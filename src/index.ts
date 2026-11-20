@@ -290,6 +290,7 @@ import {
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
 import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
+import { runLimitCouncil } from "./limit-council.mjs";
 import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode, ownerCheck, noteOwnerSub } from "./strategy-arm.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
@@ -2825,6 +2826,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   try {
     const pm = await runPositionManager(env, { send: (text: string) => sendTelegram(env, text) });
     if (pm.status === "ran" || pm.status === "failed") console.log("position_manager", JSON.stringify(pm));
+    // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3, src/limit-council.mjs): the entry council's answers and each
+    // resting Omega limit at the 15m close, in the same run and under the same daily cap; off while entry_order is market.
+    const lc = await runLimitCouncil(env) as { status?: string };
+    if (lc.status === "ran" || lc.status === "failed") console.log("limit_council", JSON.stringify(lc));
     const pr = await runPositionReport(env, { send: (text: string) => sendTelegram(env, text) });
     if (pr.status === "reported" || pr.status === "failed") console.log("position_report", JSON.stringify(pr));
   } catch (e) { console.error("position_manager_failed", e instanceof Error ? e.message : String(e)); }

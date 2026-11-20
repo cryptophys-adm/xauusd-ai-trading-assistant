@@ -21,6 +21,7 @@ import { cellGateText } from "./htf-cells.mjs";
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
+import { limitKnobs } from "./omega-limit-knobs.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -50,11 +51,22 @@ export const OMEGA_DEFAULTS = Object.freeze({
   ladder_r_intraday: 0.5,
   ladder_r_swing: 0.3,
   // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, owner 2026-11-20): "market" enters a limit plan at market as before;
-  // "limit" works the plan's level at the broker as a pending order, held by the council (stage 3; refused until then).
+  // "limit" works the plan's level at the broker as a pending order, held by the council; "council" lets the entry
+  // council choose per signal between the market entry, the limit and no entry (§2). The owner's switch only.
   entry_order: "market"
 });
-/** Stage 1 of docs/RFC_OMEGA_LIMIT_ENTRY.md: the switch exists, "limit" is refused until stage 3 ships. */
-export const LIMIT_ENTRY_AVAILABLE = false;
+/** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
+export const LIMIT_ENTRY_AVAILABLE = true;
+export const ENTRY_ORDERS = Object.freeze(["market", "limit", "council"]);
+/** The OmegaExecutor that places, deletes and expires pending limits (place_limit, delete_order; RFC §9). */
+export const LIMIT_EA_MIN_VERSION = "1.21";
+/** ADR-0020 Amendment 7: open positions and pending orders together, per account, never more than this. */
+export const PLATFORM_MAX_OPEN = 3;
+/**
+ * How long a signal waits for the entry council's answer under "council" before the answer counts as silent (today's
+ * market path). The council runs in the 5-minute ledger step, so one run always falls inside this window.
+ */
+export const ENTRY_COUNCIL_WAIT_MS = 6 * 60_000;
 // 10 since 2026-11-18 (owner: "Naikkan ke 10%, dikunci profil", docs/RFC_ACCOUNT_PROFILES.md §4): the setting may go
 // to the RFC's 10% maximum; what an entry risks is the smaller of the setting and the account profile's target (Safe 1%,
 // Conservative 2%, Aggressive 5%), and Custom uses the setting itself. It was 2, which held every profile at 2%.
@@ -88,7 +100,7 @@ export function isRolloverQuarantine(nowMs = Date.now()) {
  * Validates a settings change and merges it onto the stored settings (unspecified fields keep their
  * stored value). `enabled: false` disarms live; arming live needs confirm "LIVE" and enabled.
  */
-export function settingsFrom(body, current = OMEGA_DEFAULTS) {
+export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null } = {}) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "body must be a JSON object" };
   const out = { ...OMEGA_DEFAULTS, ...(current && typeof current === "object" ? pickSettings(current) : {}) };
   if (body.enabled !== undefined) {
@@ -142,8 +154,12 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS) {
     out.sor_mode = body.sor_mode;
   }
   if (body.entry_order !== undefined) {
-    if (body.entry_order !== "market" && body.entry_order !== "limit") return { error: "entry_order must be 'market' or 'limit'" };
-    if (body.entry_order === "limit" && !LIMIT_ENTRY_AVAILABLE) return { error: "limit entries are not available yet (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)" };
+    if (!ENTRY_ORDERS.includes(body.entry_order)) return { error: "entry_order must be 'market', 'limit' or 'council'" };
+    // A switch to "limit" or "council" needs OmegaExecutor 1.21 on the terminal (`ea_version`, its self-report); the value
+    // already stored is carried through any other change (Aether's policy writes the whole settings back, never this).
+    const switching = body.entry_order !== out.entry_order;
+    if (switching && body.entry_order !== "market" && !LIMIT_ENTRY_AVAILABLE) return { error: "limit entries are not available yet (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)" };
+    if (switching && body.entry_order !== "market" && !versionAtLeast(ea_version, LIMIT_EA_MIN_VERSION)) return { error: `ea_1_21_required: entry_order '${body.entry_order}' needs OmegaExecutor ${LIMIT_EA_MIN_VERSION} or newer on the terminal (it reports ${typeof ea_version === "string" && ea_version ? ea_version : "no version"})` };
     out.entry_order = body.entry_order;
   }
   if (body.live_armed !== undefined) {
@@ -216,15 +232,20 @@ export function pendingRiskAtStops(orders = [], sym = {}) {
   return total;
 }
 /**
- * Why Omega's pending orders must go now, deterministically and without the council (RFC §6), or null: the switch back
+ * Why Omega's pending orders must go now, deterministically and without the council (RFC §4, §6), or null: the switch back
  * to market, disarm on a real account (owner disarm or auto-disarm; ADR-0020 Amendment 7: cancelled on disarm or kill),
  * pause, a news blackout, the symbol, money or tick value failing, an unvalidated or downgrading profile, the daily loss
- * floor reached. Kill and Omega switched off are handled before this (close_all, engine_off). `available` is the stage
- * switch (LIMIT_ENTRY_AVAILABLE); tests pass it to check the order of the reasons behind it.
+ * floor reached; then (stage 3) the daily risk budget exhausted (`budget`: the equity above the floor less the open and
+ * pending risk at the stops), and per order (`order`, with `meta`, its place_limit intent): an order Omega has no record
+ * of, a profile downgrade since its placement, a Decision Engine veto of its side, its side's quorum share fallen by more
+ * than cancel_share_drop since the placing decision, and its max_pending_life reached. Kill and Omega switched off are
+ * handled before this (close_all, engine_off). `available` is the stage switch (LIMIT_ENTRY_AVAILABLE); tests pass it to
+ * check the order of the reasons behind it.
  */
-export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, control = null, executor = null, account = null, lossFloor = null, available = LIMIT_ENTRY_AVAILABLE } = {}) {
+export const PROFILE_RANK = Object.freeze({ safe: 0, conservative: 1, aggressive: 2 });
+export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, control = null, executor = null, account = null, lossFloor = null, available = LIMIT_ENTRY_AVAILABLE, budget = null, order = null, meta = null, now = Date.now() } = {}) {
   const sym = executor?.symbol ?? {};
-  if (settings.entry_order !== "limit" || !available) return "entry_order_market";
+  if ((settings.entry_order !== "limit" && settings.entry_order !== "council") || !available) return "entry_order_market";
   if (executor?.account?.trade_mode !== "demo" && settings.live_armed !== true) return "disarmed";
   if (signal?.paused === true || control?.mode === "paused") return "paused";
   if (signal?.blackout === true) return "blackout";
@@ -234,6 +255,19 @@ export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, 
   if (account != null && account.spec_status !== "validated") return "spec_unvalidated";
   if (account?.review_pending === true) return "profile_review_pending";
   if (finite(lossFloor) && finite(executor?.account?.equity) && executor.account.equity <= lossFloor) return "daily_loss_limit";
+  if (budget != null && !(budget > 0)) return "daily_risk_budget";
+  if (!order) return null;
+  if (!meta || typeof meta !== "object") return "pending_unrecorded";
+  const buy = order.type === "BUY_LIMIT";
+  const knobs = meta.knobs && finite(meta.knobs.max_pending_life) ? meta.knobs : limitKnobs(meta.mode);
+  const was = PROFILE_RANK[meta.profile], is = PROFILE_RANK[account?.profile];
+  if (was != null && is != null && is < was) return "profile_downgrade";
+  if ((buy ? signal?.veto_long : signal?.veto_short) === true) return "de_veto";
+  // The current 15m decision against the placing one: its side's share of the weighted quorum.
+  const share = Number(buy ? signal?.quorum_long_share : signal?.quorum_short_share), share0 = Number(meta.share0);
+  if (finite(signal?.power_ms) && finite(meta.decision_ms) && signal.power_ms > meta.decision_ms && share >= 0 && share0 >= 0 && share0 - share > knobs.cancel_share_drop + 1e-9) return "quorum_share_drop";
+  const placed = positive(order.placed_ms) ? order.placed_ms : Number(meta.placed_ms);
+  if ((finite(placed) && now >= placed + knobs.max_pending_life * 60_000) || (finite(meta.expiry_ms) && now >= meta.expiry_ms)) return "pending_expired";
   return null;
 }
 /** An Omega pending order without a stop: Omega never places one, so it is deleted (its risk is unbounded). */
@@ -746,9 +780,113 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
 }
 
+/* ---------- live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §2-§6, stage 3) ---------- */
+const round3 = (v) => Math.round(v * 1000) / 1000;
+
+/**
+ * Pure: whether the signal's level can rest at the broker as a limit now (RFC §3), before any council is asked:
+ * { ok: true, price, away, away_r, knobs } or { ok: false, code }. The limit is the decision's level on the broker's
+ * scale (signal.entry + feed_basis); a buy limit waits below the ask, a sell limit above the bid, at most
+ * placement_band x the plan's stop distance away, and at least the broker's stop level. Never on a netting account
+ * (the fill's position ticket must be the order's).
+ */
+export function limitPlacement({ signal, sym = {}, account = {}, planStopDist, minDist = 0 }) {
+  const buy = signal?.side === "BUY";
+  if (account?.margin_mode !== "hedging") return { ok: false, code: "netting_account", detail: `margin mode ${account?.margin_mode ?? "unknown"}` };
+  if (signal?.feed_basis_known !== true || !finite(signal?.feed_basis)) return { ok: false, code: "basis_unknown" };
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const price = roundTo(Number(signal.entry) + signal.feed_basis, digits);
+  const knobs = limitKnobs(signal.trading_mode);
+  const away = roundTo(buy ? sym.ask - price : price - sym.bid, digits + 2);
+  const awayR = planStopDist > 0 ? round3(away / planStopDist) : null;
+  const out = { price, away, away_r: awayR, knobs };
+  if (!(away > 0)) return { ok: false, code: "limit_through_price", ...out };
+  if (minDist > 0 && away < minDist) return { ok: false, code: "limit_stops_level", ...out };
+  if (away > knobs.placement_band * planStopDist + 1e-9) return { ok: false, code: "limit_out_of_band", detail: `${awayR} x the stop from price, the band is ${knobs.placement_band}`, ...out };
+  return { ok: true, ...out };
+}
+
+/**
+ * Pure: the council's stored actions on Omega's pending limits (src/limit-council.mjs), checked again against the live
+ * price, as intents (ADR-0020 Amendment 7):
+ *   cancel   delete_order with the action's reason;
+ *   move     modify_order to the level the council named, only toward price, by at most the action's max_move
+ *            (move_max_atr x ATR(14) of the 15m bars), the stop and the target shifted by the same amount (the order's
+ *            distances never change), the lot untouched (a modify_order cannot change it), the broker's stop level kept;
+ *   convert  ("council" only) the order's delete first (`del:<ticket>:cv`); the market leg follows only once the
+ *            terminal has answered it (planIntents' `conversion`).
+ * `actions` are { id, ticket, action, rule, price, max_move }. One intent per action; `dropped` says why one became none.
+ */
+export function limitActionIntents({ orders = [], sym = {}, actions = [], entryOrder = "limit", meta = {} } = {}) {
+  const out = [], used = [], dropped = [], removed = [];
+  const drop = (a, reason) => dropped.push({ id: a.id, reason });
+  const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
+  const point = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+  const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * point;
+  for (const a of actions) {
+    const o = orders.find((x) => Number(x.ticket) === Number(a.ticket));
+    if (!o) { drop(a, "the order is no longer pending"); continue; }
+    if (removed.includes(o.ticket)) { drop(a, "another action on this order comes first"); continue; }
+    const buy = o.type === "BUY_LIMIT";
+    const bar = String(a.id).split(":").pop();
+    if (a.action === "cancel") {
+      out.push({ ...deleteOrderIntent(o.ticket, a.rule || "council_cancel", 0), id: `del:${o.ticket}:c${bar}`.slice(0, INTENT_ID_MAX) });
+      removed.push(o.ticket);
+    } else if (a.action === "convert") {
+      if (entryOrder !== "council") { drop(a, "a conversion to market needs entry_order council"); continue; }
+      const m = meta?.[o.ticket] ?? {};
+      out.push({ id: `del:${o.ticket}:cv`.slice(0, INTENT_ID_MAX), kind: "delete_order", ticket: o.ticket, reason: "convert_to_market", side: buy ? "BUY" : "SELL", signal_issued_ms: finite(m.signal_issued_ms) ? m.signal_issued_ms : null });
+      removed.push(o.ticket);
+    } else if (a.action === "move" && finite(a.price) && finite(a.max_move)) {
+      if (!finite(sym.bid) || !finite(sym.ask)) { drop(a, "no live price from the terminal"); continue; }
+      const from = Number(o.price_open), to = roundTo(a.price, digits), delta = roundTo(to - from, digits);
+      const toward = buy ? delta > 0 : delta < 0;
+      const gap = buy ? sym.ask - to : to - sym.bid;
+      if (!toward) { drop(a, `a move to ${to} is not toward price (the order rests at ${from})`); continue; }
+      if (Math.abs(delta) > a.max_move + point / 2) { drop(a, `a move of ${Math.abs(delta)} is more than ${roundTo(a.max_move, digits)} (move_max_atr x ATR)`); continue; }
+      if (!(gap > 0) || gap < minDist) { drop(a, `the live price leaves no room for a limit at ${to}`); continue; }
+      if (!(Number(o.sl) > 0)) { drop(a, "the order has no stop"); continue; }
+      const sl = roundTo(Number(o.sl) + delta, digits), tp = Number(o.tp) > 0 ? roundTo(Number(o.tp) + delta, digits) : 0;
+      // The bridge's line has no price field: a modify_order carries the order's new price in the volume field (EA 1.18+).
+      out.push({ id: `mo:${o.ticket}:${bar}`.slice(0, INTENT_ID_MAX), kind: "modify_order", ticket: o.ticket, volume: to, sl, tp, reason: `limit_move_${a.rule || "council"}`, from_price: from });
+    } else { drop(a, "not an action Omega applies to a pending order"); continue; }
+    used.push(a.id);
+  }
+  return { intents: out, used, dropped, removed };
+}
+
+/**
+ * Pure: the hard guard a just-filled Omega limit breaches, or null (RFC §5, the deterministic backstop at fill): the
+ * broker's tick value, the symbol's volume_min and volume_max, the profile's hard cap per trade and total open risk, and
+ * the daily risk budget including this position's risk at its stop. `others` are the other positions, `pending` the
+ * pending orders still resting, `limits` the profile's (effectiveLimits; null for Custom), `lossFloor` the day's floor.
+ */
+export function fillGuard({ position: p, others = [], pending = [], sym = {}, account = {}, limits = null, lossFloor = null, probation = false, riskScale = 0.5 }) {
+  if (typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "") return "tick_value_mismatch";
+  const vol = Number(p?.volume);
+  if (!(vol > 0) || (positive(sym.volume_min) && vol < sym.volume_min - 1e-9)) return "volume_below_min";
+  if (positive(sym.volume_max) && vol > sym.volume_max + 1e-9) return "volume_above_max";
+  const sl = Number(p?.sl), open = Number(p?.open_price);
+  const risk = sl > 0 && finite(open) && positive(sym.tick_size) && positive(sym.tick_value) ? (Math.abs(open - sl) / sym.tick_size) * sym.tick_value * vol : Infinity;
+  const equity = Number(account?.equity);
+  const pct = (money) => (equity > 0 ? roundTo((money / equity) * 100, 2) : Infinity);
+  const cap = limits && finite(limits.hard_cap_pct) ? limits.hard_cap_pct * (probation ? riskScale : 1) : null;
+  if (cap != null && !(pct(risk) <= cap + 1e-9)) return "hard_cap";
+  const otherRisk = openRiskAtStops(others, sym);
+  if (limits && finite(limits.open_risk_pct) && !(otherRisk + risk <= (equity * limits.open_risk_pct) / 100 + 1e-6)) return "open_risk_cap";
+  if (finite(lossFloor) && !(equity - otherRisk - risk - pendingRiskAtStops(pending, sym) - lossFloor > 0)) return "daily_risk_budget";
+  return null;
+}
+
+/** Pure: the planned price against the filled price, in R of the planned stop distance (positive: a worse fill). */
+export function fillGapR({ side, planned, filled, rDist }) {
+  if (!finite(planned) || !finite(filled) || !(rDist > 0)) return null;
+  return round3(((side === "BUY" ? 1 : -1) * (filled - planned)) / rDist);
+}
+
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {} } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -770,21 +908,26 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const limits = probation && profileLimits ? { ...profileLimits, hard_cap_pct: finite(profileLimits.hard_cap_pct) ? roundTo(profileLimits.hard_cap_pct * scale, 4) : profileLimits.hard_cap_pct } : profileLimits;
   const positions = Array.isArray(executor?.positions) ? executor.positions : [];
   const recent = new Set(recentIntentIds);
+  // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, stage 3): only with entry_order "limit" or "council". With "market"
+  // nothing below changes and the result has its three fields only.
+  const limitMode = LIMIT_ENTRY_AVAILABLE && (S.entry_order === "limit" || S.entry_order === "council");
+  const extra = limitMode ? { entry_request: null, limit_used: [], limit_dropped: [], fill_checks: [] } : null;
+  const done = () => (extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped });
 
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
     if (positions.length || omegaPendingOrders(executor).length) intents.push({ id: closeAllId(killKey(signal, control)), kind: "close_all", reason: "kill" });
-    return { intents, notes, pm_dropped: pmDropped };
+    return done();
   }
   if (!engineEnabled || S.enabled !== true) {
     note("engine_off");
     // Omega switched off leaves no pending order of its own at the broker (RFC §6).
     for (const o of omegaPendingOrders(executor)) if (!recent.has(deleteOrderIntent(o.ticket, "engine_off", now).id)) intents.push(deleteOrderIntent(o.ticket, "engine_off", now));
-    return { intents, notes, pm_dropped: pmDropped };
+    return done();
   }
   if (!executor || executor.connected !== true || !finite(executor.received_ms) || now - executor.received_ms > EXECUTOR_MAX_AGE_MS) {
     note("executor_stale");
-    return { intents, notes, pm_dropped: pmDropped };
+    return done();
   }
 
   // Omega's own pending limits (docs/RFC_OMEGA_LIMIT_ENTRY.md §6): deleted at once, without the council, when a hard
@@ -796,7 +939,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     for (const o of noStop) { const d = deleteOrderIntent(o.ticket, "pending_without_stop", now); if (!recent.has(d.id)) intents.push(d); }
     pendingKept = pendingKept.filter((o) => !pendingWithoutStop(o));
   }
-  if (pendingKept.length) {
+  if (pendingKept.length && !limitMode) {
     const acct = executor.account ?? {};
     const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
     const why = pendingDeleteReason({ settings: S, signal, control, executor, account: accountSpec, lossFloor: floor });
@@ -804,6 +947,46 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       note("pending_deleted", why);
       for (const o of pendingKept) { const d = deleteOrderIntent(o.ticket, why, now); if (!recent.has(d.id)) intents.push(d); }
       pendingKept = [];
+    }
+  } else if (pendingKept.length) {
+    // Stage 3: the same hard reasons, then the daily risk budget and each order's own (RFC §4, §6; ADR-0020 A7), with
+    // the placing decision's quorum share and the knobs its place_limit intent recorded (`pendingMeta` by order ticket).
+    const acct = executor.account ?? {}, sym0 = executor.symbol ?? {};
+    const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
+    const dayBudget = finite(acct.equity) && floor != null ? acct.equity - openRiskAtStops(positions, sym0) - pendingRiskAtStops(pendingKept, sym0) - floor : null;
+    const kept = [];
+    for (const o of pendingKept) {
+      const why = pendingDeleteReason({ settings: S, signal, control, executor, account: accountSpec, lossFloor: floor, budget: dayBudget, order: o, meta: pendingMeta?.[o.ticket] ?? null, now });
+      if (!why) { kept.push(o); continue; }
+      note("pending_deleted", why);
+      const d = deleteOrderIntent(o.ticket, why, now);
+      if (!recent.has(d.id)) intents.push(d);
+    }
+    pendingKept = kept;
+  }
+  if (limitMode && limitActions.length) {
+    // The council's keep, move, cancel or convert at the 15m close (src/limit-council.mjs), checked again here.
+    const la = limitActionIntents({ orders: pendingKept, sym: executor.symbol ?? {}, actions: limitActions, entryOrder: S.entry_order, meta: pendingMeta });
+    for (const it of la.intents) if (!recent.has(it.id)) intents.push(it);
+    if (la.intents.length) note("limit_council", la.intents.map((it) => `${it.ticket}:${it.reason}`).join(","));
+    pendingKept = pendingKept.filter((o) => !la.removed.includes(o.ticket));
+    extra.limit_used.push(...la.used);
+    extra.limit_dropped.push(...la.dropped);
+  }
+  if (limitMode && limitFills.length) {
+    // A limit that filled (its position's ticket is the order's, RFC §5): the hard guards once more, before anything else.
+    const acct = executor.account ?? {}, sym0 = executor.symbol ?? {};
+    const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
+    for (const t of limitFills) {
+      const p = positions.find((x) => Number(x?.ticket) === Number(t));
+      if (!p) continue;
+      const m = pendingMeta?.[t] ?? positionMeta?.[p.intent_id] ?? {};
+      const guard = fillGuard({ position: p, others: positions.filter((x) => x !== p), pending: pendingKept, sym: sym0, account: acct, limits: profileLimits && profileLimits.profile !== "custom" ? profileLimits : null, lossFloor: floor, probation: m.probation === true, riskScale: finite(m.risk_scale) ? m.risk_scale : 0.5 });
+      extra.fill_checks.push({ ticket: p.ticket, guard });
+      if (guard) {
+        note("fill_guard", `${p.ticket}:${guard}`);
+        intents.push({ id: `cl:${p.ticket}:fg`, kind: "close", ticket: p.ticket, reason: `fill_guard_${guard}` });
+      }
     }
   }
 
@@ -821,7 +1004,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
     if (intents.length) {
       note("mean_reversal_exit");
-      return { intents, notes, pm_dropped: pmDropped };
+      return done();
     }
   }
 
@@ -863,10 +1046,25 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // A range strategy held by the H4/D1 filter or its cell's evidence (src/htf-cells.mjs) says so on the page.
     if (CELL_GATE_REASONS.includes(signal?.awaiting_reason)) note(signal.awaiting_reason, cellGateText(signal));
     else note("no_side");
-    return { intents, notes, pm_dropped: pmDropped };
+    return done();
   }
 
-  const issued = signal.issued_ms, id = openId(issued, side);
+  const issued = signal.issued_ms;
+  let id = openId(issued, side);
+  // "council" (RFC §2): one limit->market conversion per signal. Its delete went first (`conversion`: { ticket, side,
+  // signal_issued_ms, deleted: true | false | null while unanswered, filled }); the market leg is planned only once the
+  // terminal answered the delete, never after a fill, under its own id (the order's signal's open id plus ":m"), sized
+  // afresh at its own price through every gate below.
+  let leg = null;
+  if (limitMode && S.entry_order === "council" && conversion && conversion.side === side && finite(conversion.signal_issued_ms)) {
+    const legId = `${openId(conversion.signal_issued_ms, side)}:m`;
+    if (!recent.has(legId) && !positions.some((p) => p.intent_id === legId)) {
+      if (conversion.filled === true) note("conversion_ended_fill", String(conversion.ticket ?? ""));
+      else if (conversion.deleted === false) note("conversion_cancel_failed", String(conversion.ticket ?? ""));
+      else leg = { ...conversion, id: legId };
+    }
+  }
+  if (leg?.deleted === true) id = leg.id;
   const sameSide = [...positions, ...pendingKept.map(pendingAsPosition)].filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
@@ -917,33 +1115,78 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [armLive && tradeAgent != null && positions.some((p) => isOmegaOwned(p) && posAgent(p) === tradeAgent), "strategy_has_position"],
     [armLive && positions.some((p) => isOmegaOwned(p) && (p.side === "BUY" || p.side === "SELL") && p.side !== side), "opposing_position"]
   ];
-  for (const [blocked, code] of gates) if (blocked) { note(code); return { intents, notes, pm_dropped: pmDropped }; }
+  for (const [blocked, code] of gates) if (blocked) { note(code); return done(); }
   const re = reentryGate({ side, reentry, settings: S, now });
-  if (re) { note(re.code, re.detail); return { intents, notes, pm_dropped: pmDropped }; }
+  if (re) { note(re.code, re.detail); return done(); }
+  if (limitMode) {
+    // Stage 3's own gates, after every gate of today (RFC §6): one pending Omega order at a time (any still reported,
+    // a delete included), the platform's cap of 3 open positions and pending orders per account (ADR-0020 A7), and
+    // OmegaExecutor 1.21 on the terminal.
+    if (omegaPendingOrders(executor).length) { note("pending_order_exists"); return done(); }
+    if (positions.length - closing + pendingKept.length >= PLATFORM_MAX_OPEN) { note("platform_cap"); return done(); }
+    if (!versionAtLeast(executor.executor?.version ?? null, LIMIT_EA_MIN_VERSION)) { note("ea_1_21_required"); return done(); }
+    if (leg && leg.deleted !== true) { note("conversion_waiting_cancel", String(leg.ticket ?? "")); return done(); }
+  }
 
   const needed = [account.equity, account.day_start_balance, signal.entry, signal.stop, signal.tp1, sym.bid, sym.ask, sym.point, sym.tick_size, sym.tick_value, sym.volume_step, sym.volume_min, sym.volume_max];
-  if (!needed.every(positive) || !Number.isInteger(sym.digits)) { note("bad_input"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (!needed.every(positive) || !Number.isInteger(sym.digits)) { note("bad_input"); return done(); }
   const lossFloor = account.day_start_balance * (1 - S.max_daily_loss_pct / 100);
-  if (account.equity <= lossFloor) { note("daily_loss_limit"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (account.equity <= lossFloor) { note("daily_loss_limit"); return done(); }
   // Daily risk budget (owner 2026-11-12): what the day can still lose is the equity above the daily
   // loss floor less what the open positions would lose at their stops; a new entry risks at most that.
   const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - pendingRiskAtStops(pendingKept, sym) - lossFloor;
-  if (!(budget > 0)) { note("daily_risk_budget"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (!(budget > 0)) { note("daily_risk_budget"); return done(); }
 
   const buy = side === "BUY";
   const planOk = buy ? signal.stop < signal.entry && signal.entry < signal.tp1 : signal.tp1 < signal.entry && signal.entry < signal.stop;
-  if (!planOk) { note("plan_wrong_side"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (!planOk) { note("plan_wrong_side"); return done(); }
   const planStopDist = Math.abs(signal.entry - signal.stop);
   let stopDist = planStopDist, tpDist = Math.abs(signal.tp1 - signal.entry);
   const minDist = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * sym.point;
-  if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (stopDist <= minDist || tpDist <= minDist) { note("stops_level"); return done(); }
+
+  // Limit entries (RFC §2-§3): which entry this signal gets. "limit": a resting limit, only on the entry council's
+  // "place"; "council": the council's measured choice (enter_market, place_limit or skip), today's market path when it
+  // is silent. The deterministic refusals of a limit come first, so no council is asked for an order that cannot rest.
+  let route = "market", lim = null;
+  if (limitMode && !leg) {
+    lim = limitPlacement({ signal, sym, account, planStopDist, minDist });
+    const council = entryCouncil && entryCouncil.id === id ? entryCouncil : null;
+    const request = () => {
+      // The sync files this for the entry council (src/limit-council.mjs, the 5-minute ledger step); planIntents never
+      // calls a model. Prices stay inside the system: the request goes to D1 and the model, never to Aether.
+      extra.entry_request = { id, side, entry_order: S.entry_order, issued_ms: issued, decided_ms: decided, action: signal.action, mode: signal.trading_mode || null, agent: tradeAgent,
+        plan: { entry: signal.entry, stop: signal.stop, tp1: signal.tp1, stop_dist: roundTo(planStopDist, sym.digits) }, market: { bid: sym.bid, ask: sym.ask },
+        limit: lim.ok ? { price: lim.price, away_r: lim.away_r, band: lim.knobs.placement_band, life_min: lim.knobs.max_pending_life } : { refused: lim.code, away_r: lim.away_r ?? null } };
+      note("entry_council_waiting", S.entry_order);
+      return done();
+    };
+    if (S.entry_order === "limit") {
+      // A missed limit is a missed trade: no market fallback.
+      if (!lim.ok) { note(lim.code, lim.detail); return done(); }
+      if (!council) return request();
+      if (council.status !== "answered") { note("council_unavailable", council.rule ?? null); return done(); }
+      if (council.choice !== "place_limit") { note("council_skip", council.reason ?? null); return done(); }
+      route = "limit";
+    } else if (!council && now - decided < ENTRY_COUNCIL_WAIT_MS) {
+      return request();
+    } else if (!council || council.status !== "answered") {
+      // A silent council (no answer in time, a model failure, the daily cap) is today's market path, never a skip or a limit.
+      note("council_unavailable", council?.rule ?? "no_answer");
+    } else if (council.choice === "skip") {
+      note("council_skip", council.reason ?? null); return done();
+    } else if (council.choice === "place_limit") {
+      if (!lim.ok) { note(lim.code, lim.detail); return done(); }
+      route = "limit";
+    } else note("council_enter_market", council.rule ?? null);
+  } else if (leg) note("conversion_market_leg", String(leg.ticket ?? ""));
 
   // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): a market entry's stop moves to the
   // broker's 5m structure (the swing of the last 3 broker 5m bars beyond a buffer of 2 spreads or 0.1
   // 5m ATR), never wider than the plan's and never closer than 0.5 5m ATR (or the stop level plus 3
   // spreads). The target stays the plan's, so the RRR rises; the lot is capped below.
   let tight = false;
-  if (signal.action !== "ENTER_LIMIT" && signal.m5_source === "broker" && positive(signal.m5_atr) && positive(buy ? signal.m5_swing_low : signal.m5_swing_high)) {
+  if (route === "market" && signal.action !== "ENTER_LIMIT" && signal.m5_source === "broker" && positive(signal.m5_atr) && positive(buy ? signal.m5_swing_low : signal.m5_swing_high)) {
     const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * sym.point;
     const buffer = Math.max(2 * spreadPx, 0.1 * signal.m5_atr);
     const px = buy ? sym.ask : sym.bid;
@@ -973,86 +1216,124 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     note(`vol_regime_${volRegime.toLowerCase()}`);
   }
 
+  // The sizing of an entry at `price` with its stop `sl` (today's formula and every hard guard), or null with its note.
+  const pctOf = (money) => roundTo((money / account.equity) * 100, 2);
+  const label = limits ? (PROFILES[limits.profile]?.label ?? limits.profile) : null;
+  const sizeEntry = (price, sl) => {
+    const lossPerLot = (Math.abs(price - sl) / sym.tick_size) * sym.tick_value;
+    let volume = floorToStep((account.equity * S.risk_pct / 100) / lossPerLot, sym.volume_step);
+    if (tight) {
+      // The money at risk stays within risk_pct; the lot is capped at tight_stop_max_lot_factor x the lot at the plan's stop.
+      const planVolume = (account.equity * S.risk_pct / 100) / ((planStopDist / sym.tick_size) * sym.tick_value);
+      const cap = floorToStep(planVolume * (finite(S.tight_stop_max_lot_factor) ? S.tight_stop_max_lot_factor : 1.5), sym.volume_step);
+      if (volume > cap) { volume = cap; note("lot_capped_5m"); }
+    }
+    if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
+    if (!positive(volume) || volume < sym.volume_min) {
+      // The minimum lot (RFC §3): allowed only when its real risk stays within the profile's hard cap per trade. Custom
+      // has no hard cap of its own, so it skips as before. Either way the reason says the numbers.
+      const minRisk = pctOf(lossPerLot * sym.volume_min);
+      const stopPts = sym.point > 0 ? Math.round(Math.abs(price - sl) / sym.point) : null;
+      if (limits && finite(limits.hard_cap_pct) && minRisk <= limits.hard_cap_pct) {
+        volume = sym.volume_min;
+        note("min_lot_within_cap", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, within the ${label} cap of ${limits.hard_cap_pct}%`);
+      } else {
+        const cap = limits && finite(limits.hard_cap_pct) ? `the ${label} cap of ${limits.hard_cap_pct}%` : `the risk per trade of ${S.risk_pct}%`;
+        note("volume_below_min", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, over ${cap}`);
+        return null;
+      }
+    }
+    // The profile's total open risk (RFC §4): what the open positions lose at their stops plus this entry's risk.
+    if (limits && finite(limits.open_risk_pct)) {
+      const openRisk = openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym);
+      const room = (account.equity * limits.open_risk_pct) / 100 - openRisk;
+      const roomVolume = room > 0 ? floorToStep(room / lossPerLot, sym.volume_step) : 0;
+      if (!(roomVolume >= sym.volume_min)) {
+        note("open_risk_cap", `open positions risk ${pctOf(openRisk)}% at their stops; the ${label} total open risk is ${limits.open_risk_pct}%`);
+        return null;
+      }
+      if (volume > roomVolume) { volume = roomVolume; note("lot_capped_open_risk"); }
+    }
+    const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
+    if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return null; }
+    if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
+    return { volume, lossPerLot };
+  };
+  // What every entry records: its strategy agent, the grid, the volatility regime, the mode, R and probation.
+  const decorate = (it, price, sl, volume, lossPerLot) => {
+    // The strategy agent whose plan this is (owner 2026-11-16): its confidence governs the position's exit.
+    if (typeof signal.trade_agent === "string" && signal.trade_agent) {
+      it.strategy = signal.trade_agent;
+      // Its confidence on the side at entry (the re-entry guard's "momentum recovered" reference).
+      const c = parseConfidences(signal.agent_conf)[signal.trade_agent]?.[buy ? "long" : "short"];
+      if (finite(c)) it.agent_conf = c;
+    }
+    // The grid's adapted entry and stop (src/grid-adapt.mjs, owner 2026-11-17): recorded on the intent; a 5m stop keeps its own source.
+    if (typeof signal.grid_cell === "string" && signal.grid_cell) {
+      it.grid_cell = signal.grid_cell;
+      if (typeof signal.grid_slice === "string") it.grid_slice = signal.grid_slice;
+      if (!tight) it.stop_source = `grid:${signal.grid_cell}`;
+    }
+    if (volRegime !== "NORMAL") it.vol_regime = volRegime;
+    // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
+    if (["scalp", "intraday", "swing", "range"].includes(signal.trading_mode)) it.mode = signal.trading_mode;
+    if (finite(price) && finite(sl)) it.r_dist = roundTo(Math.abs(price - sl), sym.digits);
+    // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
+    if (probation) {
+      it.probation = true;
+      it.cell = `${signal.trade_agent}|${signal.side}|${signal.htf_context ?? "against"}`;
+      it.risk_usd = roundTo(lossPerLot * volume, 2);
+    }
+    return it;
+  };
+
+  if (route === "limit") {
+    // The limit (RFC §3): the stop and the target keep their distances from the limit price (the adaptive stop above
+    // included), sized as if filled there; it expires max_pending_life after placement (never GTC, the EA enforces it).
+    const price = lim.price;
+    const sl = roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
+    const tp = roundTo(buy ? price + tpDist : price - tpDist, sym.digits);
+    const sized = sizeEntry(price, sl);
+    if (!sized) return done();
+    const { volume, lossPerLot } = sized;
+    const expiryMs = now + lim.knobs.max_pending_life * 60_000;
+    // OmegaExecutor 1.21: `volume` is "<lot>@<limit price>", `ticket` the expiry in UTC epoch seconds.
+    const it = decorate({ id, kind: "place_limit", side, volume: `${volume}@${price}`, entry: price, sl, tp, ticket: Math.floor(expiryMs / 1000), signal_issued_ms: issued, reason: "signal", stop_source: "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null }, price, sl, volume, lossPerLot);
+    // What the order's own cancels read at every later sync (RFC §4): the placing decision's quorum share on its side,
+    // its close, the profile and the knobs, and the lot it may never exceed.
+    const share0 = Number(buy ? signal.quorum_long_share : signal.quorum_short_share);
+    Object.assign(it, { lot: volume, entry_order: S.entry_order, placed_ms: now, expiry_ms: expiryMs, share0: share0 >= 0 ? share0 : null,
+      decision_ms: finite(signal.power_ms) && signal.power_ms > 0 ? signal.power_ms : issued, profile: typeof accountSpec?.profile === "string" ? accountSpec.profile : null,
+      knobs: { max_pending_life: lim.knobs.max_pending_life, move_max_atr: lim.knobs.move_max_atr, cancel_share_drop: lim.knobs.cancel_share_drop, placement_band: lim.knobs.placement_band }, away_r: lim.away_r, basis: signal.feed_basis });
+    intents.push(it);
+    return done();
+  }
+
   if (signal.action === "ENTER_LIMIT") {
     const priceAway = buy ? sym.ask > signal.entry + 0.35 * stopDist : sym.bid < signal.entry - 0.35 * stopDist;
-    if (priceAway) { note("waiting_for_pullback"); return { intents, notes, pm_dropped: pmDropped }; }
+    if (priceAway) { note("waiting_for_pullback"); return done(); }
     // Owner 2026-11-13 ("setuju"): price past the entry toward the plan's stop by more than 0.35 x the plan's
     // stop distance is not entered. The stop keeps its distance from the fill, so such an entry put the stop
     // well beyond the key level the plan stood on (a SELL at 3903.98 against a 3888.48 entry, its stop 14
     // past the plan's). It waits: price may come back inside the band before the signal expires.
     const pastEntry = buy ? sym.ask < signal.entry - 0.35 * planStopDist : sym.bid > signal.entry + 0.35 * planStopDist;
-    if (pastEntry) { note("price_past_entry"); return { intents, notes, pm_dropped: pmDropped }; }
+    if (pastEntry) { note("price_past_entry"); return done(); }
   }
   const breached = buy ? sym.bid <= signal.stop : sym.ask >= signal.stop;
-  if (breached) { note("stop_breached"); return { intents, notes, pm_dropped: pmDropped }; }
+  if (breached) { note("stop_breached"); return done(); }
 
   const price = buy ? sym.ask : sym.bid;
   const sl = roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
   const tp = roundTo(buy ? price + tpDist : price - tpDist, sym.digits);
-  const lossPerLot = (Math.abs(price - sl) / sym.tick_size) * sym.tick_value;
-  let volume = floorToStep((account.equity * S.risk_pct / 100) / lossPerLot, sym.volume_step);
-  if (tight) {
-    // The money at risk stays within risk_pct; the lot is capped at tight_stop_max_lot_factor x the lot at the plan's stop.
-    const planVolume = (account.equity * S.risk_pct / 100) / ((planStopDist / sym.tick_size) * sym.tick_value);
-    const cap = floorToStep(planVolume * (finite(S.tight_stop_max_lot_factor) ? S.tight_stop_max_lot_factor : 1.5), sym.volume_step);
-    if (volume > cap) { volume = cap; note("lot_capped_5m"); }
-  }
-  if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
-  const pctOf = (money) => roundTo((money / account.equity) * 100, 2);
-  const label = limits ? (PROFILES[limits.profile]?.label ?? limits.profile) : null;
-  if (!positive(volume) || volume < sym.volume_min) {
-    // The minimum lot (RFC §3): allowed only when its real risk stays within the profile's hard cap per trade. Custom
-    // has no hard cap of its own, so it skips as before. Either way the reason says the numbers.
-    const minRisk = pctOf(lossPerLot * sym.volume_min);
-    const stopPts = sym.point > 0 ? Math.round(Math.abs(price - sl) / sym.point) : null;
-    if (limits && finite(limits.hard_cap_pct) && minRisk <= limits.hard_cap_pct) {
-      volume = sym.volume_min;
-      note("min_lot_within_cap", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, within the ${label} cap of ${limits.hard_cap_pct}%`);
-    } else {
-      const cap = limits && finite(limits.hard_cap_pct) ? `the ${label} cap of ${limits.hard_cap_pct}%` : `the risk per trade of ${S.risk_pct}%`;
-      note("volume_below_min", `stop ${stopPts} pts: the minimum lot ${sym.volume_min} risks ${minRisk}% of ${roundTo(account.equity, 2)}, over ${cap}`);
-      return { intents, notes, pm_dropped: pmDropped };
-    }
-  }
-  // The profile's total open risk (RFC §4): what the open positions lose at their stops plus this entry's risk.
-  if (limits && finite(limits.open_risk_pct)) {
-    const openRisk = openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym);
-    const room = (account.equity * limits.open_risk_pct) / 100 - openRisk;
-    const roomVolume = room > 0 ? floorToStep(room / lossPerLot, sym.volume_step) : 0;
-    if (!(roomVolume >= sym.volume_min)) {
-      note("open_risk_cap", `open positions risk ${pctOf(openRisk)}% at their stops; the ${label} total open risk is ${limits.open_risk_pct}%`);
-      return { intents, notes, pm_dropped: pmDropped };
-    }
-    if (volume > roomVolume) { volume = roomVolume; note("lot_capped_open_risk"); }
-  }
-  const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
-  if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return { intents, notes, pm_dropped: pmDropped }; }
-  if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
-
-  const openIntent = { id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null };
-  // The strategy agent whose plan this is (owner 2026-11-16): its confidence governs the position's exit.
-  if (typeof signal.trade_agent === "string" && signal.trade_agent) {
-    openIntent.strategy = signal.trade_agent;
-    // Its confidence on the side at entry (the re-entry guard's "momentum recovered" reference).
-    const c = parseConfidences(signal.agent_conf)[signal.trade_agent]?.[buy ? "long" : "short"];
-    if (finite(c)) openIntent.agent_conf = c;
-  }
-  // The grid's adapted entry and stop (src/grid-adapt.mjs, owner 2026-11-17): recorded on the intent; a 5m stop keeps its own source.
-  if (typeof signal.grid_cell === "string" && signal.grid_cell) {
-    openIntent.grid_cell = signal.grid_cell;
-    if (typeof signal.grid_slice === "string") openIntent.grid_slice = signal.grid_slice;
-    if (!tight) openIntent.stop_source = `grid:${signal.grid_cell}`;
-  }
-  if (volRegime !== "NORMAL") openIntent.vol_regime = volRegime;
-  // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
-  if (["scalp", "intraday", "swing", "range"].includes(signal.trading_mode)) openIntent.mode = signal.trading_mode;
-  if (finite(price) && finite(sl)) openIntent.r_dist = roundTo(Math.abs(price - sl), sym.digits);
-  // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
-  if (probation) {
-    openIntent.probation = true;
-    openIntent.cell = `${signal.trade_agent}|${signal.side}|${signal.htf_context ?? "against"}`;
-    openIntent.risk_usd = roundTo(lossPerLot * volume, 2);
+  const sized = sizeEntry(price, sl);
+  if (!sized) return done();
+  const { volume, lossPerLot } = sized;
+  const openIntent = decorate({ id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: issued, reason: "signal", stop_source: tight ? "stop_5m" : "plan", trigger_source: typeof signal.trigger_source === "string" ? signal.trigger_source : null }, price, sl, volume, lossPerLot);
+  // Under "council": how this market entry came (the council's choice, a silent council, or the conversion's leg).
+  if (limitMode) {
+    openIntent.entry_order = S.entry_order;
+    if (leg) openIntent.converted_from = leg.ticket ?? null;
   }
   intents.push(openIntent);
-  return { intents, notes, pm_dropped: pmDropped };
+  return done();
 }

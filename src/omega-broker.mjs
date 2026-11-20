@@ -16,7 +16,8 @@ import { goldClosedAt } from "./market-hours.mjs";
 import { eaSignal, readControl, blackoutWindow } from "./ea-signal.mjs";
 import { storeDeal, dealStats, FIRST_OF_DEAL, ensureSchema as ensureDealsSchema } from "./ea-execution.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
-import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, planIntents, settingsFrom } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, planIntents, settingsFrom, omegaPendingOrders, openId, fillGapR, LIMIT_ENTRY_AVAILABLE, LIMIT_EA_MIN_VERSION, ENTRY_ORDERS } from "./omega-engine.mjs";
+import { requestEntryCouncil, readEntryCouncil, pendingLimitActions, markLimitActions, placeLimitRows, ensureLimitCouncilSchema } from "./limit-council.mjs";
 import { pendingPositionActions, markPositionActions, positionActionRows, expireStalePositionActions, actionIdOfIntent, actionMessage, ACTION_TTL_MS } from "./position-actions.mjs";
 import { announceExits } from "./position-exit.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
@@ -110,7 +111,7 @@ export async function positionAgents(db, executor) {
   const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter((x) => typeof x === "string" && x.startsWith("open:")))].slice(0, 50);
   if (!ids.length) return {};
   try {
-    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
+    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
     const out = {};
     for (const r of rows) { const a = parse(r.payload)?.strategy; if (typeof a === "string" && a) out[r.id] = a; }
     return out;
@@ -124,7 +125,7 @@ export async function positionMeta(db, executor) {
   const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter((x) => typeof x === "string" && x.startsWith("open:")))].slice(0, 50);
   if (!ids.length) return {};
   try {
-    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
+    const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
     const out = {};
     for (const r of rows) {
       const p = parse(r.payload, {});
@@ -240,6 +241,111 @@ export async function reconcileFilledOpens(env, db, executor, now) {
 }
 
 /**
+ * What planIntents needs for live limit entries (RFC §3-§5), read once a sync while entry_order is "limit" or "council":
+ * `entryCouncil` (the stored answer for the current signal), `limitActions` (the council's fresh moves, cancels and
+ * conversions), `pendingMeta` (each resting order's and each just-filled position's place_limit payload, by ticket),
+ * `limitFills` (positions whose ticket is an order Omega placed and whose fill is not yet recorded) and `conversion`
+ * (the last limit->market delete within the hour: its result and whether the order filled first). Never throws.
+ */
+export async function limitInputs(db, executor, signal, now) {
+  const out = { entryCouncil: null, limitActions: [], pendingMeta: {}, limitFills: [], conversion: null };
+  try {
+    await ensureLimitCouncilSchema(db);
+    if (signal?.side === "BUY" || signal?.side === "SELL") out.entryCouncil = await readEntryCouncil(db, openId(signal.issued_ms, signal.side));
+    out.limitActions = await pendingLimitActions(db, { now });
+    const orders = omegaPendingOrders(executor);
+    const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => typeof p?.intent_id === "string" && p.intent_id.startsWith("open:"));
+    const rows = await placeLimitRows(db, { ids: [...orders.map((o) => o.comment), ...positions.map((p) => p.intent_id)], tickets: [...orders.map((o) => o.ticket), ...positions.map((p) => p.ticket)] });
+    for (const r of rows) {
+      const t = Number(r.result?.ticket);
+      const o = orders.find((x) => x.comment === r.id || Number(x.ticket) === t);
+      if (o) { out.pendingMeta[o.ticket] = r.payload; continue; }
+      // The fill: the position whose ticket is the order's (or, when the placement's result line never arrived, the
+      // position carrying the intent id, as reconcileFilledOpens reads an open).
+      const p = positions.find((x) => (r.result?.ok === true && Number(x.ticket) === t) || (r.result == null && x.intent_id === r.id));
+      if (p) {
+        out.pendingMeta[p.ticket] = r.payload;
+        if (!Number.isFinite(Number(r.payload?.filled_ms))) out.limitFills.push(p.ticket);
+      }
+    }
+    const cv = await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind = 'delete_order' AND id LIKE 'del:%:cv%' AND created_ms > ? ORDER BY created_ms DESC LIMIT 1").bind(now - 3_600_000).first();
+    if (cv) {
+      const it = parse(cv.payload, {}), res = parse(cv.result, null);
+      const ticket = Number(it.ticket);
+      const filled = (Array.isArray(executor?.positions) ? executor.positions : []).some((p) => Number(p?.ticket) === ticket);
+      out.conversion = { ticket, side: it.side ?? null, signal_issued_ms: Number(it.signal_issued_ms) || null, filled,
+        deleted: cv.status === "done" && res?.ok === true ? true : cv.status === "failed" || cv.status === "expired" || (cv.status === "done" && res?.ok !== true) ? false : null };
+    }
+  } catch { /* a limit input that cannot be read is absent: no council answer, no fill check, no conversion */ }
+  return out;
+}
+
+/** A council move the terminal applied: the order's place_limit payload follows it (the planned entry, stop and target). */
+async function recordLimitMove(db, it, now) {
+  try {
+    const row = (await placeLimitRows(db, { tickets: [it.ticket] })).find((x) => Number(x.result?.ticket) === Number(it.ticket));
+    if (!row || Number.isFinite(Number(row.payload?.filled_ms))) return;
+    const p = row.payload ?? {};
+    const next = { ...p, entry: Number(it.volume), sl: Number(it.sl) > 0 ? Number(it.sl) : p.sl, tp: Number(it.tp) > 0 ? Number(it.tp) : p.tp, moves: (Number(p.moves) || 0) + 1 };
+    await db.prepare("UPDATE omega_intents SET payload = ?, updated_ms = ? WHERE id = ?").bind(JSON.stringify(next), now, row.id).run();
+  } catch { /* the snapshot of the order still shows its price */ }
+}
+
+async function eaDeletedLine(env, db, executor, r, now) {
+  const key = `omega:limit:eadel:${r.id}`;
+  try { if (await env.SIGNAL_CACHE?.get?.(key)) return; await env.SIGNAL_CACHE?.put?.(key, "1", { expirationTtl: 86_400 }); } catch { /* said anyway */ }
+  const ticket = Number(r.ticket) || Number(String(r.id).split(":").pop()) || null;
+  const why = typeof r.error === "string" && r.error ? r.error.slice(0, 40) : "by the EA";
+  await event(db, now, "bridge", "limit_cancelled", { intent_id: r.id, ticket, reason: `ea_${why}` });
+  await sendOmegaTelegram(env, limitLine("cancelled", { label: await brokerLabelFor(db, executor), ticket, reason: `deleted by the EA (${why})` }));
+}
+
+/** Pure: the Telegram line of a limit event (placed, moved, cancelled, filled). The owner's private chat only: it carries levels. */
+export function limitLine(kind, { label = "", side = "", ticket = null, lot = null, price = null, sl = null, tp = null, reason = null, expiry_ms = null, from = null, fill = null, gap_r = null, guard = null } = {}) {
+  const t = ticket != null ? ` #${ticket}` : "";
+  if (kind === "placed") return `⏳ <b>Omega Limit Placed · ${label}</b>\nOrder:<code>${t}</code> ${side} ${lot ?? "—"} lot @ <code>${price}</code>\nSL: <code>${sl}</code> | TP: <code>${tp}</code>\nExpires: <code>${expiry_ms ? new Date(expiry_ms).toISOString().slice(11, 16) : "—"} UTC</code>`;
+  if (kind === "moved") return `↔️ <b>Omega Limit Moved · ${label}</b>\nOrder:<code>${t}</code> ${side} <code>${from ?? "—"}</code> → <code>${price}</code>\nSL: <code>${sl}</code> | TP: <code>${tp}</code>${reason ? `\nReason: <code>${escHtml(reason)}</code>` : ""}`;
+  if (kind === "cancelled") return `✖️ <b>Omega Limit Cancelled · ${label}</b>\nOrder:<code>${t}</code>${side ? ` ${side}` : ""}\nReason: <code>${escHtml(reason ?? "—")}</code>`;
+  return `🟢 <b>Omega Limit Filled · ${label}</b>\nTicket:<code>${t}</code> ${side} ${lot ?? "—"} lot\nLimit: <code>${price ?? "—"}</code> | Fill: <code>${fill ?? "—"}</code>${gap_r != null ? ` (gap ${gap_r >= 0 ? "+" : ""}${gap_r}R)` : ""}\nSL: <code>${sl ?? "—"}</code> | TP: <code>${tp ?? "—"}</code>${guard ? `\n<b>Closed at once:</b> <code>fill_guard_${guard}</code>` : ""}`;
+}
+
+/**
+ * After the plan (stage 3): the entry request filed for the council, the council's actions marked, and each limit fill
+ * recorded once (RFC §5): the place_limit payload gets the fill (time, price, the gap in R, the guard), its stop and target
+ * as filled, an event (R and times only) and the owner's line. The position is the Position Manager's from here, as any
+ * Omega open.
+ */
+async function limitAfterPlan(env, db, { plan, limitIn, executor, now }) {
+  try {
+    if (plan.entry_request) await requestEntryCouncil(db, plan.entry_request, { now });
+    const acts = limitIn.limitActions ?? [];
+    if (acts.length) {
+      const used = new Set(plan.limit_used ?? []);
+      await markLimitActions(db, acts.filter((a) => used.has(a.id)).map((a) => a.id), "applied", { now });
+      await markLimitActions(db, acts.filter((a) => !used.has(a.id)).map((a) => a.id), "skipped", { now });
+    }
+    if (plan.fill_checks?.length) {
+      const label = await brokerLabelFor(db, executor);
+      for (const fc of plan.fill_checks) {
+        const pos = (executor?.positions ?? []).find((p) => Number(p.ticket) === Number(fc.ticket));
+        const row = (await placeLimitRows(db, { ids: [pos?.intent_id], tickets: [fc.ticket] })).find((r) => Number(r.result?.ticket) === Number(fc.ticket) || (r.result == null && r.id === pos?.intent_id));
+        if (!pos || !row) continue;
+        const p = row.payload ?? {};
+        const rDist = Number(p.r_dist) > 0 ? Number(p.r_dist) : Math.abs(Number(p.entry) - Number(p.sl));
+        const gap = fillGapR({ side: p.side, planned: Number(p.entry), filled: Number(pos.open_price), rDist });
+        const filledMs = Number(pos.opened_ms) > 0 ? Number(pos.opened_ms) : now;
+        const next = { ...p, planned_entry: p.entry, sl: Number(pos.sl) > 0 ? Number(pos.sl) : p.sl, tp: Number(pos.tp) > 0 ? Number(pos.tp) : p.tp, filled_ms: filledMs, fill_price: Number(pos.open_price), fill_gap_r: gap, fill_guard: fc.guard ?? null };
+        const res = await db.prepare("UPDATE omega_intents SET payload = ?, updated_ms = ? WHERE id = ? AND json_extract(payload, '$.filled_ms') IS NULL").bind(JSON.stringify(next), now, row.id).run();
+        if (!(Number(res?.meta?.changes ?? 1) > 0)) continue;
+        await event(db, now, "engine", "limit_filled", { intent_id: row.id, ticket: pos.ticket, signal_issued_ms: p.signal_issued_ms ?? null, stop_source: p.stop_source ?? null, mode: p.mode ?? null, entry_order: p.entry_order ?? null, gap_r: gap,
+          wait_min: Number(p.placed_ms) > 0 ? Math.round((filledMs - Number(p.placed_ms)) / 60_000) : null, guard: fc.guard ?? null });
+        await sendOmegaTelegram(env, limitLine("filled", { label, side: p.side, ticket: pos.ticket, lot: pos.volume, price: p.entry, fill: pos.open_price, gap_r: gap, sl: pos.sl, tp: pos.tp, guard: fc.guard }));
+      }
+    }
+  } catch { /* retried at the next sync (a fill is recorded once) */ }
+}
+
+/**
  * The latest Position Manager exit for weakening or a cut loss in the last 6 hours, for the re-entry guard
  * (src/omega-engine.mjs reentryGate): { side, exit_price, exit_ms, entry_conf, ticket }, or null. The side and the exit
  * come from the closing deal, the entry confidence from the position's open intent (recorded since 2026-11-18).
@@ -252,7 +358,7 @@ export async function lastWeakeningExit(db, now) {
     if (!(ticket > 0)) return null;
     let deal = null;
     try { deal = await db.prepare("SELECT side, exit_price, closed_ms FROM ea_deals WHERE position_ticket = ? ORDER BY closed_ms DESC LIMIT 1").bind(ticket).first(); } catch { deal = null; }
-    const open = await db.prepare("SELECT payload FROM omega_intents WHERE kind = 'open' AND json_extract(result, '$.ticket') = ? LIMIT 1").bind(ticket).first();
+    const open = await db.prepare("SELECT payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND json_extract(result, '$.ticket') = ? LIMIT 1").bind(ticket).first();
     const p = parse(open?.payload, {});
     const side = deal?.side ?? p.side ?? null;
     if (side !== "BUY" && side !== "SELL") return null;
@@ -307,7 +413,10 @@ export async function readSettings(env) {
 
 export async function writeSettings(env, { body, actor }, { now = Date.now() } = {}) {
   const current = await readSettings(env);
-  const r = settingsFrom(body, current.settings);
+  // The terminal's OmegaExecutor version (its self-report in the last bridge state): "limit" and "council" need 1.21.
+  let eaVersion = null;
+  try { eaVersion = parse((await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state, null)?.executor?.version ?? null; } catch { eaVersion = null; }
+  const r = settingsFrom(body, current.settings, { ea_version: eaVersion });
   if (r.error) return { ok: false, error: r.error };
   const version = current.version + 1;
   await env.DB.prepare("UPDATE omega_settings SET settings = ?, version = ?, updated_by = ?, updated_ms = ? WHERE id = 1").bind(JSON.stringify(r.settings), version, actor, now).run();
@@ -617,7 +726,8 @@ export const CLOSE_MAX_ATTEMPTS = 10;
  * position is still there) gets the next attempt id `<id>:<n>`; none while an attempt is in flight.
  */
 async function withAttempt(db, it) {
-  if (it.kind === "open") return it;
+  // An entry (a market open or a resting limit) is planned once per signal and never retried.
+  if (it.kind === "open" || it.kind === "place_limit") return it;
   const rows = (await db.prepare("SELECT id, status FROM omega_intents WHERE id = ? OR id LIKE ?").bind(it.id, `${it.id}:%`).all()).results ?? [];
   if (!rows.length) return it;
   if (rows.some((r) => r.status === "pending" || r.status === "sent")) return null;
@@ -824,6 +934,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
   for (const r of Array.isArray(results) ? results.slice(0, 100) : []) {
     if (typeof r?.id !== "string") continue;
+    // OmegaExecutor 1.21 deletes its own pending limits by itself (expired, max_life, the dead-man switch): said once.
+    if (r.id.startsWith("ea:del:") && r.ok === true) { await eaDeletedLine(env, db, executor, r, now); continue; }
     const existing = await db.prepare("SELECT status, payload, created_ms FROM omega_intents WHERE id = ?").bind(r.id).first();
     const p = parse(existing?.payload, {});
     const latencyMs = (Number.isFinite(r.executed_ms) && Number.isFinite(existing?.created_ms)) ? Math.max(0, Number(r.executed_ms) - Number(existing.created_ms)) : null;
@@ -863,6 +975,17 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           await sendOmegaTelegram(env, `💰 <b>Omega Position Scaled Out (${p.volume ?? "part"} lot) · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
         } else if (p?.kind === "modify_tp") {
           await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner) · ${label}</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
+        } else if (p?.kind === "place_limit") {
+          // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §5): placed, moved, cancelled and filled, to the owner's private chat.
+          await event(db, now, "engine", "limit_placed", { intent_id: r.id, ticket: result.ticket, side: p.side, mode: p.mode ?? null, entry_order: p.entry_order ?? null, away_r: p.away_r ?? null, life_min: p.knobs?.max_pending_life ?? null });
+          await sendOmegaTelegram(env, limitLine("placed", { label, side: p.side, ticket: result.ticket, lot: p.lot, price: p.entry, sl: p.sl, tp: p.tp, expiry_ms: p.expiry_ms }));
+        } else if (p?.kind === "delete_order") {
+          await event(db, now, "engine", "limit_cancelled", { intent_id: r.id, ticket: p.ticket, reason: p.reason ?? null });
+          await sendOmegaTelegram(env, limitLine("cancelled", { label, ticket: p.ticket, side: p.side ?? "", reason: p.reason }));
+        } else if (p?.kind === "modify_order" && String(r.id).startsWith("mo:")) {
+          await recordLimitMove(db, p, now);
+          await event(db, now, "engine", "limit_moved", { intent_id: r.id, ticket: p.ticket, reason: p.reason ?? null });
+          await sendOmegaTelegram(env, limitLine("moved", { label, ticket: p.ticket, from: p.from_price, price: p.volume, sl: p.sl, tp: p.tp, reason: p.reason }));
         }
       } else if (result.error) {
         await sendOmegaTelegram(env, `⚠️ <b>Omega Intent Rejected · ${label}</b>\nTicket: <code>#${result.ticket || p?.ticket || "—"}</code>\nKind: <code>${p?.kind || "—"}</code>\nError: <code>${result.error}</code>`);
@@ -966,7 +1089,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const dlg = delegateOk ? withDelegated(dayExec, delegated, { mode: signal?.trading_mode ?? null }) : { executor: dayExec, meta: {} };
   // The stops Omega commanded in the last minutes (commandedStops): a snapshot older than a modification never loosens it.
   const stops = hasPositions ? commandedStops((await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind IN ('modify_sl', 'modify_sltp') AND created_ms > ? AND status IN ('pending', 'sent', 'done')").bind(now - STOP_COMMAND_MS).all()).results ?? []) : {};
-  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops });
+  // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, stage 3): only with entry_order "limit" or "council". The council's
+  // stored answers (src/limit-council.mjs), each resting order's place_limit intent, the fills not yet re-checked and
+  // the last limit->market conversion. With "market" none of this is read and planIntents gets none of it.
+  const limitIn = settings?.entry_order === "limit" || settings?.entry_order === "council" ? await limitInputs(db, executor, signal, now) : {};
+  const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn });
+  if (plan.entry_request || plan.limit_used || plan.fill_checks) await limitAfterPlan(env, db, { plan, limitIn, executor, now });
   if (delegated.length && !delegateOk) plan.notes.push({ code: "delegate_needs_ea_1_18", detail: `${delegated.length} delegated position${delegated.length > 1 ? "s wait" : " waits"} for OmegaExecutor 1.18` });
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
@@ -1140,7 +1268,7 @@ export async function probationTick(env, { now = Date.now() } = {}) {
   try {
     await ensureSchema(env.DB);
     const db = env.DB;
-    const rows = (await db.prepare("SELECT id, payload, result, created_ms FROM omega_intents WHERE kind = 'open' AND status = 'done' AND json_extract(payload, '$.probation') = 1 ORDER BY created_ms LIMIT 200").all()).results ?? [];
+    const rows = (await db.prepare("SELECT id, payload, result, created_ms FROM omega_intents WHERE kind IN ('open', 'place_limit') AND status = 'done' AND json_extract(payload, '$.probation') = 1 ORDER BY created_ms LIMIT 200").all()).results ?? [];
     if (!rows.length) return { status: "idle" };
     // A position still open (a partial close already made a deal) is counted once it has gone.
     const st = parse((await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state);
@@ -1263,6 +1391,31 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
     positions: Array.isArray(st?.positions) ? st.positions.length : 0,
     synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null
   };
+}
+
+/** The entry_order switch for the Omega page: the options the terminal allows, and Omega's resting limits. Never throws. */
+export async function entryOrderView(db, st, settings, now = Date.now()) {
+  const version = st?.executor?.version ?? null;
+  const eaOk = specVersionAtLeast(version, LIMIT_EA_MIN_VERSION);
+  const why = !LIMIT_ENTRY_AVAILABLE ? "not available yet" : eaOk ? null : `needs OmegaExecutor ${LIMIT_EA_MIN_VERSION} (the terminal reports ${version ?? "no version"})`;
+  const view = { mode: settings?.entry_order ?? "market", ea_version: version, ea_min_version: LIMIT_EA_MIN_VERSION, ea_ok: eaOk,
+    options: ENTRY_ORDERS.map((value) => ({ value, enabled: value === "market" || why == null, reason: value === "market" ? null : why })), pending: [], recent: [] };
+  try {
+    const orders = omegaPendingOrders(st);
+    if (orders.length) {
+      const rows = await placeLimitRows(db, { ids: orders.map((o) => o.comment), tickets: orders.map((o) => o.ticket) });
+      await ensureLimitCouncilSchema(db);
+      for (const o of orders) {
+        const m = rows.find((r) => r.id === o.comment || Number(r.result?.ticket) === Number(o.ticket))?.payload ?? null;
+        const last = await db.prepare("SELECT at_ms, choice, rule, reason FROM limit_council WHERE kind = 'pending' AND ticket = ? ORDER BY at_ms DESC LIMIT 1").bind(o.ticket).first();
+        view.pending.push({ ticket: o.ticket, side: o.type === "BUY_LIMIT" ? "BUY" : "SELL", intent_id: o.comment ?? null, placed_ms: o.placed_ms ?? m?.placed_ms ?? null, expiry_ms: m?.expiry_ms ?? null,
+          status: m ? (last ? `council: ${last.choice}` : "resting") : "unrecorded", reason: last ? `${last.rule}${last.reason ? `: ${String(last.reason).slice(0, 160)}` : ""}` : null, council_ms: last?.at_ms ?? null });
+      }
+    }
+    view.recent = ((await db.prepare("SELECT ms, action, detail FROM omega_events WHERE action IN ('limit_placed', 'limit_moved', 'limit_cancelled', 'limit_filled') ORDER BY id DESC LIMIT 6").all()).results ?? [])
+      .map((e) => { const d = parse(e.detail, {}); return { ms: e.ms, action: e.action.replace("limit_", ""), ticket: d.ticket ?? null, reason: d.reason ?? d.guard ?? null, gap_r: d.gap_r ?? null }; });
+  } catch { /* the switch is still shown */ }
+  return view;
 }
 
 export async function brokerOverview(env, { now = Date.now() } = {}) {
@@ -1393,6 +1546,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
+    // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md): the owner's entry_order switch, what the terminal allows, and Omega's
+    // resting limit with its status, last council reason and expiry.
+    entry_order: await entryOrderView(db, st, settings.settings, now),
     // The owner's edits and delegation (owner 2026-11-19, src/omega-hitl.mjs): the delegated tickets, the toggle, and
     // whether the terminal's OmegaExecutor takes them (1.18+).
     delegation: { ...(await readDelegations(db)), supported: hitlSupported(executorFrom(st, { stored: true })), ea_min_version: HITL_EA_MIN_VERSION },
@@ -1571,6 +1727,8 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (!policy || typeof policy !== "object") return { status: "invalid_policy" };
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
+  // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2): the owner's switch is carried as stored.
+  delete body.entry_order;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

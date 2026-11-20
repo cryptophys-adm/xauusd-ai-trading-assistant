@@ -52,7 +52,7 @@ function sellCase(pts, { mode = "scalp", later = [], to = C + 60 * M1 } = {}) {
 }
 
 test("L1. a limit fills when a bar reaches the level, then v4 manages it: the TP ladder's lock and the sl_plus exit, through planIntents", () => {
-  assert.equal(LIMIT_ENTRY_AVAILABLE, false, "stage 2 never turns limit entries on live");
+  assert.equal(LIMIT_ENTRY_AVAILABLE, true, "stage 3 turned limit entries on live; the replay stays a measurement");
   // Price 1998 at the decision (2 under the SELL level: in the band 0.35 x 20 = 7), up to the level at C + 8, then the
   // ladder case's drop to 1995.5 and the rise back through the locked stop.
   const pts = [[C + 3 * M1, 1998], [C + 8 * M1, 2000], [C + 15 * M1, 1995.5], [C + 22 * M1, 1995.5], [C + 36 * M1, 2003]];

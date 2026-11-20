@@ -213,11 +213,15 @@ export function cleanCouncil(o) {
   return { momentum: o.momentum, thesis: o.thesis, reason: String(o.reason ?? "").slice(0, 240) };
 }
 
-/** Today's spend of the position council in USD (from ai_usage_daily). */
+/**
+ * Today's spend of the position council in USD (from ai_usage_daily), with the limit entry's council since stage 3 of
+ * docs/RFC_OMEGA_LIMIT_ENTRY.md (meter "entry_council"): both sit inside one daily cap (RFC §11).
+ */
+export const ENTRY_COUNCIL_METER = "entry_council";
 export async function positionCouncilSpendUsd(db, { now = Date.now() } = {}) {
   await ensureAiUsageSchema(db);
   const day = new Date(now).toISOString().slice(0, 10);
-  const rows = (await db.prepare("SELECT model, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, SUM(cached_tokens) AS k FROM ai_usage_daily WHERE day = ? AND source = ? GROUP BY model").bind(day, POSITION_COUNCIL_METER).all()).results || [];
+  const rows = (await db.prepare("SELECT model, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, SUM(cached_tokens) AS k FROM ai_usage_daily WHERE day = ? AND source IN (?, ?) GROUP BY model").bind(day, POSITION_COUNCIL_METER, ENTRY_COUNCIL_METER).all()).results || [];
   let neurons = 0;
   for (const r of rows) neurons += neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0) ?? 0;
   return Math.round((neurons / 1000) * USD_PER_1K_NEURONS * 10_000) / 10_000;
@@ -245,7 +249,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     if (!positions.length) return { status: "no_positions" };
     const sym = executor?.symbol ?? {};
     const ids = positions.filter((p) => !p.delegated).map((p) => p.intent_id);
-    const stored = intentsIn ?? (ids.length ? Object.fromEntries(((await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind = 'open' AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? []).map((r) => [r.id, JSON.parse(r.payload)])) : {});
+    const stored = intentsIn ?? (ids.length ? Object.fromEntries(((await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? []).map((r) => [r.id, JSON.parse(r.payload)])) : {});
     const openIntents = { ...stored };
     for (const p of positions.filter((x) => x.delegated)) {
       openIntents[p.intent_id] ??= { tp: Number(p.tp) > 0 ? p.tp : null, entry: p.open_price, sl: Number(p.sl) > 0 ? p.sl : null, strategy: null,

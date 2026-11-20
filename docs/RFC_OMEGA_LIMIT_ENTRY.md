@@ -3,7 +3,8 @@
 Status: reviewed by the orchestrator (2026-11-20, six points folded in) and by the platform session (2026-11-20, §7 and the
 stage 3 precondition in §10 folded in), for the owner's review. Updated 2026-11-20 with the owner's confirmation: the
 `"council"` entry order (§2), and ADR-0020 Amendments 7 and 8, merged on the platform (cryptophys-cloud-platform ed43279),
-folded into §4, §6 and §10. Stage 1 is merged (#497); stage 2 (§8, measurement only) is the PR that adds this line. Owner decision 2026-11-20, relayed by the orchestrator and
+folded into §4, §6 and §10. Stage 1 is merged (#497), stage 2 (§8, measurement only) is merged (#501); stage 3 (§3-§5,
+live) is built in the PR that adds this line (§10, "Built in stage 3"). Owner decision 2026-11-20, relayed by the orchestrator and
 confirmed by the owner in the session ("Yes, that scope"): "setuju dan tetap dinamis learning dan knowledge karena prinsip
 system ini adalah feedloop auto learning dan dinamis."
 
@@ -309,6 +310,58 @@ Policy Engine's prohibited filter refuses them; platform test K2):
      `move_max_atr`, the stop and target shifted by the same amount, never widened (§4); deterministic cancels on the
      quorum share drop, a Decision Engine veto (`de_veto`), a downgrade to Safe, disarm and kill (§4, §6); pending orders
      counted toward the platform cap of 3 (§6). Stage 3 implements them as written here.
+   **Built in stage 3** (2026-11-20; `src/omega-engine.mjs`, `src/limit-council.mjs`, `src/omega-limit-knobs.mjs`):
+   - **The switch.** `LIMIT_ENTRY_AVAILABLE` is true. `entry_order` takes `"market" | "limit" | "council"`, default
+     `"market"`. A switch to `"limit"` or `"council"` is refused (`ea_1_21_required`) unless the terminal's last state reports
+     OmegaExecutor 1.21 or newer; planIntents refuses entries the same way if the terminal later reports an older EA.
+     Aether's `applyOmegaPolicy` drops `entry_order` from what it writes.
+   - **The async council around the pure planner.** As with the Position Manager: the sync's planIntents runs every gate,
+     then the placement checks, and returns an `entry_request` when the council has not answered; the sync files it in
+     D1 `limit_council`; `runLimitCouncil` in the 5-minute ledger step (after the Position Manager, one model call per
+     signal, schema `entry_council`, meter `entry_council`) stores the answer; the next sync hands it to planIntents as
+     `entryCouncil`. Resting orders are checked the same way, once per order and 15m close, and come back as
+     `limitActions` (move, cancel, convert), re-checked against the live price (`limitActionIntents`).
+   - **Intents (EA 1.21, unchanged bridge).** `place_limit`: id = the signal's open id, `volume` `<lot>@<limit>`, `sl`,
+     `tp`, `ticket` the expiry in UTC epoch seconds. A move: `modify_order` with the new price in `volume`, the stop and the
+     target shifted by the same amount. A cancel: `delete_order` with `ticket` the order.
+   - **The fill.** The position whose ticket is the order's (its comment is the intent id) is re-checked once
+     (`fillGuard`); a breach closes it at once (`fill_guard_<name>`). The fill is recorded on the place_limit intent (time,
+     price, the gap in R, the guard) and as an event in R only; the Position Manager manages it as any Omega open.
+   - **Telegram.** Placed, moved, cancelled (with the reason) and filled go through `sendOmegaTelegram` (`TELEGRAM_CHAT_ID`,
+     the owner's private chat), like every Omega notice. Nothing goes to a public or CTA channel.
+   - **Market unchanged.** With `"market"` planIntents gives exactly what it gave before (hashes of 64 hand fixtures and
+     of v4's replay traces taken at 3b245ca, test S12). v4 forces `entry_order: "market"` in its replay.
+   - **Deviations, stated plainly:**
+     - **Every entry is a limit in limit mode**, ENTER_MARKET decisions included (§2 "places every entry as a limit" and
+       the ledger's policy of §8), not only ENTER_LIMIT ones as §3's first line reads.
+     - **The deterministic placement refusals run before the council** (basis, side of price, band, stop level, netting),
+       so no model call is spent on an order that cannot rest. The result is the same as checking them after a "place".
+       They are checked again at the sync that places.
+     - **"No answer" under "council" has a bound**: the council answers in the 5-minute ledger step, so a signal waits for
+       it at most `ENTRY_COUNCIL_WAIT_MS` (6 minutes) from its decision; then (or at once on a failure or the cap) it is
+       today's market path. Under "limit" a signal keeps waiting while its gates hold; no answer is no order.
+     - **The measured reasons of the entry council** are a fixed list the code verifies against the facts: `htf_against`,
+       `confidence_drop`, `quorum_share_drop` for skip; `price_away_from_level` (at least 0.1 x the stop from price) for
+       place_limit; `price_at_level`, `htf_with`, `confidence_rising` for enter_market. Under "council" an answer without
+       one that holds is the market entry (`no_measured_reason`). Under "limit" place and skip stand as answered (§3).
+     - **The conversion's market leg** follows the current signal: it is planned once the delete is answered and the
+       order is gone from the terminal's report, only while the current signal is on the order's side, under the id
+       `<the order's open id>:m` (one per signal), through every gate of today with the current signal's plan. A signal
+       usually expires 15 minutes after its close, before the first 15m check of its resting order, so the leg is often
+       refused by `expired`; that is today's gate, not a fallback.
+     - **A conversion is the pending council's answer `convert`**, under "council" only.
+     - **Extra refusals and cancels** beyond the RFC's list: `limit_stops_level` (the EA would refuse it),
+       `pending_unrecorded` (an Omega pending order with no place_limit record is deleted), `daily_risk_budget` (the day's
+       budget, open and pending risk included, exhausted).
+     - **One AI task**: the entry decision and the pending check share the task and meter `entry_council`; together with
+       `position_council` they sit inside the Position Manager's daily cap (`positionCouncilSpendUsd` counts both).
+     - **ATR(14) 15m** is read from the feed's 15m series (a range, the same on the broker's scale).
+     - **v4 parity**: a limit fill has no `open` intent, so the v4 parity (a market replay) leaves it out; the maker side
+       is measured by the ledger's limit policy (§8).
+   - **Left for stage 4**: the knobs stay at their start values (`limitKnobs`, `source: "start_values"`); the tuning loop,
+     the platform bounds reader and Aether's anchors are not built. The ledger's limit policy still does not model the
+     council's place, keep and move, `de_veto`, disarm or the fill's re-check (§8). The live fill gap in R is recorded per
+     order (`fill_gap_r`, the `limit_filled` event) but not yet aggregated into the execution report.
 4. **The learned knobs (§7):** the tuning loop, the bounds request to the platform session and the anchors with Aether.
 
 The owner installs EA 1.21 after stage 1 and switches `entry_order` to `"limit"` after stage 3.

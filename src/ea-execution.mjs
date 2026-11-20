@@ -104,7 +104,7 @@ export function dealFrom(body, { now = Date.now() } = {}) {
 /** The strategy of the Omega open intent that opened this position ticket (within `since`), or null. Never throws. */
 export async function dealStrategy(db, positionTicket, { since = 0 } = {}) {
   try {
-    const row = await db.prepare("SELECT json_extract(payload, '$.strategy') AS strategy FROM omega_intents WHERE kind = 'open' AND created_ms >= ? AND json_extract(result, '$.ticket') = ? ORDER BY created_ms DESC LIMIT 1")
+    const row = await db.prepare("SELECT json_extract(payload, '$.strategy') AS strategy FROM omega_intents WHERE kind IN ('open', 'place_limit') AND created_ms >= ? AND json_extract(result, '$.ticket') = ? ORDER BY created_ms DESC LIMIT 1")
       .bind(Math.max(0, Math.floor(since)), positionTicket).first();
     const s = row?.strategy;
     return typeof s === "string" && /^[a-z0-9_]{2,40}$/.test(s) ? s : null;

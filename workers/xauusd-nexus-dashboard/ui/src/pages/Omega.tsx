@@ -744,6 +744,9 @@ export default function Omega() {
   const e = b?.engine || {};
   const conn = b?.connection || {};
   const br = b?.bridge || {};
+  // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md): the switch, and Omega's resting limit by order ticket.
+  const entryOrder: any = b?.entry_order || {};
+  const limitByTicket: Record<string, any> = Object.fromEntries((entryOrder.pending || []).map((x: any) => [String(x.ticket), x]));
   // The connected account's row, as the server marks it (the live login's own reference, never the first account on
   // the same server: owner 2026-11-19, "harus bisa membedakan mana akun sen dan usd"). No connected account: none.
   const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
@@ -1566,6 +1569,8 @@ export default function Omega() {
                           <th>S/L</th>
                           <th>T/P</th>
                           <th>Comment</th>
+                          <th>Status</th>
+                          <th>Expires (UTC)</th>
                           <th className="text-right">Action</th>
                         </tr>
                       </thead>
@@ -1597,6 +1602,11 @@ export default function Omega() {
                               <td className="mono text-rose-300">{o.sl ? num(o.sl, digits) : "—"}</td>
                               <td className="mono text-emerald-300">{o.tp ? num(o.tp, digits) : "—"}</td>
                               <td className="mono text-[11px] text-slate-400">{o.comment || "—"}</td>
+                              <td className="mono text-[11px] text-slate-300" title={limitByTicket[String(o.ticket)]?.reason || undefined}>
+                                {limitByTicket[String(o.ticket)]?.status || (isManualOrd ? "—" : "resting")}
+                                {limitByTicket[String(o.ticket)]?.reason ? <span className="block max-w-[220px] truncate text-slate-500">{limitByTicket[String(o.ticket)].reason}</span> : null}
+                              </td>
+                              <td className="mono text-[11px]">{limitByTicket[String(o.ticket)]?.expiry_ms ? timeUtc(limitByTicket[String(o.ticket)].expiry_ms) : "—"}</td>
                               <td className="text-right">
                                 <button
                                   type="button"
@@ -1611,7 +1621,7 @@ export default function Omega() {
                             </tr>
                             {editingOrd ? (
                               <tr>
-                                <td colSpan={11} className="bg-cyan-500/5">
+                                <td colSpan={13} className="bg-cyan-500/5">
                                   <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11px]">
                                     <span className="text-slate-400">Modify order #{String(o.ticket)} {o.type}:</span>
                                     <label className="text-slate-200">Price <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.price} onChange={(e) => setEditRow({ ...editRow!, price: e.target.value })} /></label>
@@ -1631,6 +1641,15 @@ export default function Omega() {
                   </div>
                 </div>
               )}
+
+              {entryOrder.mode && entryOrder.mode !== "market" && entryOrder.recent?.length ? (
+                <div className="border-t border-white/10 bg-[#060a12] px-3.5 py-1.5 text-[11px] text-slate-400" aria-label="Omega limit events">
+                  <span className="font-semibold text-slate-300">Limit ({entryOrder.mode}):</span>{" "}
+                  {entryOrder.recent.slice(0, 4).map((x: any, i: number) => (
+                    <span key={`${x.ms}-${i}`} className="mono mr-3">{timeUtc(x.ms).slice(11)} {x.action}{x.ticket ? ` #${x.ticket}` : ""}{x.reason ? ` · ${x.reason}` : ""}{x.gap_r != null ? ` · gap ${x.gap_r}R` : ""}</span>
+                  ))}
+                </div>
+              ) : null}
 
               {/* Classic Windows MT5 Gray/Obsidian Account Summary Footer Row */}
               <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#0c1322] px-3.5 py-2 text-[11.5px]">
@@ -2653,6 +2672,7 @@ export default function Omega() {
               <dt className="text-slate-500">Max daily loss</dt><dd className="mono text-slate-200">{e.max_daily_loss_pct != null ? `${e.max_daily_loss_pct}%` : "—"}</dd>
               <dt className="text-slate-500">Max spread</dt><dd className="mono text-slate-200">{e.max_spread_points != null ? `${e.max_spread_points} pts` : "—"}</dd>
               <dt className="text-slate-500">Max signal age</dt><dd className="mono text-slate-200">{e.max_signal_age_ms ? `${Math.round(e.max_signal_age_ms / 60000)} min` : "—"}</dd>
+              <dt className="text-slate-500">Entry order</dt><dd className="mono text-slate-200">{entryOrder.mode || e.entry_order || "market"}</dd>
               <dt className="text-slate-500">Changed by</dt><dd className="mono text-slate-300">{e.updated_by || "—"}</dd>
               {/* Reversal probation (owner 2026-11-18): counter-trend sweep reversals at half risk, one at a time. */}
               <dt className="text-slate-500" title="Counter-trend sweep reversals before their record passes: half risk and half the hard cap, one at a time, never hedged, only after a change of structure on a closed H1 or H4 candle. A cell whose last 5 probation trades average under 0R stops.">Reversal probation</dt>
@@ -2742,7 +2762,25 @@ export default function Omega() {
                 <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
                 <input id="e-age" type="number" min="1" max="60" step="1" value={eAge} onChange={(ev) => { setEngineDirty(true); setEAge(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                {/* Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md): the owner's switch; limit and council need OmegaExecutor 1.21. */}
+                <label htmlFor="e-entry-order" className="text-slate-400" title="Market enters at the broker's price (today's path). Limit rests the plan's level as a pending order, placed only on the entry council's consensus; a missed limit is a missed trade. Council lets the entry council choose market, limit or no entry per signal; a silent council is the market entry.">Entry order</label>
+                <select
+                  id="e-entry-order"
+                  disabled={!canControl}
+                  value={entryOrder.mode || "market"}
+                  onChange={(ev) => saveEngine({ entry_order: ev.target.value })}
+                  className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100 disabled:opacity-40"
+                >
+                  {(entryOrder.options?.length ? entryOrder.options : [{ value: "market", enabled: true, reason: null }]).map((o: any) => (
+                    <option key={o.value} value={o.value} disabled={!o.enabled} title={o.reason || undefined}>
+                      {o.value}{!o.enabled && o.reason ? ` (${o.reason})` : ""}
+                    </option>
+                  ))}
+                </select>
               </div>
+              {entryOrder.ea_ok === false ? (
+                <p className="text-[11px] text-amber-200" aria-label="Entry order needs EA 1.21">Limit and council need OmegaExecutor {entryOrder.ea_min_version ?? "1.21"}; the terminal reports {entryOrder.ea_version ?? "no version"}.</p>
+              ) : null}
               {/* What the profile applies now (phase 2): the smaller of each setting and the profile's cap. */}
               {account ? (
                 <p className="text-[11px] text-cyan-200" aria-label="Limits applied by the profile"
