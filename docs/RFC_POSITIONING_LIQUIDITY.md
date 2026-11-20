@@ -110,10 +110,13 @@ Every reader asks for the report **known at time t**:
 - For a backfilled row, `released_ms` is the scheduled Friday 15:30 New York time after its Tuesday, moved to the
   following Monday 15:30 when a US federal holiday falls in that Monday-to-Friday week, with `released_estimated = 1`.
   Weeks of a known publication outage (CFTC's own release schedule) are listed in code (`COT_DELAYED_RELEASES`) with
-  their real release day.
+  their real release day. An outage whose per-week days are not listed yet is a window in `COT_PUBLICATION_OUTAGES`:
+  every report dated inside it counts as released no earlier than the end of the catch-up (conservative: read late,
+  never early). 2025: the reports of 30 Sep to 23 Dec count as released 29 Dec 2025 15:30 New York (CFTC resumed on
+  19 Nov and cleared the backlog in chronological order by 29 Dec).
 - The percentile at t uses only the rows released before t, within the 156 weekly rows before it.
 - Tests: a replay at a Thursday reads the report of the Tuesday nine days earlier, never two days earlier; a holiday week
-  shifts to Monday; a delayed week reads its listed day.
+  shifts to Monday; a delayed week reads its listed day; no report inside an outage window is read before its end.
 
 ### 3.3 Facts (lens A)
 
@@ -489,9 +492,12 @@ floor).
 
 Decisions of 2026-11-20: the deferral (§6) is approved; the A8 reason question is closed (pools are key levels); the
 staged delivery of §13 is replaced by one PR, live on merge. Still open:
-- **`COT_DELAYED_RELEASES` is empty.** The real release days of the 2025 shutdown weeks are not filled in yet; those
-  rows use the estimated Friday (marked `released_estimated`). They lie outside the day-one replay's window (the 4H
-  series reaches about 83 days back), so no replayed reading reads them early. Fill them from CFTC's schedule.
+- **The 2025 shutdown weeks' exact days.** `COT_PUBLICATION_OUTAGES` holds the reports of 30 Sep to 23 Dec 2025 to 29
+  Dec 2025 (orchestrator review of #505, the conservative choice); the per-week catch-up days from CFTC's schedule
+  (cftc.gov was out of this build's reach) go into `COT_DELAYED_RELEASES`, which wins over the window.
+- **A refused lens report raises no alert yet** (orchestrator note on #505). `LENS_REPORT_FORBIDDEN` matches substrings,
+  so a new key such as `slippage` is refused (safe) and the report would go dark. It joins the health alert of the
+  Aether push with Aether's `ingestLensReport()`, before the report is first sent.
 - **Aether's methods.** `KnowledgeIngress.lensPolicy()` and `ingestLensReport()` are read when Aether offers them; until
   then the lens facts are read from the `omegaPolicy()` pack and the report is not sent.
 

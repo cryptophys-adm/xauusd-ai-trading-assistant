@@ -33,11 +33,22 @@ export const COT_FETCH_LAST_KEY = "cot:fetch:last";
 export const COT_FETCH_FAILS_KEY = "cot:fetch:fails";
 export const COT_WEEK_CAP = 30;
 /**
- * Weeks whose report came out late for a known publication outage (CFTC's own release schedule), by report date with
- * the real release day (New York 15:30). Empty until the real dates are filled in from CFTC's schedule (an open point:
- * the 2025 shutdown weeks); those weeks fall back to the estimated release, which the backfill marks estimated.
+ * Weeks whose report came out late for a known publication outage, by report date with the real release day (New York
+ * 15:30), from CFTC's own release schedule. Empty: the per-week catch-up days of the 2025 shutdown are not read from
+ * cftc.gov yet; COT_PUBLICATION_OUTAGES holds those weeks back conservatively until then.
  */
 export const COT_DELAYED_RELEASES = Object.freeze({});
+/**
+ * Publication outages whose per-week days are not listed (orchestrator review of #505): every report dated inside the
+ * window counts as released no earlier than the end of the catch-up, New York 15:30 (the conservative choice: a replay
+ * may read such a report late, never before it was public). 2025: the shutdown from 1 October stopped the report from
+ * the one of 30 September; CFTC resumed on 19 November and published the backlog in chronological order, cleared by the
+ * release of 29 December 2025 (CFTC press release 9138-25 and its accelerated revision), the one of the report of 23
+ * December (Christmas week: Monday 29 December).
+ */
+export const COT_PUBLICATION_OUTAGES = Object.freeze([
+  Object.freeze({ first_report: "2025-09-30", last_report: "2025-12-23", released_by: "2025-12-29" })
+]);
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -73,19 +84,27 @@ export function usFederalHolidays(y) {
 /**
  * Pure: the scheduled release of the report of a Tuesday `reportDate` (YYYY-MM-DD): Friday 15:30 New York time, moved
  * to the following Monday 15:30 when a US federal holiday falls in that Monday-to-Friday week; a week listed in
- * COT_DELAYED_RELEASES reads its listed day. Returns { ms, estimated }.
+ * COT_DELAYED_RELEASES reads its listed day; a week inside a COT_PUBLICATION_OUTAGES window is held to the end of the
+ * catch-up. Returns { ms, estimated }.
  */
-export function scheduledReleaseMs(reportDate, { delayed = COT_DELAYED_RELEASES } = {}) {
+export function scheduledReleaseMs(reportDate, { delayed = COT_DELAYED_RELEASES, outages = COT_PUBLICATION_OUTAGES } = {}) {
   const d = String(reportDate).slice(0, 10);
+  const at1530 = (day) => { const [y, m, dd] = String(day).slice(0, 10).split("-").map(Number); return nyToUtc(y, m, dd, 15, 30); };
   const listed = delayed[d];
-  if (listed) { const [y, m, dd] = String(listed).slice(0, 10).split("-").map(Number); return { ms: nyToUtc(y, m, dd, 15, 30), estimated: false, listed: true }; }
+  if (listed) return { ms: at1530(listed), estimated: false, listed: true };
+  const normal = normalReleaseMs(d);
+  const outage = (outages || []).find((o) => d >= o.first_report && d <= o.last_report);
+  if (outage) return { ms: Math.max(normal, at1530(outage.released_by)), estimated: true, listed: false, outage: true };
+  return { ms: normal, estimated: true, listed: false };
+}
+function normalReleaseMs(d) {
   const tue = dayMs(d);
   const mon = tue - DAY, fri = tue + 3 * DAY;
   const hol = new Set([...usFederalHolidays(new Date(mon).getUTCFullYear()), ...usFederalHolidays(new Date(fri).getUTCFullYear())]);
   let holiday = false;
   for (let t = mon; t <= fri; t += DAY) if (hol.has(ymd(t))) holiday = true;
   const day = new Date(holiday ? tue + 6 * DAY : fri);
-  return { ms: nyToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), 15, 30), estimated: true, listed: false };
+  return nyToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), 15, 30);
 }
 
 // ---------------------------------------------------------------- rows and storage

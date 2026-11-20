@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
-  parseCotRows, scheduledReleaseMs, cotAt, positioningFactsAt, positioningLean, positioningCard, positioningLine, storeCotRows, readCotRows, runCotStep,
+  parseCotRows, scheduledReleaseMs, COT_PUBLICATION_OUTAGES, cotAt, positioningFactsAt, positioningLean, positioningCard, positioningLine, storeCotRows, readCotRows, runCotStep,
   resetCotSchemaForTests, resetPositioningMemoForTests, usFederalHolidays, priceChangeFor, positioningReadings, COT_BACKFILL_KEY, POSITIONING_LEAN_CAP, cotUrl
 } from "../src/positioning-lens.mjs";
 import {
@@ -38,7 +38,7 @@ function d1() {
 const kv = () => { const m = new Map(); return { m, get: async (k) => (m.has(k) ? m.get(k) : null), put: async (k, v) => { m.set(k, String(v)); }, delete: async (k) => { m.delete(k); } }; };
 const env = (over = {}) => ({ DB: d1(), SIGNAL_CACHE: kv(), ...over });
 const reset = () => { resetCotSchemaForTests(); resetPositioningMemoForTests(); resetLensStateMemoForTests(); resetLensReadingsSchemaForTests(); resetLiquiditySchemaForTests(); };
-const DAY = 86_400_000, M1 = 60_000;
+const DAY = 86_400_000, M1 = 60_000, HOUR = 3_600_000;
 const PRICE_KEY = /price|entry|stop|sl|tp|target|level|zone|bid|ask/i;
 
 // ---------------------------------------------------------------- fixtures: 200 weeks of the disaggregated report
@@ -106,6 +106,28 @@ test("PL2. cotAt is point in time: a Thursday reads the report of the Tuesday ni
   const delayed = scheduledReleaseMs("2025-10-07", { delayed: { "2025-10-07": "2025-11-21" } });
   assert.equal(new Date(delayed.ms).toISOString(), "2025-11-21T20:30:00.000Z");
   assert.equal(delayed.estimated, false);
+  // The 2025 shutdown (orchestrator review of #505): no report of 30 Sep to 23 Dec 2025 is read before the end of the
+  // catch-up, 29 Dec 2025 15:30 New York; the report before the window and the ones after keep their usual day.
+  assert.deepEqual(COT_PUBLICATION_OUTAGES.map((o) => [o.first_report, o.last_report, o.released_by]), [["2025-09-30", "2025-12-23", "2025-12-29"]]);
+  const end = Date.parse("2025-12-29T20:30:00Z");
+  const tuesdays = [];
+  for (let t = Date.parse("2025-09-16T00:00:00Z"); t <= Date.parse("2026-01-13T00:00:00Z"); t += 7 * DAY) tuesdays.push(new Date(t).toISOString().slice(0, 10));
+  const shutdownRows = tuesdays.map((d) => ({ series: "disaggregated", report_date: d, released_ms: scheduledReleaseMs(d).ms }));
+  const inWindow = (d) => d >= "2025-09-30" && d <= "2025-12-23";
+  for (const r of shutdownRows) {
+    if (inWindow(r.report_date)) { assert.equal(r.released_ms, end, r.report_date); assert.equal(scheduledReleaseMs(r.report_date).estimated, true); }
+    else assert.ok(r.released_ms < end || r.report_date > "2025-12-23", r.report_date);
+  }
+  assert.equal(new Date(scheduledReleaseMs("2025-09-23").ms).toISOString(), "2025-09-26T19:30:00.000Z", "the last report before the shutdown");
+  assert.equal(new Date(scheduledReleaseMs("2025-12-30").ms).toISOString(), "2026-01-05T20:30:00.000Z", "after the catch-up: New Year's week, Monday");
+  for (let t = Date.parse("2025-09-26T00:00:00Z"); t <= Date.parse("2026-01-10T00:00:00Z"); t += HOUR) {
+    const got = cotAt(shutdownRows, t);
+    if (got && inWindow(got.report_date)) assert.ok(t >= end, `${got.report_date} read at ${new Date(t).toISOString()}`);
+  }
+  assert.equal(cotAt(shutdownRows, end - 60_000).report_date, "2025-09-23", "a minute before the catch-up ends: the last report from before the shutdown");
+  assert.equal(cotAt(shutdownRows, end).report_date, "2025-12-23");
+  // A listed day (once read from CFTC's schedule) wins over the window.
+  assert.equal(new Date(scheduledReleaseMs("2025-10-07", { delayed: { "2025-10-07": "2025-11-21" } }).ms).toISOString(), "2025-11-21T20:30:00.000Z");
   // The percentile at t uses only the rows released before t.
   const f = positioningFactsAt(rows, thu);
   assert.equal(f.as_of, "2026-11-10");
