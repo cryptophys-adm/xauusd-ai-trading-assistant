@@ -200,11 +200,15 @@ export const MAX_REPLAY_MINUTES = 720;
  *               this run would have (test V11), so a bounded run never repeats or loses a minute;
  *   more        the bound stopped the run before `to`.
  * `plan` is planIntents (a test may wrap it); `trace` collects each call's input and output.
+ * `entry` is another entry policy on the same account and the same management (src/ledger-omega-limit.mjs, the limit
+ * counterfactual): null is v4's own, the market entry planIntents opens. With one, planIntents' market opens are never
+ * applied; the policy places, cancels and fills its own entries through the hooks below, and every fill is then
+ * managed here exactly as a v4 trade. `version` labels the records and the checkpoint.
  */
 export function replayOmega4({
   bars = [], decisions = [], from = null, to = Infinity, settings = OMEGA_DEFAULTS, state = null,
   profileAt = () => null, balanceAt = null, councils = {}, control = [], blackouts = [], grid = null, arms = null,
-  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity
+  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity, entry = null, version = OMEGA4_VERSION
 } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...(settings && typeof settings === "object" ? settings : {}), enabled: true, live_armed: true };
   const m1 = Array.isArray(bars) && bars.length && finite(bars[0]?.t) ? bars : minuteBars(bars);
@@ -273,6 +277,18 @@ export function replayOmega4({
     return Math.abs(Number(p.tp) - Number(p.tp0)) > OMEGA4_SIM.point / 2 ? "trailed_target" : "target";
   };
   const execPos = (p) => ({ ticket: p.ticket, side: p.side, volume: p.volume, open_price: p.open_price, sl: p.sl, tp: p.tp, source: "omega", magic: 920200, intent_id: p.intent_id, opened_ms: p.opened_ms, symbol: "XAUUSD" });
+  // An open intent becomes a simulated position and its trade (v4's market fill, or another entry policy's fill).
+  const openTrade = ({ key, it, now, issuedMs, mode, agent, equity, profile, noteCodes = [], extra = null }) => {
+    const pos = { key, ticket: Math.floor(issuedMs / M1) * 10 + (it.side === "BUY" ? 1 : 2), side: it.side, volume: it.volume, open_price: it.entry, sl: it.sl, tp: it.tp, tp0: it.tp, intent_id: it.id, opened_ms: now, open_intent: { ...it } };
+    positions.push(pos);
+    if (entry) emitted.push({ id: it.id, ms: now, it });
+    const stopDist = Math.abs(it.entry - it.sl);
+    const riskMoney = stopDist * it.volume * MONEY_PER_PRICE_LOT;
+    trades.set(key, { key, side: it.side, issued_ms: issuedMs, mode, agent, filled_ms: now, volume0: it.volume, risk0: stopDist * it.volume,
+      risk_pct: equity > 0 ? r2((riskMoney / equity) * 100) : null, profile: profile ?? null, stop_source: it.stop_source ?? null, status: "open", realized: 0, exits: [], partials: 0, sl_moves: 0, tp_moves: 0, protected_ms: null,
+      mfe: 0, mae: 0, pm: [], pm_council: { recorded: 0, fallback: 0 }, entry_notes: noteCodes.filter((c) => ["stop_5m", "adaptive_stop", "min_lot_within_cap", "lot_capped_5m", "lot_capped_open_risk", "lot_capped_daily_budget"].includes(c)), ...(extra ? { extra } : {}) });
+    return pos;
+  };
 
   for (let k = firstK < 0 ? m1.length : firstK; k < m1.length; k++) {
     const bar = m1[k], now = bar.t;
@@ -313,8 +329,10 @@ export function replayOmega4({
     const entryLive = signal && (signal.side === "BUY" || signal.side === "SELL") && now < signal.expires_ms && now - (finite(signal.decided_ms) ? signal.decided_ms : signal.issued_ms) <= S.max_signal_age_ms;
     // A decision held before the planner (its entry trigger, the arm, range mode, the cell gate) says why.
     if (entryKey && signal?.side === "NONE" && d && now < d.close_ms + M15 && !trades.has(entryKey)) notes.set(entryKey, { gate: awaitingGate(signal.awaiting_reason), last_ms: now });
-    // Flat and no entry window open: nothing in planIntents can act (it would only open), so the minute is skipped.
-    if (!positions.length && !entryLive) continue;
+    // Flat and no entry window open: nothing in planIntents can act (it would only open), so the minute is skipped,
+    // unless another entry policy still has an order resting (its cancels and its fill are checked; nothing to plan).
+    const restingOnly = !positions.length && !entryLive;
+    if (restingOnly && !entry?.busy()) continue;
 
     // The M15 ATR(14) the terminal reports (its forming bar included), from the 1m bars.
     let atrValue = null;
@@ -333,87 +351,92 @@ export function replayOmega4({
     const sym = { name: "XAUUSD", currency_profit: "USD", contract_size: OMEGA4_SIM.contract_size, digits: 2, point: OMEGA4_SIM.point, tick_size: OMEGA4_SIM.tick_size, tick_value: OMEGA4_SIM.tick_value,
       volume_min: OMEGA4_SIM.volume_min, volume_step: OMEGA4_SIM.volume_step, volume_max: OMEGA4_SIM.volume_max, stops_level_points: 0, bid: bid0, ask: ask0, spread_points: spreadPts,
       atr_value: atrValue, atr_points: atrValue != null ? Math.round(atrValue / OMEGA4_SIM.point) : null };
-    const floating = positions.reduce((a, p) => a + (p.side === "BUY" ? 1 : -1) * (priceOut(p, bid0, ask0) - p.open_price) * p.volume * MONEY_PER_PRICE_LOT, 0);
-    const liveBalance = typeof balanceAt === "function" ? balanceAt(now) : null;
-    const balance = finite(liveBalance) ? liveBalance : r2(ownBalance);
-    const dayStart = typeof balanceAt === "function" && finite(balanceAt(day)) ? balanceAt(day) : r2(ownDayStart);
-    const executor = {
-      connected: true, received_ms: now, server: "ledger-replay",
-      account: { trade_mode: "real", currency: "USD", balance, equity: r2(balance + floating), day_start_balance: dayStart, money: { problem: null } },
-      symbol: sym, positions: positions.map(execPos), orders: [], executor: { version: OMEGA4_SIM.executor_version, local_management: false }
+    // The synthetic executor: the account at this minute's open (its open positions as they are when it is built) and
+    // the symbol it reports (an entry policy's probe may show another price; the equity is always at the real one).
+    const executorFor = (symbol) => {
+      const floating = positions.reduce((a, p) => a + (p.side === "BUY" ? 1 : -1) * (priceOut(p, bid0, ask0) - p.open_price) * p.volume * MONEY_PER_PRICE_LOT, 0);
+      const liveBalance = typeof balanceAt === "function" ? balanceAt(now) : null;
+      const balance = finite(liveBalance) ? liveBalance : r2(ownBalance);
+      const dayStart = typeof balanceAt === "function" && finite(balanceAt(day)) ? balanceAt(day) : r2(ownDayStart);
+      return {
+        connected: true, received_ms: now, server: "ledger-replay",
+        account: { trade_mode: "real", currency: "USD", balance, equity: r2(balance + floating), day_start_balance: dayStart, money: { problem: null } },
+        symbol, positions: positions.map(execPos), orders: [], executor: { version: OMEGA4_SIM.executor_version, local_management: false }
+      };
     };
+    const executor = executorFor(sym);
     const profile = profileAt(now);
     const account = profile ? { profile, spec_status: "validated" } : null;
-
-    // The Position Manager, once per 5m bar (the live cron, about 2.5 minutes past the 5m close).
-    const pmActions = [];
-    if (positions.length && now - Math.floor(now / M5) * M5 === OMEGA4_SIM.pm_offset_ms && d) {
-      const pmBar = Math.floor(now / M5);
-      const prev = iDec > 0 ? decs[iDec - 1] : null;
-      const decision = { ...d, quorum_prev: prev && d.close_ms - prev.close_ms === M15 ? prev.quorum ?? null : null };
-      const levels = brokerLevels(signal);
-      for (const p of positions) {
-        const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
-        const council = parseCouncil(text);
-        const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal });
-        const a = positionAction(f, council);
-        pmCalls += 1;
-        const t = tradeOf(p);
-        t.pm_council[council ? "recorded" : "fallback"] += 1;
-        if (["close", "sl", "tp"].includes(a.action)) {
-          pmActions.push({ id: `pm:${p.ticket}:${pmBar}`, ticket: p.ticket, action: a.action, rule: a.rule, sl: a.sl ?? null, tp: a.tp ?? null, at_ms: now });
-          t.pm.push({ at: iso(now), rule: a.rule, council: council ? "recorded" : "fallback" });
+    // Another entry policy's resting order: its deterministic cancels at the minute's open.
+    if (entry) entry.atOpen({ now, decision: d, decisions: decs, mode, blackout, executor, profile, settings: S });
+    if (!restingOnly) {
+      // The Position Manager, once per 5m bar (the live cron, about 2.5 minutes past the 5m close).
+      const pmActions = [];
+      if (positions.length && now - Math.floor(now / M5) * M5 === OMEGA4_SIM.pm_offset_ms && d) {
+        const pmBar = Math.floor(now / M5);
+        const prev = iDec > 0 ? decs[iDec - 1] : null;
+        const decision = { ...d, quorum_prev: prev && d.close_ms - prev.close_ms === M15 ? prev.quorum ?? null : null };
+        const levels = brokerLevels(signal);
+        for (const p of positions) {
+          const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
+          const council = parseCouncil(text);
+          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal });
+          const a = positionAction(f, council);
+          pmCalls += 1;
+          const t = tradeOf(p);
+          t.pm_council[council ? "recorded" : "fallback"] += 1;
+          if (["close", "sl", "tp"].includes(a.action)) {
+            pmActions.push({ id: `pm:${p.ticket}:${pmBar}`, ticket: p.ticket, action: a.action, rule: a.rule, sl: a.sl ?? null, tp: a.tp ?? null, at_ms: now });
+            t.pm.push({ at: iso(now), rule: a.rule, council: council ? "recorded" : "fallback" });
+          }
         }
       }
-    }
 
-    const agents = {}, positionMeta = {};
-    for (const p of positions) {
-      if (typeof p.open_intent?.strategy === "string" && p.open_intent.strategy) agents[p.intent_id] = p.open_intent.strategy;
-      positionMeta[p.intent_id] = { mode: typeof p.open_intent?.mode === "string" ? p.open_intent.mode : null, r_dist: finite(p.open_intent?.r_dist) ? p.open_intent.r_dist : null, ...(p.open_intent?.probation === true ? { probation: true } : {}) };
-    }
-    const recentIntentIds = emitted.filter((x) => x.ms > now - OMEGA4_SIM.recent_keep_ms).map((x) => x.id);
-    const stops = positions.length ? commandedStops(emitted.filter((x) => x.it && x.ms > now - STOP_COMMAND_MS && (x.it.kind === "modify_sl" || x.it.kind === "modify_sltp")).map((x) => ({ payload: x.it, status: "done", result: { ok: true } }))) : {};
-    const recentBars = positions.length ? m1.slice(lo125, k) : null;
-    // The ladder's closed candles as ladderCandles builds them (lastClosedCandle over the last 125 1m bars); {} when flat, as live.
-    const candles = recentBars ? { M5: lastClosedCandle(recentBars, 5, now), M15: lastClosedCandle(recentBars, 15, now), H1: lastClosedCandle(recentBars, 60, now) } : {};
-    const re = reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null;
-    const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops };
-    const out = plan(input);
-    plans += 1;
-    if (trace) trace.push({ now, input, output: out });
-
-    let opened = false;
-    for (const it of out.intents) {
-      emitted.push({ id: it.id, ms: now, it });
-      const p = it.ticket != null ? positions.find((x) => x.ticket === it.ticket) : null;
-      if (it.kind === "open") {
-        const key = signal.signal_id;
-        if (!key || trades.has(key)) continue;
-        const pos = { key, ticket: Math.floor(signal.issued_ms / M1) * 10 + (it.side === "BUY" ? 1 : 2), side: it.side, volume: it.volume, open_price: it.entry, sl: it.sl, tp: it.tp, tp0: it.tp, intent_id: it.id, opened_ms: now, open_intent: { ...it } };
-        positions.push(pos);
-        const stopDist = Math.abs(it.entry - it.sl);
-        const riskMoney = stopDist * it.volume * MONEY_PER_PRICE_LOT;
-        const equity = executor.account.equity;
-        trades.set(key, { key, side: it.side, issued_ms: signal.issued_ms, mode: it.mode ?? signal.trading_mode ?? null, agent: it.strategy ?? (signal.trade_agent || null), filled_ms: now, volume0: it.volume, risk0: stopDist * it.volume,
-          risk_pct: equity > 0 ? r2((riskMoney / equity) * 100) : null, profile: profile ?? null, stop_source: it.stop_source ?? null, status: "open", realized: 0, exits: [], partials: 0, sl_moves: 0, tp_moves: 0, protected_ms: null,
-          mfe: 0, mae: 0, pm: [], pm_council: { recorded: 0, fallback: 0 }, entry_notes: out.notes.map((n) => n.code).filter((c) => ["stop_5m", "adaptive_stop", "min_lot_within_cap", "lot_capped_5m", "lot_capped_open_risk", "lot_capped_daily_budget"].includes(c)) });
-        opened = true;
-      } else if (it.kind === "close_all") {
-        for (const q of positions.slice()) closePos(q, priceOut(q, bid0, ask0), it.reason ?? "kill", now);
-      } else if (!p) {
-        continue;
-      } else if (it.kind === "close") {
-        closePos(p, priceOut(p, bid0, ask0), it.reason ?? "close", now);
-      } else if (it.kind === "partial_close" && finite(it.volume) && it.volume > 0) {
-        closePos(p, priceOut(p, bid0, ask0), it.reason ?? "partial", now, it.volume);
-      } else if (it.kind === "modify_sl" || it.kind === "modify_tp" || it.kind === "modify_sltp") {
-        const t = tradeOf(p);
-        if ((it.kind === "modify_sl" || it.kind === "modify_sltp") && finite(it.sl) && it.sl > 0 && it.sl !== p.sl) { p.sl = it.sl; t.sl_moves += 1; if (t.protected_ms == null && isProtected(p)) t.protected_ms = now; }
-        if ((it.kind === "modify_tp" || it.kind === "modify_sltp") && finite(it.tp) && it.tp > 0 && it.tp !== p.tp) { p.tp = it.tp; t.tp_moves += 1; }
+      const agents = {}, positionMeta = {};
+      for (const p of positions) {
+        if (typeof p.open_intent?.strategy === "string" && p.open_intent.strategy) agents[p.intent_id] = p.open_intent.strategy;
+        positionMeta[p.intent_id] = { mode: typeof p.open_intent?.mode === "string" ? p.open_intent.mode : null, r_dist: finite(p.open_intent?.r_dist) ? p.open_intent.r_dist : null, ...(p.open_intent?.probation === true ? { probation: true } : {}) };
       }
+      const recentIntentIds = emitted.filter((x) => x.ms > now - OMEGA4_SIM.recent_keep_ms).map((x) => x.id);
+      const stops = positions.length ? commandedStops(emitted.filter((x) => x.it && x.ms > now - STOP_COMMAND_MS && (x.it.kind === "modify_sl" || x.it.kind === "modify_sltp")).map((x) => ({ payload: x.it, status: "done", result: { ok: true } }))) : {};
+      const recentBars = positions.length ? m1.slice(lo125, k) : null;
+      // The ladder's closed candles as ladderCandles builds them (lastClosedCandle over the last 125 1m bars); {} when flat, as live.
+      const candles = recentBars ? { M5: lastClosedCandle(recentBars, 5, now), M15: lastClosedCandle(recentBars, 15, now), H1: lastClosedCandle(recentBars, 60, now) } : {};
+      const re = reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null;
+      const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops };
+      const out = plan(input);
+      plans += 1;
+      if (trace) trace.push({ now, input, output: out });
+
+      let opened = false;
+      for (const it of out.intents) {
+        // Another entry policy never enters at market: its entries come only from its own fills (entry.inMinute).
+        if (entry && it.kind === "open") continue;
+        emitted.push({ id: it.id, ms: now, it });
+        const p = it.ticket != null ? positions.find((x) => x.ticket === it.ticket) : null;
+        if (it.kind === "open") {
+          const key = signal.signal_id;
+          if (!key || trades.has(key)) continue;
+          openTrade({ key, it, now, issuedMs: signal.issued_ms, mode: it.mode ?? signal.trading_mode ?? null, agent: it.strategy ?? (signal.trade_agent || null), equity: executor.account.equity, profile, noteCodes: out.notes.map((n) => n.code) });
+          opened = true;
+        } else if (it.kind === "close_all") {
+          for (const q of positions.slice()) closePos(q, priceOut(q, bid0, ask0), it.reason ?? "kill", now);
+        } else if (!p) {
+          continue;
+        } else if (it.kind === "close") {
+          closePos(p, priceOut(p, bid0, ask0), it.reason ?? "close", now);
+        } else if (it.kind === "partial_close" && finite(it.volume) && it.volume > 0) {
+          closePos(p, priceOut(p, bid0, ask0), it.reason ?? "partial", now, it.volume);
+        } else if (it.kind === "modify_sl" || it.kind === "modify_tp" || it.kind === "modify_sltp") {
+          const t = tradeOf(p);
+          if ((it.kind === "modify_sl" || it.kind === "modify_sltp") && finite(it.sl) && it.sl > 0 && it.sl !== p.sl) { p.sl = it.sl; t.sl_moves += 1; if (t.protected_ms == null && isProtected(p)) t.protected_ms = now; }
+          if ((it.kind === "modify_tp" || it.kind === "modify_sltp") && finite(it.tp) && it.tp > 0 && it.tp !== p.tp) { p.tp = it.tp; t.tp_moves += 1; }
+        }
+      }
+      if (!entry && !opened && entryKey && entryLive && !trades.has(entryKey)) notes.set(entryKey, { gate: out.notes.at(-1)?.code ?? "no_note", last_ms: now });
+      // Another entry policy places its own order on this signal (its gates are planIntents' own, see entry.afterPlan).
+      if (entry) entry.afterPlan({ now, signal, decision: d, entryKey, entryLive, input, plan, executorFor, sym, bid0, ask0, spread, notes, trades, recentIntentIds: () => emitted.filter((x) => x.ms > now - OMEGA4_SIM.recent_keep_ms).map((x) => x.id) });
     }
-    if (!opened && entryKey && entryLive && !trades.has(entryKey)) notes.set(entryKey, { gate: out.notes.at(-1)?.code ?? "no_note", last_ms: now });
 
     // Inside the minute: the broker's stop first, then the target; a SELL closes at the ask.
     for (const p of positions.slice()) {
@@ -423,6 +446,14 @@ export function replayOmega4({
       if (finite(p.sl) && p.sl > 0 && dir * (adverse - p.sl) <= 0) closePos(p, p.sl, brokerExit(p, "stop"), now + M1 - 1);
       else if (finite(p.tp) && p.tp > 0 && dir * (favorable - p.tp) >= 0) closePos(p, p.tp, brokerExit(p, "target"), now + M1 - 1);
     }
+    // Another entry policy's order filled inside this minute: opened as a v4 trade, from the next minute managed as one.
+    if (entry) entry.inMinute({ now, bar, spread, fill: (f) => {
+      const p = openTrade({ ...f, now });
+      // Inside the fill's own minute the order of the prices is unknown: the stop counts (conservative), the target waits.
+      const adverse = p.side === "BUY" ? bar.l : bar.h + spread, dir = p.side === "BUY" ? 1 : -1;
+      if (finite(p.sl) && p.sl > 0 && dir * (adverse - p.sl) <= 0) closePos(p, p.sl, brokerExit(p, "stop"), now + M1 - 1);
+      return p;
+    } });
   }
 
   // The records: each BUY/SELL decision whose window falls in the span.
@@ -432,7 +463,7 @@ export function replayOmega4({
     const open = positions.find((p) => p.key === t.key);
     let openR = null;
     if (open && lastBar) { const px = open.side === "BUY" ? lastBar.c : lastBar.c + spread; openR = rOf(t, t.realized + (open.side === "BUY" ? 1 : -1) * (px - open.open_price) * open.volume); }
-    records[t.key] = toRecord(t, { openR });
+    records[t.key] = toRecord(t, { openR, version });
   }
   const stopAt = lastMs ?? start;
   for (const d of decs) {
@@ -445,7 +476,7 @@ export function replayOmega4({
     records[d.decision_key] = {
       decision_key: d.decision_key, side: d.stance, issued_ms: d.close_ms, trading_mode: TRADING_MODES.includes(d.trading_mode) ? d.trading_mode : null, agent: typeof d.trade?.agent === "string" ? d.trade.agent : null,
       omega4_status: pending ? "pending" : "skipped", omega4_gate: pending ? null : n?.gate ?? (d.trade ? "no_bars" : "no_plan"),
-      omega4_filled_at: null, omega4_closed_at: null, omega4_exit: null, r_omega4: null, omega4_size: null, omega4_json: JSON.stringify({ version: OMEGA4_VERSION, gate: n?.gate ?? null })
+      omega4_filled_at: null, omega4_closed_at: null, omega4_exit: null, r_omega4: null, omega4_size: null, omega4_json: JSON.stringify({ version, gate: n?.gate ?? null })
     };
   }
   // The checkpoint: the state at the next minute. Intent ids older than 2 hours only matter for a ticket still open (its
@@ -455,18 +486,20 @@ export function replayOmega4({
   const recent = emitted.filter((x) => x.ms > nextMs - 2 * 3600_000 || [...open].some((t) => x.id.includes(`:${t}:`)))
     .map((x) => ({ id: x.id, ms: x.ms, ...(x.it && (x.it.kind === "modify_sl" || x.it.kind === "modify_sltp") && x.ms > nextMs - STOP_COMMAND_MS - M1 ? { it: x.it } : {}) }));
   const checkpoint = {
-    version: OMEGA4_VERSION, at_ms: nextMs, recent, reentry: reentry && nextMs - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null,
+    version, at_ms: nextMs, recent, reentry: reentry && nextMs - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null,
     balance: r2(ownBalance), day_ms: ownDayMs, day_start: r2(ownDayStart),
-    positions: clone(positions), trades: clone([...trades.values()].filter((t) => t.status === "open")), notes: [...notes].filter(([, n]) => n.last_ms > nextMs - 3600_000)
+    positions: clone(positions), trades: clone([...trades.values()].filter((t) => t.status === "open")), notes: [...notes].filter(([, n]) => n.last_ms > nextMs - 3600_000),
+    ...(entry ? { entry: entry.state() } : {})
   };
   return { records, checkpoint, steps, plans, pm_calls: pmCalls, decisions: decs.length, last_ms: lastMs, more, open_positions: positions.length };
 }
 
-function toRecord(t, { openR = null } = {}) {
+function toRecord(t, { openR = null, version = OMEGA4_VERSION } = {}) {
   const json = {
-    version: OMEGA4_VERSION, entry_ms: t.filled_ms, profile: t.profile, risk_pct: t.risk_pct, stop_source: t.stop_source, entry_notes: t.entry_notes,
+    version, entry_ms: t.filled_ms, profile: t.profile, risk_pct: t.risk_pct, stop_source: t.stop_source, entry_notes: t.entry_notes,
     protected_at: t.protected_ms != null ? iso(t.protected_ms) : null, sl_moves: t.sl_moves, tp_moves: t.tp_moves, partials: t.partials,
-    exits: t.exits, pm: t.pm.slice(-20), pm_council: t.pm_council, mfe_r: r3(t.mfe), mae_r: r3(t.mae), open_r: openR
+    exits: t.exits, pm: t.pm.slice(-20), pm_council: t.pm_council, mfe_r: r3(t.mfe), mae_r: r3(t.mae), open_r: openR,
+    ...(t.extra ? { entry_policy: t.extra } : {})
   };
   return {
     decision_key: t.key, side: t.side, issued_ms: t.issued_ms, trading_mode: TRADING_MODES.includes(t.mode) ? t.mode : null, agent: t.agent,
@@ -786,13 +819,25 @@ export async function readArchivedBars(env, fromMs, toMs) {
 }
 
 /**
+ * The 1m bars a replay from checkpoint `cp` reads: the closed KV minutes (`live`, minuteBars) from the checkpoint less
+ * the warm-up (the ATR and the 5m structure), else the last 3 days, and before the KV series the D1 archive.
+ */
+export async function windowBars(env, liveBars, { cp = null, now = Date.now() } = {}) {
+  const live = liveBars.filter((b) => b.t + M1 <= now);
+  const want = cp ? cp.at_ms - OMEGA4_SIM.warmup_ms : now - 3 * 86_400_000;
+  const liveStart = live.length ? live[0].t : now;
+  return liveStart > want ? mergeMinuteBars(await readArchivedBars(env, want, liveStart), live) : live.filter((b) => b.t >= want);
+}
+
+/**
  * The cron step (the ledger's 5-minute run): the bars archived, then the replay from the checkpoint (the whole replay
  * state at its next minute) for at most MAX_REPLAY_MINUTES minutes, its records into D1 (ledger_omega4, and the
  * omega4_* columns of the ledger's own rows), the next checkpoint into KV. The bars come from the KV 1m series and,
  * where it no longer reaches back, from the archive. Returns the run's work: decisions seen, minutes replayed,
- * planIntents and positionAction calls, the wall time. Never throws.
+ * planIntents and positionAction calls, the wall time. `shared`, when given, receives what the run loaded ({ from, m1,
+ * decisions, ctx }) for the limit replay that follows it in the same step (src/ledger-omega-limit.mjs). Never throws.
  */
-export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes = MAX_REPLAY_MINUTES } = {}) {
+export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes = MAX_REPLAY_MINUTES, shared = null } = {}) {
   if (!env?.DB) return { status: "unavailable" };
   const t0 = Date.now();
   try {
@@ -802,11 +847,7 @@ export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes
     let cp = null;
     try { cp = JSON.parse((await env.SIGNAL_CACHE?.get?.(OMEGA4_CHECKPOINT_KEY)) || "null"); } catch { cp = null; }
     if (cp?.version !== OMEGA4_VERSION || !finite(cp?.at_ms)) cp = null;
-    const live = minuteBars(raw).filter((b) => b.t + M1 <= now);
-    // From the checkpoint less the warm-up (the ATR and the 5m structure), else the last 3 days.
-    const want = cp ? cp.at_ms - OMEGA4_SIM.warmup_ms : now - 3 * 86_400_000;
-    const liveStart = live.length ? live[0].t : now;
-    const m1 = liveStart > want ? mergeMinuteBars(await readArchivedBars(env, want, liveStart), live) : live.filter((b) => b.t >= want);
+    const m1 = await windowBars(env, minuteBars(raw), { cp, now });
     if (m1.length < 60) return { status: "no_bars", archived };
     const earliest = m1[0].t + OMEGA4_SIM.warmup_ms;
     // A gap only when no bar at all lies before the checkpoint (a weekend inside the warm-up is the market's, not ours).
@@ -819,6 +860,7 @@ export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes
     const from = cp ? cp.at_ms : earliest;
     const decisions = ((await env.DB.prepare(DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []).map(decisionFromRow).filter(Boolean);
     const ctx = await loadOmega4Context(env, { sinceMs: from, now });
+    if (shared && typeof shared === "object") Object.assign(shared, { from, m1, decisions, ctx });
     const run = replayOmega4({ bars: m1, decisions, from, to: now, state: cp, maxSteps: maxMinutes, ...ctx });
     const keys = Object.keys(run.records);
     let written = 0;

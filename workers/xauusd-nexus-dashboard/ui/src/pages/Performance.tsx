@@ -1237,6 +1237,71 @@ function OmegaParityPanel({ parity }: { parity: any }) {
 }
 
 /**
+ * Maker vs taker (docs/RFC_OMEGA_LIMIT_ENTRY.md §8, stage 2, measurement only): per mode, the limit entry at the
+ * decision's level (maker, src/ledger-omega-limit.mjs) against v4's market entry (taker) on the same signals, from
+ * `by_mode[mode].limit`. A missed limit counts 0R in the pair. R and counts only, never a price.
+ */
+function MakerTakerPanel({ byMode }: { byMode: any }) {
+  if (!byMode) return <Empty>No per-mode data yet.</Empty>;
+  const any = MODES.some((m) => byMode[m]?.limit?.decisions);
+  if (!any) return <Empty>No limit replay yet: it runs after v4 in the ledger cron, on the minutes v4 has replayed.</Empty>;
+  return (
+    <div className="table-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Signals</th>
+            <th>Fill rate</th>
+            <th>Maker R / trade</th>
+            <th>Paired R maker vs taker</th>
+            <th>Mean ΔR</th>
+            <th>Maker better</th>
+            <th>Taker better</th>
+            <th>Missed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {MODES.map((m) => {
+            const lim = byMode[m]?.limit;
+            const p = lim?.paired;
+            return (
+              <tr key={m}>
+                <td className="font-semibold capitalize text-slate-200">{m}</td>
+                <td className="mono">{lim?.decisions ?? 0}</td>
+                <td className="mono">
+                  {pct(lim?.fill_rate)}
+                  <span className="text-slate-500"> · {lim?.filled ?? 0} of {(lim?.filled ?? 0) + (lim?.missed ?? 0)}</span>
+                </td>
+                <td className="mono">{lim?.trades ? <>{r(lim.expectancy_r)}<span className="text-slate-500"> · {lim.trades}</span></> : <span className="text-slate-500">—</span>}</td>
+                <td className="mono">
+                  {p?.n ? (
+                    <>
+                      <span style={{ color: (p.maker_r ?? 0) >= (p.taker_r ?? 0) ? C.bull : C.bear }}>{r(p.maker_r)}</span> vs {r(p.taker_r)}
+                      <span className="text-slate-500"> · {p.n} pairs ({p.both_traded} both traded)</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
+                <td className="mono">{p?.mean_dr == null ? "—" : r(p.mean_dr)}</td>
+                <td className="mono text-emerald-300">{p?.n ? p.maker_better : "—"}</td>
+                <td className="mono text-rose-300">{p?.n ? p.taker_better : "—"}</td>
+                <td className="text-[11px] text-slate-400">
+                  {Object.entries(lim?.missed_by ?? {})
+                    .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
+                    .join(" · ") || "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
  * Performance (owner request 2026-11-07): the Signal Ledger. Every directional signal of the Decision
  * Engine followed on closed bars to its outcome in R. Advisory only: R multiples of the advice, never money, lots or positions.
  */
@@ -1473,6 +1538,15 @@ export default function Performance() {
                 hint={l?.rules?.omega4?.parity ?? "v4 against the live account's real Omega trades"}
               >
                 <OmegaParityPanel parity={l?.parity} />
+              </Panel>
+
+              {/* The limit entry against v4's market entry on the same signals (RFC_OMEGA_LIMIT_ENTRY stage 2, measurement only) */}
+              <Panel
+                title="Maker vs taker"
+                icon={<Split className="h-3.5 w-3.5 text-cyan-400" />}
+                hint={l?.rules?.limit ? `${l.rules.limit.placement}. Missed: ${l.rules.limit.missed}. ${l.rules.limit.pairing}. Measurement only: live entries stay at market.` : "The limit entry at the decision's level against v4's market entry, per mode"}
+              >
+                <MakerTakerPanel byMode={l?.by_mode} />
               </Panel>
 
               {/* Interactive Equity Curve & Underwater Chart */}
