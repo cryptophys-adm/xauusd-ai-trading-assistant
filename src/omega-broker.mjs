@@ -1546,6 +1546,8 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
 
   return {
     engine: { env_enabled: engineEnvEnabled(env), ...settings.settings, settings_version: settings.version, updated_by: settings.updated_by, updated_ms: settings.updated_ms },
+    // OMEGA_DEFAULTS for the Engine form's Default button: what it fills where the active profile sets nothing.
+    engine_defaults: { risk_pct: OMEGA_DEFAULTS.risk_pct, max_positions: OMEGA_DEFAULTS.max_positions, max_daily_loss_pct: OMEGA_DEFAULTS.max_daily_loss_pct, max_spread_points: OMEGA_DEFAULTS.max_spread_points, max_signal_age_min: Math.round(OMEGA_DEFAULTS.max_signal_age_ms / 60_000) },
     // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md): the owner's entry_order switch, what the terminal allows, and Omega's
     // resting limit with its status, last council reason and expiry.
     entry_order: await entryOrderView(db, st, settings.settings, now),
@@ -1602,6 +1604,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       spec_status: a.spec_status, spec_problem: a.spec_problem, spec_hash: a.spec_hash, spec_since_ms: a.spec_since_ms, spec_validated_ms: a.spec_validated_ms,
       spec_text: specStatusText(a),
       profile: a.profile, profile_label: PROFILES[a.profile]?.label ?? a.profile, ceiling: a.ceiling, agent_mode: a.agent_mode, custom: a.custom,
+      // The profile's own values (PROFILES, Safe for an unknown id as effectiveLimits reads it; null each for Custom):
+      // the Engine form's Default button and its "set, applied" notes (owner 2026-11-20: "Follow the active profile").
+      profile_limits: (() => { const P = PROFILES[a.profile] ?? PROFILES.safe; return { target_risk_pct: P.target_risk_pct, max_positions: P.max_positions, daily_loss_pct: P.daily_loss_pct }; })(),
       profile_by: a.profile_by, profile_ms: a.profile_ms,
       // The profile agent (phase 3): its proposal in approval mode, the block after a kill or the daily loss, the last upgrade.
       pending_upgrade: a.pending_upgrade, upgrade_block_until_ms: a.upgrade_block_until_ms, last_upgrade_ms: a.last_upgrade_ms,

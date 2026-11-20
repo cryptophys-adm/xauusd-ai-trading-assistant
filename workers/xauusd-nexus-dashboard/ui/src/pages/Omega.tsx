@@ -24,6 +24,7 @@ import { get } from "../lib/api";
 import { C } from "../components/charts";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
 import { KeyZoneBands } from "../lib/keyZoneBands";
+import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -803,6 +804,23 @@ export default function Omega() {
   const appliedRisk = e.risk_pct != null ? appliedLimit(e.risk_pct, capOf("risk")) : null;
   const appliedPositions = e.max_positions != null ? appliedLimit(e.max_positions, capOf("positions")) : null;
   const appliedDaily = e.max_daily_loss_pct != null ? appliedLimit(e.max_daily_loss_pct, capOf("daily")) : null;
+  // The Engine form (owner 2026-11-20, "Follow the active profile"): a field above what the profile applies says so, and
+  // Default fills the profile's values (OMEGA_DEFAULTS without an active profile); Save still writes them.
+  const formNotes = appliedNotes({ risk_pct: eRisk, max_positions: eMaxPos, max_daily_loss_pct: eLoss }, account?.profile_limits ?? null, account?.profile_label ?? null);
+  const engineDefaults = engineDefaultsFor(account?.profile_limits ?? null, b?.engine_defaults ?? null);
+  // A Custom profile sets no values to follow, so Default stays off there rather than filling Omega's lower defaults
+  // over the owner's own numbers.
+  const customProfile = !!account?.profile_limits && account.profile_limits.target_risk_pct == null && account.profile_limits.max_positions == null && account.profile_limits.daily_loss_pct == null;
+  const fillEngineDefaults = () => {
+    const d = engineDefaults;
+    setEngineDirty(true);
+    setERisk(String(d.risk_pct));
+    setEMaxPos(String(d.max_positions));
+    setELoss(String(d.max_daily_loss_pct));
+    setESpread(String(d.max_spread_points));
+    setEAge(String(d.max_signal_age_min));
+    setEngineMsg({ tone: "text-cyan-200", text: `${account?.profile_label ? `${account.profile_label} defaults` : "Omega defaults"} filled; press Save to apply.` });
+  };
 
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
@@ -2754,10 +2772,13 @@ export default function Omega() {
               <div className="grid grid-cols-[1fr_110px] items-center gap-x-3 gap-y-1.5 text-[11px]">
                 <label htmlFor="e-risk" className="text-slate-400">Risk / trade (%)</label>
                 <input id="e-risk" type="number" min="0.01" max="10" step="0.01" value={eRisk} onChange={(ev) => { setEngineDirty(true); setERisk(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                {formNotes.risk_pct ? <p className="col-span-2 -mt-1 text-right text-[10px] text-amber-200">{formNotes.risk_pct}</p> : null}
                 <label htmlFor="e-maxpos" className="text-slate-400">Max positions</label>
                 <input id="e-maxpos" type="number" min="1" max="5" step="1" value={eMaxPos} onChange={(ev) => { setEngineDirty(true); setEMaxPos(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                {formNotes.max_positions ? <p className="col-span-2 -mt-1 text-right text-[10px] text-amber-200">{formNotes.max_positions}</p> : null}
                 <label htmlFor="e-loss" className="text-slate-400">Max daily loss (%)</label>
                 <input id="e-loss" type="number" min="0.1" max="20" step="0.1" value={eLoss} onChange={(ev) => { setEngineDirty(true); setELoss(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
+                {formNotes.max_daily_loss_pct ? <p className="col-span-2 -mt-1 text-right text-[10px] text-amber-200">{formNotes.max_daily_loss_pct}</p> : null}
                 <label htmlFor="e-spread" className="text-slate-400">Max spread (pts)</label>
                 <input id="e-spread" type="number" min="1" max="1000" step="1" value={eSpread} onChange={(ev) => { setEngineDirty(true); setESpread(ev.target.value); }} className="rounded-sm border border-white/10 bg-black/30 px-2 py-1 text-slate-100" />
                 <label htmlFor="e-age" className="text-slate-400">Max signal age (min)</label>
@@ -2793,6 +2814,17 @@ export default function Omega() {
               <div className="flex flex-wrap gap-2 pt-1">
                 <button type="submit" id="e-save" disabled={!canControl} className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40">
                   Save
+                </button>
+                {/* Fills the form only (never enabled, Arm or the profile); Save writes it through the audited settings path. */}
+                <button
+                  type="button"
+                  id="e-default"
+                  disabled={!canControl || customProfile}
+                  onClick={fillEngineDefaults}
+                  title={customProfile ? "The Custom profile sets no values to follow: set them by hand." : `Fill ${engineDefaults.risk_pct}% risk, ${engineDefaults.max_positions} positions, ${engineDefaults.max_daily_loss_pct}% daily loss, ${engineDefaults.max_spread_points} pts spread and ${engineDefaults.max_signal_age_min} min signal age (${account?.profile_label ? `the ${account.profile_label} profile` : "Omega's defaults"}). Press Save to apply.`}
+                  className="btn border-cyan-400/30 bg-cyan-400/10 text-cyan-200 disabled:opacity-40"
+                >
+                  Default
                 </button>
                 <button
                   type="button"

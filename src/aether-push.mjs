@@ -197,30 +197,104 @@ export async function pushWeightingReport(env, replay, { now = Date.now(), nexus
 // The execution report (owner 2026-11-12: the Omega policy per trading mode in the Signal Ledger "untuk
 // inputan ke aether dan selanjutnya akan menjadi knowledge"): R multiples and times per mode, never a
 // price. Sent when its content changed; Aether's curator turns a measured gap into a knowledge item.
+// One row (the latest push). `rejected_streak` counts the pushes refused in a row and `rejected_since` dates the first
+// of them (2026-11-20: every push from 18 to 20 Nov was refused and nothing said so; the health alert reads them).
 const EXECUTION_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_execution_report_pushes (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   content_sha TEXT NOT NULL,
   status TEXT NOT NULL,
   detail TEXT,
-  pushed_at TEXT NOT NULL
+  pushed_at TEXT NOT NULL,
+  rejected_streak INTEGER NOT NULL DEFAULT 0,
+  rejected_since TEXT
 )`;
+let executionSchemaReady = false;
+async function ensureExecutionPushSchema(db) {
+  if (executionSchemaReady) return;
+  await db.prepare(EXECUTION_PUSH_SQL).run();
+  // A table created before 2026-11-20 has neither column.
+  try { await db.prepare("ALTER TABLE aether_execution_report_pushes ADD COLUMN rejected_streak INTEGER NOT NULL DEFAULT 0").run(); } catch { /* already there */ }
+  try { await db.prepare("ALTER TABLE aether_execution_report_pushes ADD COLUMN rejected_since TEXT").run(); } catch { /* already there */ }
+  executionSchemaReady = true;
+}
+export function resetExecutionPushSchemaForTests() { executionSchemaReady = false; }
+
+/**
+ * Pure: the refused pushes in a row after this push, and since when. A refusal after a refusal counts on (a row from
+ * before the counter, refused, counts as one); an accepted push ends the run.
+ */
+export function nextRejectedStreak(prev, status, at) {
+  if (status !== "rejected") return { rejected_streak: 0, rejected_since: null };
+  if (prev?.status !== "rejected") return { rejected_streak: 1, rejected_since: at };
+  return { rejected_streak: Math.max(Number(prev.rejected_streak) || 0, 1) + 1, rejected_since: prev.rejected_since ?? prev.pushed_at ?? at };
+}
 
 /** Sweep step: sends the execution report when it changed. Never throws for an Aether failure. */
 export async function pushExecutionReport(env, report) {
   if (typeof env?.AETHER?.ingestExecutionReport !== "function") return { status: "disabled" };
   if (!env.DB || !report) return { status: "unavailable" };
-  await env.DB.prepare(EXECUTION_PUSH_SQL).run();
+  await ensureExecutionPushSchema(env.DB);
   const { generated_at: _g, ...content } = report;
   const sha = await sha256(JSON.stringify(content));
-  const prev = await env.DB.prepare("SELECT content_sha, status FROM aether_execution_report_pushes WHERE id = 1").first();
+  const prev = await env.DB.prepare("SELECT content_sha, status, pushed_at, rejected_streak, rejected_since FROM aether_execution_report_pushes WHERE id = 1").first();
   if (prev?.content_sha === sha && prev.status === "accepted") return { status: "unchanged" };
   let res;
   try { res = await env.AETHER.ingestExecutionReport(report); }
   catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 200) }; }
   const status = res?.accepted ? "accepted" : "rejected";
-  await env.DB.prepare("INSERT INTO aether_execution_report_pushes (id, content_sha, status, detail, pushed_at) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at")
-    .bind(sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, report.generated_at ?? new Date().toISOString()).run();
+  const at = report.generated_at ?? new Date().toISOString();
+  const streak = nextRejectedStreak(prev, status, at);
+  await env.DB.prepare("INSERT INTO aether_execution_report_pushes (id, content_sha, status, detail, pushed_at, rejected_streak, rejected_since) VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content_sha = excluded.content_sha, status = excluded.status, detail = excluded.detail, pushed_at = excluded.pushed_at, rejected_streak = excluded.rejected_streak, rejected_since = excluded.rejected_since")
+    .bind(sha, status, res?.reason ? String(res.reason).slice(0, 300) : null, at, streak.rejected_streak, streak.rejected_since).run();
   return { status, trades: (report.trades || []).length, ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
+}
+
+// A validator code: a word, optionally ":" and a trade index (at most 3 digits; Aether takes 500 trades) or a key path
+// starting with a letter ("forbidden_key:report.trades[3].entry"). Anything else is dropped, so the alert never carries
+// a price, an account number or an email address.
+const REJECTION_CODE = /^[a-z][a-z0-9_]{0,47}(?::(?:\d{1,3}|[a-z][a-z0-9_.[\]]{0,63}))?$/i;
+/** Pure: the validator codes of a rejection detail ("modes_invalid, trade_invalid:77"), at most 8, in order. */
+export function rejectionCodes(detail) {
+  const out = [];
+  for (const t of String(detail ?? "").split(",").map((s) => s.trim())) if (REJECTION_CODE.test(t) && !out.includes(t)) out.push(t);
+  return out.slice(0, 8);
+}
+
+/** Refused pushes in a row that raise the health alert. */
+export const EXECUTION_REJECTED_ALERT_STREAK = 2;
+/**
+ * A push happens only when the report's content changes, so two in a row can take hours (orchestrator review of #503):
+ * one refusal older than this with no accepted push since raises the alert too.
+ */
+export const EXECUTION_REJECTED_ALERT_AGE_MS = 24 * 3600_000;
+
+/**
+ * Pure: the health alert of the latest execution report push, or null. It holds while the latest two (or more) pushes
+ * were refused, or the run of refusals started more than EXECUTION_REJECTED_ALERT_AGE_MS before `now`. Its key carries the run's first refusal and the codes, and it is `report_once`: one report per distinct
+ * rejection until a push is accepted (a code list seen earlier in the same run reopens without a second report).
+ */
+export function executionReportAlert(row, now = Date.now()) {
+  if (row?.status !== "rejected") return null;
+  const startedMs = Date.parse(row.rejected_since ?? row.pushed_at ?? "");
+  const old = Number.isFinite(startedMs) && now - startedMs > EXECUTION_REJECTED_ALERT_AGE_MS;
+  if (!(Number(row.rejected_streak) >= EXECUTION_REJECTED_ALERT_STREAK) && !old) return null;
+  const codes = rejectionCodes(row.detail);
+  const list = codes.length ? codes.join(", ") : "no validator code given";
+  const since = typeof row.rejected_since === "string" ? row.rejected_since : null;
+  const sinceText = since && Number.isFinite(Date.parse(since)) ? ` since ${new Date(Date.parse(since)).toISOString().slice(0, 16).replace("T", " ")} UTC` : "";
+  return {
+    key: `aether_execution_rejected:${since ?? "unknown"}:${codes.join(",") || "none"}`.slice(0, 240),
+    kind: "aether_execution_rejected",
+    report_once: true,
+    subject: `Aether rejected the execution report ${Math.max(Number(row.rejected_streak) || 0, 1) > 1 ? `${Number(row.rejected_streak)} times in a row` : "and nothing was accepted for over 24 hours"}${sinceText}: ${list}. Omega's results reach no knowledge until a push is accepted.`,
+    detail: { codes, rejected_in_a_row: Number(row.rejected_streak), rejected_since: since, last_push_at: row.pushed_at ?? null }
+  };
+}
+
+/** The execution report health alert, from the push row (null without the table or the counter). Never throws. */
+export async function executionReportIssue(env, now = Date.now()) {
+  try { return executionReportAlert(await env.DB.prepare("SELECT status, detail, pushed_at, rejected_streak, rejected_since FROM aether_execution_report_pushes WHERE id = 1").first(), now); }
+  catch { return null; }
 }
 
 const MODEL_PUSH_SQL = `CREATE TABLE IF NOT EXISTS aether_model_report_pushes (
