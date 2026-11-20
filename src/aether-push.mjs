@@ -262,14 +262,22 @@ export function rejectionCodes(detail) {
 
 /** Refused pushes in a row that raise the health alert. */
 export const EXECUTION_REJECTED_ALERT_STREAK = 2;
+/**
+ * A push happens only when the report's content changes, so two in a row can take hours (orchestrator review of #503):
+ * one refusal older than this with no accepted push since raises the alert too.
+ */
+export const EXECUTION_REJECTED_ALERT_AGE_MS = 24 * 3600_000;
 
 /**
  * Pure: the health alert of the latest execution report push, or null. It holds while the latest two (or more) pushes
- * were refused. Its key carries the run's first refusal and the codes, and it is `report_once`: one report per distinct
+ * were refused, or the run of refusals started more than EXECUTION_REJECTED_ALERT_AGE_MS before `now`. Its key carries the run's first refusal and the codes, and it is `report_once`: one report per distinct
  * rejection until a push is accepted (a code list seen earlier in the same run reopens without a second report).
  */
-export function executionReportAlert(row) {
-  if (row?.status !== "rejected" || !(Number(row.rejected_streak) >= EXECUTION_REJECTED_ALERT_STREAK)) return null;
+export function executionReportAlert(row, now = Date.now()) {
+  if (row?.status !== "rejected") return null;
+  const startedMs = Date.parse(row.rejected_since ?? row.pushed_at ?? "");
+  const old = Number.isFinite(startedMs) && now - startedMs > EXECUTION_REJECTED_ALERT_AGE_MS;
+  if (!(Number(row.rejected_streak) >= EXECUTION_REJECTED_ALERT_STREAK) && !old) return null;
   const codes = rejectionCodes(row.detail);
   const list = codes.length ? codes.join(", ") : "no validator code given";
   const since = typeof row.rejected_since === "string" ? row.rejected_since : null;
@@ -278,14 +286,14 @@ export function executionReportAlert(row) {
     key: `aether_execution_rejected:${since ?? "unknown"}:${codes.join(",") || "none"}`.slice(0, 240),
     kind: "aether_execution_rejected",
     report_once: true,
-    subject: `Aether rejected the execution report ${Number(row.rejected_streak)} times in a row${sinceText}: ${list}. Omega's results reach no knowledge until a push is accepted.`,
+    subject: `Aether rejected the execution report ${Math.max(Number(row.rejected_streak) || 0, 1) > 1 ? `${Number(row.rejected_streak)} times in a row` : "and nothing was accepted for over 24 hours"}${sinceText}: ${list}. Omega's results reach no knowledge until a push is accepted.`,
     detail: { codes, rejected_in_a_row: Number(row.rejected_streak), rejected_since: since, last_push_at: row.pushed_at ?? null }
   };
 }
 
 /** The execution report health alert, from the push row (null without the table or the counter). Never throws. */
-export async function executionReportIssue(env) {
-  try { return executionReportAlert(await env.DB.prepare("SELECT status, detail, pushed_at, rejected_streak, rejected_since FROM aether_execution_report_pushes WHERE id = 1").first()); }
+export async function executionReportIssue(env, now = Date.now()) {
+  try { return executionReportAlert(await env.DB.prepare("SELECT status, detail, pushed_at, rejected_streak, rejected_since FROM aether_execution_report_pushes WHERE id = 1").first(), now); }
   catch { return null; }
 }
 

@@ -286,9 +286,10 @@ export async function detectHealthIssues(env, now = Date.now()) {
     if (issue) out.push(issue);
   } catch { /* never fatal */ }
 
-  // 12. Aether refused the execution report twice in a row or more (2026-11-18 to 11-20: every push refused, silently).
+  // 12. Aether refused the execution report twice in a row or more, or once with nothing accepted for over 24 hours
+  //     (2026-11-18 to 11-20: every push refused, silently).
   //     The validator's codes only, never a price, an account or an email (src/aether-push.mjs executionReportAlert).
-  const execution = await executionReportIssue(env);
+  const execution = await executionReportIssue(env, now);
   if (execution) out.push(execution);
 
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()

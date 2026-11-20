@@ -70,7 +70,7 @@ test("EX2 a table from before the counter gets its columns; a refused row there 
 test("EX3 the alert holds from the second refusal in a row and carries the validator codes only", () => {
   assert.equal(EXECUTION_REJECTED_ALERT_STREAK, 2);
   const base = { status: "rejected", detail: "modes_invalid, trade_invalid:77", rejected_since: "2026-11-18T06:00:00.000Z", pushed_at: "2026-11-20T08:00:00.000Z" };
-  assert.equal(executionReportAlert({ ...base, rejected_streak: 1 }), null, "one refusal is no alert");
+  assert.equal(executionReportAlert({ ...base, rejected_streak: 1 }, Date.parse("2026-11-18T07:00:00.000Z")), null, "one refusal within 24 hours is no alert");
   assert.equal(executionReportAlert({ ...base, status: "accepted", rejected_streak: 0 }), null);
   const a = executionReportAlert({ ...base, rejected_streak: 2 });
   assert.equal(a.kind, "aether_execution_rejected");
@@ -117,4 +117,15 @@ test("EX4 health alerts: reported once per distinct rejection until a push is ac
   await sweep(7);
   assert.equal(sent().length, 3, "a new run after an accepted push reports again");
   for (const c of sent()) assert.ok(!/@|\d{5,}/.test(JSON.stringify(c.report.body.detail.codes)));
+});
+
+test("EX5 one refusal older than 24 hours with no accepted push since raises the alert too (orchestrator review of #503)", () => {
+  const since = "2026-11-18T06:00:00.000Z";
+  const row = { status: "rejected", detail: "modes_invalid, trade_invalid:77", pushed_at: since, rejected_streak: 1, rejected_since: since };
+  assert.equal(executionReportAlert(row, Date.parse("2026-11-19T05:00:00.000Z")), null, "23 h: not yet");
+  const a = executionReportAlert(row, Date.parse("2026-11-19T07:00:00.000Z"));
+  assert.ok(a && a.report_once, "25 h: the alert");
+  assert.match(a.subject, /nothing was accepted for over 24 hours since 2026-11-18 06:00 UTC: modes_invalid, trade_invalid:77/);
+  assert.equal(a.key, executionReportAlert({ ...row, rejected_streak: 2 }, Date.parse("2026-11-19T07:00:00.000Z")).key, "the same run keeps one key, so the second refusal does not report again");
+  assert.equal(executionReportAlert({ ...row, status: "accepted", rejected_streak: 0 }, Date.parse("2026-11-20T07:00:00.000Z")), null);
 });
