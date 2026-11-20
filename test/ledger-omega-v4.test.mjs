@@ -7,7 +7,9 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
   replayOmega4, minuteBars, aggregate, structureOf, parseCouncil, decisionFromRow, profileTimeline, balanceTimeline,
-  omegaParity, liveTradesFrom, liveExitCode, exitClass, runOmega4, runOmegaParity, PARITY_PASS, OMEGA4_CHECKPOINT_KEY, OMEGA4_PARITY_KEY
+  omegaParity, liveTradesFrom, liveExitCode, exitClass, runOmega4, runOmegaParity, PARITY_PASS, OMEGA4_CHECKPOINT_KEY, OMEGA4_PARITY_KEY,
+  PARITY_MIN_TRADES, MAX_REPLAY_MINUTES, mergeMinuteBars, archiveMinuteBars, readArchivedBars, nextEra, currentEra, engineCodeSource, sha256Hex,
+  ENGINE_CODE, ENGINE_CODE_HASH, ERA_SEED_MS, OMEGA4_ERA_KEY
 } from "../src/ledger-omega4.mjs";
 import { structureOf as adapterStructureOf } from "../market-data-ingestion/src/broker-trigger.mjs";
 import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
@@ -182,33 +184,39 @@ test("V6. TP2 with the break-even stop: one modify_sltp on the council's verdict
   assert.equal(exitClass(r.omega4_exit), "target");
 });
 
-test("V7. the parity check: matched per decision and side, the exit table, and pass or fail at the thresholds", () => {
+test("V7. the parity check: matched per decision and side, the exit table, pass or fail at the thresholds on the current era's trades only, insufficient below 20", () => {
+  const era = { hash: "a".repeat(64), since_ms: C - 3600_000, commit: "abc123def456" };
   const issued = (i) => C + i * M15;
-  const rows = Array.from({ length: 10 }, (_, i) => ({ decision_key: key(issued(i)), side: "SELL", trading_mode: "scalp", omega4_status: "closed", omega4_exit: i === 0 ? "trailed_target" : "stop", omega4_filled_at: new Date(issued(i) + 3 * M1).toISOString(), r_omega4: -1 }));
-  const live = (n, dr) => Array.from({ length: 10 }, (_, i) => ({ signal_issued_ms: issued(i), side: "SELL", opened_ms: issued(i) + 3 * M1 + 30_000, r: -1 - dr, exit: i === 0 ? "target" : i < n ? "stop" : "pm_cut_loss" }));
-  const ok = omegaParity({ ledgerRows: rows, liveTrades: live(10, 0.1), now: C });
-  assert.equal(ok.trades_compared, 10);
+  const N = PARITY_MIN_TRADES;
+  const rows = Array.from({ length: N }, (_, i) => ({ decision_key: key(issued(i)), side: "SELL", trading_mode: "scalp", omega4_status: "closed", omega4_exit: i === 0 ? "trailed_target" : "stop", omega4_filled_at: new Date(issued(i) + 3 * M1).toISOString(), r_omega4: -1 }));
+  const live = (same, dr, n = N) => Array.from({ length: n }, (_, i) => ({ signal_issued_ms: issued(i), side: "SELL", opened_ms: issued(i) + 3 * M1 + 30_000, r: -1 - dr, exit: i === 0 ? "target" : i < same ? "stop" : "pm_cut_loss" }));
+  const ok = omegaParity({ ledgerRows: rows, liveTrades: live(N, 0.1), era, now: C });
+  assert.deepEqual([ok.status, ok.pass, ok.trades_compared, ok.live_trades, ok.min_trades], ["pass", true, 20, 20, 20]);
   assert.equal(ok.same_exit_share, 1);
-  assert.equal(ok.mean_abs_dr, 0.1);
-  assert.equal(ok.pass, true, "exactly at both thresholds");
+  assert.equal(ok.mean_abs_dr, 0.1, "exactly at the |dR| threshold");
   assert.equal(ok.trades[0].entry_diff_s, -30);
-  assert.equal(omegaParity({ ledgerRows: rows, liveTrades: live(9, 0), now: C }).pass, true, "9 of 10 is 90 %");
-  const fail = omegaParity({ ledgerRows: rows, liveTrades: live(8, 0), now: C });
-  assert.deepEqual([fail.pass, fail.same_exit_share], [false, 0.8]);
-  assert.match(fail.trades[9].cause, /exit pm_cut_loss live, stop in v4/);
-  assert.equal(omegaParity({ ledgerRows: rows, liveTrades: live(10, 0.11), now: C }).pass, false, "mean |dR| 0.11");
+  assert.deepEqual(ok.era, { since: new Date(C - 3600_000).toISOString(), commit: "abc123def456", hash: "aaaaaaaaaaaa", seeded: false, previous: [] });
+  assert.equal(omegaParity({ ledgerRows: rows, liveTrades: live(18, 0), era, now: C }).status, "pass", "18 of 20 is 90 %");
+  const fail = omegaParity({ ledgerRows: rows, liveTrades: live(17, 0), era, now: C });
+  assert.deepEqual([fail.status, fail.pass, fail.same_exit_share], ["fail", false, 0.85]);
+  assert.match(fail.trades[19].cause, /exit pm_cut_loss live, stop in v4/);
+  assert.equal(omegaParity({ ledgerRows: rows, liveTrades: live(N, 0.11), era, now: C }).status, "fail", "mean |dR| 0.11");
+  // Fewer than 20 live trades in the era: insufficient, never pass, however well they match.
+  const few = omegaParity({ ledgerRows: rows.slice(0, 19), liveTrades: live(19, 0, 19), era, now: C });
+  assert.deepEqual([few.status, few.pass, few.live_trades, few.same_exit_share, few.mean_abs_dr], ["insufficient", false, 19, 1, 0]);
+  // Trades opened before the era are shown, labelled earlier, and not counted.
+  const later = { ...era, since_ms: issued(5) };
+  const split = omegaParity({ ledgerRows: rows, liveTrades: live(N, 0), era: later, now: C });
+  assert.deepEqual([split.trades.length, split.trades_compared, split.earlier.trades_compared, split.status], [20, 15, 5, "insufficient"]);
+  assert.deepEqual([split.trades[0].live_code, split.trades[19].live_code], ["earlier", "current"]);
+  // Without an era the seed (2026-11-19 17:48 UTC, after #491) applies: these 12:00 trades are all earlier.
+  assert.equal(omegaParity({ ledgerRows: rows, liveTrades: live(N, 0), now: C }).trades_compared, 0);
   // A live trade v4 did not take, and a v4 trade live did not take, both count against it.
-  const extra = omegaParity({ ledgerRows: [...rows, { decision_key: key(issued(20)), side: "SELL", omega4_status: "closed", omega4_exit: "stop", r_omega4: -1 }], liveTrades: [...live(10, 0), { signal_issued_ms: issued(30), side: "SELL", r: 1, exit: "target" }], now: C });
-  assert.deepEqual([extra.trades_compared, extra.v4_only, extra.matched, extra.same_exit_share], [12, 1, 10, 0.833]);
-  assert.equal(extra.pass, false);
+  const extra = omegaParity({ ledgerRows: [...rows, { decision_key: key(issued(40)), side: "SELL", omega4_status: "closed", omega4_exit: "stop", r_omega4: -1 }], liveTrades: [...live(N, 0), { signal_issued_ms: issued(50), side: "SELL", r: 1, exit: "target" }], era, now: C });
+  assert.deepEqual([extra.trades_compared, extra.v4_only, extra.matched, extra.same_exit_share, extra.status], [22, 1, 20, 0.909, "pass"]);
   // A decision live still holds open is not a v4-only trade (not compared until both are final).
-  const held = omegaParity({ ledgerRows: [...rows, { decision_key: key(issued(20)), side: "SELL", omega4_status: "closed", omega4_exit: "stop", r_omega4: -1 }], liveTrades: live(10, 0), liveOpen: [{ signal_issued_ms: issued(20), side: "SELL" }], now: C });
-  assert.deepEqual([held.trades_compared, held.v4_only, held.pass], [10, 0, true]);
-  // The live trades opened before the Position Manager's current code (2026-11-19 17:48 UTC) are told apart.
-  assert.deepEqual([ok.current_code.trades_compared, ok.trades[0].live_code], [0, "earlier"]);
-  const later = Date.parse("2026-11-19T18:00:00Z");
-  const cur = omegaParity({ ledgerRows: [{ decision_key: key(later), side: "SELL", omega4_status: "closed", omega4_exit: "target", r_omega4: 1 }], liveTrades: [...live(10, 0), { signal_issued_ms: later, side: "SELL", opened_ms: later + 3 * M1, r: 1, exit: "target" }], now: C });
-  assert.deepEqual([cur.current_code.trades_compared, cur.current_code.pass, cur.trades_compared], [1, true, 11]);
+  const held = omegaParity({ ledgerRows: [...rows, { decision_key: key(issued(40)), side: "SELL", omega4_status: "closed", omega4_exit: "stop", r_omega4: -1 }], liveTrades: live(N, 0), liveOpen: [{ signal_issued_ms: issued(40), side: "SELL" }], era, now: C });
+  assert.deepEqual([held.trades_compared, held.v4_only, held.status], [20, 0, "pass"]);
   assert.ok(PARITY_PASS.same_exit_min === 0.9 && PARITY_PASS.mean_abs_dr_max === 0.1);
   // The live exits: the deal's reason, a stop at or past the entry is SL+, a close by the EA is Omega's close intent.
   assert.equal(liveExitCode({ reason: "tp" }), "target");
@@ -282,6 +290,9 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   const run = await runOmega4(env, { now, bars });
   assert.equal(run.status, "ok", JSON.stringify(run));
   assert.ok(run.ms >= 0);
+  // The run's work, printed by the ledger_omega4 log line.
+  assert.deepEqual([run.decisions, run.more, run.archived], [2, false, bars.length]);
+  assert.ok(run.minutes > 0 && run.plans > 0 && run.position_actions > 0, JSON.stringify(run));
   const row = db.raw.prepare("SELECT * FROM ledger_omega4 WHERE decision_key = ?").get(key(C));
   assert.deepEqual([row.omega4_status, row.omega4_exit], ["closed", "sl_plus"]);
   assert.ok(JSON.parse(cache.m.get(OMEGA4_CHECKPOINT_KEY)).at_ms > C);
@@ -289,13 +300,16 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   assert.equal((await runOmega4(env, { now: now + M1, bars })).written, 0);
   // The live trade on the same decision, closed by the ladder's locked stop: parity passes.
   db.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES (?, 'open', ?, 'done', ?, ?, ?)").run(`open:${C}:S`, JSON.stringify({ side: "SELL", volume: 0.01, entry: 2000, sl: 2020, r_dist: 20, signal_issued_ms: C, mode: "scalp" }), JSON.stringify({ ok: true, ticket: 42 }), C + 3 * M1, C + 3 * M1);
+  // The era holding this code (as if it had started an hour before the trade).
+  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ hash: ENGINE_CODE_HASH, since_ms: C - 3600_000, commit: "c0ffee", previous: [] }));
   const parity = await runOmegaParity(env, { now });
   assert.equal(parity.status, "checked", JSON.stringify(parity));
   const stored = JSON.parse(cache.m.get(OMEGA4_PARITY_KEY));
   assert.equal(stored.trades_compared, 1);
   assert.equal(stored.trades[0].same_exit, true);
   assert.ok(Math.abs(stored.trades[0].dr) <= 0.1, JSON.stringify(stored.trades[0]));
-  assert.equal(stored.pass, true);
+  assert.deepEqual([stored.status, stored.pass, stored.min_trades], ["insufficient", false, 20], "one trade is not a sample");
+  assert.equal(stored.era.commit, "c0ffee");
   assert.equal(JSON.stringify(stored).includes("acct_"), false, "no account reference");
   assert.equal((await runOmegaParity(env, { now: now + 60_000 })).status, "fresh", "at most once an hour");
   const ledger = await readLedger(env, { days: 30, now });
@@ -304,7 +318,9 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   assert.equal(ledger.all.omega4.trades, 1);
   assert.deepEqual(ledger.all.omega4.exits, { sl_plus: 1 });
   assert.equal(ledger.by_mode.scalp.omega4.trades, 1);
-  assert.equal(ledger.parity.pass, true);
+  assert.equal(ledger.parity.status, "insufficient");
+  // The 1m bars the replay read are archived in D1.
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM ledger_bars_1m").get().n, bars.length);
 });
 
 test("V10. the view pairs v4 with v3 on the ledger's own rows and counts the decisions the ledger held back", () => {
@@ -322,4 +338,115 @@ test("V10. the view pairs v4 with v3 on the ledger's own rows and counts the dec
   assert.deepEqual(v.all.omega4.paired, { trades: 1, v4_r: 0.8, v3_r: 0.5, v4_better: 1, v3_better: 0 });
   assert.equal(v.by_source.h1_decision.omega4.trades, 0);
   assert.equal(v.all.omega.trades, 1, "v3 is unchanged beside it");
+});
+
+/** A day of 1m bars with a decision every 15 minutes (BUY, SELL, WAIT in turn). */
+function dayCase(hours = 24) {
+  const start = C - hours * 3600_000;
+  const price = (t) => Math.round((2000 + 8 * Math.sin(t / 3_600_000) + 2 * Math.sin(t / 420_000)) * 1000) / 1000;
+  const bars = path(start - WARM, C, price, 0.3);
+  const decisions = [];
+  for (let close = start, i = 0; close < C; close += M15, i++) {
+    const px = price(close + 2 * M1), side = i % 3 === 0 ? "SELL" : i % 3 === 1 ? "BUY" : "WAIT", dir = side === "BUY" ? 1 : -1;
+    decisions.push(dec(decision({ close, stance: side, score: side === "BUY" ? 0.3 : -0.3, shares: side === "BUY" ? [0.8, 0.2] : [0.2, 0.8], trade: side === "WAIT" ? null : { side, action: "ENTER_LIMIT", entry: px, stop: px - dir * 6, tp: px + dir * 9, tp1: px + dir * 9, agent: "zone_pullback" }, lv: levels([[px - 12, px - 11], [px + 11, px + 12]]) })));
+  }
+  return { start, bars, decisions };
+}
+
+test("V11. the catch-up bound: at most MAX_REPLAY_MINUTES a run, and runs resumed from the checkpoint give exactly the one long run's records", async () => {
+  assert.equal(MAX_REPLAY_MINUTES, 720);
+  const { start, bars, decisions } = dayCase(24);
+  const one = replayOmega4({ ...base({ from: start }), bars, decisions, to: C });
+  assert.equal(one.more, false);
+  let state = null, from = start, runs = 0;
+  const merged = {};
+  for (;;) {
+    const r = replayOmega4({ ...base({ from }), bars, decisions, to: C, state, maxSteps: 137 });
+    runs += 1;
+    assert.ok(r.steps <= 137);
+    Object.assign(merged, r.records);
+    state = JSON.parse(JSON.stringify(r.checkpoint)); // through KV
+    from = state.at_ms;
+    if (!r.more) break;
+  }
+  assert.ok(runs >= 10, String(runs));
+  assert.ok(Object.values(one.records).filter((x) => x.omega4_status === "closed").length > 10);
+  assert.deepEqual(merged, one.records);
+  // The cron step stops at its bound and carries the rest.
+  resetLedgerSchemaCacheForTests();
+  const db = d1(), cache = kv();
+  const env = { DB: db, SIGNAL_CACHE: cache };
+  for (const d of decisions) db.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, 0.7, 'engine', ?)").run(d.decision_key, d.bar_close, d.decided_at, d.stance, JSON.stringify(d));
+  const first = await runOmega4(env, { now: C, bars, maxMinutes: 300 });
+  assert.deepEqual([first.status, first.minutes, first.more], ["ok", 300, true], JSON.stringify(first));
+  let n = 1, last = first;
+  while (last.more && n < 20) { last = await runOmega4(env, { now: C, bars, maxMinutes: 300 }); n += 1; }
+  assert.equal(last.more, false);
+  assert.ok(n >= 4, String(n));
+});
+
+test("V12. the 1m archive: merged with the KV series without duplicates, and the replay goes on from it once KV no longer reaches back", async () => {
+  const a = [{ t: 1, o: 1, h: 1, l: 1, c: 1 }, { t: 2, o: 2, h: 2, l: 2, c: 2 }];
+  const b = [{ t: 2, o: 9, h: 9, l: 9, c: 9 }, { t: 3, o: 3, h: 3, l: 3, c: 3 }];
+  assert.deepEqual(mergeMinuteBars(a, b).map((x) => [x.t, x.c]), [[1, 1], [2, 2], [3, 3]], "one bar a minute, the archive's first");
+  const { bars, decisions } = ladderCase();
+  const setup = () => {
+    resetLedgerSchemaCacheForTests();
+    const db = d1(), cache = kv(), env = { DB: db, SIGNAL_CACHE: cache };
+    for (const d of decisions) db.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, 0.7, 'engine', ?)").run(d.decision_key, d.bar_close, d.decided_at, d.stance, JSON.stringify(d));
+    // The account's profile (as V9): without one the default 0.5 % risk sizes the minimum lot out.
+    db.raw.exec("CREATE TABLE omega_accounts (account_ref TEXT PRIMARY KEY, profile TEXT, last_balance REAL, last_seen_ms INTEGER, created_ms INTEGER)");
+    db.raw.prepare("INSERT INTO omega_accounts VALUES ('acct_x', 'aggressive', 1000, ?, ?)").run(C, C - 86_400_000);
+    db.raw.prepare("INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, profit, reason, opened_ms, closed_ms, currency, source, account_ref) VALUES (9, 9, 'unknown', 'SELL', 0.01, 0, 'tp', ?, ?, 'USD', 'omega', 'acct_x')").run(C - 86_400_000, C - 86_000_000);
+    return { db, cache, env };
+  };
+  const end = C + 40 * M1;
+  // The reference: one run with every bar in KV.
+  const ref = setup();
+  await runOmega4(ref.env, { now: end, bars });
+  const want = ref.db.raw.prepare("SELECT omega4_status, omega4_exit, r_omega4, omega4_closed_at FROM ledger_omega4 WHERE decision_key = ?").get(key(C));
+  assert.deepEqual([want.omega4_status, want.omega4_exit], ["closed", "sl_plus"]);
+  // A run while the trade is open (C + 10), then KV rolls: it now starts at C + 5, after the warm-up the replay needs.
+  const t = setup();
+  const before = bars.filter((x) => Date.parse(x.close_time) <= C + 10 * M1);
+  assert.equal((await runOmega4(t.env, { now: C + 10 * M1, bars: before })).open, 1);
+  assert.equal(t.db.raw.prepare("SELECT COUNT(*) AS n FROM ledger_bars_1m").get().n, before.length);
+  assert.equal(await archiveMinuteBars(t.env, before, { now: C + 10 * M1 }), 0, "only newer minutes are written");
+  const rolled = bars.filter((x) => Date.parse(x.open_time) >= C + 5 * M1);
+  await runOmega4(t.env, { now: end, bars: rolled });
+  assert.deepEqual(t.db.raw.prepare("SELECT omega4_status, omega4_exit, r_omega4, omega4_closed_at FROM ledger_omega4 WHERE decision_key = ?").get(key(C)), want);
+  assert.equal(t.db.raw.prepare("SELECT COUNT(*) AS n FROM ledger_bars_1m").get().n, bars.length, "no duplicate minute");
+  assert.equal((await readArchivedBars(t.env, C - WARM, C)).length, WARM / M1);
+  // Neither KV nor the archive reaches the checkpoint: the open trade is marked out (data_gap) and the replay restarts.
+  const g = setup();
+  await runOmega4(g.env, { now: C + 10 * M1, bars: before });
+  g.db.raw.exec("DELETE FROM ledger_bars_1m");
+  await runOmega4(g.env, { now: end + 5 * 3600_000, bars: path(C + 20 * M1, end + 5 * 3600_000, () => 2001) });
+  assert.equal(g.db.raw.prepare("SELECT omega4_exit FROM ledger_omega4 WHERE decision_key = ?").get(key(C)).omega4_exit, "data_gap");
+});
+
+test("V13. the engine's code era: the committed hash is the source's, a new hash starts a new parity window at the deploy time", async () => {
+  for (const [file, [mod, names]] of Object.entries(ENGINE_CODE)) for (const n of names) assert.ok(n in mod, `${file}.${n}`);
+  const hash = await sha256Hex(engineCodeSource());
+  assert.equal(ENGINE_CODE_HASH, hash, `the engine's code changed: set ENGINE_CODE_HASH in src/ledger-omega4.mjs to "${hash}" (a new parity window starts at its deploy)`);
+  assert.match(engineCodeSource(), /planIntents=function planIntents/);
+  const T = ERA_SEED_MS + 86_400_000;
+  // No era stored: the seed after #491.
+  const seed = nextEra(null, { hash: "h1", now: T, commit: "c1" });
+  assert.deepEqual([seed.changed, seed.era.since_ms, seed.era.hash, seed.era.seeded], [true, ERA_SEED_MS, "h1", true]);
+  assert.equal(ERA_SEED_MS, Date.parse("2026-11-19T17:48:00Z"));
+  // The same code: unchanged, nothing written.
+  assert.deepEqual(nextEra(seed.era, { hash: "h1", now: T + 1 }), { era: seed.era, changed: false });
+  // Another hash: a new era from the deploy time, the old one kept.
+  const next = nextEra(seed.era, { hash: "h2", now: T + 3600_000, deployedMs: T + 600_000, commit: "c2" });
+  assert.deepEqual([next.era.since_ms, next.era.commit, next.era.previous[0].until_ms, next.era.previous[0].hash], [T + 600_000, "c2", T + 600_000, "h1"]);
+  // No deploy time, one in the future or one before the era it replaces: from now.
+  assert.equal(nextEra(seed.era, { hash: "h3", now: T, deployedMs: T + 1 }).era.since_ms, T);
+  assert.equal(nextEra(seed.era, { hash: "h3", now: T, deployedMs: ERA_SEED_MS - 1 }).era.since_ms, T);
+  // In KV, from the Worker's DEPLOYED_AT and DEPLOY_COMMIT (as /health reports them), written only on a change.
+  const cache = kv();
+  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ hash: "old", since_ms: ERA_SEED_MS, commit: "c0", previous: [] }));
+  const era = await currentEra({ SIGNAL_CACHE: cache, DEPLOYED_AT: "2026-11-21T08:00:00Z", DEPLOY_COMMIT: "0123456789abcdef" }, { now: Date.parse("2026-11-21T09:00:00Z") });
+  assert.deepEqual([era.hash, era.since_ms, era.commit], [ENGINE_CODE_HASH, Date.parse("2026-11-21T08:00:00Z"), "0123456789ab"]);
+  assert.deepEqual(JSON.parse(cache.m.get(OMEGA4_ERA_KEY)), era);
 });

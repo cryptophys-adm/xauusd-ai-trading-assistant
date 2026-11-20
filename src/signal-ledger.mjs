@@ -393,7 +393,9 @@ export const OMEGA4_RULES = Object.freeze({
     news_blackout: "from the cached week's calendar (High-impact USD, the blackout window in force); outside that week none",
     kill_switch: "Omega's control history only; EA_SIGNALS_ENABLED is read as never off"
   },
-  parity: "omegaParity against the live USD account since 2026-11-19 12:00 UTC: passes with the same exit on at least 90 % of the trades compared and a mean |dR| of at most 0.1"
+  bars: "the feed's 1m bars from KV (about two days), and before that from the D1 archive ledger_bars_1m (each run appends only the new minutes, 120 days kept), so a replay stays reproducible",
+  run: "from the checkpoint (the whole replay state at its next minute), at most 720 replay minutes a 5-minute run; a longer catch-up goes on at the next run",
+  parity: "omegaParity against the live USD account: only the live trades opened under the current engine and Position Manager code count (its era, from the code's hash; a later change starts a new window at its deploy); at least 20 of them, else insufficient; passes with the same exit on at least 90 % of the trades compared and a mean |dR| of at most 0.1; the trades since 2026-11-19 12:00 UTC under earlier code are shown apart, not counted"
 });
 
 /** Pure: the ledger view of `items` (rows of signal_ledger, with their outcome fields) and `omega4` (D1 ledger_omega4 rows). */
@@ -473,7 +475,9 @@ export const LEDGER_SCHEMA_SQL = [
     r_omega4 REAL, omega4_size REAL, omega4_json TEXT,
     updated_at TEXT NOT NULL
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_ledger_omega4_issued ON ledger_omega4(issued_ms)"
+  "CREATE INDEX IF NOT EXISTS idx_ledger_omega4_issued ON ledger_omega4(issued_ms)",
+  // The feed's 1m bars the v4 replay reads, kept past the KV series' two days (src/ledger-omega4.mjs archiveMinuteBars).
+  "CREATE TABLE IF NOT EXISTS ledger_bars_1m (minute_ms INTEGER PRIMARY KEY, o REAL NOT NULL, h REAL NOT NULL, l REAL NOT NULL, c REAL NOT NULL)"
 ];
 /** The Omega policy's columns (src/signal-ledger.mjs simulateOmega), added in place. */
 const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT",

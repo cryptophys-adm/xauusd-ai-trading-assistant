@@ -1157,29 +1157,37 @@ function DisparityKnowledgePanel({
 function OmegaParityPanel({ parity }: { parity: any }) {
   if (!parity) return <Empty>No parity check yet: it runs hourly from the ledger cron once v4 has replayed the live window.</Empty>;
   const th = parity.thresholds ?? {};
-  const cur = parity.current_code;
-  const line = (p: any) => (
-    <span className="mono">
-      {p?.trades_compared ?? 0} compared · same exit {pct(p?.same_exit_share)} · mean |ΔR| {p?.mean_abs_dr ?? "—"}
-      {p?.v4_only ? ` · ${p.v4_only} v4 only` : ""}
-    </span>
-  );
+  const era = parity.era ?? {};
+  const earlier = parity.earlier;
+  const status: string = parity.status ?? (parity.pass ? "pass" : "fail");
+  const tone = status === "pass" ? "green" : status === "fail" ? "red" : "amber";
+  const stamp = (t: any) => String(t ?? "").replace("T", " ").slice(0, 16);
   const trades: any[] = parity.trades ?? [];
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-3 text-[12px]">
-        <Badge tone={parity.pass ? "green" : "red"}>{parity.pass ? "PASS" : "FAIL"}</Badge>
-        {line(parity)}
+        <Badge tone={tone}>{status.toUpperCase()}</Badge>
+        <span className="mono">
+          {parity.live_trades ?? 0} of {parity.min_trades ?? 20} current-code live trades · {parity.trades_compared ?? 0} compared
+          {parity.v4_only ? ` (${parity.v4_only} v4 only)` : ""} · same exit {pct(parity.same_exit_share)} · mean |ΔR| {parity.mean_abs_dr ?? "—"}
+        </span>
         <span className="text-[11px] text-slate-500">
-          pass: same exit ≥ {pct(th.same_exit_min)} and mean |ΔR| ≤ {th.mean_abs_dr_max} · since {String(parity.since ?? "").replace("T", " ").slice(0, 16)} UTC · checked {String(parity.checked_at ?? "").replace("T", " ").slice(0, 16)}
+          pass: at least {parity.min_trades ?? 20} trades, same exit ≥ {pct(th.same_exit_min)} and mean |ΔR| ≤ {th.mean_abs_dr_max}; below {parity.min_trades ?? 20}: insufficient · checked {stamp(parity.checked_at)} UTC
         </span>
       </div>
-      {cur ? (
-        <div className="flex flex-wrap items-center gap-3 text-[12px]">
-          <Badge tone={cur.pass ? "green" : cur.trades_compared ? "red" : "slate"}>{cur.trades_compared ? (cur.pass ? "PASS" : "FAIL") : "—"}</Badge>
-          <span className="text-[11px] text-slate-400">Live trades on the current Position Manager code (since {String(cur.since ?? "").replace("T", " ").slice(0, 16)} UTC):</span>
-          {line(cur)}
-        </div>
+      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+        <span>
+          Engine/PM code era since <span className="mono text-slate-300">{stamp(era.since)} UTC</span>
+          {era.commit ? <> · commit <span className="mono text-slate-300">{era.commit}</span></> : null}
+          {era.hash ? <> · code <span className="mono text-slate-300">{era.hash}</span></> : null}
+          {era.seeded ? " (seed: after #491)" : ""}
+        </span>
+        <span className="text-slate-500">A later change to the engine or Position Manager code starts a new parity window automatically, at its deploy.</span>
+      </div>
+      {earlier?.trades_compared ? (
+        <p className="text-[11px] text-slate-500">
+          Earlier code (shown below, not counted): {earlier.trades_compared} trades · same exit {pct(earlier.same_exit_share)} · mean |ΔR| {earlier.mean_abs_dr ?? "—"} · since {stamp(parity.since)} UTC
+        </p>
       ) : null}
       {!trades.length ? (
         <Empty>No live trade in the window yet.</Empty>
@@ -1206,7 +1214,7 @@ function OmegaParityPanel({ parity }: { parity: any }) {
                 <tr key={`${t.issued_at}-${t.side}-${i}`}>
                   <td className="mono text-[11px]">
                     {String(t.issued_at).replace("T", " ").slice(0, 16)}
-                    {t.live_code === "earlier" ? <span className="ml-1 text-[10px] text-slate-500">earlier code</span> : null}
+                    {t.live_code === "earlier" ? <span className="ml-1 text-[10px] text-slate-500">earlier (not counted)</span> : null}
                   </td>
                   <td className={`mono font-semibold ${t.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{t.side}</td>
                   <td className="text-slate-300 capitalize">{t.mode ?? "—"}</td>
@@ -1361,6 +1369,27 @@ export default function Performance() {
             </button>
           </div>
         )}
+        {viewMode === "signal_ledger" && l?.rules?.omega4 ? (
+          <details className="mt-2 rounded-md border border-white/10 bg-white/2 px-2.5 py-1.5 text-[11px] text-slate-400">
+            <summary className="cursor-pointer text-slate-300">Omega v4: how it replays live, and why a trade may differ from live</summary>
+            <p className="mt-1.5">{l.rules.omega4.engine}. {l.rules.omega4.granularity}. {l.rules.omega4.unit}.</p>
+            <p className="mt-1 text-slate-300">Approximations</p>
+            <ul className="ml-4 list-disc">
+              {(l.rules.omega4.approximations ?? []).map((a: string) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+            <p className="mt-1 text-slate-300">Not reconstructable from history</p>
+            <ul className="ml-4 list-disc">
+              {Object.entries(l.rules.omega4.not_reconstructable ?? {}).map(([k, v]) => (
+                <li key={k}>
+                  <span className="text-slate-300">{k.replace(/_/g, " ")}</span>: {String(v)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1">{l.rules.omega4.parity}</p>
+          </details>
+        ) : null}
       </Panel>
 
       {/* Main Content Area */}
@@ -1435,21 +1464,6 @@ export default function Performance() {
                 hint={`Omega: ${l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; ${l?.rules?.omega?.management ?? "key-level management"}; gates: ${l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: ${l?.rules?.omega?.approximations ?? "feed bars"}.`}
               >
                 <ModePolicyTable byMode={l?.by_mode} />
-                {policy === "omega4" && l?.rules?.omega4 ? (
-                  <div className="mt-2 text-[11px] text-slate-400">
-                    <p>
-                      <span className="text-slate-300">Omega v4</span> ({l.rules.omega4.version}): {l.rules.omega4.engine}. {l.rules.omega4.granularity}. {l.rules.omega4.unit}.
-                    </p>
-                    <p className="mt-1">Approximations: {(l.rules.omega4.approximations ?? []).join("; ")}.</p>
-                    <p className="mt-1">
-                      Not reconstructable:{" "}
-                      {Object.entries(l.rules.omega4.not_reconstructable ?? {})
-                        .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`)
-                        .join("; ")}
-                      .
-                    </p>
-                  </div>
-                ) : null}
               </Panel>
 
               {/* v4 against the live account (src/ledger-omega4.mjs omegaParity) */}

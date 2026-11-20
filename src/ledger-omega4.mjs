@@ -32,6 +32,17 @@ import { strategyArmMode, readArmState } from "./strategy-arm.mjs";
 import { gatedEvents } from "./econ-calendar.mjs";
 import { eaVersionGateOn } from "./account-spec.mjs";
 import { toMs, decisionCloseMs, brokerDayStart, OMEGA_SIM, TRADING_MODES, ensureLedgerSchema, ledgerSeries, OMEGA4_VERSION, OMEGA4_PARITY_KEY } from "./signal-ledger.mjs";
+import * as omegaEngine from "./omega-engine.mjs";
+import * as positionManager from "./position-manager.mjs";
+import * as positionActions from "./position-actions.mjs";
+import * as eaSignalModule from "./ea-signal.mjs";
+import * as omegaBroker from "./omega-broker.mjs";
+import * as accountSpec from "./account-spec.mjs";
+import * as goldSymbol from "./gold-symbol.mjs";
+import * as gridAdapt from "./grid-adapt.mjs";
+import * as htfCells from "./htf-cells.mjs";
+import * as agentConfidence from "./agent-confidence.mjs";
+import * as brokerTrigger from "./broker-trigger.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -175,18 +186,25 @@ const awaitingGate = (reason) => {
 };
 const BROKER_EXITS = new Set(["stop", "sl_plus", "target", "trailed_target"]);
 
+/** At most this many replay minutes per invocation (the 5-minute cron's CPU budget); the checkpoint carries the rest. */
+export const MAX_REPLAY_MINUTES = 720;
+
 /**
- * Pure: Omega's policy replayed on the 1m bars from `from` to `to`, one account, through the live functions (see the
- * header). Returns { records: { [decision_key]: record }, checkpoint, steps, plans, last_ms }:
+ * Pure: Omega's policy replayed on the 1m bars from `from` to `to` (at most `maxSteps` minutes), one account, through
+ * the live functions (see the header). Returns { records: { [decision_key]: record }, checkpoint, steps, plans,
+ * pm_calls, decisions, last_ms, more }:
  *   records     every BUY/SELL decision whose entry window falls in the span: traded (open or closed, with its exit,
  *               R and size), skipped (the gate that held it) or pending (its window still runs at the end);
- *   checkpoint  the last minute the account was flat, with what a later run needs to go on from there.
+ *   checkpoint  the whole replay state at the next minute (open positions and their trades, the recent intent ids,
+ *               the re-entry exit, the gate notes, the synthetic balance): a later run goes on from there exactly as
+ *               this run would have (test V11), so a bounded run never repeats or loses a minute;
+ *   more        the bound stopped the run before `to`.
  * `plan` is planIntents (a test may wrap it); `trace` collects each call's input and output.
  */
 export function replayOmega4({
   bars = [], decisions = [], from = null, to = Infinity, settings = OMEGA_DEFAULTS, state = null,
   profileAt = () => null, balanceAt = null, councils = {}, control = [], blackouts = [], grid = null, arms = null,
-  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread
+  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity
 } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...(settings && typeof settings === "object" ? settings : {}), enabled: true, live_armed: true };
   const m1 = Array.isArray(bars) && bars.length && finite(bars[0]?.t) ? bars : minuteBars(bars);
@@ -196,19 +214,20 @@ export function replayOmega4({
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
 
-  // The carried state (the last flat minute of the run before).
+  // The carried state (the checkpoint of the run before: the whole replay state at its next minute).
   const carried = state && typeof state === "object" ? state : {};
-  const emitted = (Array.isArray(carried.recent) ? carried.recent : []).filter((x) => typeof x?.id === "string" && finite(x?.ms)).map((x) => ({ id: x.id, ms: x.ms, it: null }));
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const emitted = (Array.isArray(carried.recent) ? carried.recent : []).filter((x) => typeof x?.id === "string" && finite(x?.ms)).map((x) => ({ id: x.id, ms: x.ms, it: x.it ?? null }));
   const carriedOpens = new Set(emitted.filter((x) => x.id.startsWith("open:")).map((x) => x.id));
   let reentry = carried.reentry && finite(carried.reentry.exit_ms) ? { ...carried.reentry } : null;
   let ownBalance = finite(carried.balance) ? carried.balance : OMEGA4_SIM.start_balance;
   let ownDayMs = finite(carried.day_ms) ? carried.day_ms : null, ownDayStart = finite(carried.day_start) ? carried.day_start : ownBalance;
 
-  const positions = [];
-  const trades = new Map(); // decision key -> trade
-  const notes = new Map();  // decision key -> { gate, last_ms }
+  const positions = Array.isArray(carried.positions) ? clone(carried.positions) : [];
+  const trades = new Map((Array.isArray(carried.trades) ? clone(carried.trades) : []).map((t) => [t.key, t])); // decision key -> trade
+  const notes = new Map(Array.isArray(carried.notes) ? clone(carried.notes) : []);  // decision key -> { gate, last_ms }
   const signalCache = new Map();
-  let checkpoint = null, steps = 0, plans = 0, lastMs = null;
+  let steps = 0, plans = 0, pmCalls = 0, lastMs = null, more = false;
   let i5 = -1, i15 = -1, iDec = -1, iCtl = -1, lo125 = 0;
   const firstK = m1.findIndex((b) => b.t >= start);
 
@@ -258,6 +277,7 @@ export function replayOmega4({
   for (let k = firstK < 0 ? m1.length : firstK; k < m1.length; k++) {
     const bar = m1[k], now = bar.t;
     if (now > to) break;
+    if (steps >= maxSteps) { more = true; break; }
     steps += 1;
     lastMs = now;
     while (i5 + 1 < d5.length && d5[i5 + 1].close_ms <= now) i5 += 1;
@@ -268,11 +288,6 @@ export function replayOmega4({
     // The broker day: the synthetic balance's day start (only without a live account's balance).
     const day = brokerDayStart(now);
     if (ownDayMs !== day) { ownDayMs = day; ownDayStart = ownBalance; }
-
-    // The last flat minute: a later run goes on from here.
-    if (!positions.length) {
-      checkpoint = { version: OMEGA4_VERSION, at_ms: now, recent: emitted.filter((x) => x.ms > now - 3600_000).map((x) => ({ id: x.id, ms: x.ms })), reentry: reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null, balance: r2(ownBalance), day_ms: ownDayMs, day_start: r2(ownDayStart) };
-    }
 
     const bid0 = r2(bar.o), ask0 = r2(bar.o + spread);
     // A gap at the open: the broker's stop or target is hit at the open price.
@@ -342,6 +357,7 @@ export function replayOmega4({
         const council = parseCouncil(text);
         const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal });
         const a = positionAction(f, council);
+        pmCalls += 1;
         const t = tradeOf(p);
         t.pm_council[council ? "recorded" : "fallback"] += 1;
         if (["close", "sl", "tp"].includes(a.action)) {
@@ -432,7 +448,18 @@ export function replayOmega4({
       omega4_filled_at: null, omega4_closed_at: null, omega4_exit: null, r_omega4: null, omega4_size: null, omega4_json: JSON.stringify({ version: OMEGA4_VERSION, gate: n?.gate ?? null })
     };
   }
-  return { records, checkpoint, steps, plans, last_ms: lastMs, open_positions: positions.length };
+  // The checkpoint: the state at the next minute. Intent ids older than 2 hours only matter for a ticket still open (its
+  // partial count); the stops commanded in the last minutes keep their intent (commandedStops).
+  const nextMs = lastMs != null ? lastMs + M1 : (finite(carried.at_ms) ? carried.at_ms : start);
+  const open = new Set(positions.map((p) => p.ticket));
+  const recent = emitted.filter((x) => x.ms > nextMs - 2 * 3600_000 || [...open].some((t) => x.id.includes(`:${t}:`)))
+    .map((x) => ({ id: x.id, ms: x.ms, ...(x.it && (x.it.kind === "modify_sl" || x.it.kind === "modify_sltp") && x.ms > nextMs - STOP_COMMAND_MS - M1 ? { it: x.it } : {}) }));
+  const checkpoint = {
+    version: OMEGA4_VERSION, at_ms: nextMs, recent, reentry: reentry && nextMs - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null,
+    balance: r2(ownBalance), day_ms: ownDayMs, day_start: r2(ownDayStart),
+    positions: clone(positions), trades: clone([...trades.values()].filter((t) => t.status === "open")), notes: [...notes].filter(([, n]) => n.last_ms > nextMs - 3600_000)
+  };
+  return { records, checkpoint, steps, plans, pm_calls: pmCalls, decisions: decs.length, last_ms: lastMs, more, open_positions: positions.length };
 }
 
 function toRecord(t, { openR = null } = {}) {
@@ -452,6 +479,86 @@ function toRecord(t, { openR = null } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// The engine's code era: a parity window per version of the code that decides Omega's trades.
+
+/**
+ * The live functions and constants that decide Omega's entries and management (the ones v4 replays, and the live
+ * orchestration around them: the signal's assembly, the Position Manager's run, the sync's inputs). Their source text
+ * (Function.prototype.toString in node, the repository's own text) and values make ENGINE_CODE_HASH.
+ */
+export const ENGINE_CODE = Object.freeze({
+  "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE"]],
+  "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP"]],
+  "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
+  "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate"]],
+  "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents"]],
+  "account-spec": [accountSpec, ["effectiveLimits", "PROFILES", "versionAtLeast", "EXECUTOR_ENTRY_MIN_VERSION"]],
+  "gold-symbol": [goldSymbol, ["goldSymbolCheck", "goldCheckOf", "goldPriceProblem", "GOLD_PRICE_TOLERANCE", "GOLD_CONTRACT_SIZE_MIN", "GOLD_CONTRACT_SIZE_MAX"]],
+  "grid-adapt": [gridAdapt, ["applyGridChoice", "cellLevels"]],
+  "htf-cells": [htfCells, ["applyRangeMode", "applyCellGate", "RANGE_GATED_AGENTS", "PROBATION"]],
+  "agent-confidence": [agentConfidence, ["confidenceTrend", "flatConfidences", "parseConfidences", "CONFIDENCE_STABLE_BAND"]],
+  "broker-trigger": [brokerTrigger, ["brokerTriggerFields", "readBrokerTrigger", "BROKER_TRIGGER_FRESH_MS"]]
+});
+
+/** The text ENGINE_CODE_HASH is taken of: each name with its function's source or its value, module by module. */
+export function engineCodeSource() {
+  const parts = [];
+  for (const [file, [mod, names]] of Object.entries(ENGINE_CODE)) {
+    for (const name of names) {
+      const v = mod[name];
+      parts.push(`${file}.${name}=${typeof v === "function" ? v.toString() : JSON.stringify(v)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** SHA-256 (hex) of a text. */
+export async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The hash of the engine's code (engineCodeSource) as it is in the repository. It is taken in node, not in the
+ * Worker: the bundler strips comments and renames identifiers (`finite` becomes `finite8` when another module has
+ * one), so a hash taken inside the bundle would move with unrelated code. test/ledger-omega-v4.test.mjs recomputes
+ * it from the source and fails, printing the new value, until a change to any function above updates it here. The
+ * deployed Worker then sees a hash its KV era does not hold and starts a new parity window (nextEra).
+ */
+export const ENGINE_CODE_HASH = "fc885c96c68c3383a206d97b257f729c0619109dd807311842406c654fe0cb84";
+/** The first era: from #491 (2026-11-19 17:48 UTC), the Position Manager v4 replays (owner window from 12:00, orchestrator review of #498). */
+export const ERA_SEED_MS = Date.parse("2026-11-19T17:48:00Z");
+export const OMEGA4_ERA_KEY = "ledger:omega4:era:v1";
+/** Parity passes or fails only on at least this many live trades opened in the current era ("insufficient" below it). */
+export const PARITY_MIN_TRADES = 20;
+
+/**
+ * Pure: the era after this deploy. No stored era: the seed (ERA_SEED_MS). The same hash: unchanged. Another hash: a
+ * new era from the Worker's deploy time (DEPLOYED_AT, else the version metadata's timestamp, if not in the future),
+ * else from now; the one before is kept in `previous` (the last 10).
+ */
+export function nextEra(stored, { hash = ENGINE_CODE_HASH, now = Date.now(), deployedMs = null, commit = null } = {}) {
+  if (!stored || typeof stored.hash !== "string" || !finite(stored.since_ms)) return { era: { hash, since_ms: ERA_SEED_MS, commit: commit ?? null, seeded: true, previous: [] }, changed: true };
+  if (stored.hash === hash) return { era: stored, changed: false };
+  const since = finite(deployedMs) && deployedMs <= now && deployedMs >= stored.since_ms ? deployedMs : now;
+  return {
+    era: { hash, since_ms: since, commit: commit ?? null, seeded: false, previous: [{ hash: stored.hash, since_ms: stored.since_ms, until_ms: since, commit: stored.commit ?? null }, ...(Array.isArray(stored.previous) ? stored.previous : [])].slice(0, 10) },
+    changed: true
+  };
+}
+
+/** The current era from KV, moved on when this Worker's engine code differs (written only then). Never throws. */
+export async function currentEra(env, { now = Date.now() } = {}) {
+  let stored = null;
+  try { stored = JSON.parse((await env?.SIGNAL_CACHE?.get?.(OMEGA4_ERA_KEY)) || "null"); } catch { stored = null; }
+  const deployed = Date.parse(String(env?.DEPLOYED_AT ?? env?.CF_VERSION_METADATA?.timestamp ?? ""));
+  const commit = String(env?.DEPLOY_COMMIT ?? env?.CF_VERSION_METADATA?.tag ?? "").slice(0, 12) || null;
+  const { era, changed } = nextEra(stored, { now, deployedMs: finite(deployed) ? deployed : null, commit });
+  if (changed) { try { await env?.SIGNAL_CACHE?.put?.(OMEGA4_ERA_KEY, JSON.stringify(era)); } catch { /* next hour */ } }
+  return era;
+}
+
+// ---------------------------------------------------------------------------
 // The parity check against Omega's real trades on the live USD account.
 
 /** The live account's trades are compared from here (owner 2026-11-20: the Omega that runs live now). */
@@ -459,10 +566,9 @@ export const PARITY_SINCE_MS = Date.parse("2026-11-19T12:00:00Z");
 export const PARITY_PASS = Object.freeze({ same_exit_min: 0.9, mean_abs_dr_max: 0.1 });
 /**
  * The live Position Manager has run the code v4 replays since #491 merged (2026-11-19 17:48 UTC; #488 at 16:33 stopped
- * the cut on a WAIT alone, #490 and #491 brought TP2 through the council and tp2_breakeven). Live trades opened before
- * ran older rules: they are compared all the same (the owner's window), and said apart (`live_code`, `current_code`).
+ * the cut on a WAIT alone, #490 and #491 brought TP2 through the council and tp2_breakeven): the seed of the eras.
  */
-export const PARITY_CURRENT_CODE_MS = Date.parse("2026-11-19T17:48:00Z");
+export const PARITY_CURRENT_CODE_MS = ERA_SEED_MS;
 /** Gold in USD: a tick of 0.01 is worth USD 1 a lot (contract 100 oz), so USD 100 a lot per 1.00 of price. */
 export const LIVE_TICK_VALUE_PER_001 = 1;
 /**
@@ -530,7 +636,8 @@ export function liveTradesFrom({ deals = [], opens = {}, closes = {} } = {}) {
  * for at least PARITY_PASS.same_exit_min of the trades compared and the mean |ΔR| of the closed pairs is at most
  * PARITY_PASS.mean_abs_dr_max. `untilMs` is the end of the replay (later trades are not compared yet).
  */
-export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], sinceMs = PARITY_SINCE_MS, untilMs = Infinity, now = Date.now() } = {}) {
+export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], sinceMs = PARITY_SINCE_MS, untilMs = Infinity, now = Date.now(), era = null } = {}) {
+  const eraSince = finite(era?.since_ms) ? era.since_ms : PARITY_CURRENT_CODE_MS;
   const rowOf = new Map();
   for (const r of ledgerRows) { const c = decisionCloseMs(r?.decision_key); if (finite(c)) rowOf.set(`${c}|${r.side}`, r); }
   // Decisions live still holds open: not compared yet (neither side has a final result).
@@ -539,7 +646,7 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
     if (!(l.signal_issued_ms >= sinceMs) || !(l.signal_issued_ms <= untilMs)) continue;
     const key = `${l.signal_issued_ms}|${l.side}`;
     const v = rowOf.get(key);
-    const row = { issued_at: iso(l.signal_issued_ms), side: l.side, mode: l.mode ?? v?.trading_mode ?? null, live_code: (l.opened_ms ?? l.signal_issued_ms) >= PARITY_CURRENT_CODE_MS ? "current" : "earlier", matched: Boolean(v), live_exit: l.exit, v4_exit: null, live_r: l.r, v4_r: null, dr: null, entry_diff_s: null, same_exit: false, cause: null };
+    const row = { issued_at: iso(l.signal_issued_ms), side: l.side, mode: l.mode ?? v?.trading_mode ?? null, live_code: (l.opened_ms ?? l.signal_issued_ms) >= eraSince ? "current" : "earlier", matched: Boolean(v), live_exit: l.exit, v4_exit: null, live_r: l.r, v4_r: null, dr: null, entry_diff_s: null, same_exit: false, cause: null };
     if (!v) { row.cause = "no v4 row for this decision (outside the replay's span)"; trades.push(row); continue; }
     used.add(key);
     row.v4_status = v.omega4_status;
@@ -557,7 +664,7 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
         if (!row.same_exit) why.push(`exit ${l.exit} live, ${v.omega4_exit} in v4`);
         if (row.dr != null && Math.abs(row.dr) > PARITY_PASS.mean_abs_dr_max) why.push(`R ${l.r} live, ${v.r_omega4} in v4`);
         if (row.entry_diff_s != null && Math.abs(row.entry_diff_s) > 120) why.push(`entries ${row.entry_diff_s}s apart`);
-        if (why.length && row.live_code === "earlier") why.push("live ran the Position Manager before #488-#491");
+        if (why.length && row.live_code === "earlier") why.push("live ran earlier engine code (not counted)");
         row.cause = why.length ? why.join("; ") : null;
       }
     }
@@ -567,26 +674,34 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
     const c = decisionCloseMs(r?.decision_key);
     if (!finite(c) || used.has(`${c}|${r.side}`) || !(c >= sinceMs) || !(c <= untilMs)) continue;
     if (r.omega4_status !== "closed") continue;
-    trades.push({ issued_at: iso(c), side: r.side, mode: r.trading_mode ?? null, live_code: c >= PARITY_CURRENT_CODE_MS ? "current" : "earlier", matched: false, v4_only: true, live_exit: null, v4_exit: r.omega4_exit ?? null, live_r: null, v4_r: r.r_omega4 ?? null, dr: null, entry_diff_s: null, same_exit: false, v4_status: r.omega4_status, cause: "v4 traded it, live did not" });
+    trades.push({ issued_at: iso(c), side: r.side, mode: r.trading_mode ?? null, live_code: c >= eraSince ? "current" : "earlier", matched: false, v4_only: true, live_exit: null, v4_exit: r.omega4_exit ?? null, live_r: null, v4_r: r.r_omega4 ?? null, dr: null, entry_diff_s: null, same_exit: false, v4_status: r.omega4_status, cause: "v4 traded it, live did not" });
   }
   trades.sort((a, b) => a.issued_at.localeCompare(b.issued_at));
+  // Only the trades of the current era count; the earlier ones are shown apart.
+  const current = paritySummary(trades.filter((t) => t.live_code === "current"));
   return {
     version: OMEGA4_VERSION, checked_at: iso(now), since: iso(sinceMs), until: finite(untilMs) ? iso(untilMs) : null,
-    ...paritySummary(trades), thresholds: PARITY_PASS,
-    current_code: { since: iso(PARITY_CURRENT_CODE_MS), ...paritySummary(trades.filter((t) => t.live_code === "current")) },
+    ...current, thresholds: PARITY_PASS,
+    era: { since: iso(eraSince), commit: era?.commit ?? null, hash: typeof era?.hash === "string" ? era.hash.slice(0, 12) : null, seeded: era?.seeded === true, previous: Array.isArray(era?.previous) ? era.previous.slice(0, 3).map((p) => ({ since: iso(p.since_ms), until: finite(p.until_ms) ? iso(p.until_ms) : null, commit: p.commit ?? null, hash: String(p.hash ?? "").slice(0, 12) })) : [] },
+    earlier: paritySummary(trades.filter((t) => t.live_code === "earlier")),
     exit_map: LIVE_EXIT_MAP, tick_value: `${LIVE_TICK_VALUE_PER_001} USD per 0.01 a lot (gold in USD, contract 100 oz)`, trades
   };
 }
 
-/** Pure: the pass/fail of parity rows (omegaParity): every row counts in the same-exit share, the closed pairs in |ΔR|. */
-export function paritySummary(trades) {
+/**
+ * Pure: the status of parity rows (omegaParity): every row counts in the same-exit share, the closed pairs in |ΔR|.
+ * "insufficient" below PARITY_MIN_TRADES live trades (never "pass"); else "pass" or "fail" at PARITY_PASS.
+ */
+export function paritySummary(trades, { minTrades = PARITY_MIN_TRADES } = {}) {
   const compared = trades.length, same = trades.filter((t) => t.same_exit).length;
   const pairs = trades.filter((t) => finite(t.dr));
   const meanAbs = pairs.length ? r3(pairs.reduce((a, t) => a + Math.abs(t.dr), 0) / pairs.length) : null;
   const share = compared ? r3(same / compared) : null;
-  const pass = compared > 0 && share >= PARITY_PASS.same_exit_min && meanAbs != null && meanAbs <= PARITY_PASS.mean_abs_dr_max;
+  const liveCount = trades.filter((t) => !t.v4_only).length;
+  const meets = compared > 0 && share >= PARITY_PASS.same_exit_min && meanAbs != null && meanAbs <= PARITY_PASS.mean_abs_dr_max;
+  const status = liveCount < minTrades ? "insufficient" : meets ? "pass" : "fail";
   return {
-    pass, trades_compared: compared, live_trades: trades.filter((t) => !t.v4_only).length, matched: trades.filter((t) => t.matched).length,
+    status, pass: status === "pass", min_trades: minTrades, trades_compared: compared, live_trades: liveCount, matched: trades.filter((t) => t.matched).length,
     v4_only: trades.filter((t) => t.v4_only).length, closed_pairs: pairs.length, same_exit: same, same_exit_share: share, mean_abs_dr: meanAbs
   };
 }
@@ -630,30 +745,81 @@ export async function loadOmega4Context(env, { sinceMs, now = Date.now() }) {
   return { settings, profileAt: profileTimeline(changes, current), balanceAt, councils, control, blackouts, grid, arms, eaGate: eaVersionGateOn(env), live_account: Boolean(ref), profile_source: changes.length ? "history" : current ? "current" : "none" };
 }
 
+// The feed's 1m bars kept in D1 (ledger_bars_1m), so the replay stays reproducible once the KV 1m series (about two
+// days) has rolled past a checkpoint or a trade. Only closed minutes newer than the last archived one are written.
+export const BAR_ARCHIVE_DAYS = 120;
+const BAR_ROWS_PER_STATEMENT = 20; // 5 values a row, within D1's 100 bound parameters a statement
+
+/** Pure: archived and live 1m bars ({ t, o, h, l, c }) as one series, oldest first, one bar a minute (the archive's first). */
+export function mergeMinuteBars(archive = [], live = []) {
+  const by = new Map();
+  for (const b of live) if (finite(b?.t)) by.set(b.t, b);
+  for (const b of archive) if (finite(b?.t)) by.set(b.t, b);
+  return [...by.values()].sort((a, b) => a.t - b.t);
+}
+
+/** Appends the closed 1m bars newer than the archive's last minute (INSERT OR IGNORE, batched). Returns the rows written. */
+export async function archiveMinuteBars(env, bars, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  if (!db) return 0;
+  const last = Number((await db.prepare("SELECT MAX(minute_ms) AS t FROM ledger_bars_1m").first())?.t) || 0;
+  const fresh = minuteBars(bars).filter((b) => b.t > last && b.t + M1 <= now);
+  if (!fresh.length) return 0;
+  const statements = [];
+  for (let i = 0; i < fresh.length; i += BAR_ROWS_PER_STATEMENT) {
+    const part = fresh.slice(i, i + BAR_ROWS_PER_STATEMENT);
+    statements.push(db.prepare(`INSERT OR IGNORE INTO ledger_bars_1m (minute_ms, o, h, l, c) VALUES ${part.map(() => "(?, ?, ?, ?, ?)").join(", ")}`).bind(...part.flatMap((b) => [b.t, b.o, b.h, b.l, b.c])));
+  }
+  statements.push(db.prepare("DELETE FROM ledger_bars_1m WHERE minute_ms < ?").bind(now - BAR_ARCHIVE_DAYS * 86_400_000));
+  for (let i = 0; i < statements.length; i += 50) {
+    const part = statements.slice(i, i + 50);
+    if (typeof db.batch === "function") await db.batch(part);
+    else for (const st of part) await st.run();
+  }
+  return fresh.length;
+}
+
+/** The archived 1m bars from `fromMs` up to (not including) `toMs`. */
+export async function readArchivedBars(env, fromMs, toMs) {
+  const rows = (await env.DB.prepare("SELECT minute_ms AS t, o, h, l, c FROM ledger_bars_1m WHERE minute_ms >= ? AND minute_ms < ? ORDER BY minute_ms").bind(fromMs, toMs).all()).results ?? [];
+  return rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c) })).filter((b) => [b.t, b.o, b.h, b.l, b.c].every(finite));
+}
+
 /**
- * The cron step (the ledger's 5-minute run): the replay from the last flat minute to now, its records into D1
- * (ledger_omega4, and the omega4_* columns of the ledger's own rows), the next checkpoint into KV. Never throws.
+ * The cron step (the ledger's 5-minute run): the bars archived, then the replay from the checkpoint (the whole replay
+ * state at its next minute) for at most MAX_REPLAY_MINUTES minutes, its records into D1 (ledger_omega4, and the
+ * omega4_* columns of the ledger's own rows), the next checkpoint into KV. The bars come from the KV 1m series and,
+ * where it no longer reaches back, from the archive. Returns the run's work: decisions seen, minutes replayed,
+ * planIntents and positionAction calls, the wall time. Never throws.
  */
-export async function runOmega4(env, { now = Date.now(), bars = null } = {}) {
+export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes = MAX_REPLAY_MINUTES } = {}) {
   if (!env?.DB) return { status: "unavailable" };
   const t0 = Date.now();
   try {
     await ensureLedgerSchema(env.DB);
     const raw = bars ?? (await ledgerSeries(env)).bars;
-    const m1 = minuteBars(raw);
-    if (m1.length < 60) return { status: "no_bars" };
-    const earliest = m1[0].t + OMEGA4_SIM.warmup_ms;
+    const archived = await archiveMinuteBars(env, raw, { now });
     let cp = null;
     try { cp = JSON.parse((await env.SIGNAL_CACHE?.get?.(OMEGA4_CHECKPOINT_KEY)) || "null"); } catch { cp = null; }
-    if (cp?.version !== OMEGA4_VERSION || !finite(cp?.at_ms) || cp.at_ms < earliest) cp = null;
-    const from = cp ? cp.at_ms : earliest;
-    if (!cp) {
-      // The bars no longer reach the checkpoint: a trade left open there is marked out at its last known R (data_gap).
-      await env.DB.prepare("UPDATE ledger_omega4 SET omega4_status = 'closed', omega4_exit = 'data_gap', r_omega4 = CAST(json_extract(omega4_json, '$.open_r') AS REAL), omega4_closed_at = ?, updated_at = ? WHERE omega4_status = 'open' AND omega4_filled_at < ?").bind(iso(from), iso(now), iso(from)).run();
+    if (cp?.version !== OMEGA4_VERSION || !finite(cp?.at_ms)) cp = null;
+    const live = minuteBars(raw).filter((b) => b.t + M1 <= now);
+    // From the checkpoint less the warm-up (the ATR and the 5m structure), else the last 3 days.
+    const want = cp ? cp.at_ms - OMEGA4_SIM.warmup_ms : now - 3 * 86_400_000;
+    const liveStart = live.length ? live[0].t : now;
+    const m1 = liveStart > want ? mergeMinuteBars(await readArchivedBars(env, want, liveStart), live) : live.filter((b) => b.t >= want);
+    if (m1.length < 60) return { status: "no_bars", archived };
+    const earliest = m1[0].t + OMEGA4_SIM.warmup_ms;
+    // A gap only when no bar at all lies before the checkpoint (a weekend inside the warm-up is the market's, not ours).
+    if (cp && m1[0].t >= cp.at_ms) {
+      // Neither the KV series nor the archive reaches the checkpoint: a trade left open there is marked out at its last
+      // known R (data_gap), and the replay starts again where the bars begin.
+      await env.DB.prepare("UPDATE ledger_omega4 SET omega4_status = 'closed', omega4_exit = 'data_gap', r_omega4 = CAST(json_extract(omega4_json, '$.open_r') AS REAL), omega4_closed_at = ?, updated_at = ? WHERE omega4_status = 'open'").bind(iso(earliest), iso(now)).run();
+      cp = null;
     }
+    const from = cp ? cp.at_ms : earliest;
     const decisions = ((await env.DB.prepare(DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []).map(decisionFromRow).filter(Boolean);
     const ctx = await loadOmega4Context(env, { sinceMs: from, now });
-    const run = replayOmega4({ bars: m1, decisions, from, to: now, state: cp, ...ctx });
+    const run = replayOmega4({ bars: m1, decisions, from, to: now, state: cp, maxSteps: maxMinutes, ...ctx });
     const keys = Object.keys(run.records);
     let written = 0;
     const stored = new Map();
@@ -670,19 +836,20 @@ export async function runOmega4(env, { now = Date.now(), bars = null } = {}) {
         .bind(r.omega4_status, r.omega4_exit, r.r_omega4, r.omega4_size, r.omega4_filled_at, r.omega4_closed_at, r.omega4_json, `decision:${key}`));
       written += 1;
     }
-    // In batches where D1 offers them (the first run writes about two statements per decision of the last two days).
     for (let i = 0; i < writes.length; i += 50) {
       const part = writes.slice(i, i + 50);
       if (typeof env.DB.batch === "function") await env.DB.batch(part);
       else for (const st of part) await st.run();
     }
-    // The checkpoint, with the replay's reach for the parity check (trades after it are not compared yet): written when
-    // the flat minute moved or the reach moved by 30 minutes (not at every 5-minute run).
-    const next = { ...(run.checkpoint ?? cp ?? { version: OMEGA4_VERSION, at_ms: from, recent: [], reentry: null }), last_ms: run.last_ms ?? cp?.last_ms ?? null };
-    if (next.at_ms !== cp?.at_ms || !finite(cp?.last_ms) || (finite(next.last_ms) && next.last_ms - cp.last_ms >= 30 * M1)) await env.SIGNAL_CACHE?.put?.(OMEGA4_CHECKPOINT_KEY, JSON.stringify(next), { expirationTtl: 7 * 86_400 });
-    return { status: "ok", from: iso(from), steps: run.steps, plans: run.plans, records: keys.length, written, open: run.open_positions, ms: Date.now() - t0 };
+    // The checkpoint (the state at the next minute), with the replay's reach for the parity check.
+    const next = { ...run.checkpoint, last_ms: run.last_ms ?? cp?.last_ms ?? null };
+    if (next.at_ms !== cp?.at_ms) await env.SIGNAL_CACHE?.put?.(OMEGA4_CHECKPOINT_KEY, JSON.stringify(next), { expirationTtl: 7 * 86_400 });
+    return {
+      status: "ok", from: iso(from), to: run.last_ms != null ? iso(run.last_ms) : null, more: run.more, archived,
+      decisions: run.decisions, minutes: run.steps, plans: run.plans, position_actions: run.pm_calls, records: keys.length, written, open: run.open_positions, ms: Date.now() - t0
+    };
   } catch (e) {
-    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200), ms: Date.now() - t0 };
   }
 }
 
@@ -726,9 +893,10 @@ export async function runOmegaParity(env, { now = Date.now(), force = false } = 
     let until = null;
     try { until = Number(JSON.parse((await env.SIGNAL_CACHE.get(OMEGA4_CHECKPOINT_KEY)) || "null")?.last_ms); } catch { until = null; }
     const live = await loadLiveTrades(env, { sinceMs: PARITY_SINCE_MS });
-    const result = omegaParity({ ledgerRows: rows, liveTrades: live.trades, liveOpen: live.open, untilMs: finite(until) && until > 0 ? until + M1 : now, now });
+    const era = await currentEra(env, { now });
+    const result = omegaParity({ ledgerRows: rows, liveTrades: live.trades, liveOpen: live.open, era, untilMs: finite(until) && until > 0 ? until + M1 : now, now });
     await env.SIGNAL_CACHE.put(OMEGA4_PARITY_KEY, JSON.stringify(result), { expirationTtl: 8 * 86_400 });
-    return { status: "checked", pass: result.pass, trades: result.trades_compared, same_exit_share: result.same_exit_share, mean_abs_dr: result.mean_abs_dr };
+    return { status: "checked", parity: result.status, era_since: result.era.since, trades: result.trades_compared, live_trades: result.live_trades, same_exit_share: result.same_exit_share, mean_abs_dr: result.mean_abs_dr };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }
