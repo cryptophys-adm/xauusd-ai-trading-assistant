@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-20
+- feat(public): `warroomScene()` carries `gold_15m`, the gold price at the last closed 15-minute candle, for the CTA's core (owner 2026-11-20: "tambahkan juga harga emas live … didalam core … update per 15m sesuai closing candle"; chose "A + live label from B"). The market price only, never a plan's level; one keyed read of `ledger_bars_1m`. test/public-warroom.test.mjs PW7.
 - feat(public): `PublicProjection.trackRecord()`, the public track record for the CTA's Performance page (owner 2026-11-20, confirmed: "Yes, build it"): win rate (won, lost, even), expectancy, net R (average win and loss) and profit factor per exit scenario (TP1, TP2, managed), in R only, aggregates only, 24 h delay; the managed exit only once the v4 parity check passes. `src/public-track-record.mjs`, test/public-track-record.test.mjs TR1–TR5.
 - feat(ledger): Omega policy v4, the live engine replayed, with a parity check against the live account (owner 2026-11-20: "pastikan omega performance sama dengan omega yang live sekarang"; `src/ledger-omega4.mjs`, `cryptophys.ledger-omega.v4`).
   - **Why.** v3 re-implements a few of Omega's rules on each ledger row. It has no TP ladder, Position Manager, re-entry cooldown, adaptive or 5m stop, or profile caps, and it trades only the ledger's rows: on 2026-11-19 the ledger's no-stacking rule held back 5 of the 11 decisions Omega traded live.

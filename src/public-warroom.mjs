@@ -176,5 +176,19 @@ export async function readPublicWarRoomScene(env) {
       if (scene) rooms[source] = scene;
     } catch { /* that room is left out */ }
   }
-  return { version: PUBLIC_WARROOM_VERSION, rooms, notice: "Analysis, not a signal." };
+  return { version: PUBLIC_WARROOM_VERSION, rooms, gold_15m: await readGold15m(env), notice: "Analysis, not a signal." };
+}
+
+/**
+ * The gold price at the last closed 15-minute candle (owner 2026-11-20, an exception to the no-price rule for the market
+ * price only: "tambahkan juga harga emas live … didalam core … update per 15m sesuai closing candle"): the close of the
+ * feed's 1m bar that ends on the 15-minute boundary, from the ledger's 1m archive (D1 ledger_bars_1m, one keyed read).
+ * Never a plan's level: no entry, stop or target. `{ value, at }` (at = the candle's close, ISO), or null. Never throws.
+ */
+export async function readGold15m(env) {
+  try {
+    const row = await env.DB.prepare("SELECT minute_ms, c FROM ledger_bars_1m WHERE (minute_ms + 60000) % 900000 = 0 ORDER BY minute_ms DESC LIMIT 1").first();
+    const value = Number(row?.c), at = Number(row?.minute_ms) + 60_000;
+    return Number.isFinite(value) && value > 0 && Number.isFinite(at) ? { value: Math.round(value * 100) / 100, at: new Date(at).toISOString() } : null;
+  } catch { return null; }
 }

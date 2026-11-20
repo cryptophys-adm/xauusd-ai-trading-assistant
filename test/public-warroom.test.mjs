@@ -115,3 +115,14 @@ test("PW6 the 1H, 4H and 1D rooms keep their statements in the run document's st
   assert.equal(out.rooms["1h"].analysts.length, 2);
   assert.deepEqual(seen, [], "the thread table is not read");
 });
+
+test("PW7 the gold price at the last 15-minute close (owner 2026-11-20): one keyed read, no plan level", async () => {
+  const { readGold15m } = await import("../src/public-warroom.mjs");
+  let sql = "";
+  const env = { DB: { prepare: (q) => { sql = q; return { first: async () => ({ minute_ms: Date.parse("2026-11-20T04:14:00Z"), c: 4123.456 }) }; } } };
+  assert.deepEqual(await readGold15m(env), { value: 4123.46, at: "2026-11-20T04:15:00.000Z" });
+  assert.match(sql, /ledger_bars_1m/);
+  assert.match(sql, /% 900000 = 0/, "only a minute ending on a 15-minute boundary");
+  assert.equal(await readGold15m({ DB: { prepare: () => ({ first: async () => null }) } }), null);
+  assert.equal(await readGold15m({}), null, "never throws");
+});
