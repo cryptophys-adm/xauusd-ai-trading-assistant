@@ -82,6 +82,8 @@ Content-Type: application/json
 | `close` | `ticket` | closes that position if it is its own (magic) |
 | `close_all` | — | closes every own position and deletes every own pending order |
 | `modify_sltp` | `ticket`, `sl`, `tp` (0 removes a level) | OmegaExecutor 1.18+: the position's stop and target in one request (the owner's edit from Nexus) |
+| `place_limit` | `side`, `volume` = `<lot>@<limit price>`, `sl`, `tp`, `ticket` = the expiry (UTC epoch seconds) | OmegaExecutor 1.21+ (docs/RFC_OMEGA_LIMIT_ENTRY.md §9): a pending buy or sell limit with this EA's magic and the intent id as comment; refused without an expiry ahead, through the price (`limit_through_price`), inside the stops or freeze level, or on a netting account. The broker's expiry where the symbol allows one; the EA's own timer deletes it at the expiry in any case (never GTC). The result's ticket is the order's |
+| `delete_order` | `ticket` | OmegaExecutor 1.21+: deletes one pending order (this EA's magic, or a `manual:`/`d:` id) |
 | `modify_order` | `ticket`, `volume` = the order's new price, `sl`, `tp` | OmegaExecutor 1.18+: a pending order's price, stop and target; its expiry stays (the bridge line has no price field, so the price rides in `volume`) |
 
 Since OmegaExecutor 1.18 (owner 2026-11-19) an intent may act on a position or order without the EA's magic number

@@ -205,6 +205,13 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.21 (2026-11-20, limit entries; docs/RFC_OMEGA_LIMIT_ENTRY.md stage 1):** `place_limit` (the volume field carries
+    `<lot>@<price>`, the ticket field the expiry in UTC epoch seconds) and `delete_order`. No pending order without an
+    end: the broker's expiry where the symbol allows one, and the EA's own timer deletes it at that time in any case
+    (`EnforcePendingSafety`), and at `PendingMaxLifeSeconds` (12 h) whatever happens. **Dead-man switch:** with no fresh
+    `intents.txt` for `PendingDeadManSeconds` (120 s) the EA deletes its own pending orders; open positions keep their
+    broker stop and target. Results of these deletions carry the id `ea:del:<ticket>`. Netting accounts refuse limits.
+    The bridge is unchanged. Nothing places a limit until stage 3 and the owner's `entry_order` switch.
   - **1.20 (2026-11-19, symbol identity):** the price path against the reference's past H4 closes, no expiring
     contracts, no choice between different contracts without the owner, the chosen symbol re-checked against a fresh
     reference, the reference aged on its own time. Needs bridge 1.6.0.
