@@ -415,8 +415,8 @@ doctrine protocol; xauusd reads it back (§7.1). There is no automatic threshold
     report age, and the threshold sensitivities (§8).
   - **No price keys.** A test walks the report and refuses any key matching
     `price|entry|stop|sl|tp|target|level|zone|bid|ask`. Contracts and percentiles are not prices.
-- **Doctrine facts:** the `positioning.*` knobs in force join the Nexus seat (`nexusFacts`), the `liquidity.*` knobs
-  the Omega seat (`omegaFacts`), `src/doctrine-facts.mjs`.
+- **Doctrine facts:** the `positioning.*` and `liquidity.*` knobs in force join the Nexus seat (`nexusFacts`),
+  `src/doctrine-facts.mjs`. The Omega seat holds `omega.*` facts only (Aether's validator).
 - **Health alerts** (`src/health-alerts.mjs`):
   - `cot_stale`: the newest report known is more than 14 days old, or the fetch failed three runs in a row;
   - `liquidity_archive_stale`: no broker bar for 30 minutes while the market is open and Omega is connected;
@@ -588,7 +588,7 @@ weight for the lens under another `doctrine_sha`, pulled after the floor.
 
 **Report, health, page.** `cryptophys.lens-report.v1` daily through `AETHER.ingestLensReport` when offered
 (`pushLensReport`); `forbiddenReportKeys` refuses any key matching `price|entry|stop|sl|tp|target|level|zone|bid|ask`.
-Doctrine facts: `positioning.*` in the Nexus seat, `liquidity.*` in the Omega seat, each with `<lens>.enabled`. Health:
+Doctrine facts: `positioning.*` and `liquidity.*` in the Nexus seat, each with `<lens>.enabled` (Aether keeps the Omega seat to `omega.*`: #505 first put `liquidity.*` there and every facts report was refused until the fix). Health:
 `cot_stale`, `liquidity_archive_stale`, `lens_at_floor` (`report_once`). `GET /api/lens`; Nexus: the "Positioning &
 Liquidity" panel on the Strategy page (weight per mode and source, score, floor, baseline, COT freshness, switches), the
 two switches on the Omega page, and `liquidity_spread_spike` / `liquidity_modify_deferred` in "why".

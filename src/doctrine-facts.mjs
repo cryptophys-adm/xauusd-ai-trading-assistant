@@ -90,8 +90,11 @@ export async function nexusFacts(env) {
     "calendar.blackout_after_min": Math.round(afterMs / 60_000),
     "parity.approval_candles": DEFAULT_POLICY.promoteAfter,
     "lanes.indicator_source": String(env?.INDICATOR_SOURCE ?? "local").trim().toLowerCase() || "local",
-    // The Positioning & Liquidity analyst's lens A knobs in force (docs/RFC_POSITIONING_LIQUIDITY.md §8, §10).
-    ...(await lensFacts(env, "positioning"))
+    // The Positioning & Liquidity analyst's knobs in force (docs/RFC_POSITIONING_LIQUIDITY.md §8, §10), both lenses on
+    // this seat: Aether's validator keeps the Omega seat to omega.* facts and refuses the whole report otherwise
+    // (2026-11-20, from #505 on every facts push was refused until this fix).
+    ...(await lensFacts(env, "positioning")),
+    ...(await lensFacts(env, "liquidity"))
   };
 }
 
@@ -101,7 +104,9 @@ async function lensFacts(env, lens) {
   try {
     const st = await readLensState(env);
     for (const m of LENS_MODES) {
-      const k = lensKnobs(lens, m, { policy: st.policy, floor: st.floor, enabled: st.switches[lens], baseline: "sufficient" });
+      // The knob as the doctrine holds it (Aether's value or the anchor, at its floor after a rollback): the owner's switch
+      // is its own fact (<lens>.enabled), so a lens switched off does not report a weight of 0 outside its bound.
+      const k = lensKnobs(lens, m, { policy: st.policy, floor: st.floor, enabled: true, baseline: "sufficient" });
       for (const base of Object.keys(LENS_KNOBS).filter((b) => b.startsWith(`${lens}.`))) out[`${base}_${m}`] = k[base.split(".")[1]];
       if (m === "intraday") { out[`${lens}.score_floor`] = k.score_floor; out[`${lens}.score_window`] = k.score_window; }
     }
@@ -125,9 +130,7 @@ export async function omegaFacts(env) {
     "omega.live_arm_required": true,
     // The strategy arm (RFC §10, owner 2026-11-17): live → an entry needs an armed strategy or the AUTO pick.
     "omega.strategy_arm_required": strategyArmMode(env) === "live",
-    "omega.max_armed_strategies": ARM_MAX,
-    // The Positioning & Liquidity analyst's lens B knobs in force (docs/RFC_POSITIONING_LIQUIDITY.md §8, §10).
-    ...(await lensFacts(env, "liquidity"))
+    "omega.max_armed_strategies": ARM_MAX
   };
 }
 
