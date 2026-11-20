@@ -34,6 +34,8 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
 import { flatConfidences } from "./agent-confidence.mjs";
+import { liquidityFields, readLiquidityState } from "./liquidity-lens.mjs";
+import { lensKnobs, readLensState } from "./lens-policy.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
 const H1_MS = 3_600_000;
@@ -209,7 +211,18 @@ async function cellGateBase(env, { now }) {
   return inputs;
 }
 let basisMemo = { at: 0, basis: null };
-export function resetFeedBasisMemoForTests() { basisMemo = { at: 0, basis: null }; }
+export function resetFeedBasisMemoForTests() { basisMemo = { at: 0, basis: null }; liquidityMemo = { at: 0, kv: null, state: null }; }
+// The liquidity lens's state (docs/RFC_POSITIONING_LIQUIDITY.md §4.4, §5): written by the 5-minute ledger step, kept 30 s
+// per isolate (the bridge syncs about twice a second); the switch, the policy and the floor are kept 30 s too.
+let liquidityMemo = { at: 0, kv: null, state: null };
+async function liquiditySignalFields(env, { now, mode }) {
+  try {
+    if (!(liquidityMemo.at && now - liquidityMemo.at < 30_000 && liquidityMemo.kv === env?.SIGNAL_CACHE)) liquidityMemo = { at: now, kv: env?.SIGNAL_CACHE, state: await readLiquidityState(env) };
+    const lens = await readLensState(env, { now });
+    const knobs = lensKnobs("liquidity", mode, { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: liquidityMemo.state?.baseline ?? null });
+    return liquidityFields(liquidityMemo.state, { now, knobs });
+  } catch { return liquidityFields(null, { now }); }
+}
 
 /** Loads the latest decision, the event gate and the feed price, and builds the signal. Never throws. */
 /** The EA's event blackout in force: BLACKOUT_MINUTES on both sides, else BLACKOUT_BEFORE_MINUTES (120) and BLACKOUT_AFTER_MINUTES (30). */
@@ -269,7 +282,7 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
       } catch { basis = null; }
       basisMemo = { at: now, basis };
     }
-    const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), source: "decision_engine" };
+    const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), ...(await liquiditySignalFields(env, { now, mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "intraday" })), source: "decision_engine" };
     // The grid's adapted entry and stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): plan by default.
     const adapted = gridAdaptMode(env) === "live" ? applyGridChoice(out, { decision, choices: await readGridChoices(env) }) : out;
     // Range mode step 1 (owner 2026-11-18, src/htf-cells.mjs): a range strategy trades only with the H4/D1 trend and only in a

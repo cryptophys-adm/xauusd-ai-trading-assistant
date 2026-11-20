@@ -14,6 +14,7 @@
 // for the next sweep. `critical` is never used here: it opens a GitHub issue on the platform.
 // Nexus shows the open alerts as its Priority Queue (GET /api/health/alerts). Read-only towards
 // the trading chain: an alert never changes a decision, a room or a parity status.
+import { lensHealthIssues } from "./lens-steps.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
@@ -291,6 +292,10 @@ export async function detectHealthIssues(env, now = Date.now()) {
   //     The validator's codes only, never a price, an account or an email (src/aether-push.mjs executionReportAlert).
   const execution = await executionReportIssue(env, now);
   if (execution) out.push(execution);
+
+  // 13. The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10): cot_stale, liquidity_archive_stale,
+  //     lens_at_floor (info, reported once).
+  try { out.push(...(await lensHealthIssues(env, now))); } catch { /* never fatal */ }
 
   // 9. End-to-end sync with Aether (hardening 2026-11-09): each warning check of AetherReader.sync()
   //    and of this side (KB hash match, this Worker's card push). Production only (binding absent elsewhere).

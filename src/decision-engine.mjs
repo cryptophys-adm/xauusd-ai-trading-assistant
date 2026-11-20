@@ -62,6 +62,9 @@ import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus,
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
+import { positioningCard, positioningNow, POSITIONING_PROMPT } from "./positioning-lens.mjs";
+import { lensKnobs, readLensState } from "./lens-policy.mjs";
+import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS } from "./liquidity-lens.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -690,7 +693,7 @@ export const COUNCIL_JSON_SCHEMA = Object.freeze({
   required: ["stance", "bias", "confidence", "entry_type", "target", "summary", "reasons", "risks", "weighed"]
 });
 
-const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS"];
+const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS", "POSITIONING"];
 
 /** Pure: a side's live agents with a plan the guardrails accept, the default first: [[id, { status, plan }]]. */
 export function liveAgentPlans(g) {
@@ -729,7 +732,7 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
     };
     return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), ...(a.plan.pattern ? { this_pattern_record: patternRecord(id, a.plan.pattern) } : {}), plan: plan({ plan: a.plan }) }));
   };
-  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
+  const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(g.liquidity ? { liquidity: g.liquidity } : {}), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
     bar_close: barClose,
     witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
@@ -767,6 +770,8 @@ export function councilMessages(evidence, { learned = null } = {}) {
     `confidence is your own judgement, 0 to 1, of how sure you are that the stance you return is the right one now (for WAIT: that waiting is right). It is not an input: no confidence value is given to you and none is missing, and no guardrail checks a confidence before you answer. Never answer 0 because something is missing; say what is missing in reasons instead. Below ${MIN_CONFIDENCE} a BUY or SELL becomes WAIT. bias is where the weight of the evidence leans (BULLISH, BEARISH or NEUTRAL), even when the stance is WAIT.`,
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
     ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. price_action, when present, is the Projection Agent's reading of the charts: the chart patterns it sees on the 15m, 1H and 4H charts, whether each has broken and which way (upward or downward), and how often that pattern reached its target on gold. Choose the strategy whose made_for matches that price action and what the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Each strategy's record is what it earned on this system's own past setups, in R per setup, overall and in the present market condition: weigh it with the number of setups behind it, and treat a strategy without a record as untested. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
+    ...((evidence?.witnesses || []).some((w) => w.key === "POSITIONING") ? [POSITIONING_PROMPT] : []),
+    ...(evidence?.long?.liquidity || evidence?.short?.liquidity ? ["A side may carry liquidity: the broker's own tick volume shows a reclaimed sweep on a volume spike in the last 15 minutes, sweep_with (the reversal is for that side) or sweep_against, with the lens weight to weigh it at. It confirms a pullback the strategy agents already plan; it never creates a plan or a side on its own."] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
@@ -1129,7 +1134,9 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const tuned = witnessWeights && decisionWeightedEnabled(env) && witnessWeights.weights && typeof witnessWeights.weights === "object" ? witnessWeights : null;
   const effectiveEnv = tuned ? { ...env, DYNAMIC_WITNESS_WEIGHTS: tuned.weights } : env;
   const source = tuned ? (tuned.source ?? "default") : decisionWeightedEnabled(env) ? "default" : "base";
-  const cards = witnessCards({ global, strategy, context, env: effectiveEnv });
+  // POSITIONING (docs/RFC_POSITIONING_LIQUIDITY.md §3.4): lens A's witness at its per-mode weight (Aether moves it within
+  // its bound; the owner's switch turns it off), outside the witness tuner: the set in force scales by 1 - w.
+  const cards = withPositioning(witnessCards({ global, strategy, context, env: effectiveEnv }), loaded?.positioning ?? null);
   const quorum = quorumOf(cards, { now, analytics });
   const market = marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
@@ -1147,7 +1154,32 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   let priceAction = [];
   try { priceAction = priceActionReading(strategy?.key_levels?.patterns, inputs.patternCalibration ?? null); } catch { priceAction = []; }
   guards.price_action = priceAction;
-  return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null };
+  // Lens B (RFC §5.2): each side's sweep reading for the council, only while the lens is on; never a plan.
+  const liq = liquidityEvidence(loaded?.liquidity ?? null, now);
+  if (liq) { guards.long.liquidity = { sweep: liq.sweepFor("BUY"), lens_weight: liq.weight }; guards.short.liquidity = { sweep: liq.sweepFor("SELL"), lens_weight: liq.weight }; }
+  const pos = cards.find((c) => c.key === "POSITIONING") ?? null;
+  return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null,
+    ...(pos ? { positioning: { weight: pos.weight, source: loaded.positioning.knobs?.weight_source ?? null, mode: loaded.positioning.knobs?.mode ?? null, lean: pos.lean, stale: pos.stale } } : {}) };
+}
+
+/**
+ * Pure: the cards with lens A's POSITIONING witness (RFC §3.4) at `positioning.knobs.weight`, the others scaled by
+ * 1 - w (addWitness's rule), so the weights still sum to one. Without the lens (off, no report) the cards are as they are.
+ */
+export function withPositioning(cards, positioning) {
+  const k = positioning?.knobs;
+  const w = Number(k?.weight);
+  if (!positioning?.facts || k?.enabled !== true || !(w > 0 && w < 1)) return cards;
+  const card = positioningCard(positioning.facts, { weight: w, knobs: k });
+  return [...cards.map((c) => ({ ...c, weight: isNum(c.weight) ? r4(c.weight * (1 - w)) : c.weight })), card];
+}
+const r4 = (v) => Math.round(v * 10000) / 10000;
+
+/** Pure: lens B's evidence for the council (on, fresh, available), or null. */
+export function liquidityEvidence(liquidity, now = Date.now()) {
+  const st = liquidity?.state, k = liquidity?.knobs;
+  if (!k?.active || !st?.facts?.available || !(now - Number(st.at_ms) <= LIQUIDITY_STATE_FRESH_MS)) return null;
+  return { weight: k.weight, sweepFor: (side) => (sweepFor(st.facts, side) ?? null) };
 }
 
 /** Pure: both sides' agent plans as the record keeps them ({ long: { id: { status, entry, stop, ... } }, short }), or null without any. */
@@ -1238,7 +1270,7 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, ...(assessment?.positioning ? { positioning: assessment.positioning } : {}), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).
     worker_version: typeof env?.CF_VERSION_METADATA?.id === "string" ? env.CF_VERSION_METADATA.id : null
@@ -1326,6 +1358,19 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     // loaded lazily (that module reads this one). Unreadable: the rule's 1.
     try { env.ROOM_CORRIDOR_ATR = (await (await import("./room-tuning.mjs")).activeRoom(env, env.TRADING_MODE, { now })).value; } catch { env.ROOM_CORRIDOR_ATR = SQUEEZE_RULE.corridor_atr; }
     const data = loaded ?? await loadDecisionInputs(env, { now });
+    // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens A's facts known at this close
+    // (cotAt: released before now) at the mode's knobs, lens B's state for the council's sweep evidence.
+    if (data.positioning === undefined || data.liquidity === undefined) {
+      try {
+        const lens = await readLensState(env, { now });
+        const pk = lensKnobs("positioning", env.TRADING_MODE, { policy: lens.policy, floor: lens.floor, enabled: lens.switches.positioning });
+        if (data.positioning === undefined) data.positioning = { knobs: pk, facts: pk.enabled ? await positioningNow(env, { now, knobs: pk }) : null };
+        if (data.liquidity === undefined) {
+          const st = lens.switches.liquidity ? await readLiquidityState(env) : null;
+          data.liquidity = { state: st, knobs: lensKnobs("liquidity", env.TRADING_MODE, { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: st?.baseline ?? null }) };
+        }
+      } catch { data.positioning ??= null; data.liquidity ??= null; }
+    }
     let witnessWeights = null;
     try { witnessWeights = await activeWitnessTuning(env, { now }); } catch { witnessWeights = null; }
     // The strategy agents' measured records (the plan learner's state): the breaker and the council read them.

@@ -5,6 +5,7 @@ import { C } from "../components/charts";
 import { get } from "../lib/api";
 import { ago } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
+import { LensPanel } from "../components/LensPanel";
 
 // Strategy agents (owner 2026-11-13: "kita perlu agent yang bisa dibongkar pasang menyesuaikan strategy yang
 // tepat yang dipilih oleh council"). Read-only, from the AI Worker:
@@ -372,6 +373,8 @@ export default function Strategy() {
           </div>
         )}
       </Panel>
+
+      <LensPanel />
     </div>
   );
 }

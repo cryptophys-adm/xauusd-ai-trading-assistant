@@ -9,7 +9,7 @@ import {
   replayOmega4, minuteBars, aggregate, structureOf, parseCouncil, decisionFromRow, profileTimeline, balanceTimeline,
   omegaParity, liveTradesFrom, liveExitCode, exitClass, runOmega4, runOmegaParity, PARITY_PASS, OMEGA4_CHECKPOINT_KEY, OMEGA4_PARITY_KEY,
   PARITY_MIN_TRADES, MAX_REPLAY_MINUTES, mergeMinuteBars, archiveMinuteBars, readArchivedBars, nextEra, currentEra, eraStep, eraView, eraSwitches, engineCodeSource, sha256Hex,
-  ENGINE_CODE, ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH, ERA_SWITCHES, ERA_ADOPTABLE_CODE_HASHES, ERA_SEED_MS, OMEGA4_ERA_KEY
+  ENGINE_CODE, ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH, ERA_SWITCHES, ERA_ADOPTABLE_CODE_HASHES, ERA_ADOPTABLE_BEHAVIOUR_HASH, ERA_SEED_MS, OMEGA4_ERA_KEY
 } from "../src/ledger-omega4.mjs";
 import { engineBehaviourSource } from "./fixtures/engine-behaviour.mjs";
 import { structureOf as adapterStructureOf } from "../market-data-ingestion/src/broker-trigger.mjs";
@@ -253,7 +253,7 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   // The live trade on the same decision, closed by the ladder's locked stop: parity passes.
   db.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES (?, 'open', ?, 'done', ?, ?, ?)").run(`open:${C}:S`, JSON.stringify({ side: "SELL", volume: 0.01, entry: 2000, sl: 2020, r_dist: 20, signal_issued_ms: C, mode: "scalp" }), JSON.stringify({ ok: true, ticket: 42 }), C + 3 * M1, C + 3 * M1);
   // The era holding this code (as if it had started an hour before the trade).
-  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ hash: ENGINE_CODE_HASH, since_ms: C - 3600_000, commit: "c0ffee", previous: [] }));
+  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ behaviour_hash: ENGINE_BEHAVIOUR_HASH, code_hash: ENGINE_CODE_HASH, switches: [], since_ms: C - 3600_000, commit: "c0ffee", reason: "behaviour change", previous: [], carried: [] }));
   const parity = await runOmegaParity(env, { now });
   assert.equal(parity.status, "checked", JSON.stringify(parity));
   const stored = JSON.parse(cache.m.get(OMEGA4_PARITY_KEY));
@@ -262,8 +262,8 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   assert.ok(Math.abs(stored.trades[0].dr) <= 0.1, JSON.stringify(stored.trades[0]));
   assert.deepEqual([stored.status, stored.pass, stored.min_trades], ["insufficient", false, 20], "one trade is not a sample");
   assert.equal(stored.era.commit, "c0ffee");
-  // The era of the old shape ({ hash }) is adopted with its since (V16).
-  assert.deepEqual([stored.era.since, stored.era.behaviour_hash, stored.era.reason], [new Date(C - 3600_000).toISOString(), ENGINE_BEHAVIOUR_HASH.slice(0, 12), "code change"]);
+  // The era in force holds this behaviour (the old shape's adoption is V16).
+  assert.deepEqual([stored.era.since, stored.era.behaviour_hash, stored.era.reason], [new Date(C - 3600_000).toISOString(), ENGINE_BEHAVIOUR_HASH.slice(0, 12), "behaviour change"]);
   assert.equal(JSON.stringify(stored).includes("acct_"), false, "no account reference");
   assert.equal((await runOmegaParity(env, { now: now + 60_000 })).status, "fresh", "at most once an hour");
   const ledger = await readLedger(env, { days: 30, now });
@@ -384,7 +384,10 @@ test("V13. the engine's code hash: the committed hash is the source's (informati
   const hash = await sha256Hex(engineCodeSource());
   assert.equal(ENGINE_CODE_HASH, hash, `the engine's code changed: set ENGINE_CODE_HASH in src/ledger-omega4.mjs to "${hash}" (the era carries over while ENGINE_BEHAVIOUR_HASH holds)`);
   assert.match(engineCodeSource(), /planIntents=function planIntents/);
-  assert.ok(ERA_ADOPTABLE_CODE_HASHES.includes(ENGINE_CODE_HASH));
+  // The Positioning & Liquidity analyst (2026-11-20) changed the behaviour, so this code is not adoptable as the first
+  // fingerprint's: an old-shape era starts a new one at the deploy.
+  assert.ok(!ERA_ADOPTABLE_CODE_HASHES.includes(ENGINE_CODE_HASH));
+  assert.notEqual(ENGINE_BEHAVIOUR_HASH, ERA_ADOPTABLE_BEHAVIOUR_HASH);
 });
 
 test("V14. the engine's behaviour hash: the committed fingerprint is the fixtures' outputs with every switch at its default", async () => {
@@ -398,7 +401,11 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled"]);
+  // The lens switches are on by default: at their defaults they add nothing; a lens switched off starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, liquidity_enabled: false }), ["liquidity_enabled=false"]);
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, positioning_enabled: false, liquidity_enabled: false }), ["liquidity_enabled=false", "positioning_enabled=false"]);
+  assert.ok(names.filter((n) => n.startsWith("liquidity/spike/")).length >= 20 && text.includes("liquidity_spread_spike"), "the fingerprint covers the lens's gate");
   assert.deepEqual(eraSwitches(OMEGA_DEFAULTS), []);
   assert.deepEqual(eraSwitches({ entry_order: "market", pm_loosen_enabled: false, risk_pct: 2 }), []);
   assert.deepEqual(eraSwitches({ pm_loosen_enabled: true, entry_order: "council" }), ["entry_order=council", "pm_loosen_enabled"]);
@@ -446,16 +453,18 @@ test("V16. the migration: the production era of the old shape is adopted with it
   const now = Date.parse("2026-11-21T09:00:00Z");
   const m = nextEra(old, { switches: [], now, deployedMs: now - 3600_000, commit: "k5" });
   assert.equal(m.changed, true);
-  assert.deepEqual([m.era.since_ms, m.era.behaviour_hash, m.era.code_hash, m.era.switches, m.era.commit, m.era.reason], [SINCE, ENGINE_BEHAVIOUR_HASH, ENGINE_CODE_HASH, [], "389a33b", "code change"]);
-  assert.deepEqual(m.era.carried.map((c) => [c.from, c.code_hash]), [[STAGE3, ENGINE_CODE_HASH]]);
-  assert.deepEqual(m.events, ["era adopted (behaviour identical, since kept)", "era carried (behaviour identical)"]);
-  assert.deepEqual(m.era.previous, old.previous, "the list before is kept");
+  // Adopted as the behaviour it was proven identical to (the first fingerprint); this code behaves otherwise since the
+  // Positioning & Liquidity analyst (2026-11-20), so a new era starts at the deploy and the adopted one is kept before it.
+  assert.deepEqual([m.era.since_ms, m.era.behaviour_hash, m.era.code_hash, m.era.switches, m.era.commit, m.era.reason], [now - 3600_000, ENGINE_BEHAVIOUR_HASH, ENGINE_CODE_HASH, [], "k5", "behaviour change"]);
+  assert.deepEqual(m.events, ["era adopted (behaviour identical, since kept)", "new era: behaviour change"]);
+  assert.deepEqual([m.era.previous[0].since_ms, m.era.previous[0].until_ms, m.era.previous[0].behaviour_hash, m.era.previous[0].code_hash], [SINCE, now - 3600_000, ERA_ADOPTABLE_BEHAVIOUR_HASH, STAGE3]);
+  assert.deepEqual(m.era.previous.slice(1), old.previous, "the list before is kept");
   assert.equal(nextEra(m.era, { switches: [], now: now + 3600_000 }).changed, false, "adopted once");
-  // The same old shape with today's code hash: adopted, nothing carried.
-  assert.deepEqual(nextEra({ ...old, hash: ENGINE_CODE_HASH }, { switches: [], now }).events, ["era adopted (behaviour identical, since kept)"]);
-  // A switch already on at the migration: the adopted era ends at the settings' updated_ms.
+  // The same old shape with the last adoptable code hash: adopted, then the new behaviour's era.
+  assert.deepEqual(nextEra({ ...old, hash: ERA_ADOPTABLE_CODE_HASHES.at(-1) }, { switches: [], now }).events, ["era adopted (behaviour identical, since kept)", "new era: behaviour change"]);
+  // A switch already on at the migration as well: the later of the two starts.
   const sw = nextEra(old, { switches: ["entry_order=council"], switchesMs: now - 600_000, now });
-  assert.deepEqual([sw.era.since_ms, sw.era.reason, sw.era.previous[0].since_ms], [now - 600_000, "switch on: entry_order=council", SINCE]);
+  assert.deepEqual([sw.era.since_ms, sw.era.reason, sw.era.previous[0].since_ms], [now, "behaviour change; switch on: entry_order=council", SINCE]);
   // An old-shape era whose code no fixture vouches for: a new era at the deploy.
   const unknown = nextEra({ ...old, hash: "f".repeat(64) }, { switches: [], now, deployedMs: now - 3600_000 });
   assert.deepEqual([unknown.era.since_ms, unknown.era.reason, unknown.events], [now - 3600_000, "behaviour change", ["era of unknown behaviour (not adopted)", "new era: behaviour change"]]);
@@ -466,16 +475,16 @@ test("V16. the migration: the production era of the old shape is adopted with it
   cache.m.set(OMEGA4_ERA_KEY, JSON.stringify(old));
   const env = { DB: db, SIGNAL_CACHE: cache, DEPLOYED_AT: "2026-11-21T08:00:00Z", DEPLOY_COMMIT: "0123456789abcdef" };
   const step = await eraStep(env, { now });
-  assert.deepEqual([step.era.since_ms, step.era.switches, step.era.carried[0].commit], [SINCE, [], "0123456789ab"]);
+  assert.deepEqual([step.era.since_ms, step.era.switches, step.era.reason, step.era.commit, step.era.previous[0].since_ms], [Date.parse("2026-11-21T08:00:00Z"), [], "behaviour change", "0123456789ab", SINCE]);
   assert.deepEqual(JSON.parse(cache.m.get(OMEGA4_ERA_KEY)), step.era);
   assert.deepEqual(await currentEra(env, { now: now + 1 }), step.era);
   // The owner turns the council's entries on: the next check starts a new era at the settings' updated_ms.
   db.raw.prepare("UPDATE omega_settings SET settings = ?, updated_ms = ? WHERE id = 1").run(JSON.stringify({ ...OMEGA_DEFAULTS, enabled: true, entry_order: "council" }), now + 1800_000);
   const flip = await currentEra(env, { now: now + 3600_000 });
-  assert.deepEqual([flip.since_ms, flip.reason, flip.switches, flip.previous[0].since_ms], [now + 1800_000, "switch on: entry_order=council", ["entry_order=council"], SINCE]);
+  assert.deepEqual([flip.since_ms, flip.reason, flip.switches, flip.previous[0].since_ms], [now + 1800_000, "switch on: entry_order=council", ["entry_order=council"], Date.parse("2026-11-21T08:00:00Z")]);
   // The parity view shows the reason and the eras before.
   const view = eraView(flip);
-  assert.deepEqual([view.reason, view.switches, view.behaviour_hash, view.previous[0].reason, view.previous[0].code_hash], ["switch on: entry_order=council", ["entry_order=council"], ENGINE_BEHAVIOUR_HASH.slice(0, 12), "code change", ENGINE_CODE_HASH.slice(0, 12)]);
+  assert.deepEqual([view.reason, view.switches, view.behaviour_hash, view.previous[0].reason, view.previous[0].code_hash], ["switch on: entry_order=council", ["entry_order=council"], ENGINE_BEHAVIOUR_HASH.slice(0, 12), "behaviour change", ENGINE_CODE_HASH.slice(0, 12)]);
   assert.equal(eraView(old).code_hash, STAGE3.slice(0, 12), "an old-shape era shows its hash as the code hash");
   // No DB: the stored signature is kept.
   assert.deepEqual(await currentEra({ SIGNAL_CACHE: cache }, { now: now + 7200_000 }), flip);

@@ -38,6 +38,9 @@ test("the crons stand still from two hours after the Friday close to the Sunday 
     static now() { return RealDate.now() + shift; }
   };
 }
+// No live network in tests: every outbound fetch (the calendar, the CFTC report) fails as it does offline, so the counts
+// are the same on a laptop and in CI (#505: in CI the idle heartbeat reached the CFTC and ran the COT backfill).
+globalThis.fetch = async (url) => { throw new TypeError(`fetch failed (no network in tests): ${new URL(String(url)).host}`); };
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 async function loadWorker() {

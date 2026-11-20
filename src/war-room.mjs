@@ -21,6 +21,7 @@ import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgen
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
+import { roomContextLine } from "./lens-steps.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
@@ -635,7 +636,11 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
   if (!existing.has("brief")) {
-    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news,
+    // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §4.3): context, not on the
+    // roster, so outside the quorum and the crowd; no price.
+    let lensContext = null;
+    try { lensContext = await roomContextLine(env, "M15"); } catch { lensContext = null; }
+    await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news, ...(lensContext ? { context: lensContext } : {}),
       ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}) } });
   }
 
@@ -857,6 +862,7 @@ export async function readWarRoom(db, { barTime = null, metrics = false, rows: d
     m5_label: brief?.m5_label ?? null,
     confirmations: brief?.confirmations ?? null,
     m15_close: brief?.m15_close ?? null,
+    context: brief?.context ?? null,
     openings,
     debate,
     conclusion,

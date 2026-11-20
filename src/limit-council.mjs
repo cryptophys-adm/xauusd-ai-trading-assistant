@@ -21,6 +21,7 @@ import { confidenceTrend } from "./agent-confidence.mjs";
 import { atr } from "./strategy-engine.mjs";
 import { omegaPendingOrders, brokerKeyLevels } from "./omega-engine.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
+import { recordLensReading } from "./lens-policy.mjs";
 
 export const ENTRY_COUNCIL_METER = "entry_council";
 /** A stored pending action older than this is not applied (as the Position Manager's ACTION_TTL_MS). */
@@ -57,7 +58,10 @@ export function resetLimitCouncilSchemaForTests() { ready = null; }
 export const ENTRY_REASONS = Object.freeze({
   htf_against: "skip", confidence_drop: "skip", quorum_share_drop: "skip",
   price_away_from_level: "place_limit",
-  price_at_level: "enter_market", htf_with: "enter_market", confidence_rising: "enter_market"
+  price_at_level: "enter_market", htf_with: "enter_market", confidence_rising: "enter_market",
+  // The liquidity lens (docs/RFC_POSITIONING_LIQUIDITY.md §5.3): thin liquidity rests as a maker; a reclaimed sweep
+  // for the side enters now; one against it skips. Each holds only while the lens is on (the request carries it).
+  liquidity_thin: "place_limit", liquidity_sweep_with: "enter_market", liquidity_sweep_against: "skip"
 });
 export function entryCouncilSchema(entryOrder) {
   const answers = entryOrder === "council" ? ["enter_market", "place_limit", "skip"] : ["place", "skip"];
@@ -93,7 +97,10 @@ export function entryFacts({ request, decision = null, rooms = [] }) {
       quorum_share_with_side: isNum(share) ? share : null, quorum_share_15m_ago: isNum(sharePrev) ? sharePrev : null
     },
     htf,
+    ...(request.liquidity ? { liquidity: { weight: request.liquidity.weight ?? null, thin: request.liquidity.thin === true, sweep: request.liquidity.sweep ?? null } } : {}),
     holds: {
+      // The liquidity lens's reasons hold only while it is on (the request carries it); off, the facts are today's.
+      ...(request.liquidity ? { liquidity_thin: request.liquidity.thin === true, liquidity_sweep_with: request.liquidity.sweep === "with", liquidity_sweep_against: request.liquidity.sweep === "against" } : {}),
       htf_against: htf.some((r) => r.bias === against),
       htf_with: htf.some((r) => r.bias === withSide) && !htf.some((r) => r.bias === against),
       confidence_drop: confidenceTrend(conf, prev) === "drop",
@@ -110,9 +117,11 @@ export function entryCouncilMessages(f) {
   const ask = three
     ? "Answer enter_market (take the market price now), place_limit (rest a limit at the plan's level and wait for price) or skip (no entry), with the measured reasons that support it: htf_against, confidence_drop or quorum_share_drop for skip; price_away_from_level for place_limit; price_at_level, htf_with or confidence_rising for enter_market. An answer without a measured reason that holds becomes the market entry."
     : "Answer place (rest a limit at the plan's level) or skip (no order: a missed limit is a missed trade), with the measured reasons you used.";
-  const evidence = { side: f.side, mode: f.mode, plan: f.plan, market: f.market, limit: f.limit, decision: f.decision, measured: f.measured, higher_timeframes: f.htf };
+  // The liquidity lens, only while it is on (RFC §5.3): the broker's own tick volume, weighed at the lens weight.
+  const liq = f.liquidity ? ` liquidity is the broker's own tick volume, weighed at ${f.liquidity.weight ?? "its lens weight"}: liquidity_thin (thin liquidity) supports ${three ? "place_limit" : "place"}, liquidity_sweep_with (a reclaimed sweep for this side in the last 15 minutes) supports ${three ? "enter_market" : "place"}, liquidity_sweep_against supports skip.` : "";
+  const evidence = { side: f.side, mode: f.mode, plan: f.plan, market: f.market, limit: f.limit, decision: f.decision, measured: f.measured, higher_timeframes: f.htf, ...(f.liquidity ? { liquidity: f.liquidity } : {}) };
   return [
-    { role: "system", content: `You are the Entry Council of the XAUUSD system: Omega's entry seat and the Position Manager's seat, in one answer. Every gate of the system has already passed for this 15m signal; you decide only how it enters, from measured inputs: the 15m decision with its reasons, the strategy agent's confidence on the side now and 15 minutes ago, the quorum's share on the side, and the 1H, 4H and 1D rooms' latest readings and biases. A WAIT or neutral reading alone is never a reason. ${ask} You never choose a size or a price. Return only the JSON object, with one short reason in plain words.` },
+    { role: "system", content: `You are the Entry Council of the XAUUSD system: Omega's entry seat and the Position Manager's seat, in one answer. Every gate of the system has already passed for this 15m signal; you decide only how it enters, from measured inputs: the 15m decision with its reasons, the strategy agent's confidence on the side now and 15 minutes ago, the quorum's share on the side, and the 1H, 4H and 1D rooms' latest readings and biases. A WAIT or neutral reading alone is never a reason. ${ask}${liq} You never choose a size or a price. Return only the JSON object, with one short reason in plain words.` },
     { role: "user", content: JSON.stringify(evidence) }
   ];
 }
@@ -342,6 +351,10 @@ export async function runLimitCouncil(env, { now = Date.now(), call = callBusMod
       await db.prepare("UPDATE limit_council SET status = ?, choice = ?, rule = ?, reason = ?, council = ?, updated_ms = ? WHERE id = ? AND status = 'asked'")
         .bind(c.status, c.choice, c.rule, c.reason, council ? JSON.stringify(council) : null, now, row.id).run();
       out.entries.push({ id: row.open_id, status: c.status, choice: c.choice, rule: c.rule });
+      // The liquidity lens's maker reading (RFC §7.2): a liquidity_thin answer, scored later from the limit ledger's pair.
+      if (String(c.rule ?? "").split("+").includes("liquidity_thin") && Number.isFinite(Number(request.issued_ms))) {
+        try { await recordLensReading(db, { id: `maker:${request.issued_ms}:${request.side === "BUY" ? "B" : "S"}`, lens: "liquidity", kind: "maker", at_ms: Number(request.issued_ms), mode: request.mode ?? null, side: request.side === "BUY" ? 1 : -1 }, { now }); } catch { /* the choice stands */ }
+      }
     }
 
     // Each resting Omega limit at the 15m close (once per order and bar, only for an order placed before that close).

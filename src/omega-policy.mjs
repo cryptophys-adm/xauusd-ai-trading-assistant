@@ -4,6 +4,7 @@
 // applyOmegaPolicy (src/omega-broker.mjs) applies it within Omega's own hard bounds, only while the
 // owner's switch is on. Nothing here changes a setting.
 import { OMEGA_POLICY_KEY } from "./omega-broker.mjs";
+import { storeLensPolicy } from "./lens-policy.mjs";
 
 const PULL_EVERY_MS = 55 * 60_000;
 const LAST_PULL_KEY = "omega:policy:pulled_at";
@@ -27,8 +28,16 @@ export async function pullOmegaPolicy(env, { now = Date.now() } = {}) {
   await kv.put(LAST_PULL_KEY, new Date(now).toISOString(), { expirationTtl: 2 * 3600 });
   let pack;
   try { pack = await env.AETHER.omegaPolicy(); } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 120) }; }
+  // The Positioning & Liquidity analyst's knobs (docs/RFC_POSITIONING_LIQUIDITY.md §7.1): the same hourly pull. A
+  // dedicated KnowledgeIngress.lensPolicy() is read when Aether offers it, else the positioning.* and liquidity.* facts
+  // of this pack; each value is clamped to its bound into KV lens:policy:v1. Nothing here changes a setting.
+  let lens = null;
+  try {
+    const lensPack = typeof env.AETHER.lensPolicy === "function" ? await env.AETHER.lensPolicy() : pack;
+    lens = await storeLensPolicy(env, lensPack, { now });
+  } catch { lens = null; }
   const policy = policyFromPack(pack);
-  if (!policy) return { status: "empty" };
+  if (!policy) return { status: "empty", ...(lens ? { lens_doctrine_sha: lens.doctrine_sha } : {}) };
   await kv.put(OMEGA_POLICY_KEY, JSON.stringify({ ...policy, pulled_at: new Date(now).toISOString() }));
   return { status: "pulled", doctrine_sha: policy.doctrine_sha };
 }
