@@ -182,13 +182,19 @@ export async function readPublicWarRoomScene(env) {
 /**
  * The gold price at the last closed 15-minute candle (owner 2026-11-20, an exception to the no-price rule for the market
  * price only: "tambahkan juga harga emas live … didalam core … update per 15m sesuai closing candle"): the close of the
- * feed's 1m bar that ends on the 15-minute boundary, from the ledger's 1m archive (D1 ledger_bars_1m, one keyed read).
- * Never a plan's level: no entry, stop or target. `{ value, at }` (at = the candle's close, ISO), or null. Never throws.
+ * feed's 1m bar that ends on a 15-minute boundary, from the ledger's 1m archive (D1 ledger_bars_1m). Primary-key range
+ * reads of one row each, at most two (orchestrator review): the latest bar at or before the last boundary's minute; if
+ * that bar does not end on a boundary (the archive lags, or a gap), the latest bar at or before the boundary below it.
+ * The weekend's answer is Friday's last close. Never a plan's level. `{ value, at }` (at = the candle's close), or null.
  */
-export async function readGold15m(env) {
+export const M15_MS = 900_000;
+export async function readGold15m(env, { now = Date.now() } = {}) {
   try {
-    const row = await env.DB.prepare("SELECT minute_ms, c FROM ledger_bars_1m WHERE (minute_ms + 60000) % 900000 = 0 ORDER BY minute_ms DESC LIMIT 1").first();
+    const read = (minute) => env.DB.prepare("SELECT minute_ms, c FROM ledger_bars_1m WHERE minute_ms <= ? ORDER BY minute_ms DESC LIMIT 1").bind(minute).first();
+    const boundary = (ms) => Math.floor(ms / M15_MS) * M15_MS;
+    let row = await read(boundary(now) - 60_000);
+    if (row && (Number(row.minute_ms) + 60_000) % M15_MS !== 0) row = await read(boundary(Number(row.minute_ms)) - 60_000);
     const value = Number(row?.c), at = Number(row?.minute_ms) + 60_000;
-    return Number.isFinite(value) && value > 0 && Number.isFinite(at) ? { value: Math.round(value * 100) / 100, at: new Date(at).toISOString() } : null;
+    return Number.isFinite(value) && value > 0 && Number.isFinite(at) && at % M15_MS === 0 ? { value: Math.round(value * 100) / 100, at: new Date(at).toISOString() } : null;
   } catch { return null; }
 }

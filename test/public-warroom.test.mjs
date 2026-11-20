@@ -116,13 +116,20 @@ test("PW6 the 1H, 4H and 1D rooms keep their statements in the run document's st
   assert.deepEqual(seen, [], "the thread table is not read");
 });
 
-test("PW7 the gold price at the last 15-minute close (owner 2026-11-20): one keyed read, no plan level", async () => {
+test("PW7 the gold price at the last 15-minute close (owner 2026-11-20): one-row key range reads, no expression on the key", async () => {
   const { readGold15m } = await import("../src/public-warroom.mjs");
-  let sql = "";
-  const env = { DB: { prepare: (q) => { sql = q; return { first: async () => ({ minute_ms: Date.parse("2026-11-20T04:14:00Z"), c: 4123.456 }) }; } } };
-  assert.deepEqual(await readGold15m(env), { value: 4123.46, at: "2026-11-20T04:15:00.000Z" });
-  assert.match(sql, /ledger_bars_1m/);
-  assert.match(sql, /% 900000 = 0/, "only a minute ending on a 15-minute boundary");
-  assert.equal(await readGold15m({ DB: { prepare: () => ({ first: async () => null }) } }), null);
+  const bars = [Date.parse("2026-11-20T03:59:00Z"), Date.parse("2026-11-20T04:08:00Z")]; // the archive lags past 04:15
+  const sqls = [], binds = [];
+  const env = { DB: { prepare: (q) => { sqls.push(q); return { bind: (m) => { binds.push(m); return { first: async () => { const b = bars.filter((x) => x <= m).at(-1); return b == null ? null : { minute_ms: b, c: 4100 + (b === bars[1] ? 9 : 0) + 0.456 }; } }; } }; } } };
+  const out = await readGold15m(env, { now: Date.parse("2026-11-20T04:22:00Z") });
+  assert.deepEqual(out, { value: 4100.46, at: "2026-11-20T04:00:00.000Z" }, "04:08 is no boundary: the 04:00 close, honestly timed");
+  assert.equal(sqls.length, 2, "at most two reads");
+  for (const q of sqls) assert.doesNotMatch(q, /minute_ms\s*[+%*-]/, "no expression on the key"), assert.match(q, /minute_ms <= \? ORDER BY minute_ms DESC LIMIT 1/);
+  assert.deepEqual(binds, [Date.parse("2026-11-20T04:14:00Z"), Date.parse("2026-11-20T03:59:00Z")]);
+  // On a boundary at once: one read. The weekend: Friday's last close.
+  sqls.length = 0; bars.splice(0, 2, Date.parse("2026-11-20T21:59:00Z"));
+  assert.deepEqual(await readGold15m(env, { now: Date.parse("2026-11-22T10:00:00Z") }), { value: 4100.46, at: "2026-11-20T22:00:00.000Z" });
+  assert.equal(sqls.length, 1);
+  assert.equal(await readGold15m({ DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) } }), null);
   assert.equal(await readGold15m({}), null, "never throws");
 });
