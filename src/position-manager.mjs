@@ -39,7 +39,9 @@ import { confidenceTrend } from "./agent-confidence.mjs";
 import { eaSignal } from "./ea-signal.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
-import { OMEGA_DEFAULTS, ladderTp1Locked } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords } from "./omega-engine.mjs";
+import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
+import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -84,7 +86,7 @@ export const pipsOf = (dist) => r1(dist / PIP);
  * strategy); `levels` the key levels on the broker's scale (low first); `decision` the latest Decision Engine record
  * (stance, quorum, agent_confidence and agent_confidence_prev). Returns null when an input the rules need is missing.
  */
-export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null }) {
+export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null }) {
   if (!p || (p.side !== "BUY" && p.side !== "SELL") || !isNum(sym?.bid) || !isNum(sym?.ask)) return null;
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), sl = Number(p.sl), tp = Number(p.tp);
@@ -101,7 +103,7 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   const beyond = levels.filter((z) => (buy ? z.low > tp1 + spreadPx : z.high < tp1 - spreadPx)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
   const band = pmBand(openIntent, decision.trading_mode ?? null);
   const pips = pipsOf(dir * (price - open));
-  return {
+  const out = {
     ticket: p.ticket, side: p.side, dir, open, price, sl: Number.isFinite(sl) ? sl : null, tp: Number.isFinite(tp) ? tp : null,
     tp1, tp2: beyond ? (buy ? beyond.low : beyond.high) : null, spread: spreadPx, point,
     pips, beyond_tp1_pips: pipsOf(dir * (price - tp1)),
@@ -112,6 +114,28 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
     // Under the TP ladder an outward target waits until the stop locks the ladder's TP1 (ADR-0020 Amendment 4).
     ladder_hold: ladder === true && !ladderTp1Locked({ position: p, levels: levels.length ? levels : null, sym, signal })
   };
+  // ADR-0020 Amendment 8: only with its switch on (`loosen` given by the runner); otherwise the facts are today's.
+  if (loosen && typeof loosen === "object") out.loosen = loosenFacts(loosen, { openIntent, mode: band.mode, levels });
+  return out;
+}
+
+/**
+ * Pure: what the bounded loosening and the two-way target read (ADR-0020 Amendment 8). `loosen` is what the runner
+ * found: { orig_sl (the open or place_limit intent's sl), atr_now (ATR(14, 15m) the terminal reports), atr_ref and
+ * atr_ref_source (the ATR at the last Omega tighten, else at entry), loosened (a loosening already sent for this
+ * position), release (a high-impact USD release in the calendar gate's window, or null), delegated, unreadable }.
+ */
+export function loosenFacts(loosen, { openIntent = null, mode = DEFAULT_MODE, levels = [] } = {}) {
+  const num = (v) => (isNum(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  const atrEntry = num(openIntent?.atr_entry);
+  const atrRef = num(loosen.atr_ref) ?? atrEntry;
+  return {
+    orig_sl: num(loosen.orig_sl ?? openIntent?.sl), atr_now: num(loosen.atr_now),
+    atr_ref: atrRef, atr_ref_source: num(loosen.atr_ref) != null ? (loosen.atr_ref_source ?? "last_tighten") : atrEntry != null ? "entry" : null,
+    knobs: pmLoosenKnobs(mode), loosened: loosen.loosened === true, from_sl: num(loosen.from_sl), unreadable: loosen.unreadable === true, delegated: loosen.delegated === true,
+    release: loosen.release && typeof loosen.release.title === "string" ? { title: loosen.release.title.slice(0, 80), time: String(loosen.release.time ?? "") } : null,
+    levels: Array.isArray(levels) ? levels : []
+  };
 }
 
 /**
@@ -120,6 +144,17 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
  * "none" means no action for want of an input; "hold" is a decision to keep the position as it is.
  */
 export function positionAction(f, council) {
+  const base = ruleAction(f, council);
+  // ADR-0020 Amendment 8 (owner 2026-11-20), only with its switch on (the facts then carry `loosen`) and only on the
+  // council's answer: a silent council changes nothing, and nothing loosens mechanically. After a loosening a lock
+  // waits until it passes the stop before it (as Omega would drop it).
+  if (!f?.loosen) return base;
+  const held = loosenHold(f, base);
+  return council ? a8Action(f, council, held) : held;
+}
+
+/** Pure: the fixed rules of today (before ADR-0020 Amendment 8), as positionAction gave them. */
+export function ruleAction(f, council) {
   if (!f) return { action: "none", rule: "inputs_missing", why: "an input the rules need is missing" };
   const better = (x) => f.sl == null || (f.dir > 0 ? x > f.sl + f.point / 2 : x < f.sl - f.point / 2);
   const room = (x) => (f.dir > 0 ? x < f.price - f.spread : x > f.price + f.spread);
@@ -184,6 +219,155 @@ export function positionAction(f, council) {
   return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
 }
 
+/* ---------- ADR-0020 Amendment 8 (owner 2026-11-20): the council's bounded loosening and two-way target ---------- */
+
+/** The measured reasons the council may name, per change (docs/RFC_PM_A8.md §2). */
+export const LOOSEN_REASONS = Object.freeze(["atr_expansion", "key_level_outside", "high_impact_release"]);
+export const TP_NEARER_REASONS = Object.freeze(["momentum_fading", "key_level_before", "confidence_drop"]);
+export const TP_FURTHER_REASONS = Object.freeze(["atr_expansion_trend", "key_level_beyond"]);
+/** The holds an A8 change may replace: never a close, a lock, TP2, an input missing, or a loss at the cut band. */
+const A8_BASE_RULES = Object.freeze(["inside_band", "protected", "tp2_waits_council", "tp2_waits_ladder"]);
+const roundPt = (v, point) => Number((Math.round(v / point) * point).toFixed(6));
+
+/** Pure: the risk at a stop in R of the stop distance at entry (1R: the original stop), or null without it. */
+function riskR(f, sl) {
+  const rd = isNum(f.r_dist_pips) && f.r_dist_pips > 0 ? f.r_dist_pips * PIP : null;
+  return rd ? Math.round(((f.dir * (f.open - sl)) / rd) * 100) / 100 : null;
+}
+const rText = (v) => (v == null ? "" : `${v >= 0 ? "+" : ""}${v}R`);
+const riskText = (v) => (v == null ? "an unknown R" : v > 0 ? `${v}R at risk` : v === 0 ? "break-even" : `${Math.abs(v)}R locked`);
+
+/** Pure: after a loosening (`f.loosen.from_sl`), a lock not tighter than the stop before it becomes a hold. */
+export function loosenHold(f, a) {
+  const from = f?.loosen?.from_sl;
+  if (!isNum(from) || (a?.action !== "sl" && a?.action !== "tp") || !isNum(a.sl) || String(a.rule).startsWith("loosen_")) return a;
+  if (f.dir * (a.sl - from) > f.point / 2) return a;
+  return { action: "hold", rule: "lock_waits_loosened", why: `${a.why}; held: the council loosened this stop from ${from}, and a lock waits until it is tighter than that` };
+}
+
+/** Pure: whether ATR(14, 15m) now is at least the mode's expansion ratio times its reference. */
+export function atrExpanded(L) {
+  return isNum(L?.atr_now) && isNum(L?.atr_ref) && L.atr_ref > 0 && L.atr_now >= L.knobs.atr_expand * L.atr_ref - 1e-9;
+}
+
+/**
+ * Pure: the council's stop loosening checked against the amendment's bounds, or null when it did not ask for one.
+ * { ok: true, action } or { ok: false, why }. The stop moves back toward the original entry stop by at most the mode's
+ * back_share of the way, never past it; from break-even or better never back into loss; once per position; only on
+ * the council's consensus (thesis intact, momentum not weakening) with a measured reason that holds.
+ */
+export function loosenPlan(f, council) {
+  if (council?.stop !== "loosen") return null;
+  const L = f.loosen, dir = f.dir, cur = f.sl, orig = L.orig_sl, reason = council.stop_reason;
+  const no = (why) => ({ ok: false, why: `the council asked to loosen the stop (${reason}), refused: ${why}` });
+  if (L.delegated) return no("a delegated position's stop is never loosened");
+  if (L.unreadable) return no("the record of earlier loosenings cannot be read");
+  if (L.loosened) return no("this position was loosened once already");
+  if (council.thesis !== "intact" || council.momentum === "weakening") return no(`its reading (${council.momentum}, thesis ${council.thesis}) is no consensus to give the position room`);
+  if (!LOOSEN_REASONS.includes(reason)) return no("no measured reason named");
+  if (!isNum(orig) || cur == null) return no("the original entry stop is unknown");
+  const dist = dir * (cur - orig);
+  if (!(dist > f.point / 2)) return no("the stop was never tightened");
+  // The bound: back_share of the way from the current stop to the original one, never past it; from break-even or
+  // better never back into loss (the entry is the floor).
+  let bound = cur - dir * L.knobs.back_share * dist;
+  if (dir * (cur - f.open) >= -1e-9) bound = dir > 0 ? Math.max(bound, f.open) : Math.min(bound, f.open);
+  bound = dir > 0 ? Math.max(bound, orig) : Math.min(bound, orig);
+  let sl = bound, measured = null;
+  if (reason === "atr_expansion") {
+    if (atrExpanded(L)) measured = `ATR(14, 15m) ${L.atr_now} is ${Math.round((L.atr_now / L.atr_ref) * 100) / 100}x the ${L.atr_ref} at ${L.atr_ref_source === "entry" ? "entry" : "the last tighten"} (threshold ${L.knobs.atr_expand}x)`;
+    else return no(L.atr_ref == null ? "no ATR reference was recorded (entry or last tighten)" : `ATR(14, 15m) ${L.atr_now ?? "unknown"} is below ${L.knobs.atr_expand}x the reference ${L.atr_ref}`);
+  } else if (reason === "key_level_outside") {
+    // A key level just outside the stop: its near edge between the stop and the bound; the stop clears it by a buffer,
+    // never past the bound.
+    const edge = (z) => (dir > 0 ? z.high : z.low), far = (z) => (dir > 0 ? z.low : z.high);
+    const z = L.levels.filter((x) => dir * (cur - edge(x)) > 0 && dir * (edge(x) - bound) >= 0).sort((a, b) => dir * (edge(b) - edge(a)))[0];
+    if (!z) return no("no key level lies just outside the stop, within the bound");
+    const clear = far(z) - dir * Math.max(2 * f.spread, f.point);
+    sl = dir > 0 ? Math.max(bound, clear) : Math.min(bound, clear);
+    measured = `a key level ${z.low}-${z.high} sits just outside the stop`;
+  } else if (L.release) measured = `a high-impact release is scheduled (${L.release.title}, ${L.release.time.slice(11, 16)} UTC)`;
+  else return no("no high-impact release is in the calendar's window");
+  sl = roundPt(sl, f.point);
+  if (!(dir * (cur - sl) > f.point / 2)) return no("no room between the stop and its bound");
+  const before = riskR(f, cur), after = riskR(f, sl);
+  return { ok: true, action: { action: "sl", rule: `loosen_${reason}`, sl,
+    why: `stop loosened ${cur} → ${sl} (${measured}); ${f.mode}; the stop from ${riskText(before)} to ${riskText(after)} (1R at entry); ${f.pips} pips${f.r != null ? ` (${rText(f.r)})` : ""}; the council reads ${council.momentum}, thesis intact` } };
+}
+
+/**
+ * Pure: the council's target move (nearer or further) checked against its measured reason, or null when it asked none.
+ * Nearer: the agent's confidence dropped, the quorum's share fell, or a key level stands before the target; the new
+ * target is the nearest key level ahead of price before it, else TP1 when the target is beyond it. Further: a key
+ * level beyond the target, or ATR expansion with the agent's confidence rising, on the council's consensus; the new
+ * target is the next key level beyond. Never on the wrong side of price; under the TP ladder an outward move waits for
+ * the TP1 lock (Amendment 4).
+ */
+export function targetPlan(f, council) {
+  const kind = council?.target;
+  if (kind !== "nearer" && kind !== "further") return null;
+  const L = f.loosen, dir = f.dir, reason = council.target_reason;
+  const no = (why) => ({ ok: false, why: `the council asked to move the target ${kind} (${reason}), refused: ${why}` });
+  if (L.delegated) return no("a delegated position keeps its own target rules");
+  if (f.tp == null) return no("the position has no target");
+  const buffer = Math.max(2 * f.spread, f.point);
+  const near = (z) => (dir > 0 ? z.low : z.high);
+  const ahead = (x) => dir * (x - f.price) > f.spread + buffer;
+  let tp = null, measured = null;
+  if (kind === "nearer") {
+    if (!TP_NEARER_REASONS.includes(reason)) return no("no measured reason named");
+    const before = L.levels.filter((z) => ahead(near(z)) && dir * (f.tp - near(z)) > buffer).sort((a, b) => dir * (near(a) - near(b)))[0];
+    if (reason === "momentum_fading") {
+      if (!(f.share != null && f.share_prev != null && f.share_prev - f.share > SHARE_DROP)) return no("the quorum's share on the side did not fall");
+      measured = `the quorum's share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`;
+    } else if (reason === "confidence_drop") {
+      if (f.agent_trend !== "drop") return no(`the ${f.agent} confidence did not drop`);
+      measured = `the ${f.agent} confidence dropped ${f.agent_conf_prev} to ${f.agent_conf}`;
+    } else {
+      if (!before) return no("no key level stands before the target");
+      measured = `a key level ${before.low}-${before.high} stands before the target`;
+    }
+    if (before) tp = near(before);
+    else if (dir * (f.tp - f.tp1) > PIP / 2 && ahead(f.tp1)) tp = f.tp1;
+    else return no("no key level ahead of price before the target, and the target is not beyond TP1");
+  } else {
+    if (!TP_FURTHER_REASONS.includes(reason)) return no("no measured reason named");
+    if (council.thesis !== "intact" || council.momentum === "weakening") return no(`its reading (${council.momentum}, thesis ${council.thesis}) is no consensus to extend`);
+    if (f.ladder_hold) return no("the TP ladder holds the target until the stop locks TP1 (ADR-0020 Amendment 4)");
+    const beyond = L.levels.filter((z) => dir * (near(z) - f.tp) > buffer).sort((a, b) => dir * (near(a) - near(b)))[0];
+    if (!beyond) return no("no key level beyond the target");
+    if (reason === "atr_expansion_trend") {
+      if (!atrExpanded(L)) return no(L.atr_ref == null ? "no ATR reference was recorded" : `ATR(14, 15m) ${L.atr_now ?? "unknown"} is below ${L.knobs.atr_expand}x the reference ${L.atr_ref}`);
+      if (f.agent_trend !== "rising") return no(`the ${f.agent} confidence is not rising`);
+      measured = `ATR(14, 15m) ${L.atr_now} is ${Math.round((L.atr_now / L.atr_ref) * 100) / 100}x the reference and the ${f.agent} confidence rose ${f.agent_conf_prev} to ${f.agent_conf}`;
+    } else measured = `a key level ${beyond.low}-${beyond.high} lies beyond the target`;
+    tp = near(beyond);
+  }
+  tp = roundPt(tp, f.point);
+  const rd = isNum(f.r_dist_pips) && f.r_dist_pips > 0 ? f.r_dist_pips * PIP : null;
+  const tpR = (x) => (rd ? Math.round(((f.dir * (x - f.open)) / rd) * 100) / 100 : null);
+  return { ok: true, action: { action: "tp", rule: `tp_${kind}_${reason}`, tp,
+    why: `target moved ${kind} ${f.tp} → ${tp} (${measured}); ${f.mode}; the target ${rText(tpR(f.tp))} → ${rText(tpR(tp))}; ${f.pips} pips${f.r != null ? ` (${rText(f.r)})` : ""}; the council reads ${council.momentum}, thesis ${council.thesis}` } };
+}
+
+/**
+ * Pure: the amendment's change on top of the fixed rules' hold. A close, a lock, TP2 or a cut comes first; at the loss
+ * band nothing is loosened or moved. One change per position and bar: the stop first, and a target moved further
+ * never with a looser stop. A refused request keeps the hold and says why.
+ */
+export function a8Action(f, council, base) {
+  if (base?.action !== "hold" || !A8_BASE_RULES.includes(base.rule)) return base;
+  const stop = loosenPlan(f, council);
+  if (stop?.ok) {
+    const waits = council.target === "further" ? "; the target waits: a target moved further never comes with a looser stop" : council.target === "nearer" ? "; the target waits for the next bar (one change at a time)" : "";
+    return { ...stop.action, why: `${stop.action.why}${waits}` };
+  }
+  const target = targetPlan(f, council);
+  if (target?.ok) return stop ? { ...target.action, why: `${target.action.why}; ${stop.why}` } : target.action;
+  const refused = [stop, target].filter(Boolean).map((x) => x.why);
+  return refused.length ? { ...base, why: `${base.why}; ${refused.join("; ")}` } : base;
+}
+
 export const POSITION_COUNCIL_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false, required: ["momentum", "thesis", "reason"],
   properties: {
@@ -193,6 +377,19 @@ export const POSITION_COUNCIL_SCHEMA = Object.freeze({
   }
 });
 
+/** With ADR-0020 Amendment 8 switched on: the same answer, plus the stop and target the council asks for, each with one measured reason. */
+export const POSITION_COUNCIL_SCHEMA_A8 = Object.freeze({
+  type: "object", additionalProperties: false, required: ["momentum", "thesis", "reason", "stop", "stop_reason", "target", "target_reason"],
+  properties: {
+    ...POSITION_COUNCIL_SCHEMA.properties,
+    stop: { type: "string", enum: ["keep", "loosen"] },
+    stop_reason: { type: "string", enum: ["none", ...LOOSEN_REASONS] },
+    target: { type: "string", enum: ["keep", "nearer", "further"] },
+    target_reason: { type: "string", enum: ["none", ...TP_NEARER_REASONS, ...TP_FURTHER_REASONS] }
+  }
+});
+const A8_SYSTEM = " Since ADR-0020 Amendment 8 you may also ask for ONE change, each with one measured reason, and fixed rules check the reason and set the price: stop \"loosen\" moves a stop that was tightened since entry back toward the original entry stop (never past it, never back into loss from break-even, once per position; reasons atr_expansion, key_level_outside, high_impact_release), only with the thesis intact; target \"nearer\" (momentum_fading, key_level_before, confidence_drop) or \"further\" (atr_expansion_trend, key_level_beyond). Answer \"keep\" and \"none\" when nothing is warranted; a loosening never comes with a target further.";
+
 /** Pure: the council's messages for one position (measured inputs only; never a size, never the council's own confidence). */
 export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
   const evidence = {
@@ -201,8 +398,14 @@ export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
     m5: m5 ? { atr: m5.m5_atr ?? null, swing_low: m5.m5_swing_low ?? null, swing_high: m5.m5_swing_high ?? null, confirmation_buy: m5.m5_buy === true, confirmation_sell: m5.m5_sell === true } : null,
     key_levels: levels.slice(0, 12)
   };
+  const L = f.loosen;
+  if (L) {
+    evidence.amendment_8 = { original_stop: L.orig_sl, stop_tightened: L.orig_sl != null && f.sl != null && f.dir * (f.sl - L.orig_sl) > f.point / 2, loosened_once: L.loosened, atr_15m_now: L.atr_now, atr_15m_reference: L.atr_ref,
+      atr_reference_from: L.atr_ref_source, atr_expand_threshold: L.knobs.atr_expand, back_share: L.knobs.back_share, high_impact_release: L.release ? `${L.release.title} ${L.release.time}` : null };
+  }
+  const system = "You are the Position Council of the XAUUSD system. Every 5 minutes you judge ONE open position from measured inputs only: the strategy agent's confidence on the position's side now and 15 minutes ago, the quorum's share on its side, the Decision Engine's stance, the broker's 5m structure and the key levels. Answer momentum (strengthening, holding or weakening: is price still moving the position's way with the agents and the quorum behind it?) and thesis (intact, weakening or broken: does the reason the position was opened still hold?). Fixed rules turn your answer into an action; you never choose the action, a size or a price. Return only the JSON object, with one short reason in plain words.";
   return [
-    { role: "system", content: "You are the Position Council of the XAUUSD system. Every 5 minutes you judge ONE open position from measured inputs only: the strategy agent's confidence on the position's side now and 15 minutes ago, the quorum's share on its side, the Decision Engine's stance, the broker's 5m structure and the key levels. Answer momentum (strengthening, holding or weakening: is price still moving the position's way with the agents and the quorum behind it?) and thesis (intact, weakening or broken: does the reason the position was opened still hold?). Fixed rules turn your answer into an action; you never choose the action, a size or a price. Return only the JSON object, with one short reason in plain words." },
+    { role: "system", content: L ? `${system}${A8_SYSTEM}` : system },
     { role: "user", content: JSON.stringify(evidence) }
   ];
 }
@@ -211,6 +414,23 @@ export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
 export function cleanCouncil(o) {
   if (!o || !["strengthening", "holding", "weakening"].includes(o.momentum) || !["intact", "weakening", "broken"].includes(o.thesis)) return null;
   return { momentum: o.momentum, thesis: o.thesis, reason: String(o.reason ?? "").slice(0, 240) };
+}
+
+/** The council's answer under ADR-0020 Amendment 8, reduced to its schema (an unknown change or reason reads as none), or null. */
+export function cleanCouncilA8(o) {
+  const base = cleanCouncil(o);
+  if (!base) return null;
+  const stop = o.stop === "loosen" ? "loosen" : "keep", target = ["nearer", "further"].includes(o.target) ? o.target : "keep";
+  const stopReason = stop === "loosen" && LOOSEN_REASONS.includes(o.stop_reason) ? o.stop_reason : "none";
+  const targetReason = target !== "keep" && [...TP_NEARER_REASONS, ...TP_FURTHER_REASONS].includes(o.target_reason) ? o.target_reason : "none";
+  return { ...base, stop, stop_reason: stopReason, target, target_reason: targetReason };
+}
+
+/** Pure: the council's reading as stored (position_actions.council); the amendment's asks ride after the reason. */
+export function councilText(c) {
+  if (!c) return null;
+  const asks = [...(c.stop === "loosen" ? [`stop loosen: ${c.stop_reason}`] : []), ...(c.target === "nearer" || c.target === "further" ? [`target ${c.target}: ${c.target_reason}`] : [])];
+  return `${c.momentum}, thesis ${c.thesis}: ${c.reason}${asks.length ? ` [${asks.join("; ")}]` : ""}`;
 }
 
 /**
@@ -231,7 +451,7 @@ export async function positionCouncilSpendUsd(db, { now = Date.now() } = {}) {
  * The runner, on the main Worker's 5-minute cron: each open Omega position once per 5-minute bar. `deps` lets the
  * tests give the executor, the open intents, the signal, the decision, the model call and Telegram. Never throws.
  */
-export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn } = {}) {
+export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn, events: eventsIn } = {}) {
   if (positionManagerMode(env) !== "live") return { status: "off" };
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
@@ -260,8 +480,10 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);
     const levels = brokerLevels(signal);
     // The TP ladder setting (Omega's settings, default on): TP2 waits for its TP1 lock (positionFacts ladder_hold).
-    let ladder = OMEGA_DEFAULTS.tp_ladder === true;
-    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; } catch { /* the default */ }
+    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false;
+    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; } catch { /* the defaults */ }
+    // ADR-0020 Amendment 8 (owner 2026-11-20): with the owner's switch on, what the bounded loosening reads.
+    const loosenOf = a8 ? await loosenInputs(env, db, { positions, openIntents, sym, now, events: eventsIn }) : null;
     const bar = Math.floor(now / 300_000);
     const capUsd = dailyCapUsd(env);
     const spent = await positionCouncilSpendUsd(db, { now });
@@ -277,18 +499,18 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     for (const p of positions) {
       const id = `pm:${p.ticket}:${bar}`;
       if (await db.prepare("SELECT id FROM position_actions WHERE id = ?").bind(id).first()) continue;
-      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal });
+      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}) });
       let council = null, councilNote = null;
       if (f && spent < capUsd) {
         try {
-          const r = await call(env, { messages: positionCouncilMessages(f, { m5: signal, levels }), schemaName: "position_council", schema: POSITION_COUNCIL_SCHEMA, maxTokens: 400, effort: "low", deadline: Date.now() + 45_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: POSITION_COUNCIL_METER });
-          council = r?.status === "answered" ? cleanCouncil(r.obj) : null;
+          const r = await call(env, { messages: positionCouncilMessages(f, { m5: signal, levels }), schemaName: "position_council", schema: f.loosen ? POSITION_COUNCIL_SCHEMA_A8 : POSITION_COUNCIL_SCHEMA, maxTokens: f.loosen ? 500 : 400, effort: "low", deadline: Date.now() + 45_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: POSITION_COUNCIL_METER });
+          council = r?.status === "answered" ? (f.loosen ? cleanCouncilA8(r.obj) : cleanCouncil(r.obj)) : null;
           if (!council) councilNote = "council_failed";
         } catch { council = null; councilNote = "council_failed"; }
       } else if (f) councilNote = "daily_cap";
       const a = positionAction(f, council);
       const row = { id, ticket: p.ticket, bar, at_ms: now, side: p.side, pips: f?.pips ?? null, price: f?.price ?? null, action: a.action, rule: councilNote && a.action === "none" ? councilNote : a.rule,
-        sl: a.sl ?? null, tp: a.tp ?? null, why: a.why, council: council ? `${council.momentum}, thesis ${council.thesis}: ${council.reason}` : null,
+        sl: a.sl ?? null, tp: a.tp ?? null, why: a.why, council: councilText(council),
         orig_sl: f?.sl ?? null, orig_tp: f?.tp ?? null, basis: isNum(signal?.feed_basis) ? signal.feed_basis : null, status: ["close", "sl", "tp"].includes(a.action) ? "pending" : "noted" };
       await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(row.id, row.ticket, row.bar, row.at_ms, row.side, row.pips, row.price, row.action, row.rule, row.sl, row.tp, row.why, row.council, row.orig_sl, row.orig_tp, row.basis, row.status).run();
@@ -299,6 +521,41 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
   } catch (error) {
     return { status: "failed", error: String(error?.message ?? error).slice(0, 160) };
   }
+}
+
+/**
+ * What the bounded loosening reads for each position (ADR-0020 Amendment 8), read once a run with the switch on: the
+ * loosenings already sent (omega_intents, a failed one excepted, and this manager's own pending actions), the ATR(14,
+ * 15m) at the last Omega tighten, the calendar's high-impact USD release in its window. Returns (position) => loosen
+ * input for positionFacts. A record that cannot be read is said as unreadable: nothing is loosened then.
+ */
+export const LOOSEN_LOOKBACK_MS = 30 * 86_400_000;
+export async function loosenInputs(env, db, { positions = [], openIntents = {}, sym = {}, now = Date.now(), events = undefined } = {}) {
+  let records = {}, unreadable = false;
+  const tickets = positions.map((p) => Number(p.ticket)).filter((t) => t > 0);
+  try {
+    const rows = (await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind IN ('modify_sl', 'modify_sltp') AND json_extract(payload, '$.loosen') = 1 AND created_ms > ?").bind(now - LOOSEN_LOOKBACK_MS).all()).results ?? [];
+    records = loosenRecords(rows);
+    const pending = (await db.prepare("SELECT ticket FROM position_actions WHERE rule LIKE 'loosen%' AND status = 'pending'").all()).results ?? [];
+    for (const r of pending) records[String(r.ticket)] ??= { pending: true };
+  } catch { unreadable = true; }
+  const atrRef = {};
+  for (const t of tickets) {
+    try {
+      const row = await db.prepare("SELECT payload FROM omega_intents WHERE kind IN ('modify_sl', 'modify_sltp') AND status = 'done' AND json_extract(result, '$.ok') = 1 AND json_extract(payload, '$.ticket') = ? AND json_extract(payload, '$.atr') IS NOT NULL AND json_extract(payload, '$.loosen') IS NULL ORDER BY created_ms DESC LIMIT 1").bind(t).first();
+      const a = Number(JSON.parse(row?.payload ?? "null")?.atr);
+      if (a > 0) atrRef[t] = a;
+    } catch { /* the entry's ATR then */ }
+  }
+  let release = null;
+  try {
+    const list = events !== undefined ? events : await gatedEvents(env, { now });
+    const e = eventRisk(list ?? [], now).active[0];
+    if (e) release = { title: e.title, time: e.time };
+  } catch { release = null; }
+  const atrNow = isNum(sym?.atr_value) && sym.atr_value > 0 ? sym.atr_value : null;
+  return (p) => ({ orig_sl: p.delegated ? null : openIntents[p.intent_id]?.sl ?? null, atr_now: atrNow, atr_ref: atrRef[Number(p.ticket)] ?? null, atr_ref_source: atrRef[Number(p.ticket)] ? "last_tighten" : null,
+    loosened: Boolean(records[String(p.ticket)]), from_sl: records[String(p.ticket)]?.from_sl ?? null, unreadable, release, delegated: p.delegated === true });
 }
 
 /** The latest decision with the quorum of the bar before (quorum_prev), or null. */

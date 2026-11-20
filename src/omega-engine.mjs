@@ -22,6 +22,7 @@ import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
+import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -53,7 +54,11 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, owner 2026-11-20): "market" enters a limit plan at market as before;
   // "limit" works the plan's level at the broker as a pending order, held by the council; "council" lets the entry
   // council choose per signal between the market entry, the limit and no entry (§2). The owner's switch only.
-  entry_order: "market"
+  entry_order: "market",
+  // Platform ADR-0020 Amendment 8 (owner 2026-11-20, "setuju", "keduanya"): the Position Council may loosen a tightened
+  // stop once, within bounds, and move a take profit nearer or further. The owner's switch on the Omega page only;
+  // Aether's policy never writes it. Off: today's rules, unchanged.
+  pm_loosen_enabled: false
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -133,6 +138,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.tp_ladder !== undefined) {
     if (typeof body.tp_ladder !== "boolean") return { error: "tp_ladder must be true or false" };
     out.tp_ladder = body.tp_ladder;
+  }
+  if (body.pm_loosen_enabled !== undefined) {
+    if (typeof body.pm_loosen_enabled !== "boolean") return { error: "pm_loosen_enabled must be true or false" };
+    out.pm_loosen_enabled = body.pm_loosen_enabled;
   }
   if (body.max_signal_age_min !== undefined) {
     const m = body.max_signal_age_min;
@@ -538,7 +547,7 @@ export function withCommandedStop(p, stops = {}) {
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {} } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {}, loosenedFrom = {} } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -554,6 +563,11 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     const buy = p.side === "BUY";
     const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp), vol = Number(p.volume);
     if (!Number.isFinite(open)) continue;
+    // ADR-0020 Amendment 8: after the council loosened this stop, a mechanical lock waits until it is tighter than the
+    // stop before the loosening (`loosenedFrom`), so the ladder never undoes it from where it was.
+    const from = Number(loosenedFrom?.[String(p.ticket)]);
+    const halfPt = (positive(sym.point) ? sym.point : Math.pow(10, -digits)) / 2;
+    const held = (x) => finite(from) && from > 0 && !(buy ? x > from + halfPt : x < from - halfPt);
     const move = buy ? sym.bid - open : open - sym.ask;
     const atBreakEven = Number.isFinite(curSl) && (buy ? curSl >= open - 1e-9 : curSl <= open + 1e-9);
     const risk = Number.isFinite(curSl) && !atBreakEven ? Math.abs(open - curSl) : 0;
@@ -576,13 +590,13 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
       }
-      if (k.sl != null) {
+      if (k.sl != null && !held(k.sl)) {
         out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}` });
         movedSl = true;
       }
       if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level" });
     }
-    if (!movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
+    if (!movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r && !held(roundTo(open, digits))) {
       out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: roundTo(open, digits), tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
       movedSl = true;
     }
@@ -594,7 +608,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       const target = buy ? roundTo(m5.m5_swing_low - buffer, digits) : roundTo(m5.m5_swing_high + buffer, digits);
       const better = Number.isFinite(curSl) ? (buy ? target > curSl + point : target < curSl - point) : true;
       const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
-      if (finite(target) && target > 0 && better && room) {
+      if (finite(target) && target > 0 && better && room && !held(target)) {
         out.push({ id: `ms:${p.ticket}:t5:${Math.floor(m5.m5_close_ms / 60_000)}`, kind: "modify_sl", ticket: p.ticket, sl: target, tp: Number.isFinite(curTp) ? curTp : null, reason: "trail_5m" });
       }
     }
@@ -607,6 +621,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     if (S.tp_ladder) {
       const partialsDone = [...recent].filter((rid) => String(rid).startsWith(`pl:${p.ticket}:`)).length;
       const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles });
+      if (lad.sl != null && held(lad.sl)) lad.sl = null;
       if (lad.sl != null) {
         // One stop per position per plan: the ladder's lock wins only when it is tighter than a stop already planned.
         const i = out.findIndex((x) => x.kind === "modify_sl" && x.ticket === p.ticket);
@@ -659,6 +674,8 @@ export function reentryGate({ side, reentry, settings = OMEGA_DEFAULTS, now = Da
 
 /** A position whose stop sits at or beyond its open price (break-even or locked profit) risks nothing more. */
 export function isProtected(p) {
+  // ADR-0020 Amendment 8: a position whose stop the council loosened counts as unprotected again, wherever its stop is.
+  if (p?.loosened === true) return false;
   const open = Number(p?.open_price ?? p?.entry), sl = Number(p?.sl);
   if (!Number.isFinite(open) || !Number.isFinite(sl) || sl <= 0) return false;
   return p.side === "BUY" ? sl >= open - 1e-9 : p.side === "SELL" ? sl <= open + 1e-9 : false;
@@ -703,7 +720,7 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * only out to TP2 (the side's way). Risk-reducing only: never an open, an add or a wider stop. One intent per ticket
  * and 5-minute bar (the id carries the action's bar). `actions` are { id, ticket, action, rule, sl, tp }.
  */
-export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false } = {}) {
+export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false, a8 = null, loosenedFrom = {} } = {}) {
   // `dropped`: each action that became no intent, with the reason in plain words (owner 2026-11-19: the Telegram
   // line says what reached the broker, and why an action did not).
   const out = [], used = [], dropped = [];
@@ -720,7 +737,16 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
     if (!isOmegaOwned(p) || (p.side !== "BUY" && p.side !== "SELL")) { drop(a, "not an Omega position"); continue; }
     const buy = p.side === "BUY", curSl = Number(p.sl), curTp = Number(p.tp);
     const bar = String(a.id).split(":").pop();
-    if (a.action === "close") {
+    // ADR-0020 Amendment 8: after a loosening, a stop the manager locks must be tighter than the stop before it.
+    const from = Number(loosenedFrom?.[String(p.ticket)]);
+    const heldByLoosen = (x) => finite(from) && from > 0 && !(buy ? x > from + point / 2 : x < from - point / 2);
+    const a8Rule = typeof a.rule === "string" && (a.rule.startsWith("loosen_") || /^tp_(nearer|further)_/.test(a.rule));
+    if (a8Rule) {
+      // The council's loosening or target move (ADR-0020 Amendment 8), checked again here against every bound.
+      const r = a8Intent({ a, p, sym, bar, a8, point, digits, floorPx });
+      if (r.drop) { drop(a, r.drop); continue; }
+      out.push(r.intent);
+    } else if (a.action === "close") {
       out.push({ id: `pm:${p.ticket}:c:${bar}`, kind: "close", ticket: p.ticket, reason: `pm_${a.rule}` });
     } else if (a.action === "sl" && finite(a.sl)) {
       const sl = roundTo(a.sl, digits);
@@ -728,6 +754,7 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
       const room = buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx;
       if (!tighter) { drop(a, `the stop is already at or beyond ${sl}`); continue; }
       if (!room) { drop(a, `the live price leaves no room for a stop at ${sl}`); continue; }
+      if (heldByLoosen(sl)) { drop(a, `the council loosened this stop: a lock waits until it is tighter than ${from}, the stop before the loosening`); continue; }
       out.push({ id: `pm:${p.ticket}:s:${bar}`, kind: "modify_sl", ticket: p.ticket, sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `pm_${a.rule}` });
     } else if (a.action === "tp" && finite(a.tp)) {
       const tp = roundTo(a.tp, digits);
@@ -743,12 +770,86 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
         const room = buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx;
         if (!notLooser || !notBelowEntry) { drop(a, `a stop at ${sl} would be looser than the broker's or below the entry`); continue; }
         if (!room) { drop(a, `the live price leaves no room for a stop at ${sl}`); continue; }
+        if (heldByLoosen(sl) && sl !== roundTo(curSl, digits)) { drop(a, `the council loosened this stop: a lock waits until it is tighter than ${from}, the stop before the loosening`); continue; }
         out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_sltp", ticket: p.ticket, sl, tp, reason: `pm_${a.rule}` });
       } else out.push({ id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}` });
     } else { drop(a, "not an action Omega applies"); continue; }
     used.push(a.id);
   }
   return { intents: out, used, dropped };
+}
+
+/**
+ * Pure: the loosenings already sent, per ticket ({ [ticket]: { from_sl, sl, id } }), from omega_intents rows
+ * ({ payload, status, result }) of modify_sl or modify_sltp intents marked `loosen` (ADR-0020 Amendment 8). A loosening
+ * the broker refused (status failed) changed nothing and is not one; pending, sent, done and expired ones are (an
+ * unanswered one may have applied). At most one per position: a ticket here is never loosened again, counts as
+ * unprotected, and its mechanical locks wait until they are tighter than `from_sl`.
+ */
+export function loosenRecords(rows = []) {
+  const out = {};
+  for (const r of rows) {
+    let it = r?.payload;
+    try { if (typeof it === "string") it = JSON.parse(it); } catch { continue; }
+    if ((it?.kind !== "modify_sl" && it?.kind !== "modify_sltp") || it.loosen !== true || it.ticket == null) continue;
+    if (r.status === "failed") continue;
+    const t = String(it.ticket);
+    if (!out[t]) out[t] = { from_sl: finite(Number(it.from_sl)) && Number(it.from_sl) > 0 ? Number(it.from_sl) : null, sl: Number(it.sl), id: it.id ?? null };
+  }
+  return out;
+}
+
+/**
+ * Pure: one Amendment 8 action as an intent, or { drop: reason }. `a8` is planIntents' context with the switch on:
+ * { original: { [ticket]: { sl, mode, r_dist } }, loosened, stops, blocked, veto(p), riskCheck(p, sl) }.
+ *   stop     looser than the broker's stop (the tightest commanded one included), never past the original entry stop,
+ *            at most back_share of the way back, from break-even or better never into loss, once per position, never
+ *            a delegated position's, within the daily loss budget and the profile caps at the new stop, not against a
+ *            veto, never while paused, on a real account not armed, or with the tick value or money unverified;
+ *   target   nearer: between the price and the current target, on the right side of price with the broker's stop
+ *            distance; further: beyond the current target, never with a stop, not against a veto.
+ */
+export function a8Intent({ a, p, sym, bar, a8, point = 0.01, digits = 2, floorPx = 0 }) {
+  if (!a8) return { drop: "the council's stop and target moves are switched off (ADR-0020 Amendment 8, pm_loosen_enabled)" };
+  if (p.delegated === true) return { drop: "a delegated position is never loosened or retargeted by the council" };
+  const buy = p.side === "BUY", dir = buy ? 1 : -1, open = Number(p.open_price ?? p.entry), curTp = Number(p.tp);
+  const t = String(p.ticket), orig = a8.original?.[t] ?? null;
+  const rd = positive(Number(orig?.r_dist)) ? Number(orig.r_dist) : positive(Number(orig?.sl)) && finite(open) ? Math.abs(open - Number(orig.sl)) : null;
+  const inR = (x) => (rd ? roundTo((dir * x) / rd, 2) : null);
+  const mode = typeof orig?.mode === "string" ? orig.mode : null;
+  if (a.action === "sl" && finite(a.sl) && a.rule.startsWith("loosen_")) {
+    if (a8.blocked) return { drop: `no loosening: ${a8.blocked}` };
+    if (!positive(Number(orig?.sl))) return { drop: "no loosening: the position's original entry stop is unknown" };
+    if (a8.loosened?.[t]) return { drop: "no loosening: this position was loosened once already" };
+    if (a8.veto?.(p)) return { drop: "no loosening: the Decision Engine vetoes the position's side" };
+    const o = Number(orig.sl), sl = roundTo(a.sl, digits);
+    const cur = Number(withCommandedStop(p, a8.stops ?? {}).sl);
+    if (!positive(cur)) return { drop: "no loosening: the position has no stop" };
+    if (!(buy ? sl < cur - point / 2 : sl > cur + point / 2)) return { drop: `no loosening: a stop at ${sl} is not looser than the broker's (${cur})` };
+    if (buy ? sl < o - point / 2 : sl > o + point / 2) return { drop: `no loosening: a stop at ${sl} is beyond the original entry stop ${o}` };
+    const tightened = dir * (cur - o);
+    if (!(tightened > point / 2)) return { drop: "no loosening: the stop was never tightened" };
+    const share = pmLoosenKnobs(mode).back_share;
+    if (dir * (cur - sl) > share * tightened + point / 2) return { drop: `no loosening: a stop at ${sl} goes more than ${Math.round(share * 100)}% of the way back to ${o}` };
+    if (finite(open) && dir * (cur - open) >= -1e-9 && dir * (sl - open) < -point / 2) return { drop: `no loosening: from break-even or better the stop never goes back into loss (${sl} against the entry ${open})` };
+    if (!(buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx)) return { drop: `the live price leaves no room for a stop at ${sl}` };
+    const risk = a8.riskCheck?.(p, sl) ?? null;
+    if (risk) return { drop: `no loosening: ${risk}` };
+    return { intent: { id: `pm:${p.ticket}:s:${bar}`, kind: "modify_sl", ticket: p.ticket, sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `pm_${a.rule}`, loosen: true, from_sl: cur, orig_sl: o, mode,
+      risk_r_before: inR(open - cur), risk_r_after: inR(open - sl) } };
+  }
+  if (a.action === "tp" && finite(a.tp) && /^tp_(nearer|further)_/.test(a.rule)) {
+    if (finite(a.sl)) return { drop: "a target move by the council never carries a stop (a target further never comes with a looser stop)" };
+    if (!(Number.isFinite(curTp) && curTp > 0)) return { drop: "the position has no target to move" };
+    const tp = roundTo(a.tp, digits);
+    const right = buy ? tp > sym.ask + floorPx : tp < sym.bid - floorPx;
+    if (!right) return { drop: `a target at ${tp} would be on the wrong side of price or inside the broker's stop distance` };
+    const nearer = a.rule.startsWith("tp_nearer_");
+    if (nearer ? !(buy ? tp < curTp - point / 2 : tp > curTp + point / 2) : !(buy ? tp > curTp + point / 2 : tp < curTp - point / 2)) return { drop: `a target at ${tp} is not ${nearer ? "nearer" : "further out"} than the broker's (${curTp})` };
+    if (!nearer && a8.veto?.(p)) return { drop: "no target further: the Decision Engine vetoes the position's side" };
+    return { intent: { id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}`, from_tp: curTp, mode, tp_r_from: finite(open) ? inR(curTp - open) : null, tp_r_to: finite(open) ? inR(tp - open) : null } };
+  }
+  return { drop: "not an action Omega applies" };
 }
 
 export const LEAN_BAND = 0.15;
@@ -886,7 +987,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -906,7 +1007,11 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const scale = probation && finite(signal?.risk_scale) && signal.risk_scale > 0 && signal.risk_scale < 1 ? signal.risk_scale : probation ? 0.5 : 1;
   if (probation) S.risk_pct = roundTo(S.risk_pct * scale, 4);
   const limits = probation && profileLimits ? { ...profileLimits, hard_cap_pct: finite(profileLimits.hard_cap_pct) ? roundTo(profileLimits.hard_cap_pct * scale, 4) : profileLimits.hard_cap_pct } : profileLimits;
-  const positions = Array.isArray(executor?.positions) ? executor.positions : [];
+  // ADR-0020 Amendment 8: a position whose stop the council loosened (`pmLoosen.loosened`, from omega_intents) counts
+  // as unprotected again (isProtected), whatever the switch says now. Without one the positions are the executor's.
+  const loosenedRec = pmLoosen?.loosened && typeof pmLoosen.loosened === "object" ? pmLoosen.loosened : {};
+  const positions0 = Array.isArray(executor?.positions) ? executor.positions : [];
+  const positions = Object.keys(loosenedRec).length ? positions0.map((p) => (loosenedRec[String(p?.ticket)] ? { ...p, loosened: true } : p)) : positions0;
   const recent = new Set(recentIntentIds);
   // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, stage 3): only with entry_order "limit" or "council". With "market"
   // nothing below changes and the result has its three fields only.
@@ -1019,14 +1124,46 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
   intents.push(...exits.intents);
   // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.
-  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: intents.filter((it) => it.kind === "close").map((it) => it.ticket), sltp: versionAtLeast(executor.executor?.version ?? null, "1.18") });
+  // ADR-0020 Amendment 8, only with the owner's switch on: the context the council's loosening and target moves are
+  // checked in again (the original entry stops, the loosenings already sent, the daily loss budget and the profile caps
+  // at the new stop, the veto, the arm, the pause, the tick value and the money).
+  const closingNow = new Set(intents.filter((it) => it.kind === "close").map((it) => it.ticket));
+  const loosenedFrom = Object.fromEntries(Object.entries(loosenedRec).filter(([, r]) => finite(r?.from_sl)).map(([t, r]) => [t, r.from_sl]));
+  let a8 = null;
+  if (S.pm_loosen_enabled === true) {
+    const acct = executor.account ?? {};
+    const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
+    const capLimits = profileLimits && profileLimits.profile !== "custom" ? profileLimits : null;
+    const blocked = signal?.paused === true || control?.mode === "paused" ? "Omega is paused"
+      : acct.trade_mode !== "demo" && S.live_armed !== true ? "a real account that is not armed live"
+      : typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "" ? "the broker's tick value disagrees with the contract (tick_value_mismatch)"
+      : typeof acct.money?.problem === "string" && acct.money.problem !== "" ? `the account's money is not verified (${acct.money.problem})` : null;
+    const riskCheck = (p, sl) => {
+      if (floor == null || !finite(acct.equity)) return "the daily loss budget cannot be read";
+      const after = positions.filter((x) => !closingNow.has(x.ticket)).map((x) => (x.ticket === p.ticket ? { ...x, sl } : x));
+      const open = openRiskAtStops(after, sym);
+      const left = acct.equity - open - pendingRiskAtStops(pendingKept, sym) - floor;
+      if (!(left > 0)) return `the daily loss budget would not hold at the new stop (${finite(left) ? roundTo(left, 2) : "unbounded risk"})`;
+      if (capLimits && positive(acct.equity)) {
+        const o = Number(p.open_price ?? p.entry), vol = Number(p.volume);
+        const tradeRisk = positive(sym.tick_size) && positive(sym.tick_value) && finite(o) && vol > 0 ? (Math.max(0, (p.side === "BUY" ? 1 : -1) * (o - sl)) / sym.tick_size) * sym.tick_value * vol : Infinity;
+        if (finite(capLimits.hard_cap_pct) && !(roundTo((tradeRisk / acct.equity) * 100, 2) <= capLimits.hard_cap_pct + 1e-9)) return `the profile's hard cap per trade (${capLimits.hard_cap_pct}%)`;
+        if (finite(capLimits.open_risk_pct) && !(open <= (acct.equity * capLimits.open_risk_pct) / 100 + 1e-6)) return `the profile's total open risk (${capLimits.open_risk_pct}%)`;
+      }
+      return null;
+    };
+    a8 = { original: pmLoosen?.original ?? {}, loosened: loosenedRec, stops, blocked, riskCheck, veto: (p) => (p.side === "BUY" ? signal?.veto_long : signal?.veto_short) === true };
+  }
+  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: [...closingNow], sltp: versionAtLeast(executor.executor?.version ?? null, "1.18"), ...(a8 ? { a8 } : {}), ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}) });
   // ADR-0020 Amendment 4: under the TP ladder the Position Manager's outward take-profit (TP2) waits, like every
-  // outward move, until the stop locks a profit at or beyond TP1.
+  // outward move, until the stop locks a profit at or beyond TP1. A target the council moves nearer (Amendment 8) is
+  // not an outward move.
   if (S.tp_ladder) {
     const levels = brokerKeyLevels(signal);
     pm.intents = pm.intents.filter((it) => {
       if (it.kind !== "modify_tp") return true;
       const p = positions.find((x) => x.ticket === it.ticket);
+      if (p && Number(p.tp) > 0 && (p.side === "BUY" ? it.tp < Number(p.tp) : it.tp > Number(p.tp))) return true;
       if (p && ladderTp1Locked({ position: p, levels, sym, signal })) return true;
       const [, t, , b] = String(it.id).split(":");
       pm.dropped.push({ id: `pm:${t}:${b}`, reason: "the TP ladder holds the target until the stop locks TP1 (ADR-0020 Amendment 4)" });
@@ -1040,7 +1177,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  intents.push(...manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles, stops }));
+  const managed = manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles, stops, ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}) });
+  // ADR-0020 Amendment 8: in the sync that loosens a stop, no mechanical stop or target move for that position (the
+  // ladder never re-tightens it from a stale snapshot, and a target further never comes with a looser stop).
+  const loosenedNow = new Set(pm.intents.filter((it) => it.loosen === true).map((it) => it.ticket));
+  intents.push(...(loosenedNow.size ? managed.filter((it) => !(loosenedNow.has(it.ticket) && ["modify_sl", "modify_sltp", "modify_tp"].includes(it.kind))) : managed));
+  // With the switch on, each tightening records the ATR(14, 15m) it was made at: the reference of a later loosening.
+  if (S.pm_loosen_enabled === true && positive(sym.atr_value)) for (const it of intents) if ((it.kind === "modify_sl" || it.kind === "modify_sltp") && it.loosen !== true) it.atr = sym.atr_value;
 
   if (!side) {
     // A range strategy held by the H4/D1 filter or its cell's evidence (src/htf-cells.mjs) says so on the page.
@@ -1278,6 +1421,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
     if (["scalp", "intraday", "swing", "range"].includes(signal.trading_mode)) it.mode = signal.trading_mode;
     if (finite(price) && finite(sl)) it.r_dist = roundTo(Math.abs(price - sl), sym.digits);
+    // ADR-0020 Amendment 8 (switch on): the ATR(14, 15m) at entry, the reference of a later loosening.
+    if (S.pm_loosen_enabled === true && positive(sym.atr_value)) it.atr_entry = sym.atr_value;
     // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
     if (probation) {
       it.probation = true;

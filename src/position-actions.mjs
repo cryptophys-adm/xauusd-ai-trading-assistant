@@ -72,7 +72,10 @@ export async function expireStalePositionActions(db, { now = Date.now() } = {}) 
  * broker did). `outcome` is { applied: true } or { applied: false, reason }. Plain text: the sender escapes it.
  */
 export function actionMessage(row, outcome = { applied: true }) {
-  const what = { close: "close", sl: `stop to ${row.sl}`, tp: row.sl != null ? `target to ${row.tp} and stop to ${row.sl}` : `target to ${row.tp}` }[row.action] ?? row.action;
+  // ADR-0020 Amendment 8: the council's loosening and target moves have their own heads ("Stop loosened", "TP moved").
+  const rule = String(row.rule ?? "");
+  const a8 = rule.startsWith("loosen_") ? `Stop loosened to ${row.sl}` : /^tp_(nearer|further)_/.test(rule) ? `TP moved ${rule.startsWith("tp_nearer_") ? "nearer" : "further"} to ${row.tp}` : null;
+  const what = a8 ?? { close: "close", sl: `stop to ${row.sl}`, tp: row.sl != null ? `target to ${row.tp} and stop to ${row.sl}` : `target to ${row.tp}` }[row.action] ?? row.action;
   const pips = row.pips == null ? "" : ` · ${row.pips >= 0 ? "+" : ""}${row.pips} pips`;
   const head = outcome?.applied === true ? `${what} · applied at the broker` : `${what} · NOT applied: ${outcome?.reason || "unknown"}`;
   return `XAUUSD POSITION MANAGER · #${row.ticket} ${row.side}${pips} · ${head}\n${row.why}${row.council ? `\nCouncil: ${row.council}` : ""}`;
