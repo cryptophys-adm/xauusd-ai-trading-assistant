@@ -65,6 +65,6 @@ Why: scalp stops are small and its ATR noisy, so it needs more expansion and giv
 - **Mechanical locks wait after a loosening** until they pass the stop before it (§3). Without this the ladder would re-tighten the stop at the next sync.
 - **Extra refusals beyond the amendment's list:** a pause, a real account not armed live, a Decision Engine veto of the side, the tick value or money unverified, and the profile's caps at the new stop.
 - **v4 parity.** The replay has no council asks (its recorded verdicts carry momentum and thesis only), so it never loosens or moves a target. With the switch on, a live position the council loosened differs from its replay.
-- **`ENGINE_CODE_HASH` changes** (new functions and the changed `positionAction`, `positionManagerIntents`, `manageIntents`, `planIntents`, `isProtected`, `settingsFrom`, `OMEGA_DEFAULTS`): a new parity era starts at the deploy.
+- **`ENGINE_CODE_HASH` changes** (new functions and the changed `positionAction`, `positionManagerIntents`, `manageIntents`, `planIntents`, `isProtected`, `settingsFrom`, `OMEGA_DEFAULTS`). The era now follows `ENGINE_BEHAVIOUR_HASH` and the switch signature (docs/SSOT.md, v4 parity era). With the switch off the behaviour hash is unchanged (A8-2), so the stage 3 era carries over at the deploy; `pm_loosen_enabled` turned on starts a new era at the settings' `updated_ms` ("switch on: pm_loosen_enabled"), and turned off again another.
 
 Tests: test/position-manager-a8.test.mjs A8-1 to A8-15; the fixture test/fixtures/pm-a8-off.mjs.

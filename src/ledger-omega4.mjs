@@ -517,7 +517,7 @@ function toRecord(t, { openR = null, version = OMEGA4_VERSION } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// The engine's code era: a parity window per version of the code that decides Omega's trades.
+// The engine's era: a parity window per behaviour of the code that decides Omega's trades and per set of its switches.
 
 /**
  * The live functions and constants that decide Omega's entries and management (the ones v4 replays, and the live
@@ -568,10 +568,40 @@ export async function sha256Hex(text) {
  * The hash of the engine's code (engineCodeSource) as it is in the repository. It is taken in node, not in the
  * Worker: the bundler strips comments and renames identifiers (`finite` becomes `finite8` when another module has
  * one), so a hash taken inside the bundle would move with unrelated code. test/ledger-omega-v4.test.mjs recomputes
- * it from the source and fails, printing the new value, until a change to any function above updates it here. The
- * deployed Worker then sees a hash its KV era does not hold and starts a new parity window (nextEra).
+ * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
+ * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
 export const ENGINE_CODE_HASH = "bbff5fadea876d05598713150251ea791989a4b8b5f65133f350873068ec9649";
+/**
+ * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
+ * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
+ *   planIntents over the market-path fixtures (test/fixtures/omega-market-path.mjs, the hand inputs and v4's replay
+ *   traces and records); positionFacts, positionAction, the council's messages, schema and cleaning,
+ *   positionManagerIntents and planIntents with Position Manager actions over the A8 switch-off fixtures
+ *   (test/fixtures/pm-a8-off.mjs); replayOmega4's traces and records over the v4 replay fixtures
+ *   (test/fixtures/omega-v4-replay.mjs). Only tests build the text, so the Worker bundle carries the value alone.
+ * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
+ * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
+ */
+export const ENGINE_BEHAVIOUR_HASH = "df71fd7ca2bcc577816e0c6007e92165d004634edf23350d23369a2b649cfb88";
+/**
+ * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
+ * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
+ * on, changes or goes back to its default starts a new era at the settings' updated_ms. Add each new one here; the
+ * next one will be wait_bias_entry (docs/RFC_WAIT_BIAS_ENTRY.md).
+ */
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled"]);
+/**
+ * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
+ * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
+ * market path byte for byte against stage 2) and bbff5fad (ADR-0020 Amendment 8; test/position-manager-a8.test.mjs
+ * A8-2 proves the Position Manager byte for byte against ad21475, whose engine code is stage 3's). A stored era of the
+ * old shape ({ hash, since_ms }) with one of these is adopted with its since_ms; any other starts a new era.
+ */
+export const ERA_ADOPTABLE_CODE_HASHES = Object.freeze([
+  "7497aa5177163fa88c581f1f8f90edc5094b99aa8c66a161eb24aaa8a26a9104",
+  "bbff5fadea876d05598713150251ea791989a4b8b5f65133f350873068ec9649"
+]);
 /** The first era: from #491 (2026-11-19 17:48 UTC), the Position Manager v4 replays (owner window from 12:00, orchestrator review of #498). */
 export const ERA_SEED_MS = Date.parse("2026-11-19T17:48:00Z");
 export const OMEGA4_ERA_KEY = "ledger:omega4:era:v1";
@@ -579,29 +609,108 @@ export const OMEGA4_ERA_KEY = "ledger:omega4:era:v1";
 export const PARITY_MIN_TRADES = 20;
 
 /**
- * Pure: the era after this deploy. No stored era: the seed (ERA_SEED_MS). The same hash: unchanged. Another hash: a
- * new era from the Worker's deploy time (DEPLOYED_AT, else the version metadata's timestamp, if not in the future),
- * else from now; the one before is kept in `previous` (the last 10).
+ * Pure: the switch signature of Omega's settings: each ERA_SWITCHES switch off its default, sorted, as "name" for a
+ * boolean switched on and "name=value" otherwise (e.g. ["entry_order=council", "pm_loosen_enabled"]). [] at defaults.
  */
-export function nextEra(stored, { hash = ENGINE_CODE_HASH, now = Date.now(), deployedMs = null, commit = null } = {}) {
-  if (!stored || typeof stored.hash !== "string" || !finite(stored.since_ms)) return { era: { hash, since_ms: ERA_SEED_MS, commit: commit ?? null, seeded: true, previous: [] }, changed: true };
-  if (stored.hash === hash) return { era: stored, changed: false };
-  const since = finite(deployedMs) && deployedMs <= now && deployedMs >= stored.since_ms ? deployedMs : now;
+export function eraSwitches(settings = {}) {
+  const s = settings && typeof settings === "object" ? settings : {};
+  const out = [];
+  for (const name of ERA_SWITCHES) {
+    const v = s[name] === undefined ? OMEGA_DEFAULTS[name] : s[name];
+    if (JSON.stringify(v) === JSON.stringify(OMEGA_DEFAULTS[name])) continue;
+    out.push(v === true ? name : `${name}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+  }
+  return out.sort();
+}
+
+const sameList = (a, b) => JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+/** Pure: why the switch signature moved ("switch on: entry_order=council", "switch off: pm_loosen_enabled"). */
+export function switchReason(before = [], after = []) {
+  const on = after.filter((x) => !before.includes(x)), off = before.filter((x) => !after.includes(x));
+  return [...on.map((x) => `switch on: ${x}`), ...off.map((x) => `switch off: ${x}`)].join("; ");
+}
+/** The time a new era starts: `at` when it is known, not in the future and not before the era it replaces, else now. */
+const eraStart = (at, sinceMs, now) => (finite(at) && at <= now && at >= sinceMs ? at : now);
+
+/**
+ * Pure: the era after this run. The era's identity is the behaviour hash and the switch signature:
+ *   no stored era                   the seed (ERA_SEED_MS, reason "seed");
+ *   an era of the old shape         ({ hash, since_ms }, before the behaviour hash) adopted with its since_ms when its
+ *                                   code hash is in ERA_ADOPTABLE_CODE_HASHES (code_hash from its hash, the switches
+ *                                   at their defaults), else treated as another behaviour; then as below;
+ *   another behaviour hash          a new era from the Worker's deploy time (`deployedMs`, if not in the future and not
+ *                                   before the era it replaces), else from now (reason "behaviour change");
+ *   another switch signature        a new era from the settings' updated_ms (`switchesMs`, the same bounds), else from
+ *                                   now (reason "switch on: …" or "switch off: …"); both at once: the later start;
+ *   the same behaviour and switches with another code hash: the era carried over (same since_ms, code_hash recorded,
+ *                                   the carry kept in `carried`, the last 10).
+ * `switches` null (the settings could not be read) keeps the stored signature. The era replaced goes to `previous`
+ * (the last 10). Returns { era, changed, events }: the log lines of what moved ("era carried (behaviour identical)").
+ */
+export function nextEra(stored, { behaviour = ENGINE_BEHAVIOUR_HASH, code = ENGINE_CODE_HASH, switches = null, switchesMs = null, now = Date.now(), deployedMs = null, commit = null } = {}) {
+  const sw = Array.isArray(switches) ? [...switches].sort() : null;
+  const oldShape = stored && typeof stored.behaviour_hash !== "string" && typeof stored.hash === "string";
+  if (!stored || !finite(stored.since_ms) || (!oldShape && typeof stored.behaviour_hash !== "string")) {
+    return { era: { behaviour_hash: behaviour, code_hash: code, switches: sw ?? [], since_ms: ERA_SEED_MS, commit: commit ?? null, seeded: true, reason: "seed", previous: [], carried: [] }, changed: true, events: ["era seeded"] };
+  }
+  const events = [];
+  let cur = stored;
+  if (oldShape) {
+    const adopt = ERA_ADOPTABLE_CODE_HASHES.includes(stored.hash);
+    cur = {
+      behaviour_hash: adopt ? behaviour : null, code_hash: stored.hash, switches: [], since_ms: stored.since_ms, commit: stored.commit ?? null,
+      seeded: stored.seeded === true, reason: stored.seeded === true ? "seed" : "code change", adopted_ms: now,
+      previous: Array.isArray(stored.previous) ? stored.previous : [], carried: []
+    };
+    events.push(adopt ? "era adopted (behaviour identical, since kept)" : "era of unknown behaviour (not adopted)");
+  }
+  const swNow = sw ?? (Array.isArray(cur.switches) ? cur.switches : []);
+  const behaviourMoved = cur.behaviour_hash !== behaviour, switchesMoved = !sameList(cur.switches, swNow);
+  if (!behaviourMoved && !switchesMoved) {
+    if (cur.code_hash === code) return { era: cur, changed: oldShape, events };
+    const carried = [{ code_hash: code, from: cur.code_hash ?? null, at_ms: now, commit: commit ?? null }, ...(Array.isArray(cur.carried) ? cur.carried : [])].slice(0, 10);
+    return { era: { ...cur, code_hash: code, carried }, changed: true, events: [...events, "era carried (behaviour identical)"] };
+  }
+  const starts = [], reasons = [];
+  if (behaviourMoved) { starts.push(eraStart(deployedMs, cur.since_ms, now)); reasons.push("behaviour change"); }
+  if (switchesMoved) { starts.push(eraStart(switchesMs, cur.since_ms, now)); reasons.push(switchReason(cur.switches ?? [], swNow)); }
+  const since = Math.max(...starts), reason = reasons.join("; ");
+  const before = { behaviour_hash: cur.behaviour_hash ?? null, code_hash: cur.code_hash ?? null, switches: cur.switches ?? [], reason: cur.reason ?? null, since_ms: cur.since_ms, until_ms: since, commit: cur.commit ?? null };
   return {
-    era: { hash, since_ms: since, commit: commit ?? null, seeded: false, previous: [{ hash: stored.hash, since_ms: stored.since_ms, until_ms: since, commit: stored.commit ?? null }, ...(Array.isArray(stored.previous) ? stored.previous : [])].slice(0, 10) },
-    changed: true
+    era: { behaviour_hash: behaviour, code_hash: code, switches: swNow, since_ms: since, commit: commit ?? null, seeded: false, reason, previous: [before, ...(Array.isArray(cur.previous) ? cur.previous : [])].slice(0, 10), carried: [] },
+    changed: true, events: [...events, `new era: ${reason}`]
   };
 }
 
-/** The current era from KV, moved on when this Worker's engine code differs (written only then). Never throws. */
-export async function currentEra(env, { now = Date.now() } = {}) {
+/** The switch signature and its time from the stored Omega settings (omega_settings id 1), or null when unreadable. */
+export async function readEraSwitches(db) {
+  if (!db?.prepare) return null;
+  try {
+    const row = await db.prepare("SELECT settings, updated_ms FROM omega_settings WHERE id = 1").first();
+    const settings = row?.settings ? JSON.parse(row.settings) : {};
+    const at = Number(row?.updated_ms);
+    return { switches: eraSwitches({ ...OMEGA_DEFAULTS, ...settings }), updated_ms: row?.updated_ms != null && finite(at) ? at : null };
+  } catch { return null; }
+}
+
+/**
+ * The current era from KV (nextEra on this Worker's behaviour hash, its deploy time and the stored settings' switches
+ * from env.DB), written only when it moved. Returns { era, changed, events }. Never throws.
+ */
+export async function eraStep(env, { now = Date.now() } = {}) {
   let stored = null;
   try { stored = JSON.parse((await env?.SIGNAL_CACHE?.get?.(OMEGA4_ERA_KEY)) || "null"); } catch { stored = null; }
   const deployed = Date.parse(String(env?.DEPLOYED_AT ?? env?.CF_VERSION_METADATA?.timestamp ?? ""));
   const commit = String(env?.DEPLOY_COMMIT ?? env?.CF_VERSION_METADATA?.tag ?? "").slice(0, 12) || null;
-  const { era, changed } = nextEra(stored, { now, deployedMs: finite(deployed) ? deployed : null, commit });
-  if (changed) { try { await env?.SIGNAL_CACHE?.put?.(OMEGA4_ERA_KEY, JSON.stringify(era)); } catch { /* next hour */ } }
-  return era;
+  const sw = await readEraSwitches(env?.DB);
+  const r = nextEra(stored, { now, deployedMs: finite(deployed) ? deployed : null, commit, switches: sw?.switches ?? null, switchesMs: sw?.updated_ms ?? null });
+  if (r.changed) { try { await env?.SIGNAL_CACHE?.put?.(OMEGA4_ERA_KEY, JSON.stringify(r.era)); } catch { /* next hour */ } }
+  return r;
+}
+
+/** The current era (eraStep's). Never throws. */
+export async function currentEra(env, { now = Date.now() } = {}) {
+  return (await eraStep(env, { now })).era;
 }
 
 // ---------------------------------------------------------------------------
@@ -728,9 +837,28 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
   return {
     version: OMEGA4_VERSION, checked_at: iso(now), since: iso(sinceMs), until: finite(untilMs) ? iso(untilMs) : null,
     ...current, thresholds: PARITY_PASS,
-    era: { since: iso(eraSince), commit: era?.commit ?? null, hash: typeof era?.hash === "string" ? era.hash.slice(0, 12) : null, seeded: era?.seeded === true, previous: Array.isArray(era?.previous) ? era.previous.slice(0, 3).map((p) => ({ since: iso(p.since_ms), until: finite(p.until_ms) ? iso(p.until_ms) : null, commit: p.commit ?? null, hash: String(p.hash ?? "").slice(0, 12) })) : [] },
+    era: eraView(era, eraSince),
     earlier: paritySummary(trades.filter((t) => t.live_code === "earlier")),
     exit_map: LIVE_EXIT_MAP, tick_value: `${LIVE_TICK_VALUE_PER_001} USD per 0.01 a lot (gold in USD, contract 100 oz)`, trades
+  };
+}
+
+const short = (h) => (typeof h === "string" && h ? h.slice(0, 12) : null);
+/**
+ * Pure: the era as the parity result shows it: since, commit, reason ("seed", "behaviour change", "switch on:
+ * entry_order=council"), the behaviour and code hashes (12 characters), the switch signature, the code carries, and the
+ * eras before it (the last 3). An era of the old shape ({ hash }) shows its hash as the code hash.
+ */
+export function eraView(era, eraSince = finite(era?.since_ms) ? era.since_ms : PARITY_CURRENT_CODE_MS) {
+  const code = short(era?.code_hash ?? era?.hash);
+  return {
+    since: iso(eraSince), commit: era?.commit ?? null, reason: typeof era?.reason === "string" ? era.reason : era?.seeded === true ? "seed" : null,
+    behaviour_hash: short(era?.behaviour_hash), code_hash: code, hash: code, switches: Array.isArray(era?.switches) ? era.switches : [], seeded: era?.seeded === true,
+    adopted: finite(era?.adopted_ms), carried: Array.isArray(era?.carried) ? era.carried.slice(0, 3).map((c) => ({ at: finite(c.at_ms) ? iso(c.at_ms) : null, code_hash: short(c.code_hash), commit: c.commit ?? null })) : [],
+    previous: Array.isArray(era?.previous) ? era.previous.slice(0, 3).map((p) => ({
+      since: finite(p.since_ms) ? iso(p.since_ms) : null, until: finite(p.until_ms) ? iso(p.until_ms) : null, commit: p.commit ?? null, reason: p.reason ?? null,
+      behaviour_hash: short(p.behaviour_hash), code_hash: short(p.code_hash ?? p.hash), hash: short(p.code_hash ?? p.hash), switches: Array.isArray(p.switches) ? p.switches : []
+    })) : []
   };
 }
 
@@ -948,10 +1076,14 @@ export async function runOmegaParity(env, { now = Date.now(), force = false } = 
     let until = null;
     try { until = Number(JSON.parse((await env.SIGNAL_CACHE.get(OMEGA4_CHECKPOINT_KEY)) || "null")?.last_ms); } catch { until = null; }
     const live = await loadLiveTrades(env, { sinceMs: PARITY_SINCE_MS });
-    const era = await currentEra(env, { now });
+    // The era (its moves, "era carried (behaviour identical)" among them, go to the ledger_omega4 log line as era_events).
+    const { era, events } = await eraStep(env, { now });
     const result = omegaParity({ ledgerRows: rows, liveTrades: live.trades, liveOpen: live.open, era, untilMs: finite(until) && until > 0 ? until + M1 : now, now });
     await env.SIGNAL_CACHE.put(OMEGA4_PARITY_KEY, JSON.stringify(result), { expirationTtl: 8 * 86_400 });
-    return { status: "checked", parity: result.status, era_since: result.era.since, trades: result.trades_compared, live_trades: result.live_trades, same_exit_share: result.same_exit_share, mean_abs_dr: result.mean_abs_dr };
+    return {
+      status: "checked", parity: result.status, era_since: result.era.since, era_reason: result.era.reason, trades: result.trades_compared, live_trades: result.live_trades, same_exit_share: result.same_exit_share, mean_abs_dr: result.mean_abs_dr,
+      ...(events.length ? { era_events: events, era_code_hash: result.era.code_hash, era_behaviour_hash: result.era.behaviour_hash } : {})
+    };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }

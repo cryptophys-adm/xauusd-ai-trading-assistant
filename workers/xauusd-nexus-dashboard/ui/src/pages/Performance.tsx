@@ -1177,13 +1177,30 @@ function OmegaParityPanel({ parity }: { parity: any }) {
       </div>
       <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
         <span>
-          Engine/PM code era since <span className="mono text-slate-300">{stamp(era.since)} UTC</span>
-          {era.commit ? <> · commit <span className="mono text-slate-300">{era.commit}</span></> : null}
-          {era.hash ? <> · code <span className="mono text-slate-300">{era.hash}</span></> : null}
+          Engine/PM behaviour era since <span className="mono text-slate-300">{stamp(era.since)} UTC</span>
+          {era.reason ? <> · <span className="text-slate-300">{era.reason}</span></> : null}
           {era.seeded ? " (seed: after #491)" : ""}
+          {era.commit ? <> · commit <span className="mono text-slate-300">{era.commit}</span></> : null}
+          {era.behaviour_hash ? <> · behaviour <span className="mono text-slate-300">{era.behaviour_hash}</span></> : null}
+          {(era.code_hash ?? era.hash) ? <> · code <span className="mono text-slate-300">{era.code_hash ?? era.hash}</span></> : null}
+          {" · switches "}
+          <span className="mono text-slate-300">{Array.isArray(era.switches) && era.switches.length ? era.switches.join(", ") : "all at default"}</span>
+          {Array.isArray(era.carried) && era.carried.length ? ` · carried over ${era.carried.length} code change${era.carried.length === 1 ? "" : "s"} (behaviour identical)` : ""}
         </span>
-        <span className="text-slate-500">A later change to the engine or Position Manager code starts a new parity window automatically, at its deploy.</span>
+        <span className="text-slate-500">A change of the engine's behaviour (at its deploy) or of a behaviour switch (at the settings change) starts a new parity window; a code change with identical behaviour carries it over.</span>
       </div>
+      {Array.isArray(era.previous) && era.previous.length ? (
+        <p className="text-[11px] text-slate-500">
+          Earlier eras:{" "}
+          {era.previous.map((p: any, i: number) => (
+            <span key={`${p.since}-${i}`} className="mr-2">
+              <span className="mono">{stamp(p.since)}</span> to <span className="mono">{stamp(p.until)}</span>
+              {p.reason ? ` (${p.reason})` : ""}
+              {i < era.previous.length - 1 ? ";" : ""}
+            </span>
+          ))}
+        </p>
+      ) : null}
       {earlier?.trades_compared ? (
         <p className="text-[11px] text-slate-500">
           Earlier code (shown below, not counted): {earlier.trades_compared} trades · same exit {pct(earlier.same_exit_share)} · mean |ΔR| {earlier.mean_abs_dr ?? "—"} · since {stamp(parity.since)} UTC
