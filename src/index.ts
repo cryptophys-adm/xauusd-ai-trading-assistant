@@ -3169,6 +3169,13 @@ export default {
             const cot = await runCotStep(env, { allowBackfill: false });
             if (cot.status !== "fresh" && cot.status !== "not_due" && cot.status !== "backfill_pending") console.log("cot_reports", JSON.stringify(cot));
           } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
+          // The Knowledge Council's facts (src/doctrine-facts.mjs), hourly while the market is closed too: on 2026-11-21 the
+          // council of 03:52 UTC read an old build's facts (91 → 21) and amended the doctrine; the next council needs this
+          // build's facts, fresh (under 3 hours), before the Sunday reopen.
+          try {
+            const facts = await pushDoctrineFacts(env);
+            if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
+          } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
           await runHealthStep(env);
           console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
         })());
