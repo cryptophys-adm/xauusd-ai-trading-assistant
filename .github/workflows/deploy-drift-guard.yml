@@ -1,0 +1,51 @@
+name: Deploy drift guard
+
+# 2026-11-21: an old checkout outside CI uploaded an old build of the AI Worker twice (wrangler deploy from the owner's
+# trading VPS). Every 15 minutes: the live Worker must be a CI build of main with wrangler.jsonc's crons
+# (scripts/deploy-drift-check.mjs). A drift fails this run, which GitHub reports. With the repository variable
+# DRIFT_AUTO_RESTORE set to "on" (the owner's choice; off by default), the guard re-runs deploy-worker.yml on main.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: deploy-drift-guard
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Skip while a deploy is running
+        id: busy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh run list --workflow deploy-worker.yml --status in_progress --json databaseId --jq 'length' || echo 0)
+          q=$(gh run list --workflow deploy-worker.yml --status queued --json databaseId --jq 'length' || echo 0)
+          echo "busy=$(( n + q ))" >> "$GITHUB_OUTPUT"
+      - name: Check the live Worker against main
+        id: drift
+        if: steps.busy.outputs.busy == '0'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/deploy-drift-check.mjs
+      - name: Restore main (DRIFT_AUTO_RESTORE=on only)
+        if: failure() && steps.drift.outcome == 'failure' && vars.DRIFT_AUTO_RESTORE == 'on'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-worker.yml --ref main

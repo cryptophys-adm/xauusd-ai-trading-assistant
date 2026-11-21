@@ -289,7 +289,12 @@ export function forbiddenReportKeys(obj, path = "") {
  * kind, the floor, lens B's baseline state and lens A's series and report age. R, shares and counts only; a report
  * with a forbidden key is refused (null).
  */
-export function lensReport({ state, scores = {}, positioning = null, liquidity = null, now = Date.now() }) {
+export function lensReport(args) {
+  const report = lensReportDraft(args);
+  return forbiddenReportKeys(report).length ? null : report;
+}
+/** Pure: the report before the price filter (lensReport refuses it when a key matches). */
+export function lensReportDraft({ state, scores = {}, positioning = null, liquidity = null, now = Date.now() }) {
   const lens = (name, extra) => ({
     enabled: state?.switches?.[name] !== false,
     weights: lensWeights(name, { policy: state?.policy, floor: state?.floor, enabled: state?.switches?.[name] !== false, baseline: liquidity?.baseline ?? null }),
@@ -306,5 +311,5 @@ export function lensReport({ state, scores = {}, positioning = null, liquidity =
       liquidity: lens("liquidity", { baseline: liquidity?.baseline ?? "unavailable", baseline_weeks: liquidity?.baseline_weeks ?? 0 })
     }
   };
-  return forbiddenReportKeys(report).length ? null : report;
+  return report;
 }

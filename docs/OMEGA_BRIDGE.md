@@ -289,6 +289,12 @@ sudo journalctl -u omega-bridge -n 30 --no-pager | grep -E "daemon_started|error
 
 `daemon_started` must show `"bridge_version":"1.7.0"` and `"calm_mode":true`. The Omega page shows the bridge version.
 
+**Never deploy from the VPS.** The VPS updates the bridge and the EA only. Never run `wrangler deploy`, `wrangler
+versions`, `wrangler secret put` or an `npm run deploy` there, and keep wrangler logged out (`npx wrangler logout`). On
+2026-11-21 an old checkout on the VPS uploaded an old build of the AI Worker and of the platform kernel twice; production
+reaches Cloudflare only through the deploy workflows on `main` (docs/SSOT.md §5), and the deploy drift guard reports a
+live Worker that is not a build of `main`.
+
 ## Troubleshooting
 
 - **HTTP 403 (`sync_forbidden`):** Logged at most once per minute with `"hint": "check OMEGA_BRIDGE_CLIENT_ID / the Access service token"`. Verify that:

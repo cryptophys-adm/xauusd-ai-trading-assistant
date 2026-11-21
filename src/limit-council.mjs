@@ -313,6 +313,21 @@ export async function placeLimitRows(db, { ids = [], tickets = [] } = {}) {
  * resting Omega limit once per 15m close. Off while entry_order is "market". `deps` let the tests give the settings, the
  * executor, the decision, the rooms, ATR and the model call. Never throws.
  */
+export const FIRST_COUNCIL_KEY = "limit_council:first_council:v1";
+/** The entry council's first decision in council mode, said once to the owner's private chat. Never throws. */
+export async function firstCouncilLine(env, { choice, rule, reason, side, mode, now = Date.now(), send = null } = {}) {
+  const kv = env?.SIGNAL_CACHE;
+  if (!kv?.get || !kv?.put) return false;
+  try {
+    if (await kv.get(FIRST_COUNCIL_KEY)) return false;
+    await kv.put(FIRST_COUNCIL_KEY, new Date(now).toISOString());
+    const text = `XAUUSD SYSTEM · Entry council: first decision in council mode · ${new Date(now).toISOString().slice(11, 16)} UTC\n${side ?? "—"} (${mode ?? "—"}): ${choice ?? "—"}${rule ? ` · rule ${rule}` : ""}${reason ? `\n${String(reason).slice(0, 200)}` : ""}`;
+    if (typeof send === "function") await send(text);
+    else { const { sendOmegaTelegram, escHtml } = await import("./omega-broker.mjs"); await sendOmegaTelegram(env, escHtml(text)); }
+    return true;
+  } catch { return false; }
+}
+
 export async function runLimitCouncil(env, { now = Date.now(), call = callBusModel, settings: settingsIn, executor: executorIn, decision: decisionIn, rooms: roomsIn, atr: atrIn, signal: signalIn, capUsd = null } = {}) {
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
@@ -351,6 +366,9 @@ export async function runLimitCouncil(env, { now = Date.now(), call = callBusMod
       await db.prepare("UPDATE limit_council SET status = ?, choice = ?, rule = ?, reason = ?, council = ?, updated_ms = ? WHERE id = ? AND status = 'asked'")
         .bind(c.status, c.choice, c.rule, c.reason, council ? JSON.stringify(council) : null, now, row.id).run();
       out.entries.push({ id: row.open_id, status: c.status, choice: c.choice, rule: c.rule });
+      // The first decision in council mode, told once (owner 2026-11-20 skipped the demo test: this line shows the path
+      // works end to end).
+      if (entryOrder === "council") await firstCouncilLine(env, { choice: c.choice, rule: c.rule, reason: c.reason, side: request.side, mode: request.mode, now });
       // The liquidity lens's maker reading (RFC §7.2): a liquidity_thin answer, scored later from the limit ledger's pair.
       if (String(c.rule ?? "").split("+").includes("liquidity_thin") && Number.isFinite(Number(request.issued_ms))) {
         try { await recordLensReading(db, { id: `maker:${request.issued_ms}:${request.side === "BUY" ? "B" : "S"}`, lens: "liquidity", kind: "maker", at_ms: Number(request.issued_ms), mode: request.mode ?? null, side: request.side === "BUY" ? 1 : -1 }, { now }); } catch { /* the choice stands */ }

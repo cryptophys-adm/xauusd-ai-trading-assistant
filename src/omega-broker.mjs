@@ -436,6 +436,42 @@ export async function sendOmegaTelegram(env, message) {
 
 // ---------------------------------------------------------------- settings
 
+export const LIMIT_FAULT_KINDS = Object.freeze(["place_limit", "modify_order", "delete_order"]);
+/**
+ * Pure: why a limit intent's EA result is missing or malformed, or null. Missing: expired with no result line (the EA
+ * never answered). Malformed: a place_limit the EA said was placed without a ticket.
+ */
+export function limitFault(row) {
+  if (!row || !LIMIT_FAULT_KINDS.includes(row.kind)) return null;
+  const result = parse(row.result, null);
+  if (row.status === "expired" && result == null) return "the EA never answered";
+  if (row.kind === "place_limit" && result && result.ok === true && !(Number(result.ticket) > 0)) return "the EA answered without a ticket";
+  return null;
+}
+/**
+ * The newest faulty limit intent created after the owner's last settings save (at most 7 days back), or null; told once
+ * on Telegram per intent. Never throws (an unreadable table fails closed only when a fault is read).
+ */
+export async function limitFailClosed(env, db, { since = null, now = Date.now() } = {}) {
+  try {
+    const from = Math.max(Number(since) || 0, now - 7 * 86_400_000);
+    const rows = (await db.prepare(`SELECT id, kind, status, result, created_ms FROM omega_intents WHERE kind IN ('place_limit', 'modify_order', 'delete_order') AND created_ms > ? AND status IN ('expired', 'done') ORDER BY created_ms DESC LIMIT 20`).bind(from).all()).results ?? [];
+    for (const r of rows) {
+      const why = limitFault(r);
+      if (!why) continue;
+      const fault = { intent_id: r.id, kind: r.kind, why, created_ms: Number(r.created_ms) };
+      const kv = env?.SIGNAL_CACHE, key = `limit:fail_closed:${r.id}`;
+      if (kv?.get && !(await kv.get(key))) {
+        await kv.put(key, String(now), { expirationTtl: 8 * 86_400 });
+        await event(db, now, "engine", "limit_fail_closed", fault);
+        await sendOmegaTelegram(env, escHtml(`XAUUSD SYSTEM · Limit entries stopped (fail closed): a ${r.kind} intent, ${why}. Omega enters at market and deletes its resting limits until you save the Omega settings again; check the EA (OmegaExecutor 1.21) and its result lines first.`));
+      }
+      return fault;
+    }
+  } catch { /* no fault read */ }
+  return null;
+}
+
 export async function readSettings(env) {
   await ensureSchema(env.DB);
   const row = await env.DB.prepare("SELECT settings, version, updated_by, updated_ms FROM omega_settings WHERE id = 1").first();
@@ -1062,7 +1098,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
 
   // Plan.
-  const { settings, version: settingsVersion } = await readSettings(env);
+  const { settings: storedSettings, version: settingsVersion, updated_ms: settingsUpdatedMs } = await readSettings(env);
+  // Fail closed (owner 2026-11-20, the demo test skipped): a limit intent the EA never answered, or answered without a
+  // ticket, sends Omega back to market entries (resting Omega limits are deleted, entry_order_market) until the owner
+  // saves the settings again.
+  const limitStop = storedSettings?.entry_order === "limit" || storedSettings?.entry_order === "council" ? await limitFailClosed(env, db, { since: settingsUpdatedMs, now }) : null;
+  const settings = limitStop ? { ...storedSettings, entry_order: "market" } : storedSettings;
   let signal = signalIn ?? null;
   // The kill switch is read once a sync and is never cached: a KILL takes effect at the next sync.
   const control = await readControl(env);
@@ -1139,6 +1180,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     try { liquiditySpikeSince = await spikeSince(env, liveSpreadSpike(signal, executor?.symbol ?? {}), { now }); } catch { liquiditySpikeSince = null; }
   }
   const plan = planIntents({ signal, control, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince });
+  if (limitStop) plan.notes.push({ code: "limit_fail_closed", detail: `${limitStop.kind} ${limitStop.why}; market entries until the owner saves the settings again` });
   // A new entry the spread spike held back is a reading of the lens (scored later from the v4 replay).
   if (plan.notes.some((x) => x.code === "liquidity_spread_spike")) { try { await recordSpikeBlock(db, signal, { now }); } catch { /* the plan stands */ } }
   if (plan.entry_request || plan.limit_used || plan.fill_checks) await limitAfterPlan(env, db, { plan, limitIn, executor, now });
