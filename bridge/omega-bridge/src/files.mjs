@@ -417,6 +417,8 @@ export function readTerminalLastError(terminalDir, { fs = nodeFs } = {}) {
     const lines = str.split(/\r?\n/).filter(Boolean);
     for (let i = lines.length - 1; i >= Math.max(0, lines.length - 50); i--) {
       const line = lines[i];
+      // A later successful login supersedes an earlier failed account attempt.
+      if (/\tNetwork\t[^\t]*: (authorized on |terminal synchronized with )/.test(line)) return null;
       if (line.includes("failed") || line.includes("timeout") || line.includes("authorization")) {
         const parts = line.split("\t");
         const msg = parts.length >= 5 ? parts.slice(4).join(" ") : line;
