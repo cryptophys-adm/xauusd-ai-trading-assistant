@@ -26,6 +26,7 @@ import { planForDirection, zoneLevels, SCALP_TARGET } from "./strategy-engine.mj
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
+import { orbStrategy } from "./orb-strategy.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
 export const DEFAULT_AGENT = "zone_pullback";
@@ -290,7 +291,7 @@ const patternInside = Object.freeze({
 });
 
 /** The registry: adding or removing a strategy is one entry here. */
-export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside]);
+export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside, orbStrategy]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
 
 export function strategyAgentsMode(env) {
