@@ -1118,7 +1118,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       const p = positions.find((x) => Number(x?.ticket) === Number(t));
       if (!p) continue;
       const m = pendingMeta?.[t] ?? positionMeta?.[p.intent_id] ?? {};
-      const guard = fillGuard({ position: p, others: positions.filter((x) => x !== p), pending: pendingKept, sym: sym0, account: acct, limits: profileLimits && profileLimits.profile !== "custom" ? profileLimits : null, lossFloor: floor, probation: m.probation === true, riskScale: finite(m.risk_scale) ? m.risk_scale : 0.5 });
+      const guard = fillGuard({ position: p, others: positions.filter((x) => x !== p), pending: pendingKept, sym: sym0, account: acct, limits: profileLimits, lossFloor: floor, probation: m.probation === true, riskScale: finite(m.risk_scale) ? m.risk_scale : 0.5 });
       extra.fill_checks.push({ ticket: p.ticket, guard });
       if (guard) {
         note("fill_guard", `${p.ticket}:${guard}`);
@@ -1165,7 +1165,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (S.pm_loosen_enabled === true) {
     const acct = executor.account ?? {};
     const floor = positive(acct.day_start_balance) ? acct.day_start_balance * (1 - S.max_daily_loss_pct / 100) : null;
-    const capLimits = profileLimits && profileLimits.profile !== "custom" ? profileLimits : null;
+    const capLimits = profileLimits;
     const blocked = signal?.paused === true || control?.mode === "paused" ? "Omega is paused"
       : acct.trade_mode !== "demo" && S.live_armed !== true ? "a real account that is not armed live"
       : typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "" ? "the broker's tick value disagrees with the contract (tick_value_mismatch)"

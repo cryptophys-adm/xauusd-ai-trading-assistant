@@ -255,7 +255,7 @@ test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses 
 // ------------------------------------------------------------------ phase 2: sizing within the profile's caps
 
 import { effectiveLimits, CUSTOM_CAPS } from "../src/account-spec.mjs";
-import { openRiskAtStops } from "../src/omega-engine.mjs";
+import { openRiskAtStops, fillGuard } from "../src/omega-engine.mjs";
 
 const SIGNAL2 = { side: "BUY", action: "ENTER_MARKET", entry: 4100, stop: 4095, tp1: 4110, issued_ms: NOW - 60_000, expires_ms: NOW + 600_000, blackout: false, kill: false, paused: false };
 const plan2 = ({ profile, equity = 10_000, settings = {}, positions = [], stop = 4095, adaptive = false } = {}) => planIntents({
@@ -271,10 +271,10 @@ const openOf = (p) => p.intents.find((i) => i.kind === "open") ?? null;
 test("AS13 effectiveLimits: the smaller of the profile's cap and the setting; Custom is the settings within Aggressive's limits", () => {
   const live = { risk_pct: 2, max_positions: 5, max_daily_loss_pct: 10 };
   // ADR-0020 Amendment 10 (owner 2026-11-21: "Ya, Custom = Aggressive"): Custom holds at 10 % / 10 % / 3.
-  assert.deepEqual(effectiveLimits("custom", live), { profile: "custom", risk_pct: 2, max_positions: 3, max_daily_loss_pct: 10, hard_cap_pct: null, open_risk_pct: null });
-  assert.deepEqual(effectiveLimits("custom", { risk_pct: 12, max_positions: 2, max_daily_loss_pct: 20 }), { profile: "custom", risk_pct: 10, max_positions: 2, max_daily_loss_pct: 10, hard_cap_pct: null, open_risk_pct: null });
-  assert.deepEqual(effectiveLimits("custom", {}), { profile: "custom", risk_pct: null, max_positions: null, max_daily_loss_pct: null, hard_cap_pct: null, open_risk_pct: null }, "the cap never stands in for an absent setting");
-  assert.deepEqual(CUSTOM_CAPS, { risk_pct: 10, daily_loss_pct: 10, max_positions: 3 });
+  assert.deepEqual(effectiveLimits("custom", live), { profile: "custom", risk_pct: 2, max_positions: 3, max_daily_loss_pct: 10, hard_cap_pct: null, open_risk_pct: 10 });
+  assert.deepEqual(effectiveLimits("custom", { risk_pct: 12, max_positions: 2, max_daily_loss_pct: 20 }), { profile: "custom", risk_pct: 10, max_positions: 2, max_daily_loss_pct: 10, hard_cap_pct: null, open_risk_pct: 10 });
+  assert.deepEqual(effectiveLimits("custom", {}), { profile: "custom", risk_pct: null, max_positions: null, max_daily_loss_pct: null, hard_cap_pct: null, open_risk_pct: 10 }, "the cap never stands in for an absent setting");
+  assert.deepEqual(CUSTOM_CAPS, { risk_pct: 10, daily_loss_pct: 10, max_positions: 3, open_risk_pct: 10 });
   assert.deepEqual(effectiveLimits("safe", live), { profile: "safe", risk_pct: 1, max_positions: 1, max_daily_loss_pct: 3, hard_cap_pct: 2, open_risk_pct: 2 });
   assert.deepEqual(effectiveLimits("conservative", { risk_pct: 0.5, max_positions: 1, max_daily_loss_pct: 2 }), { profile: "conservative", risk_pct: 0.5, max_positions: 1, max_daily_loss_pct: 2, hard_cap_pct: 5, open_risk_pct: 5 }, "a tighter setting wins");
   assert.equal(effectiveLimits("aggressive", { risk_pct: 2 }).risk_pct, 2, "the setting (max 2) stays below Aggressive's 5");
@@ -466,4 +466,13 @@ test("AS23 ADR-0020 Amendment 10: Custom holds a fourth position and a 20 % dail
   assert.equal(settingsFrom({ max_positions: 4 }).error, "max_positions must be an integer from 1 to 3");
   assert.equal(settingsFrom({ max_daily_loss_pct: 10.5 }).error, "max_daily_loss_pct must be a number from 0.1 to 10");
   assert.deepEqual(["max_positions", "max_daily_loss_pct", "risk_pct"].map((k) => settingsFrom({ max_positions: 3, max_daily_loss_pct: 10, risk_pct: 10 }).settings[k]), [3, 10, 10], "Aggressive's limits themselves are accepted");
+  // Aggressive's total open risk (owner 2026-11-21: "Ya, tambahkan"): Custom's limits carry it, and the fill guard stops a
+  // filled limit that takes the open positions past 10 % at their stops (the daily budget of 10 % usually stops an entry
+  // first in the planner; the total holds when the day is in profit).
+  const sell = (volume) => ({ ticket: 9, side: "SELL", volume, open_price: 4090, sl: 4110, tp: 4060, magic: 0, intent_id: null, source: "manual" });
+  const S = { risk_pct: 10, max_positions: 3 };
+  const sym = executor().symbol, lim = effectiveLimits("custom", S);
+  const buy = { ticket: 10, side: "BUY", volume: 0.3, open_price: 4090, sl: 4070, magic: 920200 };
+  assert.equal(fillGuard({ position: buy, others: [sell(1)], sym, account: { equity: 10_000 }, limits: lim }), "open_risk_cap", "6 % + 8.8 % at the stops (from the price now) is over 10 %");
+  assert.equal(fillGuard({ position: buy, others: [sell(0.1)], sym, account: { equity: 10_000 }, limits: lim }), null, "6 % + 0.9 % is within");
 });
