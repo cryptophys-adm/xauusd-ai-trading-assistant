@@ -466,18 +466,18 @@ export async function recordLimitFault(env, db, fault, { now = Date.now() } = {}
     if (!(Number(res?.meta?.changes) > 0)) return false;
     await event(db, now, "engine", "limit_fail_closed", fault);
     await sendOmegaTelegram(env, escHtml(fault.why === LIMIT_FAULT_NO_ANSWER
-      ? `XAUUSD SYSTEM · Entries stopped (fail closed): a ${fault.kind} intent, ${fault.why}. No new entry and no loosening until the EA answers again; closes and protection still go out, resting limits are deleted. Check the terminal and the EA (OmegaExecutor 1.21).`
+      ? `XAUUSD SYSTEM · Entries stopped (fail closed): a ${fault.kind} intent, ${fault.why}. No new entry and no loosening until the EA answers again${fault.ea_silent ? " (its heartbeat counts)" : ""} or you save the Omega settings; closes and protection still go out, resting limits are deleted. Check the terminal and the EA (OmegaExecutor 1.21).`
       : `XAUUSD SYSTEM · Limit entries stopped (fail closed): a ${fault.kind} intent, ${fault.why}. Omega enters at market and deletes its resting limits until you save the Omega settings again; check the EA (OmegaExecutor 1.21) and its result lines first.`));
     return true;
   } catch { return false; }
 }
 
 /** Clears an open "never answered" fault when the EA answers again: one audit row and one Telegram line. Never throws. */
-export async function clearNoAnswerFault(env, db, { now = Date.now() } = {}) {
+export async function clearNoAnswerFault(env, db, { now = Date.now(), by = "a result line" } = {}) {
   try {
     const res = await db.prepare("UPDATE omega_settings SET limit_fault = NULL WHERE id = 1 AND json_extract(limit_fault, '$.why') = ?").bind(LIMIT_FAULT_NO_ANSWER).run();
     if (!(Number(res?.meta?.changes) > 0)) return false;
-    await event(db, now, "engine", "limit_fault_cleared", { why: "the EA answers again" });
+    await event(db, now, "engine", "limit_fault_cleared", { why: "the EA answers again", by });
     await sendOmegaTelegram(env, escHtml("XAUUSD SYSTEM · The EA answers again: entries resume (the fail-closed stop of a limit the EA never answered is lifted)."));
     return true;
   } catch { return false; }
@@ -1106,7 +1106,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR kind IN ('place_limit', 'modify_order', 'delete_order')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
   const pmExpiring = expiring.filter((r) => /^(d:)?pm:/.test(String(r.id))).map((r) => r.id);
   const limitExpiring = expiring.find((r) => LIMIT_FAULT_KINDS.includes(r.kind));
-  if (limitExpiring) await recordLimitFault(env, db, { intent_id: limitExpiring.id, kind: limitExpiring.kind, why: LIMIT_FAULT_NO_ANSWER, created_ms: Number(limitExpiring.created_ms) || now }, { now });
+  // ea_silent: the EA's own state was stale too (a VPS restart, the terminal down), so its heartbeat coming back lifts the
+  // stop; an EA alive that did not answer needs a real answer or the owner's save.
+  if (limitExpiring) await recordLimitFault(env, db, { intent_id: limitExpiring.id, kind: limitExpiring.kind, why: LIMIT_FAULT_NO_ANSWER, created_ms: Number(limitExpiring.created_ms) || now,
+    ea_silent: !(Number(executor?.received_ms) > 0) || now - Number(executor.received_ms) > 60_000 }, { now });
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
   if (pmExpiring.length) {
     const rows = await positionActionRows(db, pmExpiring.map(actionIdOfIntent).filter(Boolean));
@@ -1129,7 +1132,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // Fail closed (owner 2026-11-20, the demo test skipped): a limit intent the EA never answered, or answered without a
   // ticket (recordLimitFault, above), sends Omega back to market entries (resting Omega limits are deleted,
   // entry_order_market) until the owner saves the settings again.
-  const limitStop = limitFaultOpen && (storedSettings?.entry_order === "limit" || storedSettings?.entry_order === "council") ? limitFaultOpen : null;
+  // The EA answers again by its heartbeat (orchestrator review of #511): a fault opened while the EA was silent lifts once
+  // the EA writes its state again, fresh, at 1.21 or later; the next limit is the probe (unanswered, the fault opens again).
+  let faultOpen = limitFaultOpen;
+  if (faultOpen?.why === LIMIT_FAULT_NO_ANSWER && faultOpen.ea_silent === true && Number(executor?.received_ms) > Number(faultOpen.at_ms) && now - Number(executor.received_ms) <= 60_000
+    && versionAtLeast(executor?.executor?.version ?? null, "1.21")) {
+    if (await clearNoAnswerFault(env, db, { now, by: "the EA's heartbeat" })) faultOpen = null;
+  }
+  const limitStop = faultOpen && (storedSettings?.entry_order === "limit" || storedSettings?.entry_order === "council") ? faultOpen : null;
   const settings = limitStop ? { ...storedSettings, entry_order: "market" } : storedSettings;
   let signal = signalIn ?? null;
   // The kill switch is read once a sync and is never cached: a KILL takes effect at the next sync.

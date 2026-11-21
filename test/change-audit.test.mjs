@@ -9,6 +9,7 @@ import { limitFault, recordLimitFault, clearNoAnswerFault, readSettings, writeSe
 import { OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
 import { firstCouncilLine, FIRST_COUNCIL_KEY } from "../src/limit-council.mjs";
 import { lensHealthIssues, LENS_REPORT_LAST_KEY } from "../src/lens-steps.mjs";
+import { detectHealthIssues } from "../src/health-alerts.mjs";
 import { resetLensStateMemoForTests } from "../src/lens-policy.mjs";
 import { driftProblems, declaredCrons } from "../scripts/deploy-drift-check.mjs";
 
@@ -106,6 +107,11 @@ test("CA4 fail closed: a limit intent the EA never answered, or answered without
   // The split (owner 2026-11-21): a "never answered" fault clears itself when the EA answers again; "no ticket" does not.
   assert.equal(await recordLimitFault(env, db, { ...fault, created_ms: T0 + 1_000_000 }, { now: T0 + 1_100_000 }), true);
   assert.equal((await readSettings(env)).limit_fault.why, LIMIT_FAULT_NO_ANSWER);
+  // While open it shows: the health alert limit_fail_closed, with its age and both ways out (orchestrator review).
+  const issues = await detectHealthIssues(env, T0 + 1_160_000).catch(() => []);
+  const fc = issues.find((x) => x.kind === "limit_fail_closed");
+  assert.ok(fc, "the open fault raises a health alert");
+  assert.match(fc.subject, /fail-closed for 1 minutes.*the EA never answered; no new entry until the EA answers again or the owner saves/);
   assert.equal(await clearNoAnswerFault(env, db, { now: T0 + 1_200_000 }), true);
   assert.equal((await readSettings(env)).limit_fault, null, "the EA answered: entries resume");
   assert.equal(await recordLimitFault(env, db, { ...fault, why: LIMIT_FAULT_NO_TICKET, created_ms: T0 + 1_300_000 }, { now: T0 + 1_400_000 }), true);
