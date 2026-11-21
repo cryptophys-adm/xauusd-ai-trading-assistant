@@ -10,25 +10,43 @@ export const AUDIT_NOTIFY_KEY = "audit:notify:v1";
 export const AUDIT_DEBOUNCE_MS = 60_000;
 const BATCH = 200;
 
-/** The audit actions told on Telegram (those not already told where they happen), with their words. */
+/**
+ * Every omega_events action is in exactly one of three lists (test/change-audit.test.mjs fails on a new action that is in
+ * none): told by this sweep, told where it happens (its own Telegram line next to its audit row), or not a change.
+ */
 export const AUDIT_ACTIONS = Object.freeze({
   settings: "Omega settings changed",
-  profile_changed: "Account profile changed",
-  profile_ceiling_set: "Profile ceiling set",
   profile_agent_mode_set: "Profile agent mode set",
-  profile_baseline_reset: "Account baseline reset",
-  profile_baseline_reset_override: "Account baseline reset (override)",
   upgrade_block_cleared: "Profile upgrade block cleared",
-  mode_changed: "Trading mode changed",
+  upgrade_block_lifted: "Profile upgrade block lifted",
   position_delegated: "Position delegated to Omega",
   delegate_mode_on: "Delegation turned on",
   delegate_mode_off: "Delegation turned off",
   owner_modify_position: "Position modified by hand",
+  owner_modify_order: "Pending order modified by hand",
+  profile_proposal_declined: "Profile proposal declined",
   position_manual_close_requested: "Manual close requested",
   connection_set: "Broker connection set",
   connection_cleared: "Broker connection cleared",
-  bridge_symbol: "Bridge symbol set"
+  connection_needs_reentry: "Broker connection needs re-entry",
+  bridge_symbol: "Bridge symbol set",
+  bridge_key_changed: "Bridge key changed",
+  symbol_changed: "Trade symbol changed",
+  balance_operation: "Balance operation (deposit or withdrawal) seen",
+  liquidity_baseline_reset: "Liquidity baseline reset"
 });
+/** Told where they happen (src/profile-agent.mjs, mode-selector, account-spec, position-exit, the limit lines, ...). */
+export const TOLD_ELSEWHERE = Object.freeze([
+  "profile_changed", "profile_ceiling_set", "profile_baseline_reset", "profile_baseline_reset_override", "profile_proposed",
+  "profile_downgrade_vetoed", "profile_upgrade_refused", "mode_changed", "spec_changed", "position_closed", "probation_set",
+  "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed",
+  "pm_stop_loosened", "pm_tp_moved", "autonomous_recovery"
+]);
+/** Not a change of what Omega trades with: a state, a reading or a refused attempt (health alerts carry the problems). */
+export const NOT_A_CHANGE = Object.freeze([
+  "plan", "intent_reconciled", "symbol_refused", "terminal_error", "account_seen", "spec_validated", "account_ref_upgraded",
+  "owner_sub_seen", "profile_control_refused", "profile_review_pending", "mode_unchanged"
+]);
 
 /** The settings keys in words (anything else is shown by its own name). */
 const SETTING_WORDS = Object.freeze({
@@ -38,17 +56,21 @@ const SETTING_WORDS = Object.freeze({
   positioning_enabled: "positioning lens", liquidity_enabled: "liquidity lens", wait_bias_entry: "WAIT-with-bias entry",
   tp_ladder: "TP ladder", trailing_stop_r: "trailing stop R", sor_mode: "order routing"
 });
-// Keys whose value may never appear in a line (identity, credentials, places).
-const SECRET_KEY = /login|password|passw|account|server|email|mail|sub$|^sub|envelope|token|secret|key$|kid|ip/i;
+// Keys whose value never appears in a line, by exact name (a pattern hid ladder_lock_pips: orchestrator review of #511):
+// identity and credentials, and prices (the private chat may carry them, but this audit says what changed, not where).
+const HIDDEN_KEYS = new Set(["login", "password", "account", "account_ref", "account_number", "server", "email", "sub", "actor_sub",
+  "envelope", "token", "secret", "kid", "ip", "public_key", "private_key", "sl", "tp", "price", "entry", "stop", "target", "fill_price"]);
+const hidden = (k) => HIDDEN_KEYS.has(String(k).toLowerCase());
 
-/** Pure: who made a change, in words; never an email or an Access identity. */
+/** Pure: who made a change, in words; never an email or an Access identity. "owner" only for a person's identity. */
 export function actorLabel(actor) {
   const a = String(actor ?? "").trim();
   if (!a) return "unknown";
   if (a.startsWith("agent:")) return `agent ${a.slice(6).replace(/[^a-z0-9_-]/gi, "").slice(0, 30) || "?"}`;
   if (/^aether/i.test(a)) return a.toLowerCase().startsWith("aether-rollback") ? "Aether (rollback)" : "Aether";
-  if (["engine", "system", "bridge"].includes(a)) return a;
-  return "owner";
+  if (a.includes("@") || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(a) || a === "owner" || a === "person") return "owner";
+  if (/\.access$/.test(a)) return "service token"; // a Cloudflare Access service token (its client id ends in .access)
+  return a.replace(/[^a-z0-9_ -]/gi, "").slice(0, 30) || "unknown";
 }
 
 /** Pure: a value in words. */
@@ -81,7 +103,7 @@ export function auditSweep(state, rows, { now = Date.now(), context = {} } = {})
     if (r.action === "settings") {
       const next = detail && typeof detail === "object" ? detail : {};
       for (const k of Object.keys(next)) {
-        if (SECRET_KEY.test(k)) continue;
+        if (hidden(k)) continue;
         const from = Object.hasOwn(s.pending, k) ? s.pending[k].from : s.baseline[k];
         if (same(next[k], s.baseline[k])) continue;
         s.pending[k] = { from, to: next[k], actor: actorLabel(r.actor), ms: Number(r.ms) || now };
@@ -92,7 +114,7 @@ export function auditSweep(state, rows, { now = Date.now(), context = {} } = {})
     const what = AUDIT_ACTIONS[r.action];
     if (!what) continue;
     const parts = Object.entries(detail && typeof detail === "object" ? detail : {})
-      .filter(([k, v]) => !SECRET_KEY.test(k) && v != null && typeof v !== "object")
+      .filter(([k, v]) => !hidden(k) && v != null && typeof v !== "object")
       .slice(0, 4).map(([k, v]) => `${k} ${valueWords(k, v)}`);
     lines.push(`XAUUSD SYSTEM · ${what} by ${actorLabel(r.actor)} · ${hhmm(Number(r.ms) || now)} UTC${parts.length ? `\n${parts.join(" · ")}` : ""}`);
   }
@@ -117,9 +139,29 @@ export function auditSweep(state, rows, { now = Date.now(), context = {} } = {})
   return { state: s, lines };
 }
 
+export const AUDIT_FAILED_KEY = "audit:notify:failed";
+export const AUDIT_MAX_FAILS = 3;
+
+/** The private chat send, answering whether Telegram took the line (a 429 or 400 is a failure, unlike sendOmegaTelegram). */
+export async function telegramSend(env, text) {
+  if (!env?.TELEGRAM_BOT_TOKEN || !env?.TELEGRAM_CHAT_ID) return false;
+  try {
+    const { escHtml } = await import("./omega-broker.mjs");
+    const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: escHtml(text), parse_mode: "HTML", disable_web_page_preview: true }),
+      signal: AbortSignal.timeout(10_000)
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
 /**
  * The sweep: reads the audit rows after the cursor, sends the lines, stores the state. On its first run it starts at
- * the newest row with the settings in force as the baseline and sends nothing (no flood of old changes). Never throws.
+ * the newest row with the settings in force as the baseline and sends nothing (no flood of old changes). A line Telegram
+ * does not take keeps the cursor where it was, so the next sweep sends again; after AUDIT_MAX_FAILS sweeps in a row the
+ * cursor moves on and the health alert audit_telegram_failed says so. Two sweeps at the same moment (a save and the cron)
+ * may send a line twice: an audit channel prefers twice to never. Never throws.
  */
 export async function runAuditNotify(env, { now = Date.now(), send = null } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
@@ -144,11 +186,31 @@ export async function runAuditNotify(env, { now = Date.now(), send = null } = {}
       } catch { context = {}; }
     }
     const { state, lines } = auditSweep(stored, rows, { now, context });
-    const out = typeof send === "function" ? send : async (t) => (await import("./omega-broker.mjs")).sendOmegaTelegram(env, (await import("./omega-broker.mjs")).escHtml(t));
-    for (const line of lines) { try { await out(line); } catch { /* the audit row stands */ } }
-    await kv.put(AUDIT_NOTIFY_KEY, JSON.stringify(state));
+    const out = typeof send === "function" ? send : (t) => telegramSend(env, t);
+    let failed = 0;
+    for (const line of lines) { let ok = false; try { ok = (await out(line)) !== false; } catch { ok = false; } if (!ok) failed += 1; }
+    if (failed) {
+      const fails = (Number(stored.fails) || 0) + 1;
+      if (fails < AUDIT_MAX_FAILS) {
+        await kv.put(AUDIT_NOTIFY_KEY, JSON.stringify({ ...stored, fails }));
+        return { status: "send_failed", failed, fails, retry: true };
+      }
+      await kv.put(AUDIT_FAILED_KEY, JSON.stringify({ at: new Date(now).toISOString(), lines: failed, sweeps: fails }), { expirationTtl: 7 * 86_400 });
+      await kv.put(AUDIT_NOTIFY_KEY, JSON.stringify({ ...state, fails: 0 }));
+      return { status: "send_failed", failed, fails, retry: false };
+    }
+    await kv.put(AUDIT_NOTIFY_KEY, JSON.stringify({ ...state, fails: 0 }));
     return { status: "ok", rows: rows.length, lines: lines.length, held: Object.keys(state.pending).length };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
   }
+}
+
+/** The health alert when audit lines were given up on (Telegram refused them AUDIT_MAX_FAILS sweeps in a row), for a week. */
+export async function auditNotifyIssue(env) {
+  try {
+    const f = parse(await env?.SIGNAL_CACHE?.get?.(AUDIT_FAILED_KEY), null);
+    if (!f) return null;
+    return { key: `audit_telegram_failed:${f.at}`, kind: "audit_telegram_failed", subject: `Telegram refused ${f.lines} change-audit line${f.lines === 1 ? "" : "s"} ${f.sweeps} sweeps in a row (last ${String(f.at).slice(0, 16).replace("T", " ")} UTC); the changes are in the Omega audit (omega_events) but were not told`, detail: f };
+  } catch { return null; }
 }

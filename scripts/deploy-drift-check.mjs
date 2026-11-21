@@ -19,8 +19,10 @@ export function declaredCrons(wranglerText) {
  * `liveCrons` the Worker's schedules, `expectedCrons` wrangler.jsonc's, `onMain(sha)` whether a commit is on main and
  * `containsLast(sha)` whether it contains the last commit that touched the Worker's deploy paths.
  */
-export function driftProblems({ health, liveCrons = [], expectedCrons = [], onMain = () => true, containsLast = () => true }) {
+export function driftProblems({ health, liveCrons = [], expectedCrons = [], onMain = () => true, containsLast = () => true, deployMessage = undefined }) {
   const out = [];
+  // The active deployment's message: deploy-worker.yml writes "commit <sha>"; both VPS uploads of 2026-11-21 had none.
+  if (deployMessage !== undefined && !/^commit [0-9a-f]{40}$/.test(String(deployMessage ?? ""))) out.push(`the active deployment was not made by deploy-worker.yml (message ${JSON.stringify(deployMessage ?? null)})`);
   const commit = typeof health?.commit === "string" && /^[0-9a-f]{7,40}$/.test(health.commit) ? health.commit : null;
   if (health?.status !== "ok") out.push(`health status ${JSON.stringify(health?.status ?? null)}`);
   if (!commit) out.push("the live Worker reports no commit: not a CI build (deploy-worker.yml sets DEPLOY_COMMIT)");
@@ -54,11 +56,13 @@ async function main() {
   if (!account) throw new Error("no Cloudflare account visible to the token");
   const sched = await cf(`/accounts/${account}/workers/scripts/xauusd-ai-trading-assistant/schedules`);
   const liveCrons = (sched?.schedules ?? []).map((s) => s.cron);
+  const deployments = await cf(`/accounts/${account}/workers/scripts/xauusd-ai-trading-assistant/deployments`);
+  const deployMessage = deployments?.deployments?.[0]?.annotations?.["workers/message"] ?? null;
   const expectedCrons = declaredCrons(readFileSync("wrangler.jsonc", "utf8"));
   const onMain = (sha) => git("merge-base", "--is-ancestor", sha, "origin/main");
   const containsLast = (sha) => git("merge-base", "--is-ancestor", last, sha);
-  const problems = driftProblems({ health, liveCrons, expectedCrons, onMain, containsLast });
-  console.log(JSON.stringify({ live_commit: health?.commit ?? null, last_worker_commit: last.slice(0, 12), live_crons: liveCrons, expected_crons: expectedCrons, problems }, null, 2));
+  const problems = driftProblems({ health, liveCrons, expectedCrons, onMain, containsLast, deployMessage });
+  console.log(JSON.stringify({ deploy_message: deployMessage, live_commit: health?.commit ?? null, last_worker_commit: last.slice(0, 12), live_crons: liveCrons, expected_crons: expectedCrons, problems }, null, 2));
   if (problems.length) {
     console.log(`::error title=Deploy drift::${problems.join("; ")}`);
     // Only a drift found sets drift=true: the workflow restores main on that alone, never on an error of the check.

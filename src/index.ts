@@ -3154,6 +3154,9 @@ export default {
       ctx.waitUntil(runPendingMacroRooms(env).then(m => {
         if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));
       }).catch(e => console.error("macro_room_failed", e instanceof Error ? e.message : String(e))));
+      // The change audit (src/change-notify.mjs) on every closed-market sweep: the ledger step sleeps while the market is
+      // closed, and a change held by its minute should not wait for the hourly heartbeat.
+      ctx.waitUntil(runAuditNotify(env).then(() => undefined, (e) => console.error("audit_notify_failed", e instanceof Error ? e.message : String(e))));
       if (idleHeartbeatDue(event.scheduledTime)) {
         ctx.waitUntil((async () => {
           try {
@@ -3166,8 +3169,6 @@ export default {
             const cot = await runCotStep(env, { allowBackfill: false });
             if (cot.status !== "fresh" && cot.status !== "not_due" && cot.status !== "backfill_pending") console.log("cot_reports", JSON.stringify(cot));
           } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
-          // The change audit (src/change-notify.mjs): the ledger step sleeps while the market is closed.
-          try { await runAuditNotify(env); } catch (e) { console.error("audit_notify_failed", e instanceof Error ? e.message : String(e)); }
           await runHealthStep(env);
           console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
         })());

@@ -101,6 +101,9 @@ async function ensureSchema(db) {
   // The account's units per US dollar the owner gave with the connection (2026-11-19), for an account whose currency is
   // not USD and that has no trade yet to measure it (src/gold-symbol.mjs accountMoney). Null: none given.
   try { await db.prepare("ALTER TABLE omega_connection ADD COLUMN units_per_usd REAL").run(); } catch { /* already there */ }
+  // Fail closed on limit results (2026-11-21): the open fault, and the owner's own last save (an Aether write is not one).
+  try { await db.prepare("ALTER TABLE omega_settings ADD COLUMN limit_fault TEXT").run(); } catch { /* already there */ }
+  try { await db.prepare("ALTER TABLE omega_settings ADD COLUMN owner_saved_ms INTEGER").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 const parse = (text, fallback = null) => { try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; } };
@@ -449,33 +452,26 @@ export function limitFault(row) {
   return null;
 }
 /**
- * The newest faulty limit intent created after the owner's last settings save (at most 7 days back), or null; told once
- * on Telegram per intent. Never throws (an unreadable table fails closed only when a fault is read).
+ * Opens the limit fault (once per episode: none while one is open), only while entry_order is limit or council and for an
+ * intent created after the owner's last save: omega_settings.limit_fault, one limit_fail_closed audit row and one
+ * Telegram line. Read by the sync from the settings row it reads anyway (no query per sync). Never throws.
  */
-export async function limitFailClosed(env, db, { since = null, now = Date.now() } = {}) {
+export async function recordLimitFault(env, db, fault, { now = Date.now() } = {}) {
   try {
-    const from = Math.max(Number(since) || 0, now - 7 * 86_400_000);
-    const rows = (await db.prepare(`SELECT id, kind, status, result, created_ms FROM omega_intents WHERE kind IN ('place_limit', 'modify_order', 'delete_order') AND created_ms > ? AND status IN ('expired', 'done') ORDER BY created_ms DESC LIMIT 20`).bind(from).all()).results ?? [];
-    for (const r of rows) {
-      const why = limitFault(r);
-      if (!why) continue;
-      const fault = { intent_id: r.id, kind: r.kind, why, created_ms: Number(r.created_ms) };
-      const kv = env?.SIGNAL_CACHE, key = `limit:fail_closed:${r.id}`;
-      if (kv?.get && !(await kv.get(key))) {
-        await kv.put(key, String(now), { expirationTtl: 8 * 86_400 });
-        await event(db, now, "engine", "limit_fail_closed", fault);
-        await sendOmegaTelegram(env, escHtml(`XAUUSD SYSTEM · Limit entries stopped (fail closed): a ${r.kind} intent, ${why}. Omega enters at market and deletes its resting limits until you save the Omega settings again; check the EA (OmegaExecutor 1.21) and its result lines first.`));
-      }
-      return fault;
-    }
-  } catch { /* no fault read */ }
-  return null;
+    const res = await db.prepare("UPDATE omega_settings SET limit_fault = ? WHERE id = 1 AND limit_fault IS NULL AND json_extract(settings, '$.entry_order') IN ('limit', 'council') AND ? > COALESCE(owner_saved_ms, 0)")
+      .bind(JSON.stringify({ ...fault, at_ms: now }), Number(fault.created_ms) || now).run();
+    if (!(Number(res?.meta?.changes) > 0)) return false;
+    await event(db, now, "engine", "limit_fail_closed", fault);
+    await sendOmegaTelegram(env, escHtml(`XAUUSD SYSTEM · Limit entries stopped (fail closed): a ${fault.kind} intent, ${fault.why}. Omega enters at market and deletes its resting limits until you save the Omega settings again; check the EA (OmegaExecutor 1.21) and its result lines first.`));
+    return true;
+  } catch { return false; }
 }
 
 export async function readSettings(env) {
   await ensureSchema(env.DB);
-  const row = await env.DB.prepare("SELECT settings, version, updated_by, updated_ms FROM omega_settings WHERE id = 1").first();
-  return { settings: { ...OMEGA_DEFAULTS, ...parse(row?.settings, {}) }, version: Number(row?.version ?? 0), updated_by: row?.updated_by ?? null, updated_ms: row?.updated_ms ?? null };
+  const row = await env.DB.prepare("SELECT settings, version, updated_by, updated_ms, limit_fault, owner_saved_ms FROM omega_settings WHERE id = 1").first();
+  return { settings: { ...OMEGA_DEFAULTS, ...parse(row?.settings, {}) }, version: Number(row?.version ?? 0), updated_by: row?.updated_by ?? null, updated_ms: row?.updated_ms ?? null,
+    limit_fault: parse(row?.limit_fault, null), owner_saved_ms: Number(row?.owner_saved_ms) || null };
 }
 
 export async function writeSettings(env, { body, actor }, { now = Date.now() } = {}) {
@@ -486,7 +482,10 @@ export async function writeSettings(env, { body, actor }, { now = Date.now() } =
   const r = settingsFrom(body, current.settings, { ea_version: eaVersion });
   if (r.error) return { ok: false, error: r.error };
   const version = current.version + 1;
-  await env.DB.prepare("UPDATE omega_settings SET settings = ?, version = ?, updated_by = ?, updated_ms = ? WHERE id = 1").bind(JSON.stringify(r.settings), version, actor, now).run();
+  // A save by a person (not Aether's policy write nor its rollback) clears an open limit fault: the owner looked at it.
+  const byOwner = !/^aether/i.test(String(actor ?? ""));
+  await env.DB.prepare("UPDATE omega_settings SET settings = ?, version = ?, updated_by = ?, updated_ms = ?, limit_fault = CASE WHEN ? = 1 THEN NULL ELSE limit_fault END, owner_saved_ms = CASE WHEN ? = 1 THEN ? ELSE owner_saved_ms END WHERE id = 1")
+    .bind(JSON.stringify(r.settings), version, actor, now, byOwner ? 1 : 0, byOwner ? 1 : 0, now).run();
   await event(env.DB, now, actor, "settings", r.settings);
   return { ok: true, settings: r.settings, version };
 }
@@ -1018,6 +1017,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     // A late result still lands on an expired intent: the terminal is the truth about what happened.
     await db.prepare("UPDATE omega_intents SET status = ?, result = ?, updated_ms = ? WHERE id = ? AND status IN ('pending', 'sent', 'expired')")
       .bind(result.ok ? "done" : "failed", JSON.stringify(result), now, r.id).run();
+    // A placement the EA reports as placed without a ticket: the limit fault (fail closed).
+    if (p?.kind === "place_limit" && limitFault({ kind: "place_limit", status: result.ok ? "done" : "failed", result: JSON.stringify(result) })) {
+      await recordLimitFault(env, db, { intent_id: r.id, kind: "place_limit", why: "the EA answered without a ticket", created_ms: Number(existing?.created_ms) || now }, { now });
+    }
     if (existing && (existing.status === "pending" || existing.status === "sent")) {
       // A Position Manager intent: its own line, as the broker answered (owner 2026-11-19: say what reached the broker).
       const pmId = actionIdOfIntent(r.id);
@@ -1079,7 +1082,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     } catch { /* the deals are stored; the notices are lost */ }
   }
   // A Position Manager intent the terminal never answered is said as not applied (the expiry below).
-  const pmExpiring = ((await db.prepare("SELECT id FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%')").bind(now - INTENT_TTL_MS).all()).results ?? []).map((r) => r.id);
+  // The intents about to expire, read once: a Position Manager one is said as not applied; a limit one the EA never
+  // answered is the limit fault (fail closed).
+  const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR kind IN ('place_limit', 'modify_order', 'delete_order')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
+  const pmExpiring = expiring.filter((r) => /^(d:)?pm:/.test(String(r.id))).map((r) => r.id);
+  const limitExpiring = expiring.find((r) => LIMIT_FAULT_KINDS.includes(r.kind));
+  if (limitExpiring) await recordLimitFault(env, db, { intent_id: limitExpiring.id, kind: limitExpiring.kind, why: "the EA never answered", created_ms: Number(limitExpiring.created_ms) || now }, { now });
   await db.prepare("UPDATE omega_intents SET status = 'expired', updated_ms = ? WHERE status IN ('pending', 'sent') AND created_ms < ?").bind(now, now - INTENT_TTL_MS).run();
   if (pmExpiring.length) {
     const rows = await positionActionRows(db, pmExpiring.map(actionIdOfIntent).filter(Boolean));
@@ -1098,11 +1106,11 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   }
 
   // Plan.
-  const { settings: storedSettings, version: settingsVersion, updated_ms: settingsUpdatedMs } = await readSettings(env);
+  const { settings: storedSettings, version: settingsVersion, limit_fault: limitFaultOpen } = await readSettings(env);
   // Fail closed (owner 2026-11-20, the demo test skipped): a limit intent the EA never answered, or answered without a
-  // ticket, sends Omega back to market entries (resting Omega limits are deleted, entry_order_market) until the owner
-  // saves the settings again.
-  const limitStop = storedSettings?.entry_order === "limit" || storedSettings?.entry_order === "council" ? await limitFailClosed(env, db, { since: settingsUpdatedMs, now }) : null;
+  // ticket (recordLimitFault, above), sends Omega back to market entries (resting Omega limits are deleted,
+  // entry_order_market) until the owner saves the settings again.
+  const limitStop = limitFaultOpen && (storedSettings?.entry_order === "limit" || storedSettings?.entry_order === "council") ? limitFaultOpen : null;
   const settings = limitStop ? { ...storedSettings, entry_order: "market" } : storedSettings;
   let signal = signalIn ?? null;
   // The kill switch is read once a sync and is never cached: a KILL takes effect at the next sync.

@@ -20,6 +20,7 @@ import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
 import { executionReportIssue } from "./aether-push.mjs";
+import { auditNotifyIssue } from "./change-notify.mjs";
 import { goldCheckOf, goldSymbolText } from "./gold-symbol.mjs";
 import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
 
@@ -292,6 +293,8 @@ export async function detectHealthIssues(env, now = Date.now()) {
   //     The validator's codes only, never a price, an account or an email (src/aether-push.mjs executionReportAlert).
   const execution = await executionReportIssue(env, now);
   if (execution) out.push(execution);
+  // The change audit on Telegram (src/change-notify.mjs): lines Telegram refused three sweeps in a row.
+  try { const audit = await auditNotifyIssue(env); if (audit) out.push(audit); } catch { /* never fatal */ }
 
   // 13. The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10): cot_stale, liquidity_archive_stale,
   //     lens_at_floor (info, reported once).
