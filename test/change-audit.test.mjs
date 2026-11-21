@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readdirSync, readFileSync } from "node:fs";
 import { auditSweep, runAuditNotify, actorLabel, auditNotifyIssue, AUDIT_NOTIFY_KEY, AUDIT_DEBOUNCE_MS, AUDIT_ACTIONS, TOLD_ELSEWHERE, NOT_A_CHANGE, AUDIT_FAILED_KEY, AUDIT_MAX_FAILS } from "../src/change-notify.mjs";
-import { limitFault, recordLimitFault, readSettings, writeSettings, resetOmegaBrokerSchemaForTests } from "../src/omega-broker.mjs";
+import { limitFault, recordLimitFault, clearNoAnswerFault, readSettings, writeSettings, resetOmegaBrokerSchemaForTests, LIMIT_FAULT_NO_ANSWER, LIMIT_FAULT_NO_TICKET } from "../src/omega-broker.mjs";
 import { OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
 import { firstCouncilLine, FIRST_COUNCIL_KEY } from "../src/limit-council.mjs";
 import { lensHealthIssues, LENS_REPORT_LAST_KEY } from "../src/lens-steps.mjs";
@@ -103,8 +103,18 @@ test("CA4 fail closed: a limit intent the EA never answered, or answered without
   await writeSettings(env, { body: { risk_pct: 1.5 }, actor: "owner@example.com" }, { now: T0 + 900_000 });
   assert.equal((await readSettings(env)).limit_fault, null, "the owner's save clears it");
   assert.equal(await recordLimitFault(env, db, { ...fault, created_ms: T0 + 850_000 }, { now: T0 + 950_000 }), false, "an intent from before the owner's save opens no new fault");
+  // The split (owner 2026-11-21): a "never answered" fault clears itself when the EA answers again; "no ticket" does not.
+  assert.equal(await recordLimitFault(env, db, { ...fault, created_ms: T0 + 1_000_000 }, { now: T0 + 1_100_000 }), true);
+  assert.equal((await readSettings(env)).limit_fault.why, LIMIT_FAULT_NO_ANSWER);
+  assert.equal(await clearNoAnswerFault(env, db, { now: T0 + 1_200_000 }), true);
+  assert.equal((await readSettings(env)).limit_fault, null, "the EA answered: entries resume");
+  assert.equal(await recordLimitFault(env, db, { ...fault, why: LIMIT_FAULT_NO_TICKET, created_ms: T0 + 1_300_000 }, { now: T0 + 1_400_000 }), true);
+  assert.equal(await clearNoAnswerFault(env, db, { now: T0 + 1_500_000 }), false, "an answer does not lift a no-ticket fault: only the owner's save does");
+  assert.equal((await readSettings(env)).limit_fault.why, LIMIT_FAULT_NO_TICKET);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) n FROM omega_events WHERE action = 'limit_fault_cleared'").get().n, 1);
+  await writeSettings(env, { body: { risk_pct: 1.5 }, actor: "owner@example.com" }, { now: T0 + 1_600_000 });
   db.raw.prepare("UPDATE omega_settings SET settings = ? WHERE id = 1").run(JSON.stringify({ ...base, entry_order: "market" }));
-  assert.equal(await recordLimitFault(env, db, { ...fault, created_ms: T0 + 960_000 }, { now: T0 + 970_000 }), false, "with entry_order market there is nothing to stop");
+  assert.equal(await recordLimitFault(env, db, { ...fault, created_ms: T0 + 1_700_000 }, { now: T0 + 1_800_000 }), false, "with entry_order market there is nothing to stop");
 });
 
 test("CA5 the first decision in council mode is told once", async () => {

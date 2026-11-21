@@ -537,7 +537,7 @@ export const ENGINE_CODE = Object.freeze({
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs",
     // Fail closed (2026-11-21): a limit intent the EA never answered or answered without a ticket sends Omega to market.
-    "recordLimitFault", "limitFault", "LIMIT_FAULT_KINDS"]],
+    "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER"]],
   "omega-limit-knobs": [omegaLimitKnobs, ["limitKnobs", "LIMIT_KNOB_START", "LIMIT_KNOB_BOUNDS"]],
   "pm-loosen-knobs": [pmLoosenKnobs, ["pmLoosenKnobs", "PM_LOOSEN_KNOB_START", "PM_LOOSEN_KNOB_BOUNDS"]],
   "limit-council": [limitCouncil, ["entryFacts", "entryChoice", "pendingFacts", "pendingAction", "runLimitCouncil", "ENTRY_REASONS", "PULLBACK_MIN_R", "ENTRY_SHARE_DROP", "LIMIT_ACTION_TTL_MS"]],
@@ -577,7 +577,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "b33812c821409f6ddee973c6a03d48eb39bc4ae447e62cb512c73fc03c151769";
+export const ENGINE_CODE_HASH = "619bc7d2b86562b94c4729350333f0a4af01ccf16fe4fa640f87b3dd6e4c6866";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

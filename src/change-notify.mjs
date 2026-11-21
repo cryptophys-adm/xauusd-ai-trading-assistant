@@ -39,7 +39,7 @@ export const AUDIT_ACTIONS = Object.freeze({
 export const TOLD_ELSEWHERE = Object.freeze([
   "profile_changed", "profile_ceiling_set", "profile_baseline_reset", "profile_baseline_reset_override", "profile_proposed",
   "profile_downgrade_vetoed", "profile_upgrade_refused", "mode_changed", "spec_changed", "position_closed", "probation_set",
-  "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed",
+  "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed", "limit_fault_cleared",
   "pm_stop_loosened", "pm_tp_moved", "autonomous_recovery"
 ]);
 /** Not a change of what Omega trades with: a state, a reading or a refused attempt (health alerts carry the problems). */
