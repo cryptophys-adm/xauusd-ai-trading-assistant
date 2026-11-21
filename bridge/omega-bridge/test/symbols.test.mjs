@@ -19,6 +19,7 @@ import {
 } from "../src/symbols.mjs";
 import { applyCredentials, setStartupSymbol } from "../src/ini.mjs";
 import { createDaemon } from "../src/daemon.mjs";
+import { readTerminalLastError } from "../src/files.mjs";
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "omega-symbols-test-"));
@@ -310,6 +311,26 @@ test("daemon: an EA trading the owner's GoldOne on a cent account is confirmed; 
     nowRef.ms += 1500;
     await h.daemon.tick();
     assert.equal(syncBodies.at(-1).bridge_symbol.terminal_error, "'[account]': authorization on Cent-Live failed (Invalid account)");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("terminal log: a login that succeeded after a failure makes the failure stale", () => {
+  const dir = tmp();
+  try {
+    const logsDir = path.join(dir, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    const failed = "PO\t2\t14:26:07.617\tNetwork\t'1': authorization on FxPro-MT5 failed (Invalid account)\r\n";
+    const ok = "LP\t0\t14:30:59.314\tNetwork\t'2': authorized on FxPro-MT5\r\n" +
+      "QD\t0\t14:31:21.466\tNetwork\t'2': terminal synchronized with FxPro Markets Ltd.: 9 positions, 1 orders\r\n";
+    const file = path.join(logsDir, "20261117.log");
+    fs.writeFileSync(file, Buffer.from(failed, "utf16le"));
+    assert.match(readTerminalLastError(dir), /Invalid account/);
+    fs.writeFileSync(file, Buffer.from(failed + ok, "utf16le"));
+    assert.equal(readTerminalLastError(dir), null);
+    fs.writeFileSync(file, Buffer.from(ok + failed, "utf16le"));
+    assert.match(readTerminalLastError(dir), /Invalid account/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
