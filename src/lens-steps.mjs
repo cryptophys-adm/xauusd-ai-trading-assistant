@@ -5,7 +5,7 @@
 import { corpusSource } from "./corpus-oracle.mjs";
 import { goldPausedAt } from "./market-hours.mjs";
 import {
-  LENS_MODES, LENS_NAME, LENS_SWITCHES, lensKnobs, lensWeights, readLensState, recordLensReading, ensureLensReadingsSchema, lensScore, lensFloorStep, lensReport, floorHolds, LENS_FLOOR_KEY
+  LENS_MODES, LENS_NAME, LENS_SWITCHES, lensKnobs, lensWeights, readLensState, recordLensReading, ensureLensReadingsSchema, lensScore, lensFloorStep, lensReport, lensReportDraft, forbiddenReportKeys, floorHolds, LENS_FLOOR_KEY
 } from "./lens-policy.mjs";
 import { positioningNow, scorePositioning, cotFreshness, positioningLine, positioningLean, positioningPackFact } from "./positioning-lens.mjs";
 import {
@@ -285,6 +285,14 @@ export async function lensHealthIssues(env, now = Date.now()) {
         if (!finite(last) || now - last > 30 * M1) out.push({ key: "liquidity_archive_stale", kind: "liquidity_archive_stale", subject: `No broker M1 bar archived for ${finite(last) ? `${Math.round((now - last) / M1)} minutes` : "the connected account yet"} while the market is open and Omega is connected; the liquidity lens has no facts`, detail: { minutes: finite(last) ? Math.round((now - last) / M1) : null } });
       }
     }
+    // The daily lens report refused, here by the price filter or by Aether's validator: the report is dark until fixed.
+    try {
+      const last = JSON.parse((await env?.SIGNAL_CACHE?.get?.(LENS_REPORT_LAST_KEY)) || "null");
+      if (last && (last.status === "refused_locally" || last.status === "rejected")) {
+        const what = last.status === "rejected" ? `Aether refused it (${String(last.reason ?? "no reason given").replace(/[^a-z0-9_:,. -]/gi, "").slice(0, 120)})` : `the price filter refused the key${(last.keys ?? []).length === 1 ? "" : "s"} ${(last.keys ?? []).map((k) => String(k).replace(/[^a-z0-9_.\[\]]/gi, "").slice(0, 60)).join(", ") || "(unknown)"}`;
+        out.push({ key: `lens_report_refused:${last.status}`, kind: "lens_report_refused", subject: `The ${LENS_NAME} analyst's daily report reaches no knowledge: ${what}`, detail: { status: last.status, at: last.at ?? null, keys: last.keys ?? null } });
+      }
+    } catch { /* none */ }
     for (const l of ["positioning", "liquidity"]) {
       if (lens.switches[l] && floorHolds(l, { policy: lens.policy, floor: lens.floor })) out.push({ key: `lens_at_floor:${l}`, kind: "lens_at_floor", report_once: true, subject: `The ${l} lens of the ${LENS_NAME} analyst is at its floor weight in every mode (score ${Math.round((lens.floor[l].score ?? 0) * 100)}% over ${lens.floor[l].n ?? 0} readings); Aether can raise it again`, detail: { lens: l, score: lens.floor[l].score ?? null, n: lens.floor[l].n ?? null } });
     }
@@ -343,13 +351,20 @@ export async function pushLensReport(env, { now = Date.now() } = {}) {
   const liq = await readLiquidityState(env);
   const cot = await cotFreshness(env, { now });
   const report = lensReport({ state, scores: await scores(env, state), positioning: { series: cot.series, age_days: cot.age_days, stale: cot.stale }, liquidity: { baseline: liq?.baseline ?? null, baseline_weeks: liq?.baseline_weeks ?? 0 }, now });
-  if (!report) return { status: "refused_locally" };
+  const remember = async (out) => { try { await kv?.put?.(LENS_REPORT_LAST_KEY, JSON.stringify({ ...out, at: new Date(now).toISOString() }), { expirationTtl: 30 * DAY }); } catch { /* the alert reads none */ } return out; };
+  if (!report) {
+    // A key the price filter refuses (it matches substrings: "slippage" contains "sl"): the report would go dark, so say
+    // which keys (paths only, never a value), as the health alert lens_report_refused (orchestrator note on #505).
+    const draft = lensReportDraft({ state, scores: await scores(env, state), positioning: { series: cot.series, age_days: cot.age_days, stale: cot.stale }, liquidity: { baseline: liq?.baseline ?? null, baseline_weeks: liq?.baseline_weeks ?? 0 }, now });
+    return remember({ status: "refused_locally", keys: forbiddenReportKeys(draft).slice(0, 5) });
+  }
   let res;
   try { res = await env.AETHER.ingestLensReport(report); } catch (e) { return { status: "transport_failed", error: String(e?.message ?? e).slice(0, 160) }; }
   await kv?.put?.("lens:report:day", day, { expirationTtl: 2 * DAY });
-  return { status: res?.accepted ? "accepted" : "rejected", ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) };
+  return remember({ status: res?.accepted ? "accepted" : "rejected", ...(res?.reason ? { reason: String(res.reason).slice(0, 120) } : {}) });
 }
 export { LENS_FLOOR_KEY };
+export const LENS_REPORT_LAST_KEY = "lens:report:last";
 
 // ---------------------------------------------------------------- the rooms' context line (RFC §2, §3.5, §4.3)
 

@@ -20,6 +20,7 @@ import { engineLabel } from "./engine-names.mjs";
 import { rejectionSummary, REJECTION_TEXT } from "./webhook-rejections.mjs";
 import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
 import { executionReportIssue } from "./aether-push.mjs";
+import { auditNotifyIssue } from "./change-notify.mjs";
 import { goldCheckOf, goldSymbolText } from "./gold-symbol.mjs";
 import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
 
@@ -292,6 +293,18 @@ export async function detectHealthIssues(env, now = Date.now()) {
   //     The validator's codes only, never a price, an account or an email (src/aether-push.mjs executionReportAlert).
   const execution = await executionReportIssue(env, now);
   if (execution) out.push(execution);
+  // Fail closed on limit results (src/omega-broker.mjs recordLimitFault): open while omega_settings.limit_fault is set.
+  try {
+    const row = await db.prepare("SELECT limit_fault FROM omega_settings WHERE id = 1").first();
+    const f = row?.limit_fault ? JSON.parse(row.limit_fault) : null;
+    if (f && Number(f.at_ms) > 0) {
+      const mins = Math.max(0, Math.round((now - Number(f.at_ms)) / 60_000));
+      const noAnswer = f.why === "the EA never answered";
+      out.push({ key: `limit_fail_closed:${f.at_ms}`, kind: "limit_fail_closed", subject: `Omega is fail-closed for ${mins} minutes: a ${String(f.kind ?? "limit").replace(/[^a-z_]/g, "")} intent, ${noAnswer ? "the EA never answered; no new entry until the EA answers again or the owner saves the Omega settings" : "the EA answered without a ticket; market entries only until the owner saves the Omega settings"}`, detail: { kind: f.kind ?? null, why: f.why ?? null, minutes: mins, ea_silent: f.ea_silent ?? null } });
+    }
+  } catch { /* the column may not exist yet: no alert */ }
+  // The change audit on Telegram (src/change-notify.mjs): lines Telegram refused three sweeps in a row.
+  try { const audit = await auditNotifyIssue(env); if (audit) out.push(audit); } catch { /* never fatal */ }
 
   // 13. The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10): cot_stale, liquidity_archive_stale,
   //     lens_at_floor (info, reported once).

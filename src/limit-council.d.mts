@@ -22,3 +22,5 @@ export function htfRoomReadings(db: unknown): Promise<Record<string, any>[]>;
 export function atr15m(env: unknown, options?: { now?: number }): Promise<number | null>;
 export function placeLimitRows(db: unknown, options?: { ids?: string[]; tickets?: number[] }): Promise<Record<string, any>[]>;
 export function runLimitCouncil(env: unknown, options?: Record<string, any>): Promise<Record<string, any>>;
+export const FIRST_COUNCIL_KEY: string;
+export function firstCouncilLine(env: unknown, options?: { choice?: string | null; rule?: string | null; reason?: string | null; side?: string | null; mode?: string | null; now?: number; send?: ((text: string) => Promise<unknown>) | null }): Promise<boolean>;

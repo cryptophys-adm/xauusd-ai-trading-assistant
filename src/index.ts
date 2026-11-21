@@ -217,6 +217,7 @@ import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTun
 import { applyRoomTuning, readRoomTuning, roomTuningMessage, roomTuningReport } from "./room-tuning.mjs";
 import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
 import { pushDoctrineFacts } from "./doctrine-facts.mjs";
+import { runAuditNotify } from "./change-notify.mjs";
 import { fetchEffectiveDoctrine } from "./doctrine-consumer.mjs";
 import { aetherSyncStatus } from "./aether-sync.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
@@ -1919,7 +1920,10 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return setAccountProfile(this.env, { account_ref: String(input?.account_ref ?? ""), action: String(input?.action ?? ""), value: input?.value ?? null, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
   }
   async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
-    return writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+    const result = await writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as JsonObject;
+    // The change audit on Telegram (src/change-notify.mjs): told at once, debounced per switch per minute.
+    if (result?.ok !== false) this.ctx.waitUntil(runAuditNotify(this.env).then(() => undefined, () => undefined));
+    return result;
   }
   async setConnection(input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; units_per_usd?: unknown; actor: string }): Promise<JsonObject> {
     const units = input?.units_per_usd == null || input.units_per_usd === "" ? null : Number(input.units_per_usd);
@@ -2803,6 +2807,11 @@ async function armBlocked(env: Env): Promise<string | null> {
 
 async function runLedgerStep(env: Env): Promise<void> {
   await runEaHeartbeatRelay(env);
+  // The change audit on Telegram (owner 2026-11-20): every change that affects trading, debounced per switch per minute.
+  try {
+    const audit = await runAuditNotify(env) as { status?: string };
+    if (audit?.status === "failed") console.log("audit_notify", JSON.stringify(audit));
+  } catch (e) { console.error("audit_notify_failed", e instanceof Error ? e.message : String(e)); }
   await runStrategyArmRelay(env);
   // The profile agent's evidence steps (docs/RFC_ACCOUNT_PROFILES.md phase 3): the loss streak and the upgrades,
   // then its risk_profile.v1 record to the platform (at most one report per 30 minutes).
@@ -3145,6 +3154,9 @@ export default {
       ctx.waitUntil(runPendingMacroRooms(env).then(m => {
         if (m.status !== "disabled" && m.status !== "idle") console.log("macro_room", JSON.stringify(m));
       }).catch(e => console.error("macro_room_failed", e instanceof Error ? e.message : String(e))));
+      // The change audit (src/change-notify.mjs) on every closed-market sweep: the ledger step sleeps while the market is
+      // closed, and a change held by its minute should not wait for the hourly heartbeat.
+      ctx.waitUntil(runAuditNotify(env).then(() => undefined, (e) => console.error("audit_notify_failed", e instanceof Error ? e.message : String(e))));
       if (idleHeartbeatDue(event.scheduledTime)) {
         ctx.waitUntil((async () => {
           try {
@@ -3157,6 +3169,13 @@ export default {
             const cot = await runCotStep(env, { allowBackfill: false });
             if (cot.status !== "fresh" && cot.status !== "not_due" && cot.status !== "backfill_pending") console.log("cot_reports", JSON.stringify(cot));
           } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
+          // The Knowledge Council's facts (src/doctrine-facts.mjs), hourly while the market is closed too: on 2026-11-21 the
+          // council of 03:52 UTC read an old build's facts (91 → 21) and amended the doctrine; the next council needs this
+          // build's facts, fresh (under 3 hours), before the Sunday reopen.
+          try {
+            const facts = await pushDoctrineFacts(env);
+            if (facts.status !== "ok" && facts.status !== "disabled") console.log("doctrine_facts", JSON.stringify(facts));
+          } catch (e) { console.error("doctrine_facts_failed", e instanceof Error ? e.message : String(e)); }
           await runHealthStep(env);
           console.log("sweep_idle", JSON.stringify({ at: new Date(event.scheduledTime || Date.now()).toISOString(), heartbeat: true }));
         })());

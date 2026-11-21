@@ -1,0 +1,13 @@
+export const AUDIT_NOTIFY_KEY: string;
+export const AUDIT_DEBOUNCE_MS: number;
+export const AUDIT_ACTIONS: Record<string, string>;
+export function actorLabel(actor: unknown): string;
+export function valueWords(key: string, v: unknown): string;
+export function auditSweep(state: unknown, rows: unknown[], options?: { now?: number; context?: Record<string, unknown> }): { state: Record<string, any>; lines: string[] };
+export function runAuditNotify(env: unknown, options?: { now?: number; send?: ((text: string) => Promise<unknown>) | null }): Promise<Record<string, unknown>>;
+export const TOLD_ELSEWHERE: readonly string[];
+export const NOT_A_CHANGE: readonly string[];
+export const AUDIT_FAILED_KEY: string;
+export const AUDIT_MAX_FAILS: number;
+export function telegramSend(env: unknown, text: string): Promise<boolean>;
+export function auditNotifyIssue(env: unknown): Promise<Record<string, unknown> | null>;

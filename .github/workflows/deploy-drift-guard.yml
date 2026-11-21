@@ -1,0 +1,61 @@
+name: Deploy drift guard
+
+# 2026-11-21: an old checkout outside CI uploaded an old build of the AI Worker twice (wrangler deploy from the owner's
+# trading VPS). Every 15 minutes: the live Worker must be a CI build of main with wrangler.jsonc's crons
+# (scripts/deploy-drift-check.mjs). A drift fails this run, which GitHub reports, and the guard re-runs
+# deploy-worker.yml on main (owner 2026-11-21: "Yes, auto-restore"). The repository variable DRIFT_AUTO_RESTORE set to
+# "off" turns the restore off and leaves the alert.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: deploy-drift-guard
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Skip while a deploy is running
+        id: busy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh run list --workflow deploy-worker.yml --status in_progress --json databaseId --jq 'length' || echo 0)
+          q=$(gh run list --workflow deploy-worker.yml --status queued --json databaseId --jq 'length' || echo 0)
+          echo "busy=$(( n + q ))" >> "$GITHUB_OUTPUT"
+      - name: Check the live Worker against main
+        id: drift
+        if: steps.busy.outputs.busy == '0'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/deploy-drift-check.mjs
+      - name: Restore main (unless DRIFT_AUTO_RESTORE=off)
+        # Only on a drift the check found (drift=true), never on an error of the check itself (an API outage), and not again
+        # when the last deploy-worker run of main's head already failed (a broken deploy is not redeployed every 15 minutes).
+        if: failure() && steps.drift.outputs.drift == 'true' && vars.DRIFT_AUTO_RESTORE != 'off'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(git rev-parse origin/main)
+          last=$(gh run list --workflow deploy-worker.yml --branch main --limit 1 --json headSha,conclusion --jq '.[0] | "\(.headSha) \(.conclusion)"' || echo "")
+          if [ "$last" = "$head failure" ]; then
+            echo "::error title=No restore::the last deploy-worker run of main's head ($head) failed; fix the deploy first"
+            exit 1
+          fi
+          gh workflow run deploy-worker.yml --ref main

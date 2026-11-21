@@ -247,6 +247,14 @@ export async function setControl(env, { mode, reason = "", actor = "" } = {}, { 
   } catch (error) {
     console.error("ea_control_audit_failed", error instanceof Error ? error.message : String(error));
   }
+  // The change audit on Telegram (owner 2026-11-20): a pause, kill or resume is told at once, beside its audit row.
+  if (previous.mode !== mode) {
+    try {
+      const { sendOmegaTelegram, escHtml } = await import("./omega-broker.mjs");
+      const { actorLabel } = await import("./change-notify.mjs");
+      await sendOmegaTelegram(env, escHtml(`XAUUSD SYSTEM · EA control ${previous.mode ?? "active"} → ${mode} by ${actorLabel(who)} · ${control.at.slice(11, 16)} UTC${why ? `\nReason: ${why}` : ""}`));
+    } catch { /* the audit row stands */ }
+  }
   return { ok: true, control, previous_mode: previous.mode };
 }
 
