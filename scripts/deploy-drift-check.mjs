@@ -24,7 +24,6 @@ export function driftProblems({ health, liveCrons = [], expectedCrons = [], onMa
   // The active deployment's message: deploy-worker.yml writes "commit <sha>"; both VPS uploads of 2026-11-21 had none.
   if (deployMessage !== undefined && !/^commit [0-9a-f]{40}$/.test(String(deployMessage ?? ""))) out.push(`the active deployment was not made by deploy-worker.yml (message ${JSON.stringify(deployMessage ?? null)})`);
   const commit = typeof health?.commit === "string" && /^[0-9a-f]{7,40}$/.test(health.commit) ? health.commit : null;
-  if (health?.status !== "ok") out.push(`health status ${JSON.stringify(health?.status ?? null)}`);
   if (!commit) out.push("the live Worker reports no commit: not a CI build (deploy-worker.yml sets DEPLOY_COMMIT)");
   else {
     if (!onMain(commit)) out.push(`the live commit ${commit} is not on main`);
@@ -62,6 +61,8 @@ async function main() {
   const onMain = (sha) => git("merge-base", "--is-ancestor", sha, "origin/main");
   const containsLast = (sha) => git("merge-base", "--is-ancestor", last, sha);
   const problems = driftProblems({ health, liveCrons, expectedCrons, onMain, containsLast, deployMessage });
+  // A degraded health of the right build is an alert, never a restore (a redeploy fixes nothing; orchestrator review).
+  if (health?.status !== "ok") console.log(`::warning title=Health::status ${JSON.stringify(health?.status ?? null)} (no restore: not a deploy drift)`);
   console.log(JSON.stringify({ deploy_message: deployMessage, live_commit: health?.commit ?? null, last_worker_commit: last.slice(0, 12), live_crons: liveCrons, expected_crons: expectedCrons, problems }, null, 2));
   if (problems.length) {
     console.log(`::error title=Deploy drift::${problems.join("; ")}`);

@@ -46,8 +46,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/deploy-drift-check.mjs
       - name: Restore main (unless DRIFT_AUTO_RESTORE=off)
-        # Only on a drift the check found (drift=true), never on an error of the check itself (an API outage).
+        # Only on a drift the check found (drift=true), never on an error of the check itself (an API outage), and not again
+        # when the last deploy-worker run of main's head already failed (a broken deploy is not redeployed every 15 minutes).
         if: failure() && steps.drift.outputs.drift == 'true' && vars.DRIFT_AUTO_RESTORE != 'off'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run deploy-worker.yml --ref main
+        run: |
+          head=$(git rev-parse origin/main)
+          last=$(gh run list --workflow deploy-worker.yml --branch main --limit 1 --json headSha,conclusion --jq '.[0] | "\(.headSha) \(.conclusion)"' || echo "")
+          if [ "$last" = "$head failure" ]; then
+            echo "::error title=No restore::the last deploy-worker run of main's head ($head) failed; fix the deploy first"
+            exit 1
+          fi
+          gh workflow run deploy-worker.yml --ref main

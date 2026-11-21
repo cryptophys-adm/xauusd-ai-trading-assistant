@@ -137,6 +137,7 @@ test("CA7 the deploy drift guard: no commit, an old commit, a missing cron", () 
   const ok = { status: "ok", commit: "7051492efcb0" };
   assert.deepEqual(driftProblems({ health: ok, liveCrons: crons, expectedCrons: crons }), []);
   // 2026-11-21 00:26: the old build.
+  assert.deepEqual(driftProblems({ health: { status: "degraded", commit: "7051492efcb0" }, liveCrons: crons, expectedCrons: crons }), [], "a degraded health of the right build is no drift (no restore)");
   const old = driftProblems({ health: { status: "ok" }, liveCrons: ["10-59/15 * * * *", "6 * * * *"], expectedCrons: crons });
   assert.deepEqual(old, ["the live Worker reports no commit: not a CI build (deploy-worker.yml sets DEPLOY_COMMIT)", "crons missing: 2-59/5 * * * *"]);
   assert.match(driftProblems({ health: ok, liveCrons: crons, expectedCrons: crons, containsLast: () => false })[0], /older than the last commit/);
