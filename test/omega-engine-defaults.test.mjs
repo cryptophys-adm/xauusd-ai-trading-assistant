@@ -29,6 +29,9 @@ test("ED3 the applied value is effectiveLimits' for every profile and setting", 
   for (const id of Object.keys(PROFILES)) {
     for (const v of [0.01, 0.5, 1, 2, 3, 5, 6, 8, 10, 20]) {
       const settings = { risk_pct: v, max_positions: Math.max(1, Math.round(v)), max_daily_loss_pct: v };
+      // Custom sets no cap of its own (the form shows its values as set); settingsFrom refuses a value above Aggressive's
+      // limits (ADR-0020 Amendment 10), so a Custom setting the form can save never exceeds what the engine applies.
+      if (id === "custom" && (settings.risk_pct > 10 || settings.max_positions > 3 || settings.max_daily_loss_pct > 10)) continue;
       const lim = effectiveLimits(id, settings);
       for (const [k, p] of pairs) assert.equal(appliedValue(settings[k], PROFILES[id][p]), lim[k], `${id} ${k} ${settings[k]}`);
     }

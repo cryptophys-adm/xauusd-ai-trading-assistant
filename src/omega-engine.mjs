@@ -20,7 +20,7 @@
 import { cellGateText } from "./htf-cells.mjs";
 import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
 import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
-import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES } from "./account-spec.mjs";
+import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES, CUSTOM_CAPS } from "./account-spec.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./liquidity-lens.mjs";
@@ -126,8 +126,9 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
     return null;
   };
   const err = num("risk_pct", 0.01, RISK_PCT_MAX)
-    ?? num("max_positions", 1, 5, { integer: true })
-    ?? num("max_daily_loss_pct", 0.1, 20)
+    // At most Aggressive's limits (ADR-0020 Amendment 10): no profile, Custom included, allows more.
+    ?? num("max_positions", 1, CUSTOM_CAPS.max_positions, { integer: true })
+    ?? num("max_daily_loss_pct", 0.1, CUSTOM_CAPS.daily_loss_pct)
     ?? num("max_spread_points", 1, 1000)
     ?? num("max_signal_age_ms", 60_000, 60 * 60_000, { integer: true })
     ?? num("trailing_stop_r", 0, 5)
@@ -977,7 +978,7 @@ export function limitActionIntents({ orders = [], sym = {}, actions = [], entryO
  * Pure: the hard guard a just-filled Omega limit breaches, or null (RFC §5, the deterministic backstop at fill): the
  * broker's tick value, the symbol's volume_min and volume_max, the profile's hard cap per trade and total open risk, and
  * the daily risk budget including this position's risk at its stop. `others` are the other positions, `pending` the
- * pending orders still resting, `limits` the profile's (effectiveLimits; null for Custom), `lossFloor` the day's floor.
+ * pending orders still resting, `limits` the profile's (effectiveLimits; Custom within CUSTOM_CAPS), `lossFloor` the day's floor.
  */
 export function fillGuard({ position: p, others = [], pending = [], sym = {}, account = {}, limits = null, lossFloor = null, probation = false, riskScale = 0.5 }) {
   if (typeof sym.tick_value_problem === "string" && sym.tick_value_problem !== "") return "tick_value_mismatch";
@@ -1013,9 +1014,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // The liquidity lens off (the owner's switch): its fields on the signal are read as absent (no gate, deferral or level).
   if (S.liquidity_enabled === false && signal?.liquidity_on === true) signal = { ...signal, liquidity_on: false };
   // Account Profiles phase 2 (docs/RFC_ACCOUNT_PROFILES.md §3-4): new entries are sized within the account's profile.
-  // Each limit is the smaller of the profile's cap and the setting; Custom keeps the settings as they are.
+  // Each limit is the smaller of the profile's cap and the setting; Custom keeps the settings within Aggressive's limits
+  // (ADR-0020 Amendment 10, CUSTOM_CAPS).
   const profileLimits = typeof accountSpec?.profile === "string" ? effectiveLimits(accountSpec.profile, S) : null;
-  if (profileLimits && profileLimits.profile !== "custom") {
+  if (profileLimits) {
     if (finite(profileLimits.risk_pct)) S.risk_pct = profileLimits.risk_pct;
     if (Number.isInteger(profileLimits.max_positions)) S.max_positions = profileLimits.max_positions;
     if (finite(profileLimits.max_daily_loss_pct)) S.max_daily_loss_pct = profileLimits.max_daily_loss_pct;

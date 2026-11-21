@@ -54,7 +54,7 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
   if (mode === "paused") return "paused";
   if (blackout) return "blackout";
   const lim = typeof profile === "string" ? effectiveLimits(profile, settings) : null;
-  const lossPct = lim && lim.profile !== "custom" && finite(lim.max_daily_loss_pct) ? lim.max_daily_loss_pct : Number(settings.max_daily_loss_pct);
+  const lossPct = lim && finite(lim.max_daily_loss_pct) ? lim.max_daily_loss_pct : Number(settings.max_daily_loss_pct);
   if (finite(equity) && finite(dayStart) && dayStart > 0 && finite(lossPct) && equity <= dayStart * (1 - lossPct / 100)) return "daily_loss_limit";
   const was = PROFILE_RANK[pending.profile], is = PROFILE_RANK[profile];
   if (was != null && is != null && is < was) return "profile_downgrade";
