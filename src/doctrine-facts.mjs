@@ -15,7 +15,8 @@ import { ACTIVATION_COOLDOWN_DAYS, ROLLBACK_MIN_ROOMS } from "./weighting.mjs";
 import { DEFAULT_POLICY } from "./parity-registry.mjs";
 import { blackoutWindow } from "./ea-signal.mjs";
 import { OMEGA_DEFAULTS, RISK_PCT_MAX, ROLLOVER_QUARANTINE_UTC } from "./omega-engine.mjs";
-import { readSettings } from "./omega-broker.mjs";
+import { readSettings, connectedAccount } from "./omega-broker.mjs";
+import { PROFILES, PROFILE_IDS, effectiveLimits, readAccounts } from "./account-spec.mjs";
 import { activeWitnessTuning, tuningFrozen } from "./witness-tuning.mjs";
 import { activeRoom, roomTuningFrozen, ROOM_MIN, ROOM_MAX, ROOM_MODES } from "./room-tuning.mjs";
 
@@ -130,8 +131,41 @@ export async function omegaFacts(env) {
     "omega.live_arm_required": true,
     // The strategy arm (RFC §10, owner 2026-11-17): live → an entry needs an armed strategy or the AUTO pick.
     "omega.strategy_arm_required": strategyArmMode(env) === "live",
-    "omega.max_armed_strategies": ARM_MAX
+    "omega.max_armed_strategies": ARM_MAX,
+    ...(await profileFacts(env, settings))
   };
+}
+
+/**
+ * ADR-0020 Amendment 10: the doctrine bounds risk per profile. Per profile the limits an entry is sized within under the
+ * settings in force (`omega.risk_pct_<profile>`, `omega.max_daily_loss_pct_<profile>`, `omega.max_positions_<profile>`,
+ * effectiveLimits), the account's profile (`omega.profile`) and the limits in force for it (`omega.effective_*`). The
+ * account is the one the last bridge state names, else the one seen last; with no account seen the profile and
+ * effective facts are left out. Never the account reference.
+ */
+export async function profileFacts(env, settings) {
+  const out = {};
+  for (const id of PROFILE_IDS) {
+    const lim = effectiveLimits(id, settings);
+    out[`omega.risk_pct_${id}`] = lim.risk_pct;
+    out[`omega.max_daily_loss_pct_${id}`] = lim.max_daily_loss_pct;
+    out[`omega.max_positions_${id}`] = lim.max_positions;
+  }
+  try {
+    if (!env?.DB) return out;
+    const accounts = await readAccounts(env.DB);
+    let state = null;
+    try { state = JSON.parse((await env.DB.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state ?? "null"); } catch { state = null; }
+    const acct = (state ? await connectedAccount(accounts, state) : null)
+      ?? [...accounts].sort((a, b) => Number(b.last_seen_ms ?? 0) - Number(a.last_seen_ms ?? 0))[0] ?? null;
+    if (!acct || !PROFILES[acct.profile]) return out;
+    const lim = effectiveLimits(acct.profile, settings);
+    out["omega.profile"] = acct.profile;
+    out["omega.effective_risk_pct"] = lim.risk_pct;
+    out["omega.effective_max_daily_loss_pct"] = lim.max_daily_loss_pct;
+    out["omega.effective_max_positions"] = lim.max_positions;
+  } catch { /* the per-profile facts stand without the account */ }
+  return out;
 }
 
 /** The facts report of both seats, tagged with this Worker's deployed version. */

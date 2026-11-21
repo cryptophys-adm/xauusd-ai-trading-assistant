@@ -44,7 +44,7 @@ Omega must serve accounts from **USD 100**, with at most **10%** risk, and the S
 | Safe | 1% | 2% | 2% | 3% | 1 | swing, intraday |
 | Conservative | 2–3% | 5% | 5% | 6% | 2 | intraday, swing; scalp only if proven |
 | Aggressive | 5% | 10% | 10% | 10% | 2–3 | all, scalp if proven |
-| Custom | the account's own settings (live account: 2% / — / — / 10% / 5) | as set | as set | as set | as set | as set |
+| Custom | the account's own settings, at most Aggressive's (ADR-0020 Amendment 10, 2026-11-21: 10% / — / 10% / 10% / 3) | as set | as set | as set | as set | as set |
 
 - **Safe** with nothing that fits: the account runs as **signals only plus an automatic paper-trade record**, so a USD 100 user still has Nexus and Telegram signals and the council.
 - **Profiles change size, never signal quality.** The Decision Engine's gates (confidence, guardrails, veto) are the same for every profile.
@@ -139,7 +139,11 @@ owner clicks only; downgrades may run. The gates, for phase 3:
 
 - **Limits.** `effectiveLimits(profile, settings)`: each limit (risk per trade, positions, daily loss) is the smaller of
   the profile's cap and the engine setting, so the Aether policy only tightens inside the profile. Custom is the
-  settings unchanged: the live account sizes exactly as before (test AS14).
+  settings within Aggressive's limits (ADR-0020 Amendment 10, owner 2026-11-21: "Ya, Custom = Aggressive";
+  `CUSTOM_CAPS`: 10% risk per trade, 10% daily loss, 3 positions); a Custom setting inside them sizes exactly as before
+  (test AS14). Custom also takes Aggressive's 10% total open risk at the stops (owner 2026-11-21: "Ya, tambahkan"; it
+  only ever refuses an entry) and still has no hard cap per trade. The settings themselves may not exceed
+  those limits (`settingsFrom`: positions 1 to 3, daily loss 0.1 to 10%), since no profile allows more.
 - **Minimum lot.** Below `volume_min` the minimum lot is used only when its real risk is within the profile's hard cap
   per trade (`min_lot_within_cap`); otherwise the setup is skipped (`volume_below_min`) with the numbers, e.g. "stop
   500 pts: the minimum lot 0.01 risks 5% of 100, over the Safe cap of 2%". Custom has no hard cap and skips as before.

@@ -82,3 +82,30 @@ test("audit fix: the trade honours its trading mode's reward threshold (scalp 1.
   assert.equal(intraday.stance, "WAIT");
   assert.match(intraday.overruled.failed[0].detail, /1\.5R/);
 });
+
+test("ADR-0020 Amendment 10: the limits per profile under the settings in force, the account's profile and its limits in force", async () => {
+  const accounts = [
+    { account_ref: "acct_aaaaaaaaaaaaaaaa", profile: "conservative", ceiling: "aggressive", last_seen_ms: 5, created_ms: 1 },
+    { account_ref: "acct_bbbbbbbbbbbbbbbb", profile: "custom", ceiling: "custom", last_seen_ms: 9, created_ms: 2 }
+  ];
+  const settings = { risk_pct: 3, max_positions: 2, max_daily_loss_pct: 6 };
+  const dbWith = (state) => ({
+    prepare: (sql) => ({
+      bind: () => ({ first: async () => null, run: async () => ({}) }),
+      run: async () => ({}),
+      all: async () => ({ results: /FROM omega_accounts/.test(sql) ? accounts : [] }),
+      first: async () => (/omega_settings/.test(sql) ? { settings: JSON.stringify(settings), version: 4 } : /FROM omega_bridge/.test(sql) ? { state: state ? JSON.stringify(state) : null } : null)
+    })
+  });
+  const o = (await doctrineFacts({ DB: dbWith({ server: "x", account_ref: "acct_aaaaaaaaaaaaaaaa", connected: true }) })).seats.omega.facts;
+  assert.deepEqual(["safe", "conservative", "aggressive", "custom"].map((p) => [o[`omega.risk_pct_${p}`], o[`omega.max_daily_loss_pct_${p}`], o[`omega.max_positions_${p}`]]),
+    [[1, 3, 1], [2, 6, 2], [3, 6, 2], [3, 6, 2]], "each profile: the smaller of its cap and the setting");
+  assert.deepEqual([o["omega.profile"], o["omega.effective_risk_pct"], o["omega.effective_max_daily_loss_pct"], o["omega.effective_max_positions"]], ["conservative", 2, 6, 2], "the connected account");
+  assert.deepEqual([o["omega.risk_pct"], o["omega.max_daily_loss_pct"], o["omega.max_positions"]], [3, 6, 2], "the single facts stay, as information");
+  const idle = (await doctrineFacts({ DB: dbWith(null) })).seats.omega.facts;
+  assert.equal(idle["omega.profile"], "custom", "no bridge state: the account seen last");
+  assert.doesNotMatch(JSON.stringify(idle), /acct_/, "never the account reference");
+  const none = (await doctrineFacts({})).seats.omega.facts;
+  assert.equal(none["omega.profile"], undefined, "no account seen: no profile fact");
+  assert.equal(none["omega.risk_pct_safe"], 0.5, "the per-profile facts stand on the defaults");
+});

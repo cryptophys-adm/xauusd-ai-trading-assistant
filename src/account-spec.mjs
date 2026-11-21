@@ -34,6 +34,12 @@ export const PROFILES = Object.freeze({
   custom: Object.freeze({ label: "Custom", target_risk_pct: null, hard_cap_pct: null, open_risk_pct: null, daily_loss_pct: null, max_positions: null, modes: null })
 });
 export const PROFILE_IDS = Object.freeze(Object.keys(PROFILES));
+// ADR-0020 Amendment 10 (owner 2026-11-21: "Ya, Custom = Aggressive"): Custom keeps the account's own settings but no
+// further than Aggressive's limits: 10 % risk per trade, 10 % daily loss and 3 positions (the highest values a setting may
+// take, settingsFrom, since no profile allows more), and Aggressive's 10 % total open risk at the stops (owner
+// 2026-11-21: "Ya, tambahkan"; it only ever refuses an entry). Custom gets no hard cap per trade: a hard cap would let
+// the minimum lot through up to 10 % (omega-engine, min_lot_within_cap), which is looser than the setting.
+export const CUSTOM_CAPS = Object.freeze({ risk_pct: PROFILES.aggressive.hard_cap_pct, daily_loss_pct: PROFILES.aggressive.daily_loss_pct, max_positions: PROFILES.aggressive.max_positions, open_risk_pct: PROFILES.aggressive.open_risk_pct });
 export const AGENT_MODES = Object.freeze(["approval", "autonomous"]);
 
 const SCHEMA_SQL = [
@@ -168,7 +174,8 @@ export function specProblem(executor) {
 /**
  * Pure (phase 2, RFC §3-4): the limits new entries are sized within. The profile's caps are the outer bound and the
  * engine settings (the owner's, or the Aether policy inside OMEGA_POLICY_BOUNDS) may only tighten inside them, so each
- * limit is the smaller of the two. Custom is the account's own settings, unchanged (the live account sizes as today).
+ * limit is the smaller of the two. Custom is the account's own settings within CUSTOM_CAPS (ADR-0020 Amendment 10:
+ * Aggressive's 10 % / 10 % / 3 and its 10 % total open risk), with no hard cap per trade (as before).
  * Returns { profile, risk_pct, max_positions, max_daily_loss_pct, hard_cap_pct, open_risk_pct }; a cap the profile does
  * not set is null.
  */
@@ -177,7 +184,9 @@ export function effectiveLimits(profile, settings = {}) {
   const id = PROFILES[profile] ? profile : "safe";
   const min = (a, b) => (finite(a) && finite(b) ? Math.min(a, b) : finite(a) ? a : finite(b) ? b : null);
   if (id === "custom") {
-    return { profile: id, risk_pct: settings.risk_pct ?? null, max_positions: settings.max_positions ?? null, max_daily_loss_pct: settings.max_daily_loss_pct ?? null, hard_cap_pct: null, open_risk_pct: null };
+    // A setting that is absent stays absent (null): the cap never stands in for a value the account did not set.
+    const C = CUSTOM_CAPS, within = (v, cap) => (finite(v) ? Math.min(v, cap) : null);
+    return { profile: id, risk_pct: within(settings.risk_pct, C.risk_pct), max_positions: within(settings.max_positions, C.max_positions), max_daily_loss_pct: within(settings.max_daily_loss_pct, C.daily_loss_pct), hard_cap_pct: null, open_risk_pct: C.open_risk_pct };
   }
   return {
     profile: id,
