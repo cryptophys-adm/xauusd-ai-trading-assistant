@@ -2,8 +2,9 @@ name: Deploy drift guard
 
 # 2026-11-21: an old checkout outside CI uploaded an old build of the AI Worker twice (wrangler deploy from the owner's
 # trading VPS). Every 15 minutes: the live Worker must be a CI build of main with wrangler.jsonc's crons
-# (scripts/deploy-drift-check.mjs). A drift fails this run, which GitHub reports. With the repository variable
-# DRIFT_AUTO_RESTORE set to "on" (the owner's choice; off by default), the guard re-runs deploy-worker.yml on main.
+# (scripts/deploy-drift-check.mjs). A drift fails this run, which GitHub reports, and the guard re-runs
+# deploy-worker.yml on main (owner 2026-11-21: "Yes, auto-restore"). The repository variable DRIFT_AUTO_RESTORE set to
+# "off" turns the restore off and leaves the alert.
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -44,8 +45,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/deploy-drift-check.mjs
-      - name: Restore main (DRIFT_AUTO_RESTORE=on only)
-        if: failure() && steps.drift.outcome == 'failure' && vars.DRIFT_AUTO_RESTORE == 'on'
+      - name: Restore main (unless DRIFT_AUTO_RESTORE=off)
+        # Only on a drift the check found (drift=true), never on an error of the check itself (an API outage).
+        if: failure() && steps.drift.outputs.drift == 'true' && vars.DRIFT_AUTO_RESTORE != 'off'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run deploy-worker.yml --ref main

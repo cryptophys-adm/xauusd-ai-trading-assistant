@@ -2,9 +2,9 @@
 // AI Worker twice with `wrangler deploy`, outside CI; the 5-minute ledger cron, the owner-only arm gate and 30 bindings
 // were gone for 14 hours). Run by .github/workflows/deploy-drift-guard.yml every 15 minutes: the live Worker must be a
 // build of main (its /health commit is on main and not older than the last commit that touched the Worker), with the
-// crons of wrangler.jsonc. A drift fails the run, which GitHub reports; with the repository variable
-// DRIFT_AUTO_RESTORE=on the workflow then re-runs deploy-worker.yml on main.
-import { readFileSync } from "node:fs";
+// crons of wrangler.jsonc. A drift fails the run, which GitHub reports, and the workflow re-runs deploy-worker.yml on
+// main (owner 2026-11-21: "Yes, auto-restore"; the repository variable DRIFT_AUTO_RESTORE=off leaves the alert only).
+import { readFileSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 /** Pure: the crons wrangler.jsonc declares (comments stripped). */
@@ -61,6 +61,8 @@ async function main() {
   console.log(JSON.stringify({ live_commit: health?.commit ?? null, last_worker_commit: last.slice(0, 12), live_crons: liveCrons, expected_crons: expectedCrons, problems }, null, 2));
   if (problems.length) {
     console.log(`::error title=Deploy drift::${problems.join("; ")}`);
+    // Only a drift found sets drift=true: the workflow restores main on that alone, never on an error of the check.
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "drift=true\n");
     process.exitCode = 1;
   }
 }
