@@ -1,5 +1,5 @@
 // HAIC H3f, minimal (platform docs/design/HAIC-H3.md §4, §7.2, §7.4): the correction.v1 contract against the shared
-// fixtures (copied verbatim from cryptophys-cloud-platform docs/contracts/correction-v1 at 62e5167), and the recorder
+// fixtures (copied verbatim from cryptophys-cloud-platform docs/contracts/correction-v1 at 72fcbe0), and the recorder
 // behind its off switch: the original stays here, the masked record goes to the kernel as nexus-teacher.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -161,7 +161,7 @@ test("OC7 nothing that leaves carries a price or a secret: the raw category is m
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "SL at 4095.5" }), ["category_raw_carries_price"]);
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "Bearer abcdefghijklmnopqrstuvwxyz" }), ["category_raw_carries_secret"]);
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "x".repeat(CATEGORY_RAW_MAX + 1) }), ["category_raw"]);
-  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "  " }), ["category_raw"]);
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "  " }), [], "no blank rule: one contract with the platform");
   assert.deepEqual(payloadLeaks({ text: "the 4,095 level", evidence_refs: ["ev:xauusd/card/d:15:1795211100000:0"], target: { ref: "ev:xauusd/card/d:15:1795211100000:0" } }), ["text"]);
   resetOwnerCorrectionsSchemaForTests();
   const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => ({ outcome: "succeeded", result: {} }) } };
