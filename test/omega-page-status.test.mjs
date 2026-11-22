@@ -45,6 +45,22 @@ test("the Omega page reads the status like the Nexus header: validated, the reas
   assert.equal(page.readStatus(null), null);
 });
 
+test("before xauusd #516 is live, the kill console still shows a kill, a pause and the account, from the overview", () => {
+  const old = { connected: true, armed: true, broker: "Broker Ltd", positions: 1 }; // ./api/status without the #516 fields
+  const cellOf = (s, o) => page.omegaCell(page.withOverview(page.readStatus(s), o));
+  assert.equal(cellOf(old, { control: { mode: "killed", reason: "owner" } }).code, "KILLED");
+  assert.equal(cellOf(old, { control: { mode: "paused", reason: "news" } }).code, "PAUSED");
+  const env = cellOf(old, { control: { mode: "active" }, signal: { kill: true, kill_source: "env" } });
+  assert.deepEqual([env.code, env.title], ["KILLED", "Omega killed (env_kill_switch)"], "an env kill reaches the overview as signal.kill");
+  assert.equal(cellOf(old, { control: { mode: "active" }, heartbeat: { mode: "demo" } }).code, "ARMED", "a demo account needs no live arm");
+  assert.equal(cellOf(old, { control: { mode: "active" }, heartbeat: { mode: "live" } }).code, "ON", "live there means a real account");
+  assert.equal(cellOf(old, { control: { mode: "active" }, broker: { bridge: { trade_mode: "real" } }, heartbeat: { mode: "demo" } }).code, "ON", "the bridge's trade mode first");
+  assert.equal(page.omegaCell(page.withOverview(null, { control: { mode: "killed" } })).code, "KILLED", "an unreadable status never hides a kill");
+  assert.equal(page.omegaCell(page.withOverview(null, { control: { mode: "active" } })).code, "—");
+  const full = page.readStatus({ ...old, control_mode: "active", account_mode: "real", live_armed: true });
+  assert.equal(page.omegaCell(page.withOverview(full, { control: { mode: "killed" } })).code, "ARMED", "with the #516 fields the status wins");
+});
+
 test("the Omega page's EA cell: the heartbeat age, or OFF in red", () => {
   assert.deepEqual([page.eaCell({ connected: true, heartbeat_age_ms: 14_000 }).detail, page.eaCell({ connected: true, heartbeat_age_ms: 14_000 }).tone], ["14s", "ok"]);
   assert.deepEqual([page.eaCell({ connected: false, heartbeat_age_ms: 600_000 }).detail, page.eaCell({ connected: false }).tone], ["OFF 10m", "fault"]);

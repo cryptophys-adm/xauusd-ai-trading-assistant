@@ -43,6 +43,32 @@ export function readStatus(d) {
   };
 }
 
+/**
+ * Fills what an older Omega's ./api/status lacks (before xauusd #516: control_mode, account_mode) from the overview
+ * this page already reads, so the kill console shows KILLED and PAUSED in either deploy order (review of #517).
+ * An env kill (EA_SIGNALS_ENABLED false) reaches the overview as signal.kill with kill_source "env".
+ */
+export function withOverview(status, o) {
+  if (!o) return status;
+  const killed = o.signal?.kill === true;
+  const mode = killed ? "killed" : ["active", "paused", "killed"].includes(o.control?.mode) ? o.control.mode : null;
+  const reason = killed ? (o.signal?.kill_source === "env" ? "env_kill_switch" : o.signal?.kill_source || o.control?.reason || null) : o.control?.reason || null;
+  const ACCOUNT = { real: "real", live: "real", demo: "demo", contest: "contest" };
+  const account = ACCOUNT[o.broker?.bridge?.trade_mode] ?? ACCOUNT[o.heartbeat?.mode] ?? null;
+  if (!status) {
+    // Status unreadable: still show a kill or a pause, never hide it behind a dash.
+    return mode === "killed" || mode === "paused"
+      ? { connected: false, armed: false, broker: null, positions: 0, live_armed: null, control_mode: mode, control_reason: reason ? String(reason).slice(0, 60) : null, limit_fault: null, account_mode: account, engine_enabled: null }
+      : null;
+  }
+  return {
+    ...status,
+    control_mode: status.control_mode ?? mode,
+    control_reason: status.control_mode ? status.control_reason : (reason ? String(reason).slice(0, 60) : null),
+    account_mode: status.account_mode ?? account
+  };
+}
+
 /** The EA cell from the overview: its heartbeat age, or OFF. */
 export function eaCell(ea) {
   if (!ea) return { code: "EA", detail: "—", tone: "off", title: "EA status not read yet" };

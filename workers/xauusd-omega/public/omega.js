@@ -3,7 +3,7 @@
 // only (CSP script-src 'self'); every URL is relative so the page works at omega.cryptophys.work/ and
 // at nexus.cryptophys.work/omega/. The only absolute URLs are two plain links to Nexus in index.html.
 import { buildEnvelope } from "./omega-crypto.js";
-import { clockParts, eaCell, omegaCell, readStatus } from "./omega-status.js";
+import { clockParts, eaCell, omegaCell, readStatus, withOverview } from "./omega-status.js";
 
 const POLL_MS = 15_000;
 let viewer = { can_control: false };
@@ -104,6 +104,7 @@ function render(o) {
 // ---------------------------------------------------------------- status strip (same codes as the Nexus header)
 
 let lastStatus = null;   // the Omega cell's read (./api/status), null when unreadable
+let lastOverview = null; // the last overview read, to fill what an older status lacks
 let lastEa = null;       // the overview's ea block
 const TONE = { ok: "t-ok", late: "t-late", fault: "t-fault", off: "t-off" };
 function cell(label, code, detail, tone, title, filled = true, extra = null) {
@@ -111,18 +112,22 @@ function cell(label, code, detail, tone, title, filled = true, extra = null) {
     el("span", { class: "k" }, label), el("span", { class: `sdot${filled ? "" : " hollow"}`, "aria-hidden": "true" }),
     el("span", { class: "code" }, code), detail ? el("span", { class: "v" }, detail) : null, extra);
 }
-function renderStrip() {
-  const o = omegaCell(lastStatus);
-  const ea = eaCell(lastEa);
+function clockCell() {
   const t = clockParts(new Date());
+  return el("span", { class: "cell clock", id: "clock", title: `${t.utc} UTC, ${t.local} ${t.zone}` },
+      el("span", { class: "now long" }, t.utc), el("span", { class: "now short" }, `${t.utcShort}Z`), el("span", { class: "k long" }, "UTC"),
+      el("span", { class: "v" }, t.local), el("span", { class: "k long" }, t.zone));
+}
+function tick() { document.getElementById("clock")?.replaceWith(clockCell()); }
+function renderStrip() {
+  const o = omegaCell(withOverview(lastStatus, lastOverview));
+  const ea = eaCell(lastEa);
   document.getElementById("status").replaceChildren(
     cell(el("span", {}, el("span", { class: "long" }, "Omega"), el("span", { class: "short" }, "Ω")), o.code,
       o.positions != null ? el("span", {}, String(o.positions), el("span", { class: "long" }, " pos")) : null, o.tone, o.title, o.filled,
       o.broker ? el("span", { class: "v dimmer" }, o.broker) : null),
     cell("EA", ea.detail ?? "—", null, ea.tone, ea.title),
-    el("span", { class: "cell clock", title: `${t.utc} UTC, ${t.local} ${t.zone}` },
-      el("span", { class: "now long" }, t.utc), el("span", { class: "now short" }, `${t.utcShort}Z`), el("span", { class: "k long" }, "UTC"),
-      el("span", { class: "v" }, t.local), el("span", { class: "k long" }, t.zone))
+    clockCell()
   );
 }
 
@@ -271,6 +276,7 @@ async function load() {
   lastStatus = status.status === "fulfilled" ? readStatus(status.value) : null;
   const banner = document.getElementById("load-error");
   if (overview.status === "fulfilled") {
+    lastOverview = overview.value;
     render(overview.value);
     lastGood = Date.now();
     banner.hidden = true;
@@ -367,5 +373,5 @@ document.addEventListener("DOMContentLoaded", () => {
   load();
   setInterval(() => { if (document.visibilityState === "visible") load(); }, POLL_MS);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load(); });
-  setInterval(renderStrip, 1000);
+  setInterval(tick, 1000);
 });
