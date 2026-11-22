@@ -11,7 +11,9 @@ export class ApiError extends Error {
   readonly route: string;
   readonly status: number;
   readonly code: string | null;
-  constructor(path: string, status: number, code?: string | null) {
+  /** The failed response's `Date` (server ms; fourth review of #520), null when it had none or never answered. */
+  readonly date: number | null;
+  constructor(path: string, status: number, code?: string | null, date: number | null = null) {
     const route = path.split("?")[0];
     const c = code ? String(code).slice(0, CODE_MAX) : null;
     super(`${route} ${status ? status : "net"}${c ? ` ${c}` : ""}`);
@@ -20,6 +22,7 @@ export class ApiError extends Error {
     this.route = route;
     this.status = status;
     this.code = c;
+    this.date = date;
   }
 }
 
@@ -54,17 +57,48 @@ export function cacheOf(path: string, opts: GetOptions = {}): RequestCache {
  * A failure throws an ApiError (above).
  */
 export async function get<T = any>(path: string, opts: GetOptions = {}): Promise<T> {
+  return (await fetchJson<T>(path, cacheOf(path, opts))).data;
+}
+
+/** A read's answer with its response's `Date` (server ms, whole seconds; null when the response had none). */
+export type Dated<T = any> = { data: T; date: number | null };
+
+/** Whether a path is on this origin: one leading slash ("/api/…"), never "//host" or a URL. */
+export const sameOrigin = (path: string): boolean => /^\/(?!\/)/.test(path) && !path.includes("\\");
+
+/**
+ * A poll or retry read with its response's `Date` (fourth review of #520), for the server clock that ages a hub
+ * replay (pollState.ts serverClock). Two rules keep that clock true:
+ * - same-origin only: `Date` is not a CORS-safelisted response header, so it is readable only on this origin's
+ *   /api/* (another origin throws before any request);
+ * - always no-store: a cached response carries the cache's Date, so a cache hit would move the offset.
+ * A failed read's ApiError carries its Date too (a 502 is still the server's clock).
+ */
+export async function getDated<T = any>(path: string): Promise<Dated<T>> {
+  if (!sameOrigin(path)) throw new ApiError(path, 0, "cross_origin");
+  return fetchJson<T>(path, "no-store");
+}
+
+async function fetchJson<T>(path: string, cache: RequestCache): Promise<Dated<T>> {
   let r: Response;
   try {
-    r = await fetch(path, { headers: { accept: "application/json" }, cache: cacheOf(path, opts) });
+    r = await fetch(path, { headers: { accept: "application/json" }, cache });
   } catch {
     throw new ApiError(path, 0, null);
   }
+  const date = httpDate(r.headers.get("date"));
   const body = await r.json().catch(() => null);
-  if (r.status === 404 && body && body.status === "not_found") return body as T;
+  if (r.status === 404 && body && body.status === "not_found") return { data: body as T, date };
   if (!r.ok) {
     const code = body && typeof body === "object" ? (typeof body.error === "string" ? body.error : typeof body.status === "string" ? body.status : null) : null;
-    throw new ApiError(path, r.status, code);
+    throw new ApiError(path, r.status, code, date);
   }
-  return body as T;
+  return { data: body as T, date };
+}
+
+/** A `Date` header as ms, null when missing or not a date (api.ts imports nothing, so Node tests run it). */
+function httpDate(v: string | null): number | null {
+  if (!v) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
 }

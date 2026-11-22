@@ -80,7 +80,8 @@ export default function PriceChart() {
   // never holds an old plan at full strength; the tick only re-renders.
   const [, setClock] = useState(0);
   useEffect(() => { const t = window.setInterval(() => setClock((n) => n + 1), 30_000); return () => window.clearInterval(t); }, []);
-  const mark = planMark({ hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, intervalMs: decisionPoll.intervalMs }, localNow());
+  // Fourth review: a hub replay's plan is aged by its server-aged time (replayAt), hidden while of unknown age.
+  const mark = planMark({ hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, replayed: decisionPoll.replayed, replayAt: decisionPoll.replayAt, intervalMs: decisionPoll.intervalMs }, localNow());
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
 
   // Synchronize chart timeframe with active War Room tab unless unlinked by user.
@@ -333,7 +334,8 @@ export default function PriceChart() {
 
   // The note only when something was dropped: a clear decision's plan, or the zones.
   const planHidden = !mark.show && ((showPlan && !!strategy?.plan && (strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL")) || (showZones && (strategy?.key_levels?.candidates?.length ?? 0) > 0));
-  const staleTitle = decisionPoll.error ? `${decisionPoll.error} · the decision's plan and zones are older than 2h` : "the decision's plan and zones are older than 2h";
+  const hiddenWhy = decisionPoll.replayed && decisionPoll.replayAt == null ? "the decision is a hub replay of unknown age (no read has answered yet)" : "the decision's plan and zones are older than 2h";
+  const staleTitle = decisionPoll.error ? `${decisionPoll.error} · ${hiddenWhy}` : hiddenWhy;
   const up = (head.change ?? 0) >= 0;
   const chip = (on: boolean) => clsx("rounded-md border px-2 py-1 text-[11px] font-semibold transition shrink-0", on ? "border-violet-400/40 bg-violet-400/10 text-violet-100" : "border-white/10 text-slate-500 hover:text-white");
   const fibNext: Record<Layers["fib"], Layers["fib"]> = { auto: "on", on: "off", off: "auto" };

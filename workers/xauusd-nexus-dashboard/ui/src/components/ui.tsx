@@ -4,7 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { CHIP, FILL, T, type Tone } from "../lib/tokens";
 import type { Poll } from "../lib/usePoll";
-import { localClock, localNow, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, wallOf, type PollPhase } from "../lib/pollState";
+import { ageBase, localClock, localNow, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, wallOf, type PollPhase } from "../lib/pollState";
 
 /**
  * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
@@ -19,9 +19,12 @@ export function Hint({ text, className }: { text: string; className?: string }) 
   );
 }
 
-/** The state a poll puts its panel in, now (its times are on the steady local clock, localNow). */
+/**
+ * The state a poll puts its panel in, now (its times are on the steady local clock, localNow). A hub replay on screen
+ * is aged by its server-aged time, and is stale while of unknown age (fourth review of #520: ageBase).
+ */
 export function phaseOf(poll: Poll): PollPhase {
-  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs }, localNow());
+  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs, replayed: poll.replayed, replayAt: poll.replayAt }, localNow());
 }
 
 /**
@@ -59,7 +62,7 @@ function useNow(ms: number) {
 }
 
 /** A poll's times as the wall clock reads them now (wallOf), for the clock times on screen; ages stay local. */
-const shownTimes = (poll: Poll): Poll => ({ ...poll, lastOk: wallOf(poll.lastOk), lastFail: wallOf(poll.lastFail) });
+const shownTimes = (poll: Poll): Poll => ({ ...poll, lastOk: wallOf(poll.lastOk), lastFail: wallOf(poll.lastFail), replayAt: wallOf(poll.replayAt ?? null) });
 
 const tagText = "mono whitespace-nowrap text-[11px]";
 const tagChip = "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5";
@@ -70,7 +73,7 @@ function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: Po
     return <span className={clsx(tagText, tagChip, "border-fault-fill/35 bg-fault-fill/10 text-fault")} title={`${poll.error} · retry ${retryEvery(poll.intervalMs)}`}><Dot tone="fault" />error</span>;
   }
   if (phase === "live") {
-    const ok = wallOf(poll.lastOk);
+    const ok = wallOf(ageBase(poll));
     if (ok == null) return null;
     return (
       <span className={clsx(tagText, "inline-flex items-center gap-1.5 text-fg-2")} title={`updated ${utcClock(ok)} UTC · ${localClock(ok)} local`} aria-label={`Live, updated ${utcClock(ok, false)} UTC`}>
@@ -84,11 +87,13 @@ function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: Po
 /** Stale: the chip (a button: on a phone it opens the detail line), the last good read, and Retry now. */
 function StaleTag({ poll, open, onToggle, retry }: { poll: Poll; open: boolean; onToggle: () => void; retry: boolean }) {
   const now = useNow(15_000);
-  const age = poll.lastOk != null ? shortAge(Math.max(now, localNow()) - poll.lastOk) : "";
+  // The data's age (ageBase): a hub replay's is its server-aged time, unknown ("stale") until a read brings a Date.
+  const base = ageBase(poll);
+  const age = base != null ? shortAge(Math.max(now, localNow()) - base) : "";
   const shown = shownTimes(poll);
   return (
     <>
-      <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Stale ${age}, show details`} title={staleTitle(shown)}
+      <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Stale ${age || "(age unknown)"}, show details`} title={staleTitle(shown)}
         className="inline-flex h-11 items-center rounded-md sm:h-auto">
         <span className={clsx(tagText, tagChip, "border-late-fill/35 bg-late-fill/10 text-late")}><Dot tone="late" />stale {age}</span>
       </button>
@@ -106,6 +111,7 @@ function StaleDetail({ poll }: { poll: Poll }) {
         ? <><span className="text-late">{poll.error}</span> · {poll.failures} failed · retry {retryEvery(poll.intervalMs)}</>
         : <><span className="text-late">no good read for {shortAge(2 * poll.intervalMs)}</span> · retry {retryEvery(poll.intervalMs)}</>}
       <br />ok {okLine(wallOf(poll.lastOk), false)}
+      {poll.replayed ? <><br />replayed by the hub · {poll.replayAt != null ? `data of ${okLine(wallOf(poll.replayAt), false)}` : "age unknown until a read answers"}</> : null}
     </div>
   );
 }

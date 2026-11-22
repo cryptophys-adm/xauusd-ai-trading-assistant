@@ -4,9 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CLOCK_SLACK_MS, PLAN_HIDE_MS, PUSH_SLACK_MS, RETRY_JOIN_MS, STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, okLine, planMark, pollPhase, pushApplies, pushShown, pushTime, retryEvery, routeFacts, routePushed, routeSent, routeSettled, shortAge, singleFlight, staleAt, staleChanged, staleTitle, staleWake, steadyClock, utcClock, wallOf, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
+import { CLOCK_SLACK_MS, DATE_SLACK_MS, OFFSET_SAMPLES, PLAN_HIDE_MS, PUSH_SLACK_MS, RETRY_JOIN_MS, STALE_TICK_MS, ageBase, clockJump, emptyRoute, isStale, joinsInFlight, okLine, planMark, pollPhase, pushApplies, pushShown, pushTime, pushWins, replayLocal, retryEvery, routeFacts, routePushed, routeSent, routeSettled, serverClock, shortAge, shownFacts, shownSide, singleFlight, staleAt, staleChanged, staleTitle, staleWake, steadyClock, takePush, utcClock, wallOf, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
 import { overviewBadge } from "../workers/xauusd-nexus-dashboard/ui/src/lib/healthBadge.ts";
-import { ApiError, CHART_READ, errorText, get } from "../workers/xauusd-nexus-dashboard/ui/src/lib/api.ts";
+import { ApiError, CHART_READ, errorText, get, getDated, sameOrigin } from "../workers/xauusd-nexus-dashboard/ui/src/lib/api.ts";
 
 const src = (p) => readFileSync(new URL(`../workers/xauusd-nexus-dashboard/ui/src/${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const now = Date.parse("2026-11-22T14:02:00Z");
@@ -97,7 +97,7 @@ test("PS7 the shared pieces: Panel's tag, PollBody, the error box, the empty lin
   assert.match(u, /border-late-fill\/35 bg-late-fill\/10 text-late"\)\}><Dot tone="late" \/>stale \{age\}/, "stale is amber (late)");
   assert.match(u, /border-fault-fill\/35 bg-fault-fill\/10 text-fault"\)\}[^>]*><Dot tone="fault" \/>error/, "error is red (fault)");
   assert.match(u, /<Dot tone="ok" \/>\{utcClock\(ok, false\)\} UTC/, "live is cyan (ok), the time in UTC");
-  assert.match(u, /const ok = wallOf\(poll\.lastOk\);/, "shown as the wall clock reads it now (third review: the time itself is local)");
+  assert.match(u, /const ok = wallOf\(ageBase\(poll\)\);/, "shown as the wall clock reads it now (third review: the time itself is local; fourth: a replay's server-aged time)");
   assert.match(u, /last ok \{okLine\(lastOk, false\)\}/, "the error box shows the last good read");
   assert.match(u, /"Retry now"/);
   assert.match(u, /h-11/, "44 px touch targets on a phone");
@@ -116,7 +116,7 @@ test("PS8 Model checks for an error before saying \"No … yet\"", () => {
 test("PS9 market.tsx keeps the per-read catch and exposes which routes failed; the News tab shows it", () => {
   const mk = src("lib/market.tsx");
   // Re-review of #520: the per-read catch settles that path as a failure, and a failed read never becomes null data.
-  assert.match(mk, /\(e\) => settle\(\{ ok: false, error: errorText\(e\), at: localNow\(\) \}\),/, "each read still catches its own failure");
+  assert.match(mk, /\(e\) => settle\(\{ ok: false, error: errorText\(e\), at: localNow\(\), date: \(e as ApiError\)\?\.date \?\? null \}\),/, "each read still catches its own failure (fourth review: with its Date)");
   assert.doesNotMatch(mk, /return null;\n\s+\}\);/, "the catch no longer answers null for the batch");
   const was = { ...emptyRoute, data: { engine: { stance: "SELL" } }, dataSeq: 1, lastOk: now - 59_000, sent: 1, settled: 1 };
   const failedRead = routeSettled(routeSent(was, 2), 2, { ok: false, error: "/api/conclusion/global 502", at: now });
@@ -310,42 +310,53 @@ test("PS20 MUST 1: the hub's replay of an old snapshot never clears a live REST 
   const H = Date.parse("2026-11-22T13:45:00Z"); // the hub's clock
   assert.equal(PUSH_SLACK_MS, 120_000);
   assert.equal(pushApplies({ at: null, replay: false }, null), false, "a push with no time never applies");
-  assert.equal(pushApplies({ at: H - 86_400_000, replay: true }, null), true, "nothing known: shown");
   assert.equal(pushApplies({ at: H, replay: true }, H), false, "the replay of the snapshot already applied: kept off");
   assert.equal(pushApplies({ at: H - 1, replay: true }, H), false, "a replay older than the newest applied: kept off");
-  assert.equal(pushApplies({ at: H + 1, replay: true }, H), true, "a replay of a publish missed while disconnected: shown");
+  assert.equal(pushApplies({ at: H + 1, replay: true }, H), true, "a replay of a publish missed while disconnected: may apply (then takePush checks the read)");
   assert.equal(pushApplies({ at: H - PUSH_SLACK_MS, replay: false }, H), true, "a live publish within the slack (hub clock jitter)");
   assert.equal(pushApplies({ at: H - PUSH_SLACK_MS - 1, replay: false }, H), false, "older than the data on screen by more than the slack");
 
-  // The reproduction: the hub publishes BUY (13:45 hub time), a good read at 13:52 answers SELL, /api/conclusion/global
-  // 502 at 13:57 (stale, "502 · 1 failed"); the socket reconnects and the hub replays the 13:45 snapshot.
+  // The reproduction of c2063df, on the fourth review's clocks: the server (Cloudflare) clock T, the browser's steady
+  // clock 7 minutes ahead of it (L). A good read at 13:52 answers SELL; the decision changes; /api/conclusion/global
+  // 502 at 13:57 (stale 5m, "502 · 1 failed"); the socket reconnects and the hub replays its 13:45 snapshot.
+  const M = 60_000, OFF = 7 * M;
+  const T = (hm) => Date.parse(`2026-11-22T${hm}:00Z`), L = (hm) => T(hm) + OFF;
   const sell = { engine: { stance: "SELL" } }, old = { engine: { stance: "BUY", old: true } };
-  let r = routePushed(emptyRoute, old, { seq: 1, local: now - 1_020_000, at: H, replay: true });
-  r = routeSettled(routeSent(r, 2), 2, { ok: true, data: sell, at: now - 599_000 });
-  r = routeSettled(routeSent(r, 3), 3, { ok: false, error: "/api/conclusion/global 502", at: now - 300_000 });
-  assert.equal(r.data, sell, "the read sent after the push replaced it");
-  const replay = routePushed(r, old, { seq: 4, local: now - 10_000, at: H, replay: true });
-  assert.equal(replay, r, "the replay of a snapshot already applied: nothing changes");
-  assert.deepEqual(routeFacts(replay), { error: "/api/conclusion/global 502", lastOk: now - 599_000, lastFail: now - 300_000, failSeq: 3, failures: 1 });
-  assert.equal(isStale({ hasData: true, ...routeFacts(replay), intervalMs: 300_000 }, now), true, "the card stays stale");
+  const E = "/api/conclusion/global 502";
+  let r = routeSettled(routeSent(emptyRoute, 1), 1, { ok: true, data: sell, at: L("13:52"), date: T("13:52") });
+  r = routeSettled(routeSent(r, 2), 2, { ok: false, error: E, at: L("13:57"), date: T("13:57") });
+  const replay = routePushed(r, old, { seq: 3, local: L("14:01"), at: T("13:45"), replay: true });
+  assert.equal(replay, r, "the replay is older than the read on screen (its at against the read's Date): nothing changes");
+  assert.deepEqual(routeFacts(replay, OFF), { error: E, lastOk: L("13:52"), lastFail: L("13:57"), failSeq: 2, failures: 1 });
+  assert.equal(isStale({ hasData: true, ...routeFacts(replay, OFF), intervalMs: 300_000 }, L("14:02")), true, "the card stays stale");
+  // A snapshot newer than the data on screen but older than the failure: shown, and still stale.
+  const between = routePushed(r, old, { seq: 4, local: L("14:01"), at: T("13:54"), replay: true });
+  assert.equal(between.data, old, "newer than the read on screen: shown");
+  const bf = routeFacts(between, OFF);
+  assert.deepEqual([bf.error, bf.lastOk, bf.lastFail, bf.failures], [E, L("13:52"), L("13:57"), 1], "but older than the failure: no cleared error, no newer lastOk");
+  assert.deepEqual([bf.replayed, bf.replayAt], [true, L("13:54")], "its age is its at on the server clock, never its arrival (14:01)");
+  assert.deepEqual(planMark({ hasData: true, ...bf, intervalMs: 300_000 }, L("14:02")), { show: true, dim: true, suffix: " · stale 8m", note: null });
+  // Fourth review: a replay newer than the failure still never clears it (only a live push or a good read does).
+  const newer = routePushed(r, old, { seq: 5, local: L("14:01"), at: T("13:59"), replay: true });
+  assert.deepEqual([newer.data, routeFacts(newer, OFF).error, routeFacts(newer, OFF).lastOk], [old, E, L("13:52")]);
+  // A real publish after the failure (on the local order) is a good arrival.
+  const fresh = routePushed(r, old, { seq: 6, local: L("14:01"), at: T("14:01"), replay: false });
+  assert.deepEqual(routeFacts(fresh, OFF), { error: null, lastOk: L("14:01"), lastFail: L("13:57"), failSeq: 2, failures: 0 });
   // Reconnect repeats: the same replay again and again never turns it live.
   let again = r;
-  for (let i = 0; i < 5; i++) again = routePushed(again, old, { seq: 5 + i, local: now - 5_000 + i, at: H, replay: true });
-  assert.equal(routeFacts(again).error, "/api/conclusion/global 502");
-  // A real publish after the failure (on the local order) is a good arrival.
-  const fresh = routePushed(r, old, { seq: 20, local: now - 5_000, at: H + 900_000, replay: false });
-  assert.deepEqual(routeFacts(fresh), { error: null, lastOk: now - 5_000, lastFail: now - 300_000, failSeq: 3, failures: 0 });
-  // A read sent before the push on screen refreshes lastOk but never puts its older body back.
-  const pushed = routePushed(routeSent(r, 21), { engine: { stance: "BUY" } }, { seq: 22, local: now - 5_000, at: H + 900_000, replay: false });
-  const lateRead = routeSettled(pushed, 21, { ok: true, data: sell, at: now - 1_000 });
-  assert.deepEqual([lateRead.data.engine.stance, lateRead.lastOk, lateRead.error], ["BUY", now - 1_000, null]);
+  for (let i = 0; i < 5; i++) again = routePushed(again, old, { seq: 10 + i, local: L("14:01") + i, at: T("13:45"), replay: true });
+  assert.deepEqual([again.data, routeFacts(again, OFF).error], [sell, E]);
+  // A read sent before the live push on screen refreshes lastOk but never puts its older body back.
+  const pushed = routePushed(routeSent(r, 21), { engine: { stance: "BUY" } }, { seq: 22, local: L("14:01"), at: T("14:01"), replay: false });
+  const lateRead = routeSettled(pushed, 21, { ok: true, data: sell, at: L("14:01") + 4_000, date: T("14:01") });
+  assert.deepEqual([lateRead.data.engine.stance, lateRead.lastOk, lateRead.error], ["BUY", L("14:01") + 4_000, null]);
 
   const mk = src("lib/market.tsx");
   assert.doesNotMatch(mk, /setPushAt\(|Date\.now\(\)/, "no push and no read stamped with the wall clock");
   assert.match(mk, /routePushed\(route\(GLOBAL_PATH\), decisionSnap\.data, decisionSnap\)/);
   assert.match(mk, /routePushed\(route\(threadPath\(c\)\), threadsSnap\.data\?\.\[c\] \?\? null, threadsSnap\)/);
   const wr = src("lib/warroom.tsx");
-  assert.match(wr, /pushApplies\(snap, s\?\.at \?\? null\) \? \{ data: snap\.data, mark: \{ seq: snap\.seq, local: snap\.local \}, at:/, "the War Room's 15m room too");
+  assert.match(wr, /setSlots\(\(s\) => takePush\(s, readRef\.current, snap\.data, snap\) \?\? s\);/, "the War Room's 15m room too");
   assert.doesNotMatch(wr, /setPushAt\(Date\.now\(\)\)|Date\.now\(\)/);
   assert.match(src("pages/Omega.tsx"), /const pushed = push\.snap\["omega-overview"\]\?\.data;/, "Omega reads the same snapshot shape");
 });
@@ -373,10 +384,10 @@ test("PS21 SHOULD 2: each route applies its own answer as it resolves; a hung si
   const mk = src("lib/market.tsx");
   assert.match(mk, /const settle = \(r: ReadOutcome\) => \{ routes\.current\[path\] = routeSettled\(route\(path\), id, r\); bump\(\); \};/, "each read settles its own path and renders");
   assert.doesNotMatch(mk, /Promise\.all\(\[\n?\s*\.\.\.TF_CHARTS\.map/, "no batch that waits on the slowest read");
-  assert.match(mk, /useSchedule\(\(\) => \{ for \(const p of SLOW_PATHS\) void read\(p\); \}, slowMs\);/);
+  assert.match(mk, /useSchedule\(\(\) => \{ for \(const p of SLOW_PATHS\) void read\(p\); \}, slowMs, \(\) => \{ for \(const p of SLOW_PATHS\) if \(!inFlight\(p\)\) void read\(p\); \}\);/);
   assert.match(mk, /busy: s\.sent > s\.settled, refresh: \(\) => refresh\(path\)/, "busy and refresh are the path's own");
   assert.match(mk, /const id = nextSeq\(\);\n\s+routes\.current\[path\] = routeSent\(route\(path\), id\);/, "a read's id is its send on the page's one order");
-  assert.match(src("lib/usePoll.ts"), /export function useSchedule\(run: \(\) => void, intervalMs: number\)/);
+  assert.match(src("lib/usePoll.ts"), /export function useSchedule\(run: \(\) => void, intervalMs: number, onJump: \(\) => void = run\)/);
 });
 test("PS22 SHOULD 3: the chart's plan lines and zones from a stale decision are dimmed and labelled, then dropped", () => {
   const live = { hasData: true, error: null, lastOk: now - 30_000, intervalMs: 300_000 };
@@ -420,7 +431,10 @@ test("PS23 SHOULD 4: Retry now is never stuck behind a hung read", async () => {
   assert.match(u, /export const RETRY_SPIN_MS = 10_000;/);
   const mk = src("lib/market.tsx");
   assert.match(mk, /return f && joinsInFlight\(f\.since, localNow\(\)\) \? f\.p : read\(path\);/, "per path: a read just sent is joined, any older one is not");
-  assert.match(src("lib/api.ts"), /fetch\(path, \{ headers: \{ accept: "application\/json" \}, cache: cacheOf\(path, opts\) \}\)/, "no-store for the poll reads (PS29): no browser cache lock behind a hung read of the same URL");
+  const api = src("lib/api.ts");
+  assert.match(api, /fetch\(path, \{ headers: \{ accept: "application\/json" \}, cache \}\)/);
+  assert.match(api, /return \(await fetchJson<T>\(path, cacheOf\(path, opts\)\)\)\.data;/, "no-store for the poll reads (PS29): no browser cache lock behind a hung read of the same URL");
+  assert.match(api, /return fetchJson<T>\(path, "no-store"\);/, "the dated poll reads are always no-store (PS35)");
 });
 test("PS24 nits: a backward clock jump, Key levels' read error, System issues' lane read", () => {
   assert.equal(isStale({ ...base, lastOk: now + CLOCK_SLACK_MS }, now), false, "within the slack: live");
@@ -450,32 +464,41 @@ test("PS25 (a) a push, then a failed read: the data keeps the push's age, and th
   assert.deepEqual(planMark(f, now), { show: true, dim: true, suffix: " · stale 10m", note: null }, "the plan is dimmed, never hidden");
 
   // The reported case: REST 502 every 5 minutes, a push every 15 minutes, for 3 hours. The card never reads older than
-  // the last push and the plan is never hidden; right after each push it is live at full strength.
+  // the last push and the plan is never hidden; right after each push it is live at full strength. Fourth review: the
+  // first snapshot is the connect's replay, aged on the server clock (the hub's H is the browser's `now`: OFF).
+  const OFF = now - H;
   let s = emptyRoute, seq = 0, maxAge = 0;
   for (let t = 0; t <= 180 * MIN; t += 30_000) {
     if (t % (15 * MIN) === 0) {
       s = routePushed(s, { engine: { stance: t % (30 * MIN) ? "BUY" : "SELL" } }, { seq: ++seq, local: now + t, at: H + t, replay: t === 0 });
-      const live = { hasData: true, ...routeFacts(s), intervalMs: 300_000 };
+      const live = { hasData: true, ...routeFacts(s, OFF), intervalMs: 300_000 };
       assert.equal(isStale(live, now + t), false, `live right after the push at ${t / MIN}m`);
       assert.equal(planMark(live, now + t).dim, false);
     }
-    if (t % (5 * MIN) === 150_000) { const id = ++seq; s = routeSettled(routeSent(s, id), id, { ok: false, error: "/api/conclusion/global 502", at: now + t }); }
-    const g = { hasData: true, ...routeFacts(s), intervalMs: 300_000 };
-    maxAge = Math.max(maxAge, now + t - g.lastOk);
+    if (t % (5 * MIN) === 150_000) { const id = ++seq; s = routeSettled(routeSent(s, id), id, { ok: false, error: "/api/conclusion/global 502", at: now + t, date: H + t }); }
+    const g = { hasData: true, ...routeFacts(s, OFF), intervalMs: 300_000 };
+    maxAge = Math.max(maxAge, now + t - ageBase(g));
     assert.equal(planMark(g, now + t).show, true, `the plan stays shown at ${t / MIN}m`);
   }
   assert.ok(maxAge < 15 * MIN, `never older than the push interval (max ${maxAge / MIN}m), not "stale 2h"`);
 
-  // On load: the read sent at mount, the hub's 1-minute-old replay, then that read answers 502.
+  // On load (fourth review: the third review's claim that this replay clears the 502 is gone): the read sent at mount,
+  // the hub's 1-minute-old replay, then that read answers 502 with its Date. The replay shows the data, aged 1m, and
+  // the card stays in error: a replay never clears an error, whatever its age.
   let l = routeSent(emptyRoute, 1);
   l = routePushed(l, { engine: { stance: "SELL" } }, { seq: 2, local: now - 2_000, at: H - MIN, replay: true });
-  l = routeSettled(l, 1, { ok: false, error: "/api/conclusion/global 502", at: now - 1_000 });
-  const lf = { hasData: true, ...routeFacts(l), intervalMs: 60_000 };
-  assert.deepEqual([lf.error, lf.lastOk], [null, now - 2_000], "the replay arrived after the failed read was sent: live");
-  assert.deepEqual(planMark(lf, now), { show: true, dim: false, suffix: "", note: null }, "no \"plan hidden: decision stale\"");
-  // A 502 from a read sent after the replay: stale, aged from the replay's arrival, the plan still shown.
-  l = routeSettled(routeSent(l, 3), 3, { ok: false, error: "/api/conclusion/global 502", at: now });
-  assert.deepEqual(planMark({ hasData: true, ...routeFacts(l), intervalMs: 60_000 }, now), { show: true, dim: true, suffix: " · stale 2s", note: null });
+  assert.equal(l.data.engine.stance, "SELL", "the replay shows the data");
+  assert.equal(isStale({ hasData: true, ...routeFacts(l, null), intervalMs: 60_000 }, now - 2_000), true, "before any Date: unknown age, never live");
+  l = routeSettled(l, 1, { ok: false, error: "/api/conclusion/global 502", at: now, date: H });
+  const lf = { hasData: true, ...routeFacts(l, OFF), intervalMs: 60_000 };
+  assert.deepEqual([lf.error, lf.lastOk, lf.replayed, lf.replayAt], ["/api/conclusion/global 502", null, true, now - MIN], "still in error; no lastOk; aged 1m");
+  assert.equal(pollPhase({ ...lf, loading: false }, now), "stale");
+  assert.deepEqual(planMark(lf, now), { show: true, dim: true, suffix: " · stale 1m", note: null }, "the plan dimmed, aged 1m");
+  // Only a live push or a good read clears it.
+  const viaPush = routePushed(l, { engine: { stance: "BUY" } }, { seq: 3, local: now + 5_000, at: H + 5_000, replay: false });
+  assert.deepEqual([routeFacts(viaPush, OFF).error, routeFacts(viaPush, OFF).lastOk, routeFacts(viaPush, OFF).replayed], [null, now + 5_000, undefined], "a live push: live");
+  const viaRead = routeSettled(routeSent(l, 4), 4, { ok: true, data: { engine: { stance: "SELL", fresh: true } }, at: now + 6_000, date: H + 6_000 });
+  assert.deepEqual([viaRead.data.engine.fresh, routeFacts(viaRead, OFF).error, routeFacts(viaRead, OFF).lastOk], [true, null, now + 6_000], "a good read: live, its data");
 });
 
 test("PS26 (b) a backward wall-clock step of 10 minutes: good reads still apply and stay live", () => {
@@ -583,11 +606,241 @@ test("PS30 the 15m room: a read sent before a newer push never overwrites it (th
   assert.equal(pushShown(7, { seq: 6, local: now }), false, "a read sent after the push: the read's room");
   assert.equal(pushShown(null, { seq: 6, local: now }), true, "no read's room yet: the push's");
   assert.equal(pushShown(3, null), false);
+  // Fourth review: a live push still wins by the local order (pushWins), the room's read and push kept apart.
+  const read = { data: "read", seq: 5, date: now };
+  assert.equal(pushWins(read, { seq: 6, local: now, at: now - 3_600_000, replay: false, data: "push" }), true, "a live push arrived after the read was sent: shown, whatever its at");
+  assert.equal(pushWins({ ...read, seq: 7 }, { seq: 6, local: now, at: now, replay: false, data: "push" }), false);
   const wr = src("lib/warroom.tsx");
-  assert.match(wr, /const latest = war\.data != null && !pushShown\(war\.sentSeq, mark\) \? war\.data : pushed\?\.data \?\? war\.data \?\? null;/);
-  assert.match(wr, /withPush\(\{ error: war\.error, lastOk: war\.lastOk, lastFail: war\.lastFail, failSeq: war\.failSeq, failures: war\.failures \}, mark\)/);
+  assert.match(wr, /const shown = shownSide\(read, slots\.pushed\);/);
+  assert.match(wr, /shownFacts\(\{ error: war\.error, lastOk: war\.lastOk, lastFail: war\.lastFail, failSeq: war\.failSeq, failures: war\.failures \}, slots\.push, shown\.push, pageServer\.offset\(\)\)/);
   const up = src("lib/usePoll.ts");
   assert.match(up, /const id = nextSeq\(\);\n\s+seq\.current = id;/, "usePoll's reads take the page's one order at their send");
   assert.match(up, /setSentSeq\(id\);/);
   assert.match(up, /setFailSeq\(id\);/);
+});
+
+// Fourth review of #520: a hub replay never clears an error or counts as fresh; replays are aged on the server clock
+// through the reads' Date; a settled newer read beats a replay; a forward clock jump reads once.
+
+const T = (hm) => Date.parse(`2026-11-22T${hm}:00Z`); // the server (Cloudflare) clock: the reads' Date and the hub's `at`
+const E502 = "/api/conclusion/global 502";
+
+/**
+ * One tab of the outage: the AI Worker is down from 12:05, so the hub keeps its 12:05 decision and every read of
+ * /api/conclusion/global answers 502. The tab loads at `load` (server time); its browser clock is `skew` ahead of
+ * the server, each read takes `lat` ms, and the hub's replay reaches the page `replayFirst` before or after the mount
+ * read settles. Returns the facts at server time `at` (a read every `every` ms).
+ */
+function outageTab({ load, skew = 0, lat = 300, replayFirst = true, every = 60_000, hubAt = T("12:05") }) {
+  const clock = serverClock();
+  const L = (t) => t + skew; // the tab's steady clock at server time t
+  let s = emptyRoute, seq = 0;
+  const replay = () => { s = routePushed(s, { engine: { stance: "BUY" }, setups: [{ phase: "armed" }] }, { seq: ++seq, local: L(load + 150), at: hubAt, replay: true }); };
+  const failRead = (sent) => {
+    const id = ++seq;
+    s = routeSent(s, id);
+    return () => { const date = Math.floor((sent + lat / 2) / 1000) * 1000; clock.note(date, L(sent + lat)); s = routeSettled(s, id, { ok: false, error: E502, at: L(sent + lat), date }); };
+  };
+  const mount = failRead(load);
+  if (replayFirst) { replay(); mount(); } else { mount(); replay(); }
+  return {
+    at(t) {
+      for (let sent = load + every; sent + lat <= t; sent += every) if (sent > (this.last ?? load)) { failRead(sent)(); this.last = sent; }
+      const f = { hasData: s.data != null, ...routeFacts(s, clock.offset()), intervalMs: 300_000 };
+      return { f, now: L(t), state: s, phase: pollPhase({ ...f, loading: false }, L(t)), plan: planMark(f, L(t)) };
+    },
+  };
+}
+
+test("PS31 (a)(b) a load during an outage with a 3-hour-old replay: error/stale and the plan hidden from the first second, never live", () => {
+  // Before any read brought a Date the replay is of unknown age: shown, stale, the plan hidden.
+  let s = routeSent(emptyRoute, 1);
+  s = routePushed(s, { engine: { stance: "BUY" } }, { seq: 2, local: T("15:05"), at: T("12:05"), replay: true });
+  const unknown = { hasData: true, ...routeFacts(s, null), intervalMs: 60_000 };
+  assert.deepEqual([unknown.replayed, unknown.replayAt, ageBase(unknown)], [true, null, null]);
+  assert.equal(pollPhase({ ...unknown, loading: false }, T("15:05")), "stale", "never live before the read settles");
+  assert.deepEqual(planMark(unknown, T("15:05")), { show: false, dim: true, suffix: "", note: "plan hidden: decision stale" });
+  assert.equal(staleAt(unknown), null);
+  assert.match(staleTitle(unknown), /replayed by the hub · age unknown until a read answers/);
+
+  for (const replayFirst of [true, false]) for (const skew of [0, 4 * MIN, -9 * MIN]) {
+    const tab = outageTab({ load: T("15:05"), skew, replayFirst });
+    for (let t = T("15:05") + 1_000; t <= T("15:35"); t += 10_000) {
+      const v = tab.at(t);
+      assert.equal(v.state.data.engine.stance, "BUY", "the replay's data is shown");
+      assert.equal(v.f.error, E502, "the 502 is never cleared by the replay");
+      assert.equal(v.f.lastOk, null, "and never becomes a last good read");
+      assert.equal(v.phase, "stale", `never live (${replayFirst ? "replay first" : "read first"}, skew ${skew / MIN}m, +${(t - T("15:05")) / 1000}s)`);
+      assert.equal(v.plan.show, false, "the plan hidden from the first second");
+      assert.match(v.plan.note, /^plan hidden: decision stale 3h$/, "stale 3h, on the server clock");
+    }
+  }
+  // The 15m room runs the same functions (warroom.tsx: takePush, shownSide, shownFacts).
+  const clock = serverClock();
+  clock.note(T("15:05"), T("15:05") + 400);
+  const slots = takePush({ pushed: null, push: null, pushAt: null }, null, { room: { id: "r" } }, { seq: 2, local: T("15:05"), at: T("12:05"), replay: true });
+  const shown = shownSide(null, slots.pushed);
+  const wf = shownFacts({ error: "/api/war-room/latest 502", lastOk: null, lastFail: T("15:05") + 400, failSeq: 1, failures: 1 }, slots.push, shown.push, clock.offset());
+  assert.deepEqual([shown.data.room.id, wf.error, wf.lastOk, slots.push], ["r", "/api/war-room/latest 502", null, null], "the room shown, in error, no lastOk, no live mark");
+  assert.equal(isStale({ hasData: true, ...wf, intervalMs: 300_000 }, T("15:05") + 500), true);
+  assert.equal(shortAge(T("15:05") + 500 - ageBase(wf)), "3h");
+});
+
+test("PS32 (c) a replay after a settled newer read: the read's data stays, in both arrival orders", () => {
+  // Normal operation: the hub stored the 12:00 publish; the ledger moved the setup to "filled" since without
+  // republishing. The reload's read (Date 12:04) answers "filled"; the replay of 12:00 says "armed".
+  const published = { setups: [{ phase: "armed" }] }, current = { setups: [{ phase: "filled" }] };
+  const OFF = 3 * MIN;
+  const replay = (seq, at = T("12:00")) => ({ seq, local: T("12:04") + OFF + 100, at, replay: true });
+  const good = (s, id, date = T("12:04")) => routeSettled(s, id, { ok: true, data: current, at: date + OFF + 300, date });
+  // Replay first (the read in flight is compared when it settles), then the read.
+  let a = routeSent(emptyRoute, 1);
+  a = routePushed(a, published, replay(2));
+  assert.equal(a.data, published, "shown while the read is in flight (of its server age)");
+  a = good(a, 1);
+  assert.equal(a.data, current, "replay first: the settled newer read wins");
+  // The read first, then the replay.
+  let b = good(routeSent(emptyRoute, 1), 1);
+  const bb = routePushed(b, published, replay(2));
+  assert.equal(bb, b, "read first: the replay is dropped");
+  for (const s of [a, bb]) {
+    const f = routeFacts(s, OFF);
+    assert.deepEqual([s.data, f.error, f.lastOk, f.replayed], [current, null, T("12:04") + OFF + 300, undefined]);
+    assert.equal(isStale({ hasData: true, ...f, intervalMs: 300_000 }, T("12:05") + OFF), false, "live on the read's data");
+  }
+  // A reconnect after a missed publish: the replay of 12:06 is newer than the read's Date: shown, in both orders.
+  const missed = { setups: [{ phase: "closed" }] };
+  let c = routePushed(good(routeSent(emptyRoute, 1), 1), missed, replay(2, T("12:06")));
+  let d = good(routePushed(routeSent(emptyRoute, 1), missed, replay(2, T("12:06"))), 1);
+  assert.deepEqual([c.data, d.data], [missed, missed]);
+  assert.deepEqual([routeFacts(c, OFF).replayAt, routeFacts(d, OFF).replayAt], [T("12:06") + OFF, T("12:06") + OFF]);
+  // The 1 s slack of Date's resolution: a replay published within the read's second (or the one before) wins.
+  assert.equal(DATE_SLACK_MS, 1_000);
+  assert.equal(pushWins({ data: 1, seq: 1, date: T("12:04") }, { ...replay(2, T("12:04") - 999), data: 2 }), true);
+  assert.equal(pushWins({ data: 1, seq: 1, date: T("12:04") }, { ...replay(2, T("12:04") - 1_000), data: 2 }), false);
+  // A read without a Date cannot be shown older: the replay never replaces it.
+  const noDate = routeSettled(routeSent(emptyRoute, 1), 1, { ok: true, data: current, at: T("12:04"), date: null });
+  assert.equal(routePushed(noDate, missed, replay(2, T("12:06"))), noDate);
+  // A live push keeps the f42efc2 rule: it arrived after the read was sent, so it is shown, whatever its at.
+  const live = routePushed(b, missed, { seq: 2, local: T("12:05"), at: T("12:03"), replay: false });
+  assert.equal(live.data, missed);
+  // The 15m room: the same rule in both orders (shownSide on every render).
+  const read = { data: "read", seq: 1, date: T("12:04") };
+  const early = takePush({ pushed: null, push: null, pushAt: null }, null, "replay", replay(2));
+  assert.equal(shownSide(null, early.pushed).data, "replay", "before the read settles: the replay");
+  assert.equal(shownSide(read, early.pushed).data, "read", "once it settles: the read");
+  assert.equal(takePush({ pushed: null, push: null, pushAt: null }, read, "replay", replay(2)), null, "after it: dropped");
+});
+
+test("PS33 (b) two tabs during an outage show the same state: same inputs at different reload times, same staleness and plan", () => {
+  const a = outageTab({ load: T("14:20"), skew: 2 * MIN, lat: 250 });
+  const b = outageTab({ load: T("15:00"), skew: 2 * MIN, lat: 900, replayFirst: false });
+  for (const t of [T("15:00") + 2_000, T("15:01"), T("15:04") + 30_000, T("15:30")]) {
+    const va = a.at(t), vb = b.at(t);
+    assert.deepEqual([va.phase, va.plan.show, va.plan.note], [vb.phase, vb.plan.show, vb.plan.note], `the same state at ${new Date(t).toISOString().slice(11, 19)}`);
+    assert.equal(shortAge(va.now - ageBase(va.f)), shortAge(vb.now - ageBase(vb.f)), "the same age");
+    assert.ok(Math.abs(ageBase(va.f) - ageBase(vb.f)) <= 1_000, "within Date's 1 s");
+    assert.equal(va.phase, "stale");
+  }
+  // The third review's arrival ageing gave the tab loaded at 15:00 a "live" card for five minutes; the server clock does not.
+  assert.notEqual(b.at(T("15:00") + 5_000).phase, "live");
+});
+
+test("PS34 nit: a forward clock jump (NTP step, wake from sleep) triggers one read; normal ticks and a backward step none", () => {
+  let wall = now, mono = 0;
+  const steady = steadyClock(() => wall, () => mono);
+  const jumped = clockJump(steady, () => mono);
+  const interval = 300_000;
+  let reads = 0, busy = false;
+  const tick = (ms, step = 0, sleep = false) => {
+    wall += ms + step; if (!sleep) mono += ms;
+    if (jumped(interval) && !busy) { reads++; busy = true; } // single-flight: none while one is in flight
+  };
+  for (let i = 0; i < 30; i++) tick(STALE_TICK_MS);
+  assert.equal(reads, 0, "ten minutes of ticks: no read");
+  tick(STALE_TICK_MS, 16 * MIN);
+  assert.equal(reads, 1, "a 16-minute forward step: one read at once");
+  tick(STALE_TICK_MS, 16 * MIN);
+  assert.equal(reads, 1, "single-flight: none while that read is in flight");
+  busy = false;
+  for (let i = 0; i < 10; i++) tick(STALE_TICK_MS);
+  assert.equal(reads, 1, "and none after");
+  tick(STALE_TICK_MS, -30 * MIN);
+  assert.equal(reads, 1, "a backward step: no read (the steady clock follows the monotonic one)");
+  tick(8 * 3_600_000, 0, true);
+  assert.equal(reads, 2, "a wake from an 8-hour sleep (the monotonic clock paused): one read");
+  tick(STALE_TICK_MS, interval - STALE_TICK_MS);
+  assert.equal(reads, 2, "a step within the interval is not a jump");
+  const up = src("lib/usePoll.ts");
+  assert.match(up, /const jumped = clockJump\(\);\n\s+const t = window\.setInterval\(\(\) => \{ if \(jumped\(intervalMs\) && !flight\.current\.busy && document\.visibilityState === "visible"\) void start\(\); \}, STALE_TICK_MS\);/, "usePoll: one read, never while one is in flight");
+  assert.match(up, /if \(jumped\(intervalMs\) && document\.visibilityState === "visible"\) jumpRef\.current\(\);/, "useSchedule runs its onJump");
+  const mk = src("lib/market.tsx");
+  assert.match(mk, /const inFlight = \(p: string\) => route\(p\)\.sent > route\(p\)\.settled;/);
+  assert.match(mk, /POLL_MS, \(\) => \{ for \(const p of FAST_PATHS\) if \(!inFlight\(p\)\) void read\(p\); \}\);/, "market.tsx's two schedules, a path in flight skipped");
+});
+
+test("PS35 (b) the server clock: the reads' Date, same-origin and no-store only; a null Date keeps a replay non-live, live pushes still live", async () => {
+  // The offset: (local settle) − Date, the minimum of the last OFFSET_SAMPLES reads (the least latency).
+  const c = serverClock();
+  assert.equal(c.offset(), null, "no read yet: unknown");
+  c.note(null, now);
+  assert.equal(c.offset(), null, "a response without Date notes nothing");
+  c.note(T("14:00"), T("14:00") + 5 * MIN + 900);
+  c.note(T("14:01"), T("14:01") + 5 * MIN + 200);
+  c.note(T("14:02"), T("14:02") + 5 * MIN + 4_000);
+  assert.equal(c.offset(), 5 * MIN + 200);
+  for (let i = 0; i < OFFSET_SAMPLES; i++) c.note(T("14:10") + i * 1000, T("14:10") + i * 1000 + 5 * MIN + 600);
+  assert.equal(c.offset(), 5 * MIN + 600, "only the last few reads count (a clock step ages out)");
+  assert.equal(replayLocal(T("12:05"), 5 * MIN), T("12:10"));
+  assert.equal(replayLocal(T("12:05"), null), null);
+  assert.equal(replayLocal(null, 0), null);
+
+  // getDated: the Date of a good and of a failed read, always no-store, same-origin only.
+  const real = globalThis.fetch;
+  const seen = [];
+  try {
+    globalThis.fetch = async (path, init) => {
+      seen.push([path, init.cache]);
+      const headers = { "content-type": "application/json" };
+      if (!String(path).includes("nodate")) headers.date = "Sun, 22 Nov 2026 14:20:07 GMT";
+      return new Response(path.includes("fail") ? "{}" : JSON.stringify({ ok: 1 }), { status: path.includes("fail") ? 502 : 200, headers });
+    };
+    assert.deepEqual(await getDated("/api/conclusion/global"), { data: { ok: 1 }, date: Date.parse("2026-11-22T14:20:07Z") });
+    assert.deepEqual(await getDated("/api/war-room/latest?nodate=1"), { data: { ok: 1 }, date: null });
+    await assert.rejects(getDated("/api/fail"), (e) => e instanceof ApiError && e.status === 502 && e.date === Date.parse("2026-11-22T14:20:07Z"), "a 502 carries its Date");
+    for (const bad of ["https://other.example/api/x", "//other.example/api/x", "api/x", "/\\other"]) {
+      await assert.rejects(getDated(bad), { message: /cross_origin/ }, `${bad}: never read for its Date`);
+    }
+    assert.equal(await get("/api/ohlcv?timeframe=H1&limit=10", CHART_READ).then(() => "ok"), "ok");
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.deepEqual(seen.map((x) => x[1]), ["no-store", "no-store", "no-store", "default"], "dated reads always no-store; no cross-origin request was sent");
+  assert.deepEqual(["/api/conclusion/global", "/api/war-room/latest", "/api/threads/timeframe?chart=H1"].map(sameOrigin), [true, true, true]);
+
+  // Only the no-store poll and retry reads note the Date: readDated in usePoll.ts; never a chart or cached read.
+  const up = src("lib/usePoll.ts");
+  assert.match(up, /return getDated<T>\(path\)\.then\(\n\s+\(r\) => \{ pageServer\.note\(r\.date, localNow\(\)\); return r; \},\n\s+\(e\) => \{ if \(e instanceof ApiError\) pageServer\.note\(e\.date, localNow\(\)\); throw e; \},/);
+  for (const f of ["lib/market.tsx", "lib/warroom.tsx", "components/PriceChart.tsx", "pages/Omega.tsx", "lib/api.ts", "lib/push.ts"]) {
+    assert.doesNotMatch(src(f), /pageServer\.note\(/, `${f}: notes no Date of its own`);
+  }
+  assert.match(src("lib/market.tsx"), /const p = readDated\(path\)\.then\(/, "the decision and the rooms: dated, no-store");
+  assert.match(src("lib/warroom.tsx"), /usePoll\(\(\) => readDated\(WAR_ROOM_PATH\),/, "the 15m room: dated, no-store");
+  assert.match(src("lib/market.tsx"), /export const GLOBAL_PATH = "\/api\/conclusion\/global";\nexport const threadPath = \(c: TfChart\) => `\/api\/threads\/timeframe\?chart=\$\{c\}`;/, "same-origin paths");
+  assert.match(src("lib/warroom.tsx"), /export const WAR_ROOM_PATH = "\/api\/war-room\/latest";/);
+  assert.doesNotMatch(src("components/PriceChart.tsx"), /readDated|getDated/, "the chart's reads keep the browser cache and never age a replay");
+
+  // With no Date at all (a proxy that strips it, every read "net"): the replay stays non-live, a live push still lives.
+  let s = routeSent(emptyRoute, 1);
+  s = routeSettled(s, 1, { ok: false, error: "/api/conclusion/global net", at: now - 2_000, date: null });
+  s = routePushed(s, { engine: { stance: "BUY" } }, { seq: 2, local: now - 1_000, at: T("12:05"), replay: true });
+  const rf = { hasData: true, ...routeFacts(s, null), intervalMs: 60_000 }; // no Date known on this page
+  assert.deepEqual([rf.replayed, rf.replayAt, pollPhase({ ...rf, loading: false }, now)], [true, null, "stale"]);
+  assert.equal(planMark(rf, now).show, false);
+  const good = routeSettled(routeSent(s, 3), 3, { ok: true, data: { engine: { stance: "SELL" } }, at: now, date: null });
+  assert.equal(good.data.engine.stance, "SELL", "a good read without Date beats the replay");
+  assert.equal(routePushed(good, { engine: { stance: "BUY" } }, { seq: 4, local: now, at: T("12:06"), replay: true }), good, "and no later replay replaces it");
+  const lp = routePushed(s, { engine: { stance: "SELL" } }, { seq: 5, local: now, at: T("14:00"), replay: false });
+  const lf = { hasData: true, ...routeFacts(lp, null), intervalMs: 60_000 };
+  assert.deepEqual([lp.data.engine.stance, lf.error, lf.lastOk, lf.replayed, pollPhase({ ...lf, loading: false }, now)], ["SELL", null, now, undefined, "live"], "a live push without any Date: live, as before");
 });

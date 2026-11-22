@@ -1,13 +1,14 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { get } from "./api";
-import { usePoll, type Poll } from "./usePoll";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { get, type Dated } from "./api";
+import { readDated, usePoll, type Poll } from "./usePoll";
 import { usePush } from "./push";
-import { isStale, localNow, pushApplies, pushShown, withPush, type PushMark } from "./pollState";
+import { isStale, localNow, pageServer, shownFacts, shownSide, takePush, type PushSlots, type ReadSide } from "./pollState";
 
 export type Room = any;
 /**
  * `error` is the header's (AppShell): set only while there is no room. `poll` is the read of /api/war-room/latest
- * as a poll (review of #520): the room on screen, the read's error and times with a push counted as a good arrival,
+ * as a poll (review of #520): the room on screen, the read's error and times with a live push counted as a good arrival
+ * (a hub replay never is: fourth review),
  * for the 15m tab's error box and stale tag.
  */
 type Ctx = { room: Room | null; enabled: boolean | null; h1: any | null; error: string | null; loading: boolean; poll: Poll };
@@ -21,33 +22,43 @@ export const WAR_ROOM_PATH = "/api/war-room/latest";
 const POLL_LIVE_MS = 300_000;
 const POLL_MS = 10_000;
 
+/** No push applied yet. */
+const noPush: PushSlots = { pushed: null, push: null, pushAt: null };
+
 /**
  * The latest Live War Room 15m and the latest H1 decision (60 s), shared by the page. The room comes from the
  * push hub as it changes; the read every 10 seconds stays until the hub has delivered a snapshot, then runs
- * every 5 minutes as a fallback. The newest of the two arrivals, on the local order, is shown.
+ * every 5 minutes as a fallback. Which of the read and the push is shown: shownSide (below).
  */
 export function WarRoomProvider({ children }: { children: ReactNode }) {
   const push = usePush<any>("war-room");
-  const war = usePoll(() => get(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS);
+  // The read is dated (fourth review of #520): no-store, same-origin, its Date noted into the page's server clock.
+  const war = usePoll(() => readDated(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS);
   const dec = usePoll(() => get("/api/decisions?limit=1"), 60_000);
-  // The last applied push (third review of #520): its body, its arrival (local sequence and steady time) and the newest
-  // hub `at` applied. A push applies unless the hub's `at` marks it a replay older than what is on screen
-  // (pushApplies); the room on screen is the push's only when it arrived after the read that brought the read's room
-  // was sent (pushShown), so a read sent before a newer push never overwrites it; the push's arrival counts toward
-  // lastOk and clears the read's error only when it arrived after the failed read was sent (withPush).
-  const [pushed, setPushed] = useState<{ data: any; mark: PushMark; at: number } | null>(null);
+  // The read's room, its send and its Date; the pushes kept apart (pollState.ts takePush), as lib/market.tsx's routes:
+  // - a live push is shown when it arrived after the read on screen was sent; its arrival counts toward lastOk and
+  //   clears the read's error only when it arrived after the failed read was sent (withPush);
+  // - a hub replay is shown only when its `at` is newer than the read's Date (less 1 s), in either arrival order
+  //   (shownSide runs on every render, so a read in flight is compared when it settles); it never clears the error
+  //   or moves lastOk, and its age is its `at` on the server clock (unknown, so stale, until a read brings a Date).
+  const dated = war.data as Dated | null;
+  const read: ReadSide | null = dated != null && war.sentSeq != null ? { data: dated.data, seq: war.sentSeq, date: dated.date } : null;
+  const readRef = useRef(read);
+  readRef.current = read;
+  const [slots, setSlots] = useState<PushSlots>(noPush);
   useEffect(() => {
     const snap = push.snap;
     if (!snap?.data) return;
-    setPushed((s) => (pushApplies(snap, s?.at ?? null) ? { data: snap.data, mark: { seq: snap.seq, local: snap.local }, at: Math.max(s?.at ?? -Infinity, snap.at as number) } : s));
+    setSlots((s) => takePush(s, readRef.current, snap.data, snap) ?? s);
   }, [push.snap]);
-  const mark = pushed?.mark ?? null;
-  const latest = war.data != null && !pushShown(war.sentSeq, mark) ? war.data : pushed?.data ?? war.data ?? null;
-  const f = withPush({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, mark);
+  const shown = shownSide(read, slots.pushed);
+  const latest = (shown.data ?? null) as any;
+  const f = shownFacts({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, slots.push, shown.push, pageServer.offset());
   const poll: Poll = {
     ...war, ...f, data: latest,
+    replayed: f.replayed ?? false, replayAt: f.replayAt ?? null,
     loading: !latest && war.loading,
-    stale: isStale({ hasData: latest != null, error: f.error, lastOk: f.lastOk, intervalMs: war.intervalMs }, localNow()),
+    stale: isStale({ hasData: latest != null, ...f, intervalMs: war.intervalMs }, localNow()),
   };
   const value: Ctx = {
     room: latest?.room ?? null,

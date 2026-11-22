@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type ReactNode } from "react";
-import { errorText, get } from "./api";
-import { useSchedule, type Poll } from "./usePoll";
+import { errorText, type ApiError } from "./api";
+import { readDated, useSchedule, type Poll } from "./usePoll";
 import { usePushMany } from "./push";
-import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
+import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, pageServer, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
 
 /** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
 const POLL_LIVE_MS = 300_000;
@@ -90,6 +90,13 @@ function shownOf(path: string, body: any): unknown {
  *   push applied before a later failed read keeps its age; only clearing the error needs the push to have arrived
  *   after the failed read was sent (withPush);
  * - Retry now joins only a read sent within RETRY_JOIN_MS, else sends a new one, even during a hang.
+ *
+ * Fourth review of #520:
+ * - a hub replay may show data, but never clears an error or moves lastOk; its age is its `at` on the server clock
+ *   (the reads' `Date`, pageServer), unknown (stale, the plan hidden) until a read brings a Date;
+ * - a replay replaces a read's data only when its `at` is newer than that read's `Date` (less 1 s), in either
+ *   arrival order (a read in flight is compared when it settles); a live push keeps the f42efc2 rule;
+ * - a forward clock jump reads every path once at once (useSchedule), skipping a path whose read is in flight.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
@@ -108,9 +115,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     const id = nextSeq();
     routes.current[path] = routeSent(route(path), id);
     const settle = (r: ReadOutcome) => { routes.current[path] = routeSettled(route(path), id, r); bump(); };
-    const p = get(path).then(
-      (data) => settle({ ok: true, data, at: localNow() }),
-      (e) => settle({ ok: false, error: errorText(e), at: localNow() }),
+    const p = readDated(path).then(
+      (r) => settle({ ok: true, data: r.data, at: localNow(), date: r.date }),
+      (e) => settle({ ok: false, error: errorText(e), at: localNow(), date: (e as ApiError)?.date ?? null }),
     );
     flights.current[path] = { since: localNow(), p };
     void p.then(() => { if (flights.current[path]?.p === p) delete flights.current[path]; });
@@ -126,8 +133,8 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
   // The stale verdicts follow the clock: a coarse tick (and the tab coming back) renders when one of them changed.
   const staleOf = (path: string, t: number) => {
-    const f = routeFacts(route(path));
-    return isStale({ hasData: shownOf(path, route(path).data) != null, error: f.error, lastOk: f.lastOk, intervalMs: intervalOf(path) }, t);
+    const f = routeFacts(route(path), pageServer.offset());
+    return isStale({ hasData: shownOf(path, route(path).data) != null, ...f, intervalMs: intervalOf(path) }, t);
   };
   const staleSig = (t: number) => ALL_PATHS.map((p) => (staleOf(p, t) ? "1" : "0")).join("");
   const now = localNow();
@@ -141,9 +148,11 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
-  useSchedule(() => { for (const p of SLOW_PATHS) void read(p); }, slowMs);
+  // A forward clock jump: each path once at once, unless its read is in flight (single-flight).
+  const inFlight = (p: string) => route(p).sent > route(p).settled;
+  useSchedule(() => { for (const p of SLOW_PATHS) void read(p); }, slowMs, () => { for (const p of SLOW_PATHS) if (!inFlight(p)) void read(p); });
   // News Daily and the 5m context are not pushed yet: every 60 s, as before.
-  useSchedule(() => { for (const p of FAST_PATHS) void read(p); }, POLL_MS);
+  useSchedule(() => { for (const p of FAST_PATHS) void read(p); }, POLL_MS, () => { for (const p of FAST_PATHS) if (!inFlight(p)) void read(p); });
 
   // A push: each room and the decision, by its arrival (routePushed; the hub's `at` only keeps a replay out).
   const threadsSnap = push.snap.threads ?? null;
@@ -163,13 +172,14 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
   const pollOf = (path: string): Poll => {
     const s = route(path);
-    const f = routeFacts(s);
+    const f = routeFacts(s, pageServer.offset());
     const data = shownOf(path, s.data);
     const intervalMs = intervalOf(path);
     return {
       data, error: f.error, lastOk: f.lastOk, lastFail: f.lastFail, failures: f.failures, intervalMs,
+      replayed: f.replayed ?? false, replayAt: f.replayAt ?? null,
       loading: data == null && s.settled === 0, busy: s.sent > s.settled, refresh: () => refresh(path),
-      stale: isStale({ hasData: data != null, error: f.error, lastOk: f.lastOk, intervalMs }, now),
+      stale: isStale({ hasData: data != null, ...f, intervalMs }, now),
     };
   };
   const failed: Record<string, string> = {};

@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { errorText } from "./api";
-import { STALE_TICK_MS, isStale, localNow, nextSeq, singleFlight, staleAt, staleChanged, staleWake } from "./pollState";
+import { ApiError, errorText, getDated, type Dated } from "./api";
+import { STALE_TICK_MS, clockJump, isStale, localNow, nextSeq, pageServer, singleFlight, staleAt, staleChanged, staleWake } from "./pollState";
+
+/**
+ * A poll or retry read of a same-origin /api/* path with its `Date` (fourth review of #520): no-store (api.ts
+ * getDated), and its Date (a failed read's too) noted with the local time it settled into the page's server clock
+ * (pollState.ts pageServer), which ages a hub replay. Only these reads note: never a chart read or a cached one.
+ */
+export function readDated<T = any>(path: string): Promise<Dated<T>> {
+  return getDated<T>(path).then(
+    (r) => { pageServer.note(r.date, localNow()); return r; },
+    (e) => { if (e instanceof ApiError) pageServer.note(e.date, localNow()); throw e; },
+  );
+}
 
 /**
  * Load once, then refresh every `intervalMs` while the tab is visible (0 = no refresh), and at once when the tab
@@ -22,6 +34,9 @@ import { STALE_TICK_MS, isStale, localNow, nextSeq, singleFlight, staleAt, stale
  * joinsInFlight in lib/pollState.ts). The stale verdict follows the steady clock (it counts a sleep and never runs back): the tab
  * becoming visible re-evaluates it before the refresh, a coarse tick (STALE_TICK_MS) re-evaluates it while data is
  * on screen, and a stale timer that fires early (the clock moved back) is armed again (staleWake).
+ *
+ * Fourth review of #520: a forward clock jump (an NTP step, a wake from sleep: the steady clock outran the monotonic
+ * one by more than the interval, clockJump) reads once at once, unless a read is in flight (single-flight).
  */
 export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -92,6 +107,14 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
     return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, [intervalMs, start]);
 
+  // A forward clock jump schedules no read: read once now, unless one is in flight (it brings the answer).
+  useEffect(() => {
+    if (!intervalMs) return;
+    const jumped = clockJump();
+    const t = window.setInterval(() => { if (jumped(intervalMs) && !flight.current.busy && document.visibilityState === "visible") void start(); }, STALE_TICK_MS);
+    return () => window.clearInterval(t);
+  }, [intervalMs, start]);
+
   // The coarse clock while data is on screen: timers count awake time, so after a sleep or a forward clock jump
   // the stale timer below can be late; this tick turns the tag within STALE_TICK_MS.
   useEffect(() => {
@@ -123,11 +146,21 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
 /**
  * Run `run` on mount, every `intervalMs` while the tab is visible (0 = once) and at once when the tab becomes visible
  * again: usePoll's cadence without its state, for a provider that keeps each route's state itself (lib/market.tsx).
+ * On a forward clock jump (clockJump: more than `intervalMs`) it runs `onJump` once (fourth review of #520; the
+ * provider's skips a path whose read is in flight, single-flight).
  */
-export function useSchedule(run: () => void, intervalMs: number) {
+export function useSchedule(run: () => void, intervalMs: number, onJump: () => void = run) {
   const runRef = useRef(run);
   runRef.current = run;
+  const jumpRef = useRef(onJump);
+  jumpRef.current = onJump;
   useEffect(() => { runRef.current(); }, []);
+  useEffect(() => {
+    if (!intervalMs) return;
+    const jumped = clockJump();
+    const t = window.setInterval(() => { if (jumped(intervalMs) && document.visibilityState === "visible") jumpRef.current(); }, STALE_TICK_MS);
+    return () => window.clearInterval(t);
+  }, [intervalMs]);
   useEffect(() => {
     if (!intervalMs) return;
     const t = window.setInterval(() => { if (document.visibilityState === "visible") runRef.current(); }, intervalMs);
@@ -150,4 +183,10 @@ export type Poll = {
   intervalMs: number;
   /** The poll's own read is in flight (informational: Retry now is disabled only while its own click runs). */
   busy?: boolean;
+  /**
+   * The data on screen is a hub replay's (fourth review of #520): its age is `replayAt` (server-aged, localNow), null
+   * while unknown; lastOk stays the last good read or live push (pollState.ts ageBase).
+   */
+  replayed?: boolean;
+  replayAt?: number | null;
 };

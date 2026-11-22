@@ -6,7 +6,8 @@ import { localNow, nextSeq, pushTime, type PushArrival } from "./pollState";
  * when the message had none), and its arrival (third review of #520): the local sequence (`seq`, nextSeq) and the
  * steady clock (`local`, localNow) when it reached the page, and `replay`: the first snapshot of the topic on this
  * socket, which the hub sends from its store on every connect. A page orders it by `seq` and counts its age from
- * `local`; `at` only recognises a replay older than the data on screen (pushApplies in lib/pollState.ts).
+ * `local`; `at` only recognises a replay older than the data on screen (pushApplies in lib/pollState.ts). Fourth
+ * review: a replay never counts as a good arrival; its age is `at` on the server clock (the reads' Date, takePush).
  */
 export type Snapshot<T = any> = PushArrival & { data: T };
 
