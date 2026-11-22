@@ -4,6 +4,7 @@ export const CORRECTIONS_SEND_PER_SWEEP: number;
 export const CORRECTIONS_MAX_ATTEMPTS: number;
 export const CORRECTIONS_CALL_TIMEOUT_MS: number;
 export const CORRECTIONS_BACKOFF_MS: number;
+export const CORRECTIONS_STRIKES_PER_HOUR: number;
 export function payloadLeaks(value: unknown, path?: string): string[];
 export function correctionsEnabled(env: unknown): boolean;
 export function buildCorrection(input: unknown, ctx: { actor: string; owner: boolean; attested_by: string; now: string; correction_id: string }): Promise<{ ok: true; correction: Record<string, unknown> } | { ok: false; error: string }>;

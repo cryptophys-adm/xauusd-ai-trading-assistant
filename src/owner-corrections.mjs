@@ -13,8 +13,10 @@
 // - A record never carries a parameter or a price-like key. A correction never writes STRATEGY_PARAMS, knob
 //   overrides, risk profiles, witness weights, QUORUM_SHARE or REPUTATION_PRIOR, never arms a strategy and never
 //   enters outcome_scores: this module only stores and sends.
-// - A transport failure is retried by the next sweep (as aether-push.mjs does for cards); a kernel denial is final
-//   (AGENTS.md rule 7).
+// - Sending (sendOwnerCorrections): a thrown error or a timeout is retried by the next sweep (as aether-push.mjs does
+//   for cards); the kernel's `failed` is final for that record and stops the sweep; a denial stops the sweep and waits
+//   one hour (the documented backoff of AGENTS.md rule 7), never a retry loop; at most CORRECTIONS_STRIKES_PER_HOUR
+//   denied, failed or timed-out calls an hour, below the kernel's suspension threshold of 5.
 
 export const NEXUS_TEACHER_ID = "nexus-teacher";
 export const CORRECTIONS_CAPABILITY = "corrections.record";
@@ -40,6 +42,9 @@ export const CORRECTIONS_MAX_ATTEMPTS = 48;
 export const CORRECTIONS_CALL_TIMEOUT_MS = 15_000;
 /** After a denial (every denial of a learning capability is the agent's or the system's state), the sender waits. */
 export const CORRECTIONS_BACKOFF_MS = 3_600_000;
+/** The local budget of kernel strikes (denied, failed or timed out) in any rolling hour; the kernel proposes a
+ *  suspension at 5 (ai-kernel supervisor.ts), so the sender stops at 3 and never reaches it. */
+export const CORRECTIONS_STRIKES_PER_HOUR = 3;
 
 const ID = /^cor_[0-9a-f]{16}$/;
 const SUBJECT = /^(agent|model|seat):[A-Za-z0-9_.:-]{1,100}$/;
@@ -259,10 +264,11 @@ export function recordPayload(c) {
 const LEAK_EXEMPT = new Set(["target.ref", "target.subject", "target.as_of", "created_at", "actor", "attested_by", "supersedes", "schema", "side", "source", "label", "rating", "category"]);
 /** The paths of the payload that would leak a price-like number or a secret (a last check before anything is sent). */
 export function payloadLeaks(value, path = "") {
-  if (Array.isArray(value)) return path === "evidence_refs" ? [] : value.flatMap((v, i) => payloadLeaks(v, `${path}[${i}]`));
+  if (Array.isArray(value)) return path === "evidence_refs" ? value.filter((v) => typeof v === "string" && secretInText(v)).map((_, i) => `evidence_refs[${i}]`) : value.flatMap((v, i) => payloadLeaks(v, `${path}[${i}]`));
   if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => payloadLeaks(v, path ? `${path}.${k}` : k));
-  if (typeof value !== "string" || LEAK_EXEMPT.has(path)) return [];
-  return PRICE.test(value) || secretInText(value) ? [path] : [];
+  if (typeof value !== "string") return [];
+  if (secretInText(value)) return [path];
+  return !LEAK_EXEMPT.has(path) && PRICE.test(value) ? [path] : [];
 }
 
 // ------------------------------------------------------------ the local store and the sender
@@ -308,11 +314,18 @@ export async function recordOwnerCorrection(env, input, { actor, owner = false, 
   if (errors.length) return { ok: false, error: errors[0] };
   await ensureSchema(db);
   await db.prepare("INSERT INTO owner_corrections (correction_id, original_json, record_json, dedup_sha256, status, attempts, created_ms) VALUES (?, ?, ?, ?, 'pending', 0, ?)")
-    .bind(built.correction.correction_id, redactText(JSON.stringify(input)), JSON.stringify(built.correction), built.correction.dedup_sha256, now).run();
+    .bind(built.correction.correction_id, JSON.stringify(input, (_k, v) => (typeof v === "string" ? redactText(v) : v)), JSON.stringify(built.correction), built.correction.dedup_sha256, now).run();
   return { ok: true, correction_id: built.correction.correction_id, redactions: built.correction.redactions };
 }
 
 const META_SQL = "CREATE TABLE IF NOT EXISTS owner_corrections_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
+const STRIKES_SQL = "CREATE TABLE IF NOT EXISTS owner_corrections_strikes (at_ms INTEGER NOT NULL)";
+async function strikesLastHour(db, now) {
+  await db.prepare(STRIKES_SQL).run();
+  await db.prepare("DELETE FROM owner_corrections_strikes WHERE at_ms < ?").bind(now - 2 * 3_600_000).run();
+  return Number((await db.prepare("SELECT COUNT(*) AS n FROM owner_corrections_strikes WHERE at_ms > ?").bind(now - 3_600_000).first())?.n) || 0;
+}
+async function strike(db, now) { await db.prepare(STRIKES_SQL).run(); await db.prepare("INSERT INTO owner_corrections_strikes (at_ms) VALUES (?)").bind(now).run(); }
 async function metaGet(db, key) { await db.prepare(META_SQL).run(); return (await db.prepare("SELECT value FROM owner_corrections_meta WHERE key = ?").bind(key).first())?.value ?? null; }
 async function metaSet(db, key, value) { await db.prepare(META_SQL).run(); await db.prepare("INSERT INTO owner_corrections_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, String(value)).run(); }
 
@@ -333,7 +346,10 @@ async function teacherEnabled(env, timeoutMs) {
   let timer;
   try {
     const w = await Promise.race([env.AGENTS.whoami(NEXUS_TEACHER_ID), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); })]);
-    return typeof w?.status === "string" ? w.status === "enabled" : null;
+    if (typeof w?.status !== "string") return null;
+    // Enabled and granted: a missing grant would re-deny the same first record every hour.
+    const caps = Array.isArray(w?.capabilities) ? w.capabilities : null;
+    return w.status === "enabled" && (caps === null || caps.includes(CORRECTIONS_CAPABILITY));
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
@@ -372,6 +388,7 @@ export async function sendOwnerCorrections(env, { now = Date.now(), limit = CORR
       out.invalid += 1;
       continue;
     }
+    if (await strikesLastHour(db, now) >= CORRECTIONS_STRIKES_PER_HOUR) { out.stopped = "local_budget"; break; }
     const r = await callKernel(env, payload, timeoutMs);
     if (r?.outcome === "succeeded" || r?.outcome === "success") {
       const id = r?.result?.correction_id ?? r?.result?.correction?.correction_id ?? null;
@@ -379,11 +396,13 @@ export async function sendOwnerCorrections(env, { now = Date.now(), limit = CORR
         .bind(typeof id === "string" ? id.slice(0, 40) : null, now, r?.result?.deduplicated ? "deduplicated" : null, row.correction_id).run();
       out.sent += 1;
     } else if (r?.outcome === "denied") {
+      await strike(db, now);
       await metaSet(db, "backoff_until", now + CORRECTIONS_BACKOFF_MS);
       await db.prepare("UPDATE owner_corrections SET reason = ? WHERE correction_id = ?").bind(`denied: ${String(r?.reason ?? "").slice(0, 180)}`, row.correction_id).run();
       out.stopped = "denied";
       break;
     } else if (r?.outcome === "transport") {
+      if (r.reason === "timeout") await strike(db, now);
       const attempts = Number(row.attempts || 0) + 1;
       await db.prepare("UPDATE owner_corrections SET attempts = ?, status = ?, reason = ? WHERE correction_id = ?")
         .bind(attempts, attempts >= CORRECTIONS_MAX_ATTEMPTS ? "failed" : "pending", String(r.reason).slice(0, 200), row.correction_id).run();
@@ -392,8 +411,12 @@ export async function sendOwnerCorrections(env, { now = Date.now(), limit = CORR
       break;
     } else {
       // The kernel's own `failed` (or an unknown outcome): it judged this record; final, never retried.
+      // It stops the sweep too: a systemic failure must not drain the queue toward a suspension.
+      await strike(db, now);
       await db.prepare("UPDATE owner_corrections SET status = 'rejected', reason = ? WHERE correction_id = ?").bind(String(r?.reason ?? r?.outcome ?? "failed").slice(0, 200), row.correction_id).run();
       out.rejected += 1;
+      out.stopped = "rejected";
+      break;
     }
   }
   out.pending = Number((await db.prepare("SELECT COUNT(*) AS n FROM owner_corrections WHERE status = 'pending'").first())?.n) || 0;

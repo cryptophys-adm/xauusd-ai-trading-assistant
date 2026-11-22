@@ -155,3 +155,36 @@ test("OC7 nothing that leaves carries a price or a secret: the raw category is m
   await recordOwnerCorrection(env, { ...INPUT, text: "Bearer abcdefghijklmnopqrstuvwxyz0123 leaked" }, { actor: "owner:owner@example.com", owner: true, now: NOW });
   assert.doesNotMatch(env.DB.raw.prepare("SELECT original_json FROM owner_corrections").get().original_json, /abcdefghijklmnopqrstuvwxyz0123/, "a secret is redacted in the local copy too");
 });
+
+test("OC8 a systemic kernel failure never drains the queue: the first failed stops the sweep, and at most 3 strikes an hour reach the kernel", async () => {
+  resetOwnerCorrectionsSchemaForTests();
+  let calls = 0;
+  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => { calls += 1; return { outcome: "failed", reason: "kernel_error" }; } } };
+  for (let i = 0; i < 6; i++) await recordOwnerCorrection(env, { ...INPUT, text: `row ${"abcdef"[i]}` }, { actor: "owner:owner@example.com", owner: true, now: NOW + i });
+  const first = await sendOwnerCorrections(env, { now: NOW });
+  assert.deepEqual([first.stopped, first.rejected, first.pending, calls], ["rejected", 1, 5, 1], "6 pending rows: 1 failed call, 5 still pending");
+  await sendOwnerCorrections(env, { now: NOW + 60_000 });
+  await sendOwnerCorrections(env, { now: NOW + 120_000 });
+  assert.equal(calls, 3);
+  const held = await sendOwnerCorrections(env, { now: NOW + 180_000 });
+  assert.deepEqual([held.stopped, calls], ["local_budget", 3], "the fourth strike in the hour is never sent");
+  env.AGENTS.syscall = async () => { calls += 1; return { outcome: "succeeded", result: {} }; };
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + 3_600_001 + 180_000 })).sent, 3, "the hour passes: the rest goes");
+});
+
+test("OC9 the backoff clears only for an enabled agent that holds corrections.record; secrets are caught in refs too; the local copy stays JSON", async () => {
+  resetOwnerCorrectionsSchemaForTests();
+  let whoami = { status: "enabled", capabilities: ["reports.publish"] }, calls = 0;
+  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => { calls += 1; return { outcome: "denied", reason: "capability_not_granted" }; }, whoami: async () => whoami } };
+  await recordOwnerCorrection(env, { ...INPUT, text: "Bearer abcdefghijklmnopqrstuvwxyz0123 leaked" }, { actor: "owner:owner@example.com", owner: true, now: NOW });
+  await sendOwnerCorrections(env, { now: NOW });
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + CORRECTIONS_BACKOFF_MS })).status, "backoff", "enabled but not granted: still waiting");
+  assert.equal(calls, 1);
+  whoami = { status: "enabled", capabilities: ["corrections.record"] };
+  env.AGENTS.syscall = async () => { calls += 1; return { outcome: "succeeded", result: {} }; };
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + 2 * CORRECTIONS_BACKOFF_MS })).sent, 1);
+  const original = JSON.parse(env.DB.raw.prepare("SELECT original_json FROM owner_corrections").get().original_json);
+  assert.match(original.text, /\[redacted\] leaked/);
+  assert.match(original.text, /^Bearer|\[redacted\]/);
+  assert.deepEqual(payloadLeaks({ target: { ref: "ev:xauusd/card/sk-abcdefghijklmnopqrstuvwxyz" }, evidence_refs: ["ev:xauusd/card/ghp_abcdefghijklmnopqrstuvwxyz0123"] }), ["target.ref", "evidence_refs[0]"]);
+});

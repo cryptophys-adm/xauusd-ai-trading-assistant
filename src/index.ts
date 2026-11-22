@@ -3377,7 +3377,8 @@ export default {
           if (compliance.status === "ok" && Number(compliance.violations)) console.log("compliance_checks", JSON.stringify(compliance));
         } catch (e) { console.error("compliance_checks_failed", e instanceof Error ? e.message : String(e)); }
         // HAIC H3f (platform docs/design/HAIC-H3.md §7.2): the owner's corrections, sent as nexus-teacher every sweep;
-        // a failure waits for the next sweep, a denial is final. Off unless OWNER_CORRECTIONS is "on" (no D1 read then).
+        // a transport failure waits for the next sweep, the kernel's failed is final and stops the sweep, a denial backs off
+        // an hour. Off unless OWNER_CORRECTIONS is "on" (no D1 read then).
         try {
           const corr = await sendOwnerCorrections(env);
           if (corr.status !== "disabled" && (corr.status !== "ok" || Number(corr.sent) || Number(corr.rejected) || Number(corr.invalid) || corr.stopped)) console.log("owner_corrections", JSON.stringify(corr));
