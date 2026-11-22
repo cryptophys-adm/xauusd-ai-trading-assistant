@@ -56,7 +56,9 @@ the Key Level Agent, in the projection family:
 | The other line after a breakout | 0.5 |
 
 A zone counts the projection family once per chart, so many patterns at one price do not add up.
-Switch: `CHART_PATTERNS_MODE` = `on` (default) or `off`.
+Switch: `CHART_PATTERNS_MODE` = `on` (default) or `off`. `off` removes the patterns from the key levels, the
+pattern agents' plans, the council's price action and the rooms' projection data (2026-11-22: before then it reached
+only a caller that passed `env`, so it changed nothing live).
 
 ## Limits known today
 

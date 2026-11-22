@@ -22,7 +22,16 @@ const DIRECTION = { 1: "broke out upward", "-1": "broke out downward", 0: "not b
  * (oldest first); `plane` the chart plane of its HUD snapshot (or null); `calibration` the stored
  * pattern calibration (or null).
  */
-export function projectionReading({ bars = [], plane = null, calibration = null, timeframe = "" } = {}) {
+/** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off". */
+export function chartPatternsMode(env) {
+  return String(env?.CHART_PATTERNS_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
+
+/**
+ * The Projection Agent's reading of one chart. `patterns` "off" (CHART_PATTERNS_MODE) leaves the chart patterns
+ * out and keeps the projection levels.
+ */
+export function projectionReading({ bars = [], plane = null, calibration = null, timeframe = "", patterns: patternsMode = "on" } = {}) {
   const recent = (Array.isArray(bars) ? bars : []).slice(-PROJECTION_WINDOW);
   const b = normBars(recent);
   const close = b.at(-1)?.c;
@@ -30,7 +39,7 @@ export function projectionReading({ bars = [], plane = null, calibration = null,
   if (!num(close) || !num(range) || range <= 0) return { timeframe, available: false, note: "not enough closed bars" };
   const away = (price) => (num(price) ? { side: price > close ? "above" : price < close ? "below" : "at", ranges: r2(Math.abs(price - close) / range) } : null);
   let found = [];
-  try { found = detectPatterns(recent); } catch { found = []; }
+  if (patternsMode !== "off") { try { found = detectPatterns(recent); } catch { found = []; } }
   const patterns = found.map((p) => {
     const rec = calibration?.patterns?.[p.id];
     return {

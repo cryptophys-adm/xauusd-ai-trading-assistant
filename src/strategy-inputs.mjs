@@ -76,6 +76,8 @@ export function slimInputs(inputs) {
     calendar: Array.isArray(inputs?.calendar?.events) ? { events: inputs.calendar.events.map((e) => ({ title: e.title, currency: e.currency, time: e.time, impact: e.impact })) } : null,
     // The released figures of the Projection Agent's event patterns: the replay must see them too.
     releases: Array.isArray(inputs?.releases) ? inputs.releases.map((e) => ({ title: e.title, time: e.time, gold_direction: e.gold_direction })) : [],
+    // CHART_PATTERNS_MODE at capture time, so the replay builds what the live strategy built; kept only when off.
+    ...(inputs?.modes?.chartPatterns === "off" ? { modes: { chartPatterns: "off" } } : {}),
     now: inputs?.now ?? null
   };
 }

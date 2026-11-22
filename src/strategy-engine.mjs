@@ -22,6 +22,7 @@ import { readWarRoom } from "./war-room.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
 import { buildKeyLevels } from "./key-level-agent.mjs";
+import { chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
 import { recentReleases } from "./econ-releases.mjs";
@@ -314,7 +315,7 @@ export function triggerOf(dir, { confirmations, m15Snapshot }) {
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, releases = [], m5Price = null, patternCalibration = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, releases = [], m5Price = null, patternCalibration = null, modes = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -346,7 +347,9 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
     snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
     bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1,
     // The Projection Agent's chart patterns (owner 2026-11-12); the released figures feed the event patterns.
-    patterns: chartPatternsMode(env), events: releases,
+    // CHART_PATTERNS_MODE travels in the inputs (loadStrategyInputs), not in env: buildStrategy is called
+    // without env by the decision engine, the Global Conclusion and the capture, so "off" never reached it.
+    patterns: modes?.chartPatterns === "off" ? "off" : chartPatternsMode(env), events: releases,
     // Their measured record on gold scales their weights (src/pattern-calibration.mjs, hourly).
     calibration: patternCalibration
   });
@@ -463,14 +466,14 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     releases: (await safe(() => recentReleases(env, { now }))) ?? [],
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
+    // The owner's switches the pure build reads (it never reads env for them).
+    modes: { chartPatterns: chartPatternsMode(env) },
     now
   };
 }
 
-/** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off". */
-export function chartPatternsMode(env) {
-  return String(env?.CHART_PATTERNS_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
-}
+/** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off" (src/projection-agent.mjs). */
+export { chartPatternsMode };
 
 /** The strategy from the live inputs (GET /api/strategy). */
 export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
