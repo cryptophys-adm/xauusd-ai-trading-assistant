@@ -1,7 +1,8 @@
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, ShieldCheck, Swords, Trophy, Users, X, Zap, Cpu } from "lucide-react";
-import { Dot } from "./ui";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Swords, Trophy, Users, X, Zap, Cpu } from "lucide-react";
+import { StatusRow, StatusStrip } from "./HeaderStatus";
+import { omegaCell, roomCell } from "../lib/headerStatus";
 import { useWarRoom } from "../lib/warroom";
 import { useOmegaStatus } from "../lib/omega";
 import { marketClosed } from "../lib/health";
@@ -39,22 +40,15 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
 ];
 export const NAV = NAV_GROUPS.flatMap((g) => g.items).filter((i) => !i.soon);
 
-function Clock() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 1000); return () => window.clearInterval(t); }, []);
-  return <span className="mono">{now.toISOString().slice(11, 19)} UTC</span>;
-}
-
 export default function AppShell({ current, children }: { current: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const { room, error } = useWarRoom();
-  // "Room live" only while the 15m room is current (owner 2026-11-13: not green on an old room).
+  // The header cells (lib/headerStatus.ts): LIVE only while the 15m room is current (owner 2026-11-13: never on an old room).
   const roomMs = Date.parse(String(room?.bar_close ?? room?.bar_time ?? ""));
-  const closed = marketClosed();
-  const live = !error && !!room && Number.isFinite(roomMs) && Date.now() - roomMs < 45 * 60_000;
+  const roomStatus = roomCell({ barMs: roomMs, hasRoom: !!room, error: !!error, closed: marketClosed() });
   // DEF-10 (UI audit 2026-11-14): the Omega badge from a light status read (one bridge row), every 60 s while
   // the page is visible; never the full overview (ADR-0015 resource audit).
-  const omegaStatus = useOmegaStatus();
+  const omega = omegaCell(useOmegaStatus());
 
   const navigate = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
     setOpen(false);
@@ -101,29 +95,20 @@ export default function AppShell({ current, children }: { current: string; child
               transition={{ duration: 4, repeat: Infinity }}>
               <Activity className="h-4 w-4 text-cyan-300 sm:h-5 sm:w-5" />
             </motion.div>
-            <div>
-              <div className="text-xs uppercase tracking-[0.35em] text-cyan-300/80">Cryptophys Nexus</div>
-              <div className="text-sm font-semibold text-white">XAUUSD Agent War Room</div>
+            <div className="flex items-baseline gap-2.5">
+              <span className="text-[15px] font-semibold text-white">Nexus</span>
+              <span className="hidden text-[13px] text-slate-400 min-[420px]:inline">XAUUSD War Room</span>
             </div>
           </a>
-          <div className="ml-auto hidden items-center gap-2 sm:flex">
-            <a href="/#/omega" onClick={(e) => navigate(e, "/#/omega")}
-              className={`chip transition ${current === "omega" ? "border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : omegaStatus?.connected ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:border-emerald-400/50 hover:text-white" : "border-cyan-400/20 bg-cyan-400/10 text-cyan-300 hover:border-cyan-400/40 hover:text-white"}`}
-              title={omegaStatus?.connected ? `MetaTrader 5 live: ${omegaStatus.broker || "Bridge connected"} (${omegaStatus.armed ? "Armed" : "Disarmed"}, ${omegaStatus.positions} pos)` : "MetaTrader 5 live execution bridge and terminal (Standby)"}>
-              <Zap className={`h-3 w-3 ${omegaStatus?.connected ? "text-emerald-300" : "text-cyan-300"}`} />
-              <span>{current === "omega" ? "MT5 Live" : omegaStatus?.connected ? `Omega: ${omegaStatus.broker || "Live"}${omegaStatus.positions > 0 ? ` (${omegaStatus.positions})` : ""}` : "Omega: Standby"}</span>
-            </a>
-            <span className="chip border-emerald-400/20 bg-emerald-400/10 text-emerald-300"><ShieldCheck className="h-3 w-3" />{current === "omega" ? "Execution · Access protected" : "Advisory only"}</span>
-            <span className={`chip ${live ? "border-amber-400/20 bg-amber-400/10 text-amber-200" : "border-rose-400/20 bg-rose-400/10 text-rose-300"}`}>
-              <Dot tone={live ? "green" : closed ? "slate" : "red"} pulse={live} />{live ? "Room live" : closed ? "Market closed" : !room ? "Room offline" : "Room behind"}
-            </span>
-            <span className="chip border-white/10 bg-white/4 text-slate-300"><Clock /></span>
+          <div className="ml-auto hidden sm:flex">
+            <StatusStrip room={roomStatus} omega={omega} omegaActive={current === "omega"} navigate={navigate} />
           </div>
-          <button type="button" className="ml-auto rounded-md border border-white/10 bg-white/4 p-2 text-slate-400 hover:text-white md:hidden"
+          <button type="button" className="ml-auto flex h-[44px] w-[44px] items-center justify-center rounded-lg border border-white/10 bg-white/4 text-slate-300 hover:text-white sm:ml-0 md:hidden"
             onClick={() => setOpen((o) => !o)} aria-label="Toggle navigation" aria-expanded={open}>
             {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </button>
         </div>
+        <StatusRow room={roomStatus} omega={omega} omegaActive={current === "omega"} navigate={navigate} />
       </header>
 
       {open && (
