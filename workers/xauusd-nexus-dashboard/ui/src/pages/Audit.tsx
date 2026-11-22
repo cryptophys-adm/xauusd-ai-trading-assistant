@@ -110,7 +110,7 @@ export default function Audit() {
   const cards: any[] = (data as any)?.cards ?? [];
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
+      <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
         <div className="flex flex-wrap gap-2">
           {CHARTS.map(([k, label]) => (
             <button key={k} onClick={() => setChart(k)} className={`rounded-sm border px-2 py-1 text-[12px] ${chart === k ? "border-white/30 bg-white/8 text-fg" : "border-white/10 text-fg-2 hover:text-fg"}`}>{label}</button>

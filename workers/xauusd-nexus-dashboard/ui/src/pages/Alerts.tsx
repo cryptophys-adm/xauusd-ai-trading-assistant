@@ -16,7 +16,7 @@ export default function Alerts() {
     : !v.switch_on ? { tone: "slate" as const, text: "off" } : { tone: "amber" as const, text: "bot not configured" };
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Alerts" icon={<BellRing className="h-3.5 w-3.5 text-cyan-300" />} hint="Each Signal Ledger event is sent to Telegram once, at most 5 messages per run. No orders are placed." right={state ? <Badge tone={state.tone}>{state.text}</Badge> : null}>
+      <Panel title="Alerts" icon={<BellRing className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint="Each Signal Ledger event is sent to Telegram once, at most 5 messages per run. No orders are placed." right={state ? <Badge tone={state.tone}>{state.text}</Badge> : null}>
         {v && !v.bot_configured ? <p className="text-[12px] text-amber-200">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to start sending.</p> : null}
       </Panel>
       {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={4} /></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (

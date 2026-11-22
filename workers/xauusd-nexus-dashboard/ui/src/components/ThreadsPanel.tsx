@@ -5,7 +5,7 @@ import { Post, calibrationText } from "./Post";
 import { MetricChips, RebuttalChips } from "./MetricChips";
 import CrowdLine from "./CrowdLine";
 import { Stance, stanceColor } from "./Stance";
-import { Badge, ErrorBox, Hint, Skeleton } from "./ui";
+import { Badge, ErrorBox, Hint, PollError, PollStrip, Skeleton } from "./ui";
 import { useWarRoom } from "../lib/warroom";
 import { NEWS_PATH, threadPath, useMarket } from "../lib/market";
 import { TABS, useTab, tabLabel, type Tab } from "../lib/tab";
@@ -186,17 +186,23 @@ function NewsTab({ d }: { d: any }) {
 }
 
 function TabBody({ tab }: { tab: Tab }) {
-  const { room } = useWarRoom();
-  const { threads, news, loading, failed, okAt, intervalOf, retry } = useMarket();
-  if (tab === "M15") return room ? <RoomTab room={room} tab="M15" /> : <p className="text-[12px] text-muted">No War Room yet.</p>;
-  if (loading) return <Skeleton rows={6} />;
+  const { room, poll: roomPoll } = useWarRoom();
+  const { threads, news, loading, failed, okAt, intervalOf, retry, busy, pollOf } = useMarket();
   // A failed read says so (its route and code), never "No … yet": that is only for a good read with nothing in it.
+  // Old data after a failed or missing read carries the stale tag (review of #520).
+  if (tab === "M15") {
+    if (room) return <><PollStrip poll={roomPoll} /><RoomTab room={room} tab="M15" /></>;
+    if (roomPoll.error != null) return <PollError poll={roomPoll} />;
+    if (roomPoll.loading) return <Skeleton rows={6} />;
+    return <p className="text-[12px] text-muted">No War Room yet.</p>;
+  }
+  if (loading) return <Skeleton rows={6} />;
   const failure = (path: string) => failed[path]
-    ? <ErrorBox error={failed[path]} lastOk={okAt[path] ?? null} intervalMs={intervalOf(path)} onRetry={retry} />
+    ? <ErrorBox error={failed[path]} lastOk={okAt[path] ?? null} intervalMs={intervalOf(path)} retrying={busy} onRetry={retry} />
     : null;
-  if (tab === "NEWS") return news ? <NewsTab d={news} /> : failure(NEWS_PATH) ?? <p className="text-[12px] text-muted">No news analysis yet.</p>;
+  if (tab === "NEWS") return news ? <><PollStrip poll={pollOf(NEWS_PATH)} /><NewsTab d={news} /></> : failure(NEWS_PATH) ?? <p className="text-[12px] text-muted">No news analysis yet.</p>;
   const t = threads[tab];
-  return t ? <RoomTab room={t} tab={tab} /> : failure(threadPath(tab)) ?? <p className="text-[12px] text-muted">No {tabLabel(tab)} War Room yet.</p>;
+  return t ? <><PollStrip poll={pollOf(threadPath(tab))} /><RoomTab room={t} tab={tab} /></> : failure(threadPath(tab)) ?? <p className="text-[12px] text-muted">No {tabLabel(tab)} War Room yet.</p>;
 }
 
 /**

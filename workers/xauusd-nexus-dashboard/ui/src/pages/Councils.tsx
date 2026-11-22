@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FileSearch, Lightbulb, ScrollText, Users } from "lucide-react";
-import { Badge, Empty, Hint, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
+import { Badge, Empty, ErrorLine, Hint, Panel, PollError, PollStrip, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { useConfirm } from "../components/ConfirmDialog";
 import { ago, humanKey, utc } from "../lib/format";
@@ -272,8 +272,10 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
   const [text, setText] = useState(""); const [to, setTo] = useState<string[]>([]); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const [showOld, setShowOld] = useState(false);
   const [confirm, dialog] = useConfirm();
+  // Review of #520: a failed read is the error box (old data keeps the stale tag); "not found" only from a good read.
+  if (phaseOf(poll) === "error") return <PollError poll={poll} />;
   if (poll.loading && !s) return <Skeleton rows={4} />;
-  if (!s) return <Empty>Session not found.</Empty>;
+  if (!s) return poll.error != null ? <PollError poll={poll} /> : <Empty>Session not found.</Empty>;
   const rounds = ["position", "rebuttal", "answer"].map((r) => [r, s.messages.filter((m: any) => m.round === r || (r === "answer" && (m.round === "owner" || m.round === "notice")))] as const).filter(([, ms]) => ms.length);
   const terminal = s.terminal ?? TERMINAL.includes(s.state);
   const send = async () => { setBusy(true); setErr(null); try { const r = await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); if (r?.stale) setErr("Sent. This session's evidence is older than 24 hours: re-open the topic for answers on fresh evidence."); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
@@ -289,6 +291,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
   return (
     <div className="flex flex-col gap-3">
       {dialog}
+      <PollStrip poll={poll} className="mb-0" />
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {s.pack_stale ? <span className="text-amber-300">{Number(s.pack_refs) === 0 ? "This session ran on no evidence." : "This session's evidence is older than 24 hours."}</span> : null}
         <button type="button" disabled={busy || !enabled} onClick={() => control("reopen")} title={enabled ? "Open a new session on the same topic and agents, with fresh evidence; this one is closed" : "Turn sessions on first"}
@@ -338,6 +341,7 @@ function Proposals({ tick }: { tick: number }) {
   const poll = usePoll(() => get("/api/council/proposals"), 30_000, [tick]);
   const rows = ((poll.data as any)?.proposals ?? []) as any[];
   const live = Object.entries(((poll.data as any)?.live_knobs ?? {}) as Record<string, number>);
+  if (phaseOf(poll) === "error") return <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div><ErrorLine error={poll.error ?? "read failed"} /></div>;
   if (!rows.length && !live.length) return null;
   return (
     <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div>
@@ -371,13 +375,16 @@ function Sessions({ topic }: { topic: string | null }) {
   // Open the newest live session by default; a page of closed sessions starts clean.
   useEffect(() => { if (!open) { const live = d?.sessions?.find((x: any) => !TERMINAL.includes(x.state)); if (live) setOpen(live.id); } }, [d, open]);
   const act = async (body: unknown) => { setBusy(true); setErr(null); try { const r = await ownerPost(body); if (r?.session_id) setOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
+  const phase = phaseOf(poll);
   return (
+    <Panel title="Sessions" icon={<Users className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live
+      hint="Each agent says what it thinks in its own words; the evidence sits behind each card's link. Opening opinions, then responses to each other, then the moderator's options (always including 'no change'). You can write to the agents; your pick is made in Cerebrum. A session never changes trading by itself.">
     <div className="flex flex-col gap-3">
       {dialog}
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
-        <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-ok-fill/20 text-ok ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{d?.enabled ? "On" : "Off"}</span>
-        <button type="button" disabled={busy || d?.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "rose" }))) return; act({ action: "switch", on: !d?.enabled }); }}
+        <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-ok-fill/20 text-ok ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{!d ? "—" : d.enabled ? "On" : "Off"}</span>
+        <button type="button" disabled={busy || !d || d.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "rose" }))) return; act({ action: "switch", on: !d?.enabled }); }}
           className="rounded-md px-2 py-0.5 text-slate-300 ring-1 ring-slate-600/50 hover:text-slate-100 disabled:opacity-40">{d?.enabled ? "Turn off" : "Turn on"}</button>
         <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
       </div>
@@ -396,10 +403,11 @@ function Sessions({ topic }: { topic: string | null }) {
         <div className="flex flex-wrap gap-1.5">{d.sessions.map((x: any) => (
           <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded-sm px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}
           {open ? <button type="button" onClick={() => setOpen(null)} className="rounded-sm px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-700/50 hover:text-slate-300">Hide</button> : null}</div>
-      ) : <Empty>No session yet.</Empty>}
+      ) : phase === "error" || (!d && poll.error != null) ? <PollError poll={poll} /> : phase === "loading" ? <Skeleton rows={2} /> : <Empty>No session yet.</Empty>}
       {open ? <SessionView id={open} enabled={Boolean(d?.enabled)} onOpen={(x) => { setOpen(x); setTick((t) => t + 1); }} /> : null}
       <Proposals tick={tick} />
     </div>
+    </Panel>
   );
 }
 
@@ -422,12 +430,10 @@ export default function Councils() {
         </div>
       </Panel>
 
-      <Panel title="Sessions" icon={<Users className="h-3.5 w-3.5 text-cyan-300" />}
-        hint="Each agent says what it thinks in its own words; the evidence sits behind each card's link. Opening opinions, then responses to each other, then the moderator's options (always including 'no change'). You can write to the agents; your pick is made in Cerebrum. A session never changes trading by itself.">
-        <Sessions topic={topic} />
-      </Panel>
+      <Sessions topic={topic} />
 
       <Panel title="Suggested topics" icon={<Lightbulb className="h-3.5 w-3.5 text-cyan-300" />}
+        poll={sugPoll}
         hint="Checked once an hour while the market is open: a strategy agent or pattern whose last 20 resolved trades ended at the stop or SL+ 65% of the time or more, a breaker, a losing market condition, the engine's hit rate, a seat at the weight floor, execution, data and cost signals. One open card per topic, the same signal at most once in 7 days, at most 3 new a day."
         right={s ? <Badge tone="slate">{suggestions.filter((x) => x.status === "open").length} open</Badge> : null}>
         {phaseOf(sugPoll) === "error" ? <PollError poll={sugPoll} /> : sugPoll.loading && !s ? <Skeleton rows={3} /> : !suggestions.length ? <Empty>No topic suggested yet{s?.mode === "off" ? " (the flags are off)" : ""}.</Empty> : (
@@ -438,10 +444,10 @@ export default function Councils() {
       </Panel>
 
       <Panel title="Topic" icon={<FileSearch className="h-3.5 w-3.5 text-cyan-300" />} hint="Pick a type and a topic; a strategy topic can be any agent, one of its patterns, its exits, or one market condition (trading mode and 1H regime).">
-        {!s?.catalog ? <Skeleton rows={2} /> : <Picker catalog={s.catalog} agents={agents} onPick={setTopic} />}
+        {!s?.catalog ? (phaseOf(sugPoll) === "error" ? <ErrorLine error={sugPoll.error ?? "read failed"} /> : <Skeleton rows={2} />) : <Picker catalog={s.catalog} agents={agents} onPick={setTopic} />}
       </Panel>
 
-      <Panel title="Evidence pack" icon={<ScrollText className="h-3.5 w-3.5 text-cyan-300" />}
+      <Panel title="Evidence pack" icon={<ScrollText className="h-3.5 w-3.5 text-cyan-300" />} poll={topic ? packPoll : undefined}
         hint="Built now from the stored records, deterministically: the same evidence gives the same sha256. Omega's stop locked behind passed key levels is the headline SL+; the ledger's breakeven SL+ stands beside it."
         right={pk?.pack ? <span className="flex items-center gap-1.5"><Hint text="council_pack.v1; refs follow ev:xauusd/<source>/<id>[@<as_of>][#<field>]" /><Badge tone="slate">{Object.keys(pk.pack.sections ?? {}).length} sections</Badge></span> : null}>
         {!topic ? <Empty>Pick a suggested topic or build one above.</Empty>

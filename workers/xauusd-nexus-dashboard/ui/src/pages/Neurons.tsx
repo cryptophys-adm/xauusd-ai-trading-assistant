@@ -107,7 +107,7 @@ export default function Neurons() {
 
       <div className="max-w-xl"><ShadowSwitchCard /></div>
 
-      <Panel title="Agents" hint="Neurons from each agent's room messages, priced with its model's input/output mix of the day. Hit rate: directional calls of the last 30 days (± the number scored). Grounding: share of cited metrics found in the agent's input, measured once agents answer in metrics.">
+      <Panel title="Agents" poll={poll} live hint="Neurons from each agent's room messages, priced with its model's input/output mix of the day. Hit rate: directional calls of the last 30 days (± the number scored). Grounding: share of cited metrics found in the agent's input, measured once agents answer in metrics.">
         {!agents.length ? <Empty>No AI call recorded in the window.</Empty> : (
           <div className="table-wrap">
             <table className="tbl">

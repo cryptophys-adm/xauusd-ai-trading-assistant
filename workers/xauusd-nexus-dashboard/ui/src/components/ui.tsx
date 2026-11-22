@@ -29,8 +29,9 @@ export function phaseOf(poll: Poll): PollPhase {
  * (mockup "Nexus data states", part A): amber "stale 7m" with the last good read and a retry, red "error", and with
  * `live` the cyan time of the last good read. With no poll it is as before.
  */
-export function Panel({ title, icon, right, hint, children, className, poll, live = false, pollRetry = true }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; hint?: string; children: ReactNode; className?: string; poll?: Poll; live?: boolean; pollRetry?: boolean }) {
-  const [open, setOpen] = useState(false);
+export function Panel({ title, icon, right, hint, children, className, poll, live = false, pollRetry = true, staleOpen = false }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; hint?: string; children: ReactNode; className?: string; poll?: Poll; live?: boolean; pollRetry?: boolean; staleOpen?: boolean }) {
+  // `staleOpen`: the stale detail (what failed, the last good read) starts open, for a panel traded from.
+  const [open, setOpen] = useState(staleOpen);
   const phase = poll ? phaseOf(poll) : null;
   const tag = poll && phase && (phase === "stale" || phase === "error" || (live && phase === "live"))
     ? <PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry={pollRetry} />
@@ -87,7 +88,7 @@ function StaleTag({ poll, open, onToggle, retry }: { poll: Poll; open: boolean; 
         <span className={clsx(tagText, tagChip, "border-late-fill/35 bg-late-fill/10 text-late")}><Dot tone="late" />stale {age}</span>
       </button>
       {poll.lastOk != null ? <span className={clsx(tagText, "hidden text-fg-2 sm:inline")}>ok {okLine(poll.lastOk, false)}</span> : null}
-      {retry ? <RetryButton onRetry={poll.refresh} busy={poll.loading} compact /> : null}
+      {retry ? <RetryButton onRetry={poll.refresh} busy={pollBusy(poll)} compact /> : null}
     </>
   );
 }
@@ -104,13 +105,27 @@ function StaleDetail({ poll }: { poll: Poll }) {
   );
 }
 
-/** Retry now: an icon (in a header) or a labelled button (in the error box); 44 px tall on a phone. */
+/** A read of the poll is in flight (a poll without `busy` falls back to its first-load `loading`). */
+export const pollBusy = (poll: Poll) => poll.busy ?? poll.loading;
+
+/**
+ * Retry now: an icon (in a header) or a labelled button (in the error box); 44 px tall on a phone. Busy-guarded
+ * (review of #520): disabled while the caller's read is in flight and while its own click's retry runs, so repeated
+ * clicks never start parallel reads.
+ */
 export function RetryButton({ onRetry, busy = false, compact = false }: { onRetry: () => void | Promise<void>; busy?: boolean; compact?: boolean }) {
+  const [running, setRunning] = useState(false);
+  const off = busy || running;
+  const click = () => {
+    if (off) return;
+    setRunning(true);
+    Promise.resolve().then(onRetry).catch(() => {}).finally(() => setRunning(false));
+  };
   return (
-    <button type="button" onClick={() => void onRetry()} disabled={busy} aria-label="Retry now" aria-busy={busy} title={compact ? "Retry now" : undefined}
+    <button type="button" onClick={click} disabled={off} aria-label="Retry now" aria-busy={off} title={compact ? "Retry now" : undefined}
       className={clsx("inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/4 text-[12px] font-medium text-fg transition hover:border-white/20 hover:bg-white/8 disabled:cursor-wait disabled:opacity-60",
         compact ? "h-11 w-11 sm:h-7 sm:w-7" : "h-11 px-2.5 sm:h-8")}>
-      <RefreshCw className={clsx("h-3.5 w-3.5 text-fg-2", busy && "animate-spin")} aria-hidden="true" />{compact ? null : "Retry now"}
+      <RefreshCw className={clsx("h-3.5 w-3.5 text-fg-2", off && "animate-spin")} aria-hidden="true" />{compact ? null : "Retry now"}
     </button>
   );
 }
@@ -133,7 +148,31 @@ export function ErrorBox({ error, lastOk = null, intervalMs = 0, retrying = fals
 
 /** The error box of a poll. */
 export function PollError({ poll }: { poll: Poll }) {
-  return <ErrorBox error={poll.error ?? "read failed"} lastOk={poll.lastOk} intervalMs={poll.intervalMs} retrying={poll.loading} onRetry={poll.refresh} />;
+  return <ErrorBox error={poll.error ?? "read failed"} lastOk={poll.lastOk} intervalMs={poll.intervalMs} retrying={pollBusy(poll)} onRetry={poll.refresh} />;
+}
+
+/**
+ * A failed read in one line, where a box would repeat the panel's own error box (a KPI, a pipeline step, a list
+ * the box above already explains): the route and code in red.
+ */
+export function ErrorLine({ error }: { error: string }) {
+  return <p className="mono break-all py-1 text-[12px] text-fault">{error}</p>;
+}
+
+/**
+ * A poll's state tag outside a Panel header (the War Room tabs, a council session): stale with the last good read
+ * and Retry now, or with `live` the cyan time of the last good read. Nothing while it loads or has no data.
+ */
+export function PollStrip({ poll, live = false, className }: { poll: Poll; live?: boolean; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const phase = phaseOf(poll);
+  if (!(phase === "stale" || (live && phase === "live"))) return null;
+  return (
+    <div className={clsx("mb-2", className)}>
+      <div className="flex flex-wrap items-center justify-end gap-2"><PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry /></div>
+      {open && phase === "stale" ? <div className="mt-2"><StaleDetail poll={poll} /></div> : null}
+    </div>
+  );
 }
 
 /**

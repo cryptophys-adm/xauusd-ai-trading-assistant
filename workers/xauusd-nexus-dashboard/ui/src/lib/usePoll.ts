@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorText } from "./api";
-import { isStale, staleAt } from "./pollState";
+import { STALE_TICK_MS, isStale, singleFlight, staleAt, staleChanged, staleWake } from "./pollState";
 
 /**
  * Load once, then refresh every `intervalMs` while the tab is visible (0 = no refresh), and at once when the tab
@@ -12,11 +12,17 @@ import { isStale, staleAt } from "./pollState";
  * The data states (mockup "Nexus data states", part A; lib/pollState.ts): `lastOk` and `lastFail` (ms, the
  * browser clock: the API has no generated_at), `failures` (failed reads in a row) and `stale` (data on screen and
  * the last read failed, or no good read for 2 × the interval). A failed refresh keeps the data as it was.
+ *
+ * Review of #520: `busy` is true while any read is in flight, and `refresh` (Retry now) joins the read in flight
+ * instead of starting another. The stale verdict follows the wall clock after a sleep or a clock jump: the tab
+ * becoming visible re-evaluates it before the refresh, a coarse tick (STALE_TICK_MS) re-evaluates it while data is
+ * on screen, and a stale timer that fires early (the clock moved back) is armed again (staleWake).
  */
 export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [lastFail, setLastFail] = useState<number | null>(null);
   const [failures, setFailures] = useState(0);
@@ -25,11 +31,15 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   loadRef.current = load;
   const hasData = useRef(false);
   const seq = useRef(0);
+  const pending = useRef(0);
+  const flight = useRef(singleFlight());
   const mounted = useRef(false);
 
-  const refresh = useCallback(async () => {
+  const read = useCallback(async () => {
     const id = ++seq.current;
     if (!hasData.current) setLoading(true);
+    pending.current += 1;
+    setBusy(true);
     try {
       const value = await loadRef.current();
       if (id === seq.current) { setData(value); hasData.current = true; setError(null); setLastOk(Date.now()); setFailures(0); }
@@ -37,37 +47,69 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
       if (id === seq.current) { setError(errorText(e)); setLastFail(Date.now()); setFailures((n) => n + 1); }
     } finally {
       if (id === seq.current) setLoading(false);
+      pending.current -= 1;
+      if (pending.current === 0) setBusy(false);
     }
   }, []);
+  /** The poll's own reads (mount, deps, the interval, the tab coming back): always run; the newest one wins. */
+  const start = useCallback(() => flight.current.start(read), [read]);
+  /** Retry now: joins the read in flight, so repeated clicks never start parallel reads. */
+  const refresh = useCallback(() => flight.current.retry(read), [read]);
 
   // The data: loaded on mount, and again (from empty) when the deps change.
   useEffect(() => {
     if (mounted.current) { hasData.current = false; setData(null); setError(null); setLastOk(null); setLastFail(null); setFailures(0); }
     mounted.current = true;
-    void refresh();
+    void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
-  // The refresh: every intervalMs while visible, and on becoming visible.
+  const present = data != null;
+  const stale = isStale({ hasData: present, error, lastOk, intervalMs }, Date.now());
+  // The verdict on screen, for the tick and the tab coming back (they render only when it changes).
+  const shown = useRef({ stale, facts: { hasData: present, error, lastOk, intervalMs } });
+  shown.current = { stale, facts: { hasData: present, error, lastOk, intervalMs } };
+
+  // The refresh: every intervalMs while visible, and on becoming visible (the stale verdict first: after a sleep
+  // the old data must not read as live while the refresh is in flight).
   useEffect(() => {
     if (!intervalMs) return;
-    const t = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, intervalMs);
-    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
+    const t = window.setInterval(() => { if (document.visibilityState === "visible") void start(); }, intervalMs);
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (staleChanged(shown.current.stale, shown.current.facts, Date.now())) rerender();
+      void start();
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
-  }, [intervalMs, refresh]);
+  }, [intervalMs, start]);
+
+  // The coarse clock while data is on screen: timers count awake time, so after a sleep or a forward clock jump
+  // the stale timer below can be late; this tick turns the tag within STALE_TICK_MS.
+  useEffect(() => {
+    if (!intervalMs || !present) return;
+    const t = window.setInterval(() => { if (staleChanged(shown.current.stale, shown.current.facts, Date.now())) rerender(); }, STALE_TICK_MS);
+    return () => window.clearInterval(t);
+  }, [intervalMs, present]);
 
   // The stale rule's clock: one render when 2 × the interval passes with no good read (a hung or skipped read).
+  // Fired before staleAt (the clock moved back): armed again for what is left.
   useEffect(() => {
     const at = staleAt({ lastOk, intervalMs });
     if (at == null) return;
-    const t = window.setTimeout(rerender, Math.max(0, at - Date.now()));
+    let t = 0;
+    const arm = (ms: number) => {
+      t = window.setTimeout(() => {
+        const w = staleWake(at, Date.now());
+        if (w.rearmMs != null) arm(w.rearmMs);
+        else if (w.render) rerender();
+      }, Math.max(0, ms));
+    };
+    arm(at - Date.now());
     return () => window.clearTimeout(t);
   }, [lastOk, intervalMs]);
 
-  const present = data != null;
-  const stale = isStale({ hasData: present, error, lastOk, intervalMs }, Date.now());
-  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs };
+  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs, busy };
 }
 
 /** What a panel needs of a poll to show its state (components/ui.tsx Panel, PollBody, PollError). */
@@ -81,4 +123,6 @@ export type Poll = {
   failures: number;
   stale: boolean;
   intervalMs: number;
+  /** A read is in flight (Retry now is disabled meanwhile). */
+  busy?: boolean;
 };

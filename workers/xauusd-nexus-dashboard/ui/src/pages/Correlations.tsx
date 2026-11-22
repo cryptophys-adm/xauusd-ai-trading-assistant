@@ -120,7 +120,7 @@ export default function Correlations() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <MacroRoom />
       {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={4} /></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
-        <Panel title="Correlations · 4h" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} hint={hint}>
+        <Panel title="Correlations · 4h" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} hint={hint} poll={poll} live>
           <div className="table-wrap">
             <table className="tbl">
               <thead><tr><th>Market</th><th>Last</th><th>4h</th><th>1D</th><th>5D</th><th>Corr 1W</th><th>Corr 1M</th></tr></thead>

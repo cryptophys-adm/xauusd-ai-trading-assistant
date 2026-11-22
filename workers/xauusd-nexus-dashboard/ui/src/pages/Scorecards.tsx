@@ -200,6 +200,7 @@ export default function Scorecards() {
       <Panel
         title="Agent scorecards"
         icon={<Trophy className="h-4 w-4 text-amber-300" />}
+        poll={poll} live
         hint={`30-day window. Each call is scored on the next ${d?.scoring?.horizon ?? 4} closed bars; accuracy sets the crowd weight${d?.reputation?.weight_range ? ` (x${d.reputation.weight_range[0]}–x${d.reputation.weight_range[1]})` : ""}.`}
       >
         {null}

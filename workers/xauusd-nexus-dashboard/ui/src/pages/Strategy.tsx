@@ -308,7 +308,7 @@ export default function Strategy() {
   const loading = agentsPoll.loading && !s;
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />}
+      <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />} poll={agentsPoll} live
         hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
         right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone="ok">{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
         <CouncilToggle arm={arm} onDone={() => setArmTick((t) => t + 1)} />

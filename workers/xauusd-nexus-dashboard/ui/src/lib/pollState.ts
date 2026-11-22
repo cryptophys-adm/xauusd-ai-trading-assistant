@@ -95,3 +95,56 @@ export function staleTitle(f: Pick<PollFacts, "error" | "lastOk" | "lastFail" | 
   }
   return lines.join("\n");
 }
+
+/**
+ * The stale timer fired (review of #520): timers count awake time, the stale rule counts the wall clock. When the
+ * timer lands before `staleAt` (the clock moved back, or the timer ran early) it is armed again for what is left;
+ * on or after it, the panel renders once (and turns stale). With no `staleAt` there is nothing to do.
+ */
+export function staleWake(at: number | null, now: number): { render: boolean; rearmMs: number | null } {
+  if (at == null) return { render: false, rearmMs: null };
+  return now < at ? { render: false, rearmMs: at - now } : { render: true, rearmMs: null };
+}
+
+/** The coarse clock of a poll with data on screen (ms): after a sleep or a forward jump the tag turns within it. */
+export const STALE_TICK_MS = 20_000;
+
+/**
+ * Whether the coarse tick (or the tab becoming visible) must render: only when the stale verdict now differs from
+ * the one on screen, so a tick never re-renders a page for nothing.
+ */
+export function staleChanged(shown: boolean, f: Pick<PollFacts, "hasData" | "error" | "lastOk" | "intervalMs">, now: number): boolean {
+  return isStale(f, now) !== shown;
+}
+
+/**
+ * One read at a time for a manual retry (review of #520): while a read is in flight, `retry` joins it instead of
+ * starting another, so repeated clicks on Retry now never start parallel reads. `start` (the poll's own timer, a
+ * deps change) always runs; the newest read is the one tracked.
+ */
+export function singleFlight() {
+  let current: Promise<unknown> | null = null;
+  const track = <T>(p: Promise<T>): Promise<T> => {
+    current = p;
+    const done = () => { if (current === p) current = null; };
+    p.then(done, done);
+    return p;
+  };
+  return {
+    start<T>(load: () => Promise<T>): Promise<T> { return track(load()); },
+    retry<T>(load: () => Promise<T>): Promise<T> { return current != null ? (current as Promise<T>) : track(load()); },
+    get busy() { return current != null; },
+  };
+}
+
+/**
+ * A read that a push can also deliver (the War Room's rooms and decision, ADR-0015): the newest arrival wins. A push
+ * after the last failed read is a good arrival, so the panel is live again; a failed read after the push still
+ * counts. `pushAt` is when the push last delivered (ms), null before one.
+ */
+export function withPush<F extends Pick<PollFacts, "error" | "lastOk" | "lastFail" | "failures">>(f: F, pushAt: number | null): F {
+  if (pushAt == null) return f;
+  const lastOk = f.lastOk == null ? pushAt : Math.max(f.lastOk, pushAt);
+  const failedSince = f.error != null && f.lastFail != null && f.lastFail > pushAt;
+  return { ...f, lastOk, error: failedSince ? f.error : null, failures: failedSince ? f.failures : 0 };
+}
