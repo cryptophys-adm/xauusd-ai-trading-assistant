@@ -44,7 +44,7 @@ import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
 import { roomContextLine } from "./lens-steps.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
-import { projectionReading } from "./projection-agent.mjs";
+import { projectionReading, chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { H1_ROOM_LOCK_PREFIX } from "./h1-consensus.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, stuckCautions, ROOM_TIMEFRAME, quorumAllows, quorumRule } from "./reputation.mjs";
@@ -269,7 +269,7 @@ export async function tfEvidence(env, chart, candleKey) {
     hud, confirmations, higher, news, desk, event_risk: eventRiskNow,
     // The Projection Agent (owner 2026-11-12): this chart's patterns and projection levels, no price.
     projection: await (async () => {
-      try { return projectionReading({ bars, plane: snapshot?.chart_plane ?? null, calibration: await readPatternCalibration(env), timeframe: spec.label }); } catch { return null; }
+      try { return projectionReading({ bars, plane: snapshot?.chart_plane ?? null, calibration: await readPatternCalibration(env), timeframe: spec.label, patterns: chartPatternsMode(env) }); } catch { return null; }
     })()
   };
 }
