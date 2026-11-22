@@ -11,11 +11,14 @@ import { CANDLE, CHIP, KWW, T, directionGlyph, directionTone, rgba } from "../wo
 const ui = (p) => readFileSync(new URL(`../workers/xauusd-nexus-dashboard/ui/${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const src = (p) => ui(`src/${p}`);
 
-/** The files the mockup migrates, with direction colours (bear red, neutral amber). */
+/**
+ * The files the mockup migrates, with direction colours (bear red, neutral amber). Performance.tsx since the review
+ * of #526: its equity and drawdown charts carry P&L in bull green and bear red.
+ */
 const DIRECTION_FILES = [
   "components/Stance.tsx", "components/CrowdLine.tsx", "components/MetricChips.tsx", "components/Post.tsx", "pages/Audit.tsx",
   "components/GlobalDecision.tsx", "components/SetupLifecycle.tsx", "components/ThreadsPanel.tsx", "pages/Correlations.tsx",
-  "components/charts.tsx", "components/PriceChart.tsx"
+  "components/charts.tsx", "components/PriceChart.tsx", "pages/Performance.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

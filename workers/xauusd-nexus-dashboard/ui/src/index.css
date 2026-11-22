@@ -67,3 +67,14 @@
   .tbl td { @apply border-b border-white/5 px-3 py-2 text-slate-300; }
   .tbl tr:hover td { @apply bg-white/2; }
 }
+
+/* Forced colours (a contrast theme, light or dark): SVG fill and stroke keep their authored values, so the chart's
+   text, grid, zero line, crosshair and marker rings take system colours here; the legend swatches (top borders)
+   keep their series colours, which read on either palette (pages/Performance.tsx, review of #526). */
+@media (forced-colors: active) {
+  .chart-text { fill: CanvasText; }
+  .chart-halo { stroke: Canvas; }
+  .chart-grid { stroke: GrayText; }
+  .chart-zero, .chart-cross { stroke: CanvasText; }
+  .chart-swatch { forced-color-adjust: none; }
+}
