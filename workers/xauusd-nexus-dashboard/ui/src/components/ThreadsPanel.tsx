@@ -19,7 +19,7 @@ const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed
 
 /**
  * The conclusion of the active tab, first under the tab bar, in the design of the original War
- * Room conclusion card (owner request 2026-11-06): the decision in large glowing type with its
+ * Room conclusion card (owner request 2026-11-06): the decision in large type (no glow since 2026-11-22) with its
  * confidence, the room's bias beside it (owner decision 2026-11-06: decision and bias are
  * different things), the summary in its own box, reasons and dissent, then two boxes with what
  * binds it (the higher-timeframe constraint and the entry confirmation).
@@ -29,30 +29,30 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
   return (
     <section className="glass-inner border-cyan-400/20 p-4" aria-label={`${title} conclusion`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="eyebrow flex items-center gap-2"><Swords className="h-3.5 w-3.5 text-cyan-300" />{title} conclusion<Hint text="Advisory only. Price levels come from the validated H1 chain." /></h3>
+        <h3 className="panel-title flex items-center gap-2"><Swords className="h-3.5 w-3.5 text-cyan-300" />{title} conclusion<Hint text="Advisory only. Price levels come from the validated H1 chain." /></h3>
         <div className="flex flex-wrap gap-2">{badges}</div>
       </div>
       {!ok ? <p className="text-[12.5px] text-slate-400">{waiting}</p> : (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
           <div className="flex min-w-0 shrink-0 flex-row flex-wrap items-start gap-x-6 gap-y-3 lg:w-40 lg:flex-col lg:gap-3">
             <div className="flex flex-col items-start gap-1">
-              <span className="eyebrow text-[9px]" title="What to do now, under the confirmation rule">Decision</span>
-              <div className={`mono ${heroSize(c.stance)} whitespace-nowrap font-extrabold leading-none ${stanceColor(c.stance)}`} style={{ textShadow: "0 0 20px currentColor" }}>{c.stance}</div>
+              <span className="eyebrow" title="What to do now, under the confirmation rule">Decision</span>
+              <div className={`mono ${heroSize(c.stance)} whitespace-nowrap font-bold leading-none ${stanceColor(c.stance)}`}>{c.stance}</div>
               <div className="mono text-[11px] text-slate-400">confidence {pct(c.confidence)}</div>
             </div>
             {(c.bias ?? c.majority_bias) && (
               <div className="flex flex-col items-start gap-1">
-                <span className="eyebrow text-[9px]" title="Where the weight of the room's evidence leans">Bias</span>
+                <span className="eyebrow" title="Where the weight of the room's evidence leans">Bias</span>
                 <div className={`mono whitespace-nowrap text-[18px] font-bold leading-none ${stanceColor(c.bias ?? c.majority_bias)}`}>{c.bias ?? c.majority_bias}</div>
-                {c.majority && <div className="text-[11px] text-slate-500">majority {c.majority}{c.majority_bias ? ` · ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
+                {c.majority && <div className="text-[11px] text-muted">majority {c.majority}{c.majority_bias ? ` · ${String(c.majority_bias).toLowerCase()}` : ""}</div>}
               </div>
             )}
-            {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-slate-500">majority {c.majority}</div>}
+            {!(c.bias ?? c.majority_bias) && c.majority && <div className="text-[11px] text-muted">majority {c.majority}</div>}
           </div>
           <div className="min-w-0 flex-1">
             <p className="glass-inner px-3.5 py-2.5 text-[12px] leading-relaxed text-slate-200">{c.summary}</p>
             {!!c.reasons?.length && <ul className="mt-2.5 list-disc space-y-1 pl-5 text-[11.5px] leading-relaxed text-slate-300">{c.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}</ul>}
-            {!!c.dissent?.length && <p className="mt-2 text-[11px] text-slate-500">Dissent: {c.dissent.map((d: any) => d.name ?? d).join(", ")}</p>}
+            {!!c.dissent?.length && <p className="mt-2 text-[11px] text-muted">Dissent: {c.dissent.map((d: any) => d.name ?? d).join(", ")}</p>}
           </div>
         </div>
       )}
@@ -84,7 +84,7 @@ function Discussion({ room }: { room: any }) {
     <div className="space-y-3">
       {!!opens.length && (
         <div className="flex items-center gap-2 pt-1">
-          <span className="eyebrow text-[10px]">Communication bus · {opens.length}</span>
+          <span className="eyebrow">Communication bus · {opens.length}</span>
           {hasChips && (
             <button onClick={toggle} className="ml-auto text-[10px] text-violet-300/80 hover:text-violet-200" title="The same agents' shadow answers in metric form: never in the room or a decision">
               {chips ? "hide" : "show"} metric chips (shadow)
@@ -94,7 +94,7 @@ function Discussion({ room }: { room: any }) {
       )}
       <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]}
         extra={chips ? <MetricChips m={ms?.openings?.[m.id]} live={m.stance} /> : null} />)}</div>
-      {!!debate.length && <div className="eyebrow pt-1 text-[10px]">Consensus Discussion</div>}
+      {!!debate.length && <div className="eyebrow pt-1">Consensus Discussion</div>}
       <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]}
         extra={chips ? <RebuttalChips r={ms?.rebuttals?.[m.id]} live={m.stance} names={names} /> : null} />)}</div>
     </div>
@@ -114,11 +114,11 @@ function ReasonerDecision({ r }: { r: any }) {
   return (
     <section className="glass-inner border-violet-400/20 p-3" aria-label="H1 decision">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="eyebrow text-[10px]">H1 decision · Reasoner</span>
+        <span className="eyebrow">H1 decision · Reasoner</span>
         {!pending && r.decision && <Stance value={r.decision} />}
         {!pending && r.confidence != null && <span className="mono text-[11px] text-slate-400">{pct(r.confidence)}</span>}
-        {r.consensus?.status === "partial" && <Badge tone="amber">no conclusion within {r.fallback_minutes ?? "the fallback"} min</Badge>}
-        {r.consensus?.status === "empty" && <Badge tone="amber">no agent spoke</Badge>}
+        {r.consensus?.status === "partial" && <Badge tone="late">no conclusion within {r.fallback_minutes ?? "the fallback"} min</Badge>}
+        {r.consensus?.status === "empty" && <Badge tone="late">no agent spoke</Badge>}
       </div>
       <p className="text-[12px] leading-relaxed text-slate-300">
         {pending ? `Pending: after the room concludes, at most ${r.fallback_minutes ?? 45} min after the close.` : r.reasoning}
@@ -134,17 +134,17 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
   const badges = (
     <>
       <Badge tone="slate">{label} close {utc(room.bar_close ?? room.bar_time)}</Badge>
-      <Badge tone={room.phase === "closed" ? "slate" : "cyan"}>{phaseText(room)}</Badge>
-      {tab === "M15" && room.m5_label && <Badge tone={room.m5_label === "VERIFIED 5m" ? "green" : "amber"}>{room.m5_label}</Badge>}
+      <Badge tone={room.phase === "closed" ? "off" : "ok"}>{phaseText(room)}</Badge>
+      {tab === "M15" && room.m5_label && <Badge tone={room.m5_label === "VERIFIED 5m" ? "ok" : "late"}>{room.m5_label}</Badge>}
     </>
   );
   const constraint = h1 ? (
-    <><span className="eyebrow text-[9px]">H1 constraint</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span>{h1.candle_key && <span>· {candleWhen(h1.candle_key)}</span>}</>
+    <><span className="eyebrow">H1 constraint</span><Stance value={h1.decision} /><span className="mono">{pct(h1.confidence)}</span>{h1.candle_key && <span>· {candleWhen(h1.candle_key)}</span>}</>
   ) : null;
   const confirmation = tab === "M15" ? (
-    <><span className="eyebrow mr-2 text-[9px]">Entry confirmation</span>H1 Prophet R38: {side(cf.h1_prophet_r38)} · 5m: {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</>
+    <><span className="eyebrow mr-2">Entry confirmation</span>H1 Prophet R38: {side(cf.h1_prophet_r38)} · 5m: {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</>
   ) : cf.chart_prophet_r38 ? (
-    <><span className="eyebrow mr-2 text-[9px]">Entry confirmation</span>{label} Prophet R38: {side(cf.chart_prophet_r38)}{cf.chart_prophet_r38.approved_by_parity === false ? " (not parity approved)" : ""}</>
+    <><span className="eyebrow mr-2">Entry confirmation</span>{label} Prophet R38: {side(cf.chart_prophet_r38)}{cf.chart_prophet_r38.approved_by_parity === false ? " (not parity approved)" : ""}</>
   ) : null;
   return (
     <div className="space-y-3">
@@ -159,7 +159,7 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
 function Move({ x, name }: { x?: { change_24h_percent?: number } | null; name: string }) {
   if (x?.change_24h_percent == null) return null;
   const v = x.change_24h_percent;
-  return <span className={clsx("mono", v > 0 ? "text-emerald-300" : v < 0 ? "text-rose-300" : "text-slate-400")}>{name} {v > 0 ? "+" : ""}{v}%</span>;
+  return <span className={clsx("mono", v > 0 ? "text-bull" : v < 0 ? "text-bear" : "text-neutral")}>{name} {v > 0 ? "▲ +" : v < 0 ? "▼ " : "· "}{v}%</span>;
 }
 
 function NewsTab({ d }: { d: any }) {
@@ -168,16 +168,16 @@ function NewsTab({ d }: { d: any }) {
   return (
     <div className="space-y-3">
       <ConclusionHero c={d.tldr} title="News" waiting="No TLDR yet."
-        badges={<><Badge tone="slate">updated {ago(d.run_at)}</Badge><Badge tone="cyan">{d.items?.length ?? 0} headlines</Badge></>}
-        constraint={<><span className="eyebrow text-[9px]">Bias</span><Stance value="BULLISH" />{c.bullish ?? 0}<Stance value="BEARISH" />{c.bearish ?? 0}<Stance value="NEUTRAL" />{c.neutral ?? 0}</>}
-        confirmation={<div className="flex flex-wrap items-center gap-2"><span className="eyebrow text-[9px]">24h</span><Move x={ctx.gold} name="Gold" /><Move x={ctx.dollar} name="DXY" /><Move x={ctx.oil} name="Oil" /><Move x={ctx.usdt} name="USDT.D" /></div>} />
-      <div className="eyebrow pt-1 text-[10px]">Headlines</div>
+        badges={<><Badge tone="slate">updated {ago(d.run_at)}</Badge><Badge tone="ok">{d.items?.length ?? 0} headlines</Badge></>}
+        constraint={<><span className="eyebrow">Bias</span><Stance value="BULLISH" />{c.bullish ?? 0}<Stance value="BEARISH" />{c.bearish ?? 0}<Stance value="NEUTRAL" />{c.neutral ?? 0}</>}
+        confirmation={<div className="flex flex-wrap items-center gap-2"><span className="eyebrow">24h</span><Move x={ctx.gold} name="Gold" /><Move x={ctx.dollar} name="DXY" /><Move x={ctx.oil} name="Oil" /><Move x={ctx.usdt} name="USDT.D" /></div>} />
+      <div className="eyebrow pt-1">Headlines</div>
       <div className="space-y-1.5">
         {(d.items ?? []).map((i: any, k: number) => (
           <div key={k} className="glass-inner px-3 py-2.5">
-            <div className="mb-1 flex items-center gap-2 text-[10px] text-slate-500">{i.bias ? <Stance value={i.bias} /> : <span>untagged</span>}<span>{ago(i.published_at)}</span></div>
+            <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">{i.bias ? <Stance value={i.bias} /> : <span>untagged</span>}<span>{ago(i.published_at)}</span></div>
             {i.url ? <a href={i.url} target="_blank" rel="noopener noreferrer" className="text-[12px] leading-snug text-slate-200 hover:text-cyan-200">{i.title}</a> : <span className="text-[12px] leading-snug text-slate-200">{i.title}</span>}
-            {i.why && <p className="mt-1 text-[11px] text-slate-500">{i.why}</p>}
+            {i.why && <p className="mt-1 text-[11px] text-fg-2">{i.why}</p>}
           </div>
         ))}
       </div>
@@ -188,11 +188,11 @@ function NewsTab({ d }: { d: any }) {
 function TabBody({ tab }: { tab: Tab }) {
   const { room } = useWarRoom();
   const { threads, news, loading, error } = useMarket();
-  if (tab === "M15") return room ? <RoomTab room={room} tab="M15" /> : <p className="text-[12px] text-slate-500">No War Room yet.</p>;
+  if (tab === "M15") return room ? <RoomTab room={room} tab="M15" /> : <p className="text-[12px] text-muted">No War Room yet.</p>;
   if (loading) return <Skeleton rows={6} />;
-  if (tab === "NEWS") return news ? <NewsTab d={news} /> : error ? <p className="text-[12px] text-rose-300">Unavailable: {error}</p> : <p className="text-[12px] text-slate-500">No news analysis yet.</p>;
+  if (tab === "NEWS") return news ? <NewsTab d={news} /> : error ? <p className="text-[12px] text-fault">Unavailable: {error}</p> : <p className="text-[12px] text-muted">No news analysis yet.</p>;
   const t = threads[tab];
-  return t ? <RoomTab room={t} tab={tab} /> : <p className="text-[12px] text-slate-500">No {tabLabel(tab)} War Room yet.</p>;
+  return t ? <RoomTab room={t} tab={tab} /> : <p className="text-[12px] text-muted">No {tabLabel(tab)} War Room yet.</p>;
 }
 
 /**
@@ -208,8 +208,8 @@ export default function ThreadsPanel({ className }: { className?: string }) {
         <span className="hidden px-3 text-cyan-300 sm:inline-flex" aria-hidden="true"><Layers className="h-3.5 w-3.5" /></span>
         {TABS.map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
-            className={clsx("flex-1 border-b-2 px-2 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
-              tab === key ? "border-cyan-400 bg-cyan-400/6 text-white" : "border-transparent text-slate-500 hover:bg-white/3 hover:text-slate-200")}>{label}</button>
+            className={clsx("flex-1 border-b-2 px-2 py-3 text-[12px] font-semibold transition",
+              tab === key ? "border-cyan-400 bg-cyan-400/6 text-white" : "border-transparent text-fg-2 hover:bg-white/3 hover:text-fg")}>{label}</button>
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3"><TabBody key={tab} tab={tab} /></div>

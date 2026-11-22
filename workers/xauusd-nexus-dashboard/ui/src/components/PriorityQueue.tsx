@@ -15,7 +15,7 @@ export default function PriorityQueue() {
   const resolved: any[] = (data as any)?.resolved_24h ?? [];
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-3 flex items-center justify-between">
+      <div className="panel-title mb-3 flex items-center justify-between">
         <span className="flex items-center gap-2"><ShieldAlert className="h-3 w-3 text-amber-300" />Priority Queue</span>
         <a href="/#/alerts" className="flex items-center gap-1 font-mono text-[9px] font-normal normal-case text-cyan-400 transition hover:text-cyan-300" title="Open Alerts center">
           Alerts <ArrowUpRight className="h-2.5 w-2.5" />
@@ -24,7 +24,7 @@ export default function PriorityQueue() {
       {loading && !data ? <Skeleton rows={2} /> : error && !data ? <p className="text-[12px] text-rose-300">Health checks unavailable.</p> : (
         <div className="space-y-2 text-[12.5px]">
           {open.length === 0 ? (
-            <div className="glass-inner flex items-start gap-2.5 px-3 py-2 text-slate-300"><span className="mt-1.5"><Dot tone="green" /></span><span>No open items. The system is nominal.</span></div>
+            <div className="glass-inner flex items-start gap-2.5 px-3 py-2 text-slate-300"><span className="mt-1.5"><Dot tone="ok" /></span><span>No open items. The system is nominal.</span></div>
           ) : open.map((a) => (
             <div key={a.alert_key} className="glass-inner flex items-start gap-2.5 px-3 py-2 text-slate-200">
               <span className="mt-1.5"><Dot tone={a.kind === "parity_revoked" || a.kind === "war_room_stale" ? "red" : "amber"} pulse /></span>

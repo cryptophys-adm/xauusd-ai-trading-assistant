@@ -7,45 +7,47 @@ import { useMarket, leanLabel } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { candleWhen, pct, utc } from "../lib/format";
 import SetupLifecycle, { zoneAt } from "./SetupLifecycle";
+import { TEXT, directionGlyph, edgeTone, type Tone } from "../lib/tokens";
 
-const STATE_TEXT: Record<string, { label: string; tone: "green" | "amber" | "red" | "cyan" | "slate" | "purple" }> = {
-  TRIGGERED: { label: "triggered", tone: "green" },
-  SETUP_READY: { label: "setup ready", tone: "cyan" },
-  SETUP_FORMING: { label: "setup forming", tone: "purple" },
-  LOW_REWARD: { label: "reward too small", tone: "amber" },
-  LOW_CONFIDENCE: { label: "weak alignment", tone: "amber" },
-  BLOCKED: { label: "blocked", tone: "red" },
-  NO_LEVELS: { label: "no levels", tone: "slate" },
-  NO_SETUP: { label: "no setup", tone: "slate" }
+/** The strategy's state as a status: ok, late (needs attention), fault, off. */
+const STATE_TEXT: Record<string, { label: string; tone: Tone }> = {
+  TRIGGERED: { label: "triggered", tone: "ok" },
+  SETUP_READY: { label: "setup ready", tone: "ok" },
+  SETUP_FORMING: { label: "setup forming", tone: "plain" },
+  LOW_REWARD: { label: "reward too small", tone: "late" },
+  LOW_CONFIDENCE: { label: "weak alignment", tone: "late" },
+  BLOCKED: { label: "blocked", tone: "fault" },
+  NO_LEVELS: { label: "no levels", tone: "off" },
+  NO_SETUP: { label: "no setup", tone: "off" }
 };
 
 function Pass({ v }: { v: boolean | null | undefined }) {
-  if (v === true) return <Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" aria-label="passes" />;
-  if (v === false) return <X className="h-3.5 w-3.5 shrink-0 text-rose-300" aria-label="fails" />;
-  return <Minus className="h-3.5 w-3.5 shrink-0 text-slate-600" aria-label="not applicable" />;
+  if (v === true) return <Check className="h-3.5 w-3.5 shrink-0 text-ok" aria-label="passes" />;
+  if (v === false) return <X className="h-3.5 w-3.5 shrink-0 text-fault" aria-label="fails" />;
+  return <Minus className="h-3.5 w-3.5 shrink-0 text-muted" aria-label="not applicable" />;
 }
 
 /** The trade plan as a price ladder: targets above, entry, stop below (mirrored for a short). */
 function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: number | null }) {
   const rows = [
-    { k: "TP2", price: plan.tp2, note: plan.tp2_note, rr: plan.rrr?.tp2, tone: "text-emerald-300" },
-    { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-emerald-300/80" },
-    { k: "Entry", price: plan.entry, note: plan.entry_note, rr: null, tone: "text-cyan-200" },
-    { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-rose-300" },
-    { k: "SL+", price: plan.progressive_stop, note: "breakeven stop", rr: null, tone: "text-amber-300" }
+    { k: "TP2", price: plan.tp2, note: plan.tp2_note, rr: plan.rrr?.tp2, tone: "text-bull" },
+    { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-bull" },
+    { k: "Entry", price: plan.entry, note: plan.entry_note, rr: null, tone: "text-fg" },
+    { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-bear" },
+    { k: "SL+", price: plan.progressive_stop, note: "breakeven stop", rr: null, tone: "text-neutral" }
   ];
   const ordered = long ? rows : [...rows].reverse();
   return (
     <div className="glass-inner mt-3 divide-y divide-white/5" role="table" aria-label="Key levels of the trade plan">
       {ordered.map((r) => (
         <div key={r.k} className="flex items-center gap-2 px-3 py-1.5" role="row">
-          <span className={`w-11 text-[10px] font-semibold uppercase tracking-[0.14em] ${r.tone}`}>{r.k}</span>
-          <span className="mono w-16 text-[12.5px] font-semibold text-slate-100">{r.price?.toFixed?.(2) ?? "—"}</span>
-          <span className="min-w-0 flex-1 truncate text-[10.5px] text-slate-500" title={r.note}>{r.note}</span>
-          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-emerald-300" : "text-amber-300"}`}>{r.rr}R</span>}
+          <span className={`mono w-11 text-[11px] font-semibold ${r.tone}`}>{r.k}</span>
+          <span className="mono w-16 text-[12.5px] font-semibold text-fg">{r.price?.toFixed?.(2) ?? "—"}</span>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-fg-2" title={r.note}>{r.note}</span>
+          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-ok" : "text-late"}`}>{r.rr}R</span>}
         </div>
       ))}
-      <div className="flex items-center justify-between px-3 py-1.5 text-[10.5px] text-slate-500">
+      <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-muted">
         <span>risk {plan.risk?.toFixed?.(2)}{minRrr == null ? "" : minRrr > 0 ? ` · min ${minRrr}R` : " · target at nearest level"}</span>
         {!plan.at_level && <span className="text-violet-300">pullback entry</span>}
       </div>
@@ -67,9 +69,9 @@ function Guardrails({ side, g, rules }: { side: string; g: any; rules?: any }) {
   if (!g) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
-      <span className={`mono w-10 shrink-0 font-bold ${side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{side}</span>
+      <span className={`mono w-10 shrink-0 font-bold ${side === "BUY" ? "text-bull" : "text-bear"}`}>{side}</span>
       {(g.checks ?? []).map((c: any) => (
-        <span key={c.id} title={c.detail} className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${c.pass ? "border-emerald-400/20 text-emerald-200/90" : "border-rose-400/25 text-rose-200/90"}`}>
+        <span key={c.id} title={c.detail} className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${c.pass ? "border-ok-fill/30 text-ok" : "border-fault-fill/30 text-fault"}`}>
           {c.pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}{checkLabel(c.id, rules)}
         </span>
       ))}
@@ -87,8 +89,8 @@ function ModelAdvice({ m }: { m: any }) {
   const edge = (p: unknown, base: unknown) => (typeof p === "number" && typeof base === "number" ? p - base : null);
   if (!m) {
     return (
-      <div className="glass-inner mt-3 flex items-center gap-2 px-3 py-1.5 text-[10.5px] text-slate-400">
-        <span className="w-16 shrink-0 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model</span>
+      <div className="glass-inner mt-3 flex items-center gap-2 px-3 py-1.5 text-[11px] text-fg-2">
+        <span className="w-16 shrink-0 text-[11px] font-medium text-muted">Model</span>
         <span className="min-w-0 flex-1">Not connected (shadow) · <a href="/#/model" className="text-cyan-300 hover:underline">Model &amp; Learning</a></span>
       </div>
     );
@@ -100,18 +102,18 @@ function ModelAdvice({ m }: { m: any }) {
   return (
     <div className="glass-inner mt-3 px-3 py-2 text-[10.5px]" aria-label="The model's advice to the council">
       <div className="mb-1 flex flex-wrap items-center gap-2">
-        <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Model advice</span>
+        <span className="text-[11px] font-medium text-muted">Model advice</span>
         <Hint text={`${m.question ? `Chance ${m.question}. ` : ""}Advisory only; guardrails decide.`} />
-        <Badge tone="green">{m.label_set}</Badge>
-        <span className="text-slate-500">{m.model_id}{m.connected_since ? ` · since ${utc(m.connected_since)}` : ""}</span>
+        <Badge tone="ok">{m.label_set}</Badge>
+        <span className="text-muted">{m.model_id}{m.connected_since ? ` · since ${utc(m.connected_since)}` : ""}</span>
       </div>
       {sides.map((x) => {
         const d = edge(x.p, x.base);
         return (
           <div key={x.k} className="flex items-center gap-2 py-0.5">
-            <span className="w-10 shrink-0 font-semibold text-slate-300">{x.k}</span>
-            <span className="mono w-12 shrink-0" style={{ color: d == null ? undefined : d > 0 ? "#34d399" : "#fb7185" }}>{pctOf(x.p)}</span>
-            <span className="min-w-0 flex-1 text-slate-500">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
+            <span className="w-10 shrink-0 font-semibold text-fg">{x.k}</span>
+            <span className={`mono w-12 shrink-0 ${TEXT[edgeTone(x.k === "Short" ? "short" : "long", d)]}`}>{pctOf(x.p)}</span>
+            <span className="min-w-0 flex-1 text-fg-2">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
           </div>
         );
       })}
@@ -143,8 +145,8 @@ function MarketContext({ c, calendar }: { c: any; calendar?: any }) {
     <div className="glass-inner mt-3 divide-y divide-white/5" aria-label="Market context the council read">
       {rows.map((x) => (
         <div key={x.k} className="flex gap-2 px-3 py-1.5 text-[10.5px]">
-          <span className="w-16 shrink-0 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{x.k}</span>
-          <span className="min-w-0 flex-1 text-slate-300">{x.v}</span>
+          <span className="w-16 shrink-0 text-[11px] font-medium text-muted">{x.k}</span>
+          <span className="min-w-0 flex-1 text-fg">{x.v}</span>
         </div>
       ))}
     </div>
@@ -169,10 +171,10 @@ function witnessStatus(w: any, band = DEFAULT_LEAN_BAND): WitnessStatus {
 }
 const STATUS_TAG: Record<WitnessStatus, { text: string; cls: string } | null> = {
   counts: null,
-  neutral: { text: "no direction", cls: "text-slate-400" },
-  stale: { text: "stale", cls: "text-amber-300" },
-  context: { text: "context", cls: "text-cyan-300/70" },
-  no_data: { text: "no data", cls: "text-slate-500" }
+  neutral: { text: "no direction", cls: "text-neutral" },
+  stale: { text: "stale", cls: "text-late" },
+  context: { text: "context", cls: "text-ok" },
+  no_data: { text: "no data", cls: "text-muted" }
 };
 const STATUS_NOTE: Record<WitnessStatus, string | null> = {
   counts: null,
@@ -216,7 +218,7 @@ function useCountdown(ms: number | null) {
 }
 const mmss = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
 
-const TREND_TONE: Record<string, string> = { up: "text-emerald-300", down: "text-rose-300", expanding: "text-amber-300", contracting: "text-slate-300" };
+const TREND_TONE: Record<string, string> = { up: "text-bull", down: "text-bear", expanding: "text-neutral", contracting: "text-fg-2" };
 
 /**
  * Decision Engine (owner decisions 2026-11-09): the ONE decision, the single SSOT for the EA, Telegram,
@@ -284,44 +286,44 @@ export default function GlobalDecision() {
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
       hint={e ? "Decided at each 15m close within guardrails. Hover a row for details." : "Advisory only, from closed bars. Hover a row for details."}
-      right={e ? <div className="flex items-center gap-1.5"><span title="The trading mode this decision was made in"><Badge tone="slate">{e.trading_mode ?? "mode unknown"}</Badge></span><Badge tone={e.source === "council" ? "cyan" : "amber"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
-      {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-slate-500">No decision yet.</p> : (
+      right={e ? <div className="flex items-center gap-1.5"><span title="The trading mode this decision was made in"><Badge tone="plain">{e.trading_mode ?? "mode unknown"}</Badge></span><Badge tone={e.source === "council" ? "ok" : "late"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
+      {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-muted">No decision yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
             <div className="flex flex-col">
-              <span className="eyebrow text-[9px]">Decision</span>
-              <div className={`mono whitespace-nowrap ${String(decision).length > 5 ? "text-[24px]" : "text-[32px]"} font-extrabold leading-none ${stanceColor(decision)}`} style={{ textShadow: "0 0 18px currentColor" }}>{decision}</div>
+              <span className="eyebrow">Decision</span>
+              <div className={`mono whitespace-nowrap ${String(decision).length > 5 ? "text-[24px]" : "text-[28px]"} font-bold leading-none ${stanceColor(decision)}`}>{directionGlyph(decision) && <span aria-hidden="true">{directionGlyph(decision)} </span>}{decision}</div>
             </div>
             {e ? (
               <>
                 <div className="flex flex-col gap-1 pb-1">
-                  <span className="eyebrow text-[9px]">Bias</span>
-                  <span className={`mono whitespace-nowrap text-[13px] font-bold ${stanceColor(e.bias)}`}>{e.bias}</span>
+                  <span className="eyebrow">Bias</span>
+                  <span className={`mono whitespace-nowrap text-[13px] font-semibold ${stanceColor(e.bias)}`}>{e.bias}</span>
                 </div>
                 <div className="flex flex-col gap-1 pb-1">
-                  <span className="eyebrow text-[9px]" title="The witnesses' weighted lean">Quorum</span>
-                  <span className="mono whitespace-nowrap text-[13px] font-bold text-slate-200">{e.quorum?.score != null ? `${e.quorum.score > 0 ? "+" : ""}${Math.round(e.quorum.score * 100)}` : "—"}<span className="ml-1 text-[10px] font-normal text-slate-500">▲{pct(e.quorum?.long_share)} ▼{pct(e.quorum?.short_share)}</span></span>
+                  <span className="eyebrow" title="The witnesses' weighted lean">Quorum</span>
+                  <span className="mono whitespace-nowrap text-[13px] font-semibold text-fg">{e.quorum?.score != null ? `${e.quorum.score > 0 ? "+" : ""}${Math.round(e.quorum.score * 100)}` : "—"}<span className="ml-1.5 text-[11px] font-normal text-fg-2">▲{pct(e.quorum?.long_share)} ▼{pct(e.quorum?.short_share)}</span></span>
                   {/* All the witnesses' weight: leaning long, neither way, short. The quorum's ▲▼ shares are of the
                       directional weight only, so here they are scaled by it (1 - the neutral share). */}
                   {(() => {
                     const n = e.quorum?.neutral_share ?? 0, dir = Math.max(0, 1 - n);
                     const lo = (e.quorum?.long_share ?? 0) * dir, sh = (e.quorum?.short_share ?? 0) * dir;
                     return (
-                      <div className="flex h-1.5 w-32 overflow-hidden rounded-full bg-white/5" title={`of all the witnesses' weight: ${pct(lo)} leans long, ${pct(n)} neither way, ${pct(sh)} short`}>
-                        <span className="bg-emerald-400/80" style={{ width: `${lo * 100}%` }} />
-                        <span className="bg-slate-500/60" style={{ width: `${n * 100}%` }} />
-                        <span className="bg-rose-400/80" style={{ width: `${sh * 100}%` }} />
+                      <div className="flex h-1.5 w-32 gap-px overflow-hidden rounded-full bg-white/5" title={`of all the witnesses' weight: ${pct(lo)} leans long, ${pct(n)} neither way, ${pct(sh)} short`}>
+                        <span className="bg-bull-fill" style={{ width: `${lo * 100}%` }} />
+                        <span className="bg-neutral-fill" style={{ width: `${n * 100}%` }} />
+                        <span className="bg-bear-fill" style={{ width: `${sh * 100}%` }} />
                       </div>
                     );
                   })()}
                 </div>
                 {split && (split.tech || split.fund) && (
                   <div className="flex flex-col gap-1 pb-1" title="The weighted lean of the technical witnesses (rooms, strategy, key levels, regime, trend) and of the fundamental ones (news, macro, dollar and yields, calendar), with their share of the weight">
-                    <span className="eyebrow text-[9px]">Technical · Fundamental</span>
-                    <span className="mono whitespace-nowrap text-[12px] font-bold">
-                      {split.tech ? <span className={split.tech.lean > 0 ? "text-emerald-300" : split.tech.lean < 0 ? "text-rose-300" : "text-slate-300"}>{signed(split.tech.lean)}<span className="ml-0.5 text-[10px] font-normal text-slate-500">{pct(split.tech.share)}</span></span> : "—"}
-                      <span className="mx-1.5 text-slate-600">·</span>
-                      {split.fund ? <span className={split.fund.lean > 0 ? "text-emerald-300" : split.fund.lean < 0 ? "text-rose-300" : "text-slate-300"}>{signed(split.fund.lean)}<span className="ml-0.5 text-[10px] font-normal text-slate-500">{pct(split.fund.share)}</span></span> : "—"}
+                    <span className="eyebrow">Technical · Fundamental</span>
+                    <span className="mono whitespace-nowrap text-[13px] font-semibold">
+                      {split.tech ? <span className={split.tech.lean > 0 ? "text-bull" : split.tech.lean < 0 ? "text-bear" : "text-neutral"}>{signed(split.tech.lean)}<span className="ml-0.5 text-[11px] font-normal text-fg-2">{pct(split.tech.share)}</span></span> : "—"}
+                      <span className="mx-1.5 text-dim" aria-hidden="true">·</span>
+                      {split.fund ? <span className={split.fund.lean > 0 ? "text-bull" : split.fund.lean < 0 ? "text-bear" : "text-neutral"}>{signed(split.fund.lean)}<span className="ml-0.5 text-[11px] font-normal text-fg-2">{pct(split.fund.share)}</span></span> : "—"}
                     </span>
                   </div>
                 )}
@@ -330,40 +332,40 @@ export default function GlobalDecision() {
               <>
                 {s && (
                   <div className="flex flex-col gap-1 pb-1">
-                    <span className="eyebrow text-[9px]">Direction</span>
-                    <span className={`mono whitespace-nowrap text-[13px] font-bold ${s.direction === "LONG" ? "text-emerald-300" : s.direction === "SHORT" ? "text-rose-300" : "text-slate-400"}`}>{s.direction}</span>
+                    <span className="eyebrow">Direction</span>
+                    <span className={`mono whitespace-nowrap text-[13px] font-semibold ${stanceColor(s.direction)}`}>{s.direction}</span>
                   </div>
                 )}
                 <div className="flex flex-col gap-1 pb-1">
-                  <span className="eyebrow text-[9px]" title="The weighted lean of every room and the news">Bias</span>
-                  <span className={`mono whitespace-nowrap text-[13px] font-bold ${stanceColor(g.bias)}`}>{g.bias}{g.score != null ? ` ${g.score > 0 ? "+" : ""}${Math.round(g.score * 100)}` : ""}</span>
+                  <span className="eyebrow" title="The weighted lean of every room and the news">Bias</span>
+                  <span className={`mono whitespace-nowrap text-[13px] font-semibold ${stanceColor(g.bias)}`}>{g.bias}{g.score != null ? ` ${g.score > 0 ? "+" : ""}${Math.round(g.score * 100)}` : ""}</span>
                 </div>
               </>
             )}
           </div>
           {e ? (
-            <div className="mono mt-2 text-[11px] text-slate-400">
+            <div className="mono mt-2 text-[11px] text-fg-2">
               confidence {pct(e.confidence)} · 15m close {utc(e.bar_close)} · decided in {e.latency_seconds}s{e.strategy?.price != null ? ` · price ${e.strategy.price.toFixed(2)}` : ""}
-              {left != null && <span className={left > 0 ? "text-cyan-300" : "text-slate-500"} title={e.trade ? "The next decision replaces this one after the next 15m close. Omega enters only within its signal-age limit after the decision (see the Omega page)." : "The next decision comes after the next 15m close"}> · next decision {left > 0 ? `${mmss(left)}` : "due"}</span>}
+              {left != null && <span className={left > 0 ? "text-fg" : "text-muted"} title={e.trade ? "The next decision replaces this one after the next 15m close. Omega enters only within its signal-age limit after the decision (see the Omega page)." : "The next decision comes after the next 15m close"}> · next decision {left > 0 ? `${mmss(left)}` : "due"}</span>}
             </div>
           ) : s && (
-            <div className="mono mt-2 text-[11px] text-slate-400">
+            <div className="mono mt-2 text-[11px] text-fg-2">
               confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)}` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
             </div>
           )}
           {e?.structure && (e.structure.h4 || e.structure.h1 || e.structure.m15) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px]" aria-label="Swing structure" title="The last two confirmed swing highs (HH higher / LH lower) and lows (HL higher / LL lower) of each chart: display only, not a witness">
-              <span className="eyebrow text-[9px]">Structure</span>
+              <span className="eyebrow">Structure</span>
               {([["4H", e.structure.h4], ["1H", e.structure.h1], ["15m", e.structure.m15]] as const).map(([k, v]: any) => (
-                <span key={k} className="mono rounded-full border border-white/10 px-1.5 py-0.5"><span className="text-slate-400">{k}</span> <span className={v ? TREND_TONE[v.trend] ?? "text-slate-300" : "text-slate-600"}>{v?.label ?? "—"}</span></span>
+                <span key={k} className="mono rounded-full border border-white/10 px-1.5 py-0.5"><span className="text-fg-2">{k}</span> <span className={v ? TREND_TONE[v.trend] ?? "text-fg" : "text-muted"}>{v?.label ?? "—"}</span></span>
               ))}
             </div>
           )}
           {e && shown.map((x: any) => <SetupLifecycle key={x.id} setup={x} levels={e.key_levels} />)}
           {e && (
             <div className="glass-inner mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-[11px] text-slate-300">
-              <span className="eyebrow text-[9px]">Next mode</span>
-              {mode == null ? <span className="text-slate-500">loading…</span> : (
+              <span className="eyebrow">Next mode</span>
+              {mode == null ? <span className="text-muted">loading…</span> : (
                 <select className="rounded-sm border border-white/10 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 disabled:opacity-50" value={mode} disabled={modePinned} onChange={(ev) => { void changeMode(ev.target.value); }} title={modePinned ? "Pinned by the server (TRADING_MODE)" : "Owner only: choosing a mode pins it (the selector stops) for the next 15m decision; Telegram says so"}>
                   <option value="scalp">scalp</option>
                   <option value="intraday">intraday</option>
@@ -371,23 +373,23 @@ export default function GlobalDecision() {
                   <option value="range" title="Only the range strategies trade, with the H4/D1 trend and only in cells whose evidence passes; it returns to the previous mode by itself on a breakout">range</option>
                 </select>
               )}
-              {modePinned && <span className="text-slate-500">pinned by the server</span>}
-              {!modePinned && modeSel ? <span id="mode-selector-state" className={modeSel.auto ? "text-cyan-300" : "text-slate-400"}>{modeSel.auto ? "Auto (council)" : "pinned by the owner"}</span> : null}
+              {modePinned && <span className="text-muted">pinned by the server</span>}
+              {!modePinned && modeSel ? <span id="mode-selector-state" className={modeSel.auto ? "text-ok" : "text-fg-2"}>{modeSel.auto ? "Auto (council)" : "pinned by the owner"}</span> : null}
               {!modePinned && modeSel && !modeSel.auto ? <button id="mode-auto" className="btn" onClick={() => { if (window.confirm("Hand the trading mode to the selector and its council (Auto)?")) void postMode({ action: "auto" }); }}>Auto</button> : null}
-              {lastAuto ? <button id="mode-veto" className="btn border-amber-400/40 text-amber-200" title={`${lastAuto.actor}: ${lastAuto.from} → ${lastAuto.to}`} onClick={() => { if (window.confirm(`Veto the switch ${lastAuto.from} → ${lastAuto.to} and pin ${lastAuto.from}?`)) void postMode({ action: "veto" }); }}>Veto {lastAuto.from} → {lastAuto.to}</button> : null}
-              {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-amber-200">current: {e.trading_mode}</span>}
-              {modeError && <span className="text-rose-300">not changed: {modeError}</span>}
+              {lastAuto ? <button id="mode-veto" className="btn border-late-fill/40 text-late" title={`${lastAuto.actor}: ${lastAuto.from} → ${lastAuto.to}`} onClick={() => { if (window.confirm(`Veto the switch ${lastAuto.from} → ${lastAuto.to} and pin ${lastAuto.from}?`)) void postMode({ action: "veto" }); }}>Veto {lastAuto.from} → {lastAuto.to}</button> : null}
+              {e.trading_mode && mode && e.trading_mode !== mode && <span className="text-late">current: {e.trading_mode}</span>}
+              {modeError && <span className="text-fault">not changed: {modeError}</span>}
             </div>
           )}
-          <p className="glass-inner mt-3 px-3 py-2.5 text-[11.5px] leading-relaxed text-slate-200">{e?.summary ?? s?.headline ?? g.summary}</p>
+          <p className="glass-inner mt-3 px-3 py-2.5 text-[12px] leading-relaxed text-fg">{e?.summary ?? s?.headline ?? g.summary}</p>
           {e && !!(e.reasons?.length || e.risks?.length) && (
             <ul className="mt-2 space-y-1 text-[11px]">
-              {(e.reasons ?? []).map((r: string, i: number) => <li key={"r" + i} className="flex gap-1.5 text-slate-300"><Check className="mt-0.5 h-3 w-3 shrink-0 text-cyan-300" />{r}</li>)}
-              {(e.risks ?? []).map((r: string, i: number) => <li key={"k" + i} className="flex gap-1.5 text-amber-200"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{r}</li>)}
+              {(e.reasons ?? []).map((r: string, i: number) => <li key={"r" + i} className="flex gap-1.5 text-fg"><Check className="mt-0.5 h-3 w-3 shrink-0 text-ok" aria-label="reason" />{r}</li>)}
+              {(e.risks ?? []).map((r: string, i: number) => <li key={"k" + i} className="flex gap-1.5 text-fg"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0 text-late" aria-label="risk" />{r}</li>)}
             </ul>
           )}
           {e?.overruled && (
-            <p className="mt-2 rounded-md border border-amber-400/25 bg-amber-400/5 px-2.5 py-1.5 text-[11px] text-amber-200">
+            <p className="mt-2 rounded-md border border-late-fill/30 bg-late-fill/5 px-2.5 py-1.5 text-[11px] text-late">
               Guardrail held back {e.overruled.wanted}: {(e.overruled.failed ?? []).map((f: any) => f.detail).join("; ")}
             </p>
           )}
@@ -401,15 +403,15 @@ export default function GlobalDecision() {
             {rows.map((r: any) => (
               <div key={r.key} className="flex items-center gap-2 text-[11px]" role="listitem" title={r.note}>
                 <Pass v={r.pass} />
-                <span className="mono w-9 shrink-0 font-bold text-slate-100">{r.label}</span>
-                <span className="w-20 shrink-0 truncate text-[9.5px] uppercase tracking-[0.12em] text-slate-500">{r.weight != null ? `${Math.round(r.weight * 100)}% · ${r.role ?? ""}` : r.role}</span>
-                {r.status && STATUS_TAG[r.status as WitnessStatus] ? <span className={`shrink-0 text-[9px] uppercase tracking-widest ${STATUS_TAG[r.status as WitnessStatus]!.cls}`}>{STATUS_TAG[r.status as WitnessStatus]!.text}</span> : null}
+                <span className="mono w-9 shrink-0 font-bold text-fg">{r.label}</span>
+                <span className="w-20 shrink-0 truncate text-[10.5px] text-muted">{r.weight != null ? `${Math.round(r.weight * 100)}% · ${r.role ?? ""}` : r.role}</span>
+                {r.status && STATUS_TAG[r.status as WitnessStatus] ? <span className={`shrink-0 text-[10.5px] ${STATUS_TAG[r.status as WitnessStatus]!.cls}`}>{STATUS_TAG[r.status as WitnessStatus]!.text}</span> : null}
                 {r.trigger != null ? (
-                  <span className="min-w-0 flex-1 truncate text-right text-[10px] text-slate-300">{r.trigger}</span>
+                  <span className="min-w-0 flex-1 truncate text-right text-[11px] text-fg">{r.trigger}</span>
                 ) : (
                   <>
                     <div className={`min-w-0 flex-1 ${r.stale ? "opacity-40" : ""}`}><DivergingBar value={r.lean} height={6} /></div>
-                    <span className="w-28 shrink-0 text-right text-[10px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
+                    <span className="w-36 shrink-0 whitespace-nowrap text-right text-[11px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
                   </>
                 )}
               </div>
@@ -419,21 +421,21 @@ export default function GlobalDecision() {
           {e && <ModelAdvice m={e.context?.model ?? null} />}
           {e && <MarketContext c={e.context?.market} calendar={(e.witnesses ?? []).find((w: any) => w.key === "CALENDAR")} />}
 
-          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[10.5px] text-slate-500">{e.trade.side} confirms the live setup; levels unchanged.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
+          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[11px] text-muted">{e.trade.side} confirms the live setup; levels unchanged.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
 
           {e ? !!e.cautions?.length && (
             <ul className="mt-3 space-y-1 text-[11px]">
-              {e.cautions.map((c: string, i: number) => <li key={"c" + i} className="flex gap-1.5 text-amber-200"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{c}</li>)}
+              {e.cautions.map((c: string, i: number) => <li key={"c" + i} className="flex gap-1.5 text-late"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{c}</li>)}
             </ul>
           ) : !!(s?.vetoes?.length || s?.cautions?.length) && (
             <ul className="mt-3 space-y-1 text-[11px]">
-              {s.vetoes.map((v: string, i: number) => <li key={"v" + i} className="flex gap-1.5 text-rose-300"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{v}</li>)}
-              {s.cautions.map((c: string, i: number) => <li key={"c" + i} className="flex gap-1.5 text-amber-200"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{c}</li>)}
+              {s.vetoes.map((v: string, i: number) => <li key={"v" + i} className="flex gap-1.5 text-fault"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{v}</li>)}
+              {s.cautions.map((c: string, i: number) => <li key={"c" + i} className="flex gap-1.5 text-late"><ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />{c}</li>)}
             </ul>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-            {e?.strategy && st && <><span className="eyebrow text-[9px]">Strategy</span><Badge tone={st.tone}>{st.label}</Badge></>}
-            {g?.h1_decision && <><span className="eyebrow text-[9px]">{e ? "1H room" : "H1 chain"}</span><Stance value={g.h1_decision.decision} /><span className="mono">{pct(g.h1_decision.confidence)}</span>{g.h1_decision.candle_key && <span>· {candleWhen(g.h1_decision.candle_key)}</span>}</>}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            {e?.strategy && st && <><span className="eyebrow">Strategy</span><Badge tone={st.tone}>{st.label}</Badge></>}
+            {g?.h1_decision && <><span className="eyebrow">{e ? "1H room" : "H1 chain"}</span><Stance value={g.h1_decision.decision} /><span className="mono">{pct(g.h1_decision.confidence)}</span>{g.h1_decision.candle_key && <span>· {candleWhen(g.h1_decision.candle_key)}</span>}</>}
             {cf && <span>· R38 H1 {cf.h1_prophet_r38?.buy_confirmed ? "buy" : cf.h1_prophet_r38?.sell_confirmed ? "sell" : "none"} · 5m {cf.m5_prophet_r38?.buy_confirmed ? "buy" : cf.m5_prophet_r38?.sell_confirmed ? "sell" : "none"}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</span>}
           </div>
         </>

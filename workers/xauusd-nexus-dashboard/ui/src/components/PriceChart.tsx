@@ -8,9 +8,12 @@ import { useMarket } from "../lib/market";
 import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
+import { CANDLE, KWW, T, tagText, volumeColor } from "../lib/tokens";
 
-const ZONE_COLOR: Record<string, string> = { support: "#34d399", resistance: "#fb7185", "at price": "#22d3ee" };
+const ZONE_COLOR: Record<string, string> = { support: T.bullFill, resistance: T.bearFill, "at price": T.okFill };
 const ZONE_ALPHA: Record<string, number> = { strong: 0.16, medium: 0.1, weak: 0.06 };
+/** The progressive stop (SL+): no direction and not the KWW yellow, so its own sky blue (its colour before 2026-11-22). */
+const SL_PLUS = "#38bdf8";
 const fmt = (z: any) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
 
 const TFS = [["M5", "5m"], ["M15", "15m"], ["H1", "1H"], ["H4", "4H"], ["D1", "1D"]] as const;
@@ -27,11 +30,12 @@ const readLayers = (): Layers => { try { return { ...DEFAULT_LAYERS, ...JSON.par
 
 type LineKey = "kwwMean" | "kwwUp1" | "kwwDn1" | "kwwUp1618" | "kwwDn1618" | "ema114" | "vwap";
 const LINE_STYLE: Record<LineKey, { color: string; width: 1 | 2; style: LineStyle; title: string }> = {
-  kwwMean: { color: "rgba(250,204,21,0.9)", width: 2, style: LineStyle.Solid, title: "KWW" },
-  kwwUp1: { color: "rgba(250,204,21,0.35)", width: 1, style: LineStyle.Solid, title: "" },
-  kwwDn1: { color: "rgba(250,204,21,0.35)", width: 1, style: LineStyle.Solid, title: "" },
-  kwwUp1618: { color: "rgba(52,211,153,0.85)", width: 2, style: LineStyle.Solid, title: "+1.618σ" },
-  kwwDn1618: { color: "rgba(52,211,153,0.85)", width: 2, style: LineStyle.Solid, title: "−1.618σ" },
+  kwwMean: { color: KWW.mean, width: 2, style: LineStyle.Solid, title: "KWW" },
+  kwwUp1: { color: KWW.band, width: 1, style: LineStyle.Solid, title: "" },
+  kwwDn1: { color: KWW.band, width: 1, style: LineStyle.Solid, title: "" },
+  // The ±1.618σ edges are the KWW band's, not a direction (2026-11-22): its hue, dotted.
+  kwwUp1618: { color: KWW.edge, width: 2, style: LineStyle.Dotted, title: "+1.618σ" },
+  kwwDn1618: { color: KWW.edge, width: 2, style: LineStyle.Dotted, title: "−1.618σ" },
   ema114: { color: "rgba(255,152,0,0.95)", width: 2, style: LineStyle.Solid, title: "EMA 114" },
   vwap: { color: "rgba(34,211,238,0.9)", width: 1, style: LineStyle.Solid, title: "VWAP" }
 };
@@ -58,6 +62,7 @@ export default function PriceChart() {
   const layerZonesRef = useRef<ZonesPrimitive | null>(null);
   const planLines = useRef<IPriceLine[]>([]);
   const layerLines = useRef<IPriceLine[]>([]);
+  const lastLine = useRef<IPriceLine | null>(null);
   const [bars, setBars] = useState<Bar[]>([]);
   const [plane, setPlane] = useState<any>(null);
   const [showZones, setShowZones] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartZones") !== "off"; } catch { return true; } });
@@ -139,7 +144,7 @@ export default function PriceChart() {
     if (!el.current) return;
     const c = createChart(el.current, {
       autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: "#8b949e", fontFamily: "ui-monospace, JetBrains Mono, monospace" },
+      layout: { background: { color: "transparent" }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace" },
       grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
       timeScale: {
@@ -152,8 +157,11 @@ export default function PriceChart() {
       },
       crosshair: { mode: 0 },
     });
+    // The last price is our own price line (in the load below), so its axis tag carries dark text on the green and red
+    // fills: the library's own tag is white there (2.3 to 1 on the bull fill).
     candles.current = c.addCandlestickSeries({
-      upColor: "#3fb950", downColor: "#f85149", borderUpColor: "#3fb950", borderDownColor: "#f85149", wickUpColor: "#3fb950", wickDownColor: "#f85149",
+      ...CANDLE,
+      lastValueVisible: false, priceLineVisible: false,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     zonesRef.current = new ZonesPrimitive();
@@ -166,7 +174,7 @@ export default function PriceChart() {
     volume.current = c.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
     c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chart.current = c;
-    return () => { c.remove(); chart.current = null; zonesRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lines.current = {}; };
+    return () => { c.remove(); chart.current = null; zonesRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lastLine.current = null; lines.current = {}; };
   }, []);
 
   // The zones and the plan follow the Global Conclusion (refreshed every 60 s).
@@ -176,7 +184,7 @@ export default function PriceChart() {
     if (!series) return;
     const candidates: any[] = showZones ? strategy?.key_levels?.candidates ?? [] : [];
     const zones: ChartZone[] = candidates.map((z) => ({
-      low: z.low, high: z.high, color: ZONE_COLOR[z.role] ?? "#64748b", alpha: ZONE_ALPHA[z.strength] ?? 0.08,
+      low: z.low, high: z.high, color: ZONE_COLOR[z.role] ?? T.muted, alpha: ZONE_ALPHA[z.strength] ?? 0.08,
       label: `${fmt(z)} · ${z.strength} · ${z.sources} families`
     }));
     zonesRef.current?.setZones(zones);
@@ -187,15 +195,15 @@ export default function PriceChart() {
     const p = showPlan && hasClearDecision ? strategy?.plan : null;
     if (p) {
       const line = (price: number | null | undefined, title: string, color: string, style: LineStyle) => {
-        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
+        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, axisLabelTextColor: tagText(color) }));
       };
-      line(p.entry, p.at_level ? "Entry" : "Entry (pullback)", "#22d3ee", LineStyle.Solid);
-      line(p.stop, "Stop", "#fb7185", LineStyle.Dashed);
+      line(p.entry, p.at_level ? "Entry" : "Entry (pullback)", T.okFill, LineStyle.Solid);
+      line(p.stop, "Stop", T.bearFill, LineStyle.Dashed);
       if (p.progressive_stop != null) {
-        line(p.progressive_stop, "SL+", "#38bdf8", LineStyle.Dashed);
+        line(p.progressive_stop, "SL+", SL_PLUS, LineStyle.Dashed);
       }
-      line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, "#34d399", LineStyle.Dashed);
-      line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, "#34d399", LineStyle.Dotted);
+      line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, T.bullFill, LineStyle.Dashed);
+      line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, T.bullFill, LineStyle.Dotted);
     }
   }, [strategy, showZones, showPlan]);
 
@@ -206,7 +214,7 @@ export default function PriceChart() {
         const d = await get<{ candles: Bar[]; timeframe: string; basis: string; latest_close_time: string }>(`/api/ohlcv?timeframe=${tf}&limit=400`);
         const cs = d.candles || [];
         candles.current?.setData(cs.map((x) => ({ time: x.time as UTCTimestamp, open: x.open, high: x.high, low: x.low, close: x.close })));
-        volume.current?.setData(cs.filter((x) => x.volume != null).map((x) => ({ time: x.time as UTCTimestamp, value: x.volume as number, color: x.close >= x.open ? "rgba(63,185,80,0.35)" : "rgba(248,81,73,0.35)" })));
+        volume.current?.setData(cs.filter((x) => x.volume != null).map((x) => ({ time: x.time as UTCTimestamp, value: x.volume as number, color: volumeColor(x.close >= x.open) })));
         setBars(cs);
         if (fit && cs.length > 0) {
           const visibleCount = Math.min(cs.length, 75);
@@ -217,6 +225,12 @@ export default function PriceChart() {
         }
         fit = false;
         const last = cs.at(-1), prev = cs.at(-2);
+        const series = candles.current;
+        if (series && lastLine.current) { series.removePriceLine(lastLine.current); lastLine.current = null; }
+        if (series && last) {
+          const color = last.close >= last.open ? T.bullFill : T.bearFill;
+          lastLine.current = series.createPriceLine({ price: last.close, title: "", color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, axisLabelTextColor: tagText(color) });
+        }
         setHead({ last: last?.close, change: last && prev ? last.close - prev.close : undefined, pct: last && prev ? ((last.close - prev.close) / prev.close) * 100 : undefined, basis: `${d.timeframe} · ${d.basis}`, closed: d.latest_close_time });
       } catch (e) { setHead({ error: e instanceof Error ? e.message : String(e) }); }
     };
@@ -263,7 +277,7 @@ export default function PriceChart() {
     const zones: ChartZone[] = [];
     // Each level is named on the price axis; the FVG targets (up to six) stay unlabelled to keep the axis readable.
     const line = (price: unknown, title: string, color: string, style = LineStyle.Dashed, axis = true) => {
-      if (typeof price === "number" && Number.isFinite(price)) layerLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: axis }));
+      if (typeof price === "number" && Number.isFinite(price)) layerLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: axis, axisLabelTextColor: tagText(color) }));
     };
     const p = plane;
     if (p) {
@@ -285,10 +299,10 @@ export default function PriceChart() {
       if (layers.liquidity) {
         const liq = p.liquidity || {};
         for (const z of (liq.whale_zones || []).slice(0, 4)) {
-          zones.push({ low: z.bottom, high: z.top, color: z.role === "support" ? "#22d3ee" : "#f43f5e", alpha: z.state === "active" ? 0.14 : 0.07, label: z.state === "active" ? `whale ${z.role}` : `mitigation block (${z.role})` });
+          zones.push({ low: z.bottom, high: z.top, color: z.role === "support" ? T.okFill : T.bearFill, alpha: z.state === "active" ? 0.14 : 0.07, label: z.state === "active" ? `whale ${z.role}` : `mitigation block (${z.role})` });
         }
-        for (const f of (liq.fvg?.bull || []).slice(0, 3)) line(f.price, "", "#34d399", LineStyle.Dotted, false);
-        for (const f of (liq.fvg?.bear || []).slice(0, 3)) line(f.price, "", "#fb7185", LineStyle.Dotted, false);
+        for (const f of (liq.fvg?.bull || []).slice(0, 3)) line(f.price, "", T.bullFill, LineStyle.Dotted, false);
+        for (const f of (liq.fvg?.bear || []).slice(0, 3)) line(f.price, "", T.bearFill, LineStyle.Dotted, false);
         line(liq.gabfx?.qm_buy, "QM buy", "#22d3ee");
         line(liq.gabfx?.qm_sell, "QM sell", "#e879f9");
         line(liq.gabfx?.rbs, "RBS", "#22d3ee", LineStyle.Solid);
@@ -318,7 +332,7 @@ export default function PriceChart() {
     <Panel
       title={<span className="flex items-baseline gap-3 normal-case tracking-normal"><span className="text-[13px] font-semibold text-slate-100">XAUUSD · OANDA</span>
         {head.last != null && <span className="mono text-[20px] font-bold text-white">{head.last.toFixed(2)}</span>}
-        {head.change != null && <span className={clsx("mono text-[12px]", up ? "text-emerald-400" : "text-rose-400")}>{up ? "+" : ""}{head.change.toFixed(2)} ({up ? "+" : ""}{head.pct?.toFixed(2)}%)</span>}</span>}
+        {head.change != null && <span className={clsx("mono text-[12px]", up ? "text-bull" : "text-bear")}>{up ? "▲ +" : "▼ "}{head.change.toFixed(2)} ({up ? "+" : ""}{head.pct?.toFixed(2)}%)</span>}</span>}
       icon={<CandlestickChart className="h-4 w-4 text-amber-300" />}
       right={
         <div className="flex items-center gap-1.5" role="tablist" aria-label="Chart timeframe">
@@ -340,7 +354,7 @@ export default function PriceChart() {
       }>
       <div className="mb-2 flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 text-nowrap" aria-label="Chart layers">
         <div className="mr-1 flex shrink-0 items-center gap-1 border-r border-white/10 pr-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Preset</span>
+          <span className="text-[11px] font-medium text-muted">Preset</span>
           <button type="button" onClick={() => applyPreset("clean")} title="Candlesticks only: clear all indicator overlays" className={clsx("rounded-sm px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "clean" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Clean</button>
           <button type="button" onClick={() => applyPreset("structure")} title="Standard confluence: Zones, Bands, Volume" className={clsx("rounded-sm px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "structure" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Structure</button>
           <button type="button" onClick={() => applyPreset("full")} title="Full confluence: Zones, Bands, Volume, Fib, VWAP, Liquidity, Session" className={clsx("rounded-sm px-1.5 py-0.5 text-[10px] font-medium transition", activePreset === "full" ? "border border-cyan-400/40 bg-cyan-400/20 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white")}>Full</button>
@@ -355,8 +369,8 @@ export default function PriceChart() {
         <button type="button" aria-pressed={layers.session} title="True day, week and month opens" className={chip(layers.session)} onClick={() => setLayer("session", !layers.session)}>Session</button>
       </div>
       <div ref={el} className="h-[300px] w-full sm:h-[400px]" />
-      <div className="mt-2 flex flex-wrap justify-between gap-2 text-[10px] uppercase tracking-[0.16em] text-slate-600">
-        <span>{head.error ? <span className="text-rose-300">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"}`}</span>
+      <div className="mt-2 flex flex-wrap justify-between gap-2 text-[11px] text-muted">
+        <span>{head.error ? <span className="text-fault">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"}`}</span>
         <span className="normal-case tracking-normal">{plane ? `GMI levels from the ${PLANE_LABEL[planeTf]} snapshot` : "GMI levels: waiting for the chart plane"}</span>
         {head.closed && <span className="mono normal-case tracking-normal">last closed bar {new Date(head.closed).toISOString().replace("T", " ").slice(0, 16)} UTC</span>}
       </div>

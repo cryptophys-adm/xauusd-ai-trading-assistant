@@ -3,7 +3,7 @@ import { FileSearch, Lightbulb, ScrollText, Users } from "lucide-react";
 import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { useConfirm } from "../components/ConfirmDialog";
-import { ago, utc } from "../lib/format";
+import { ago, humanKey, utc } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
 
 // Call for Councils (owner 2026-11-16: "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils";
@@ -15,7 +15,7 @@ import { usePoll } from "../lib/usePoll";
 // the owner opens, writes and switches through POST /omega/api/council (owner only); the pick is made in Cerebrum.
 
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
-const human = (k: string) => k.replace(/_/g, " ").replace(/\br\b/g, "R").replace(/^./, (c) => c.toUpperCase());
+const human = humanKey;
 const TYPE_TONE: Record<string, "cyan" | "amber" | "red" | "green" | "purple" | "slate"> = {
   strategy: "cyan", risk: "red", engine: "purple", execution: "amber", news: "amber", data: "slate", cost: "slate", seat: "green", knowledge: "green", free: "slate"
 };
@@ -223,19 +223,20 @@ const ownerPost = async (body: unknown) => {
 const STANCE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
   support: { text: "agree", tone: "green" }, oppose: { text: "disagree", tone: "red" }, amend: { text: "agree, with a change", tone: "amber" }, abstain: { text: "abstain", tone: "slate" }
 };
-const KIND: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
-  policy_parameter: { text: "knob change · shadow test first", tone: "green" }, repository_task: { text: "new code · built by Cryptophys", tone: "amber" }, no_change: { text: "no change", tone: "slate" }
+// A proposal's kind is a label, not a state or a direction: plain, and off for "no change".
+const KIND: Record<string, { text: string; tone: "plain" | "off" }> = {
+  policy_parameter: { text: "knob change · shadow test first", tone: "plain" }, repository_task: { text: "new code · built by Cryptophys", tone: "plain" }, no_change: { text: "no change", tone: "off" }
 };
 const PROPOSAL_STATE: Record<string, string> = {
   queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
   shadow: "in its shadow test", live: "live", rolled_back: "rolled back by itself", rejected: "not applied", superseded: "replaced by a newer proposal on the same knob"
 };
 // The platform's state of a handed-off proposal (council.decisions.read, platform V3).
-const PLATFORM_STATE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
-  received: { text: "received", tone: "slate" }, queued: { text: "queued", tone: "slate" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "amber" },
-  in_progress: { text: "being built", tone: "amber" }, proposed: { text: "change proposed", tone: "amber" }, merged: { text: "merged", tone: "green" },
-  deployed: { text: "deployed", tone: "green" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "green" }, closed: { text: "closed", tone: "slate" },
-  rejected: { text: "rejected", tone: "red" }, refused: { text: "refused", tone: "red" }, unfit: { text: "unfit", tone: "red" }, reverted: { text: "reverted", tone: "red" }
+const PLATFORM_STATE: Record<string, { text: string; tone: "ok" | "fault" | "late" | "off" }> = {
+  received: { text: "received", tone: "off" }, queued: { text: "queued", tone: "off" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "late" },
+  in_progress: { text: "being built", tone: "late" }, proposed: { text: "change proposed", tone: "late" }, merged: { text: "merged", tone: "ok" },
+  deployed: { text: "deployed", tone: "ok" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "ok" }, closed: { text: "closed", tone: "off" },
+  rejected: { text: "rejected", tone: "fault" }, refused: { text: "refused", tone: "fault" }, unfit: { text: "unfit", tone: "fault" }, reverted: { text: "reverted", tone: "fault" }
 };
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
@@ -277,7 +278,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
   const terminal = s.terminal ?? TERMINAL.includes(s.state);
   const send = async () => { setBusy(true); setErr(null); try { const r = await ownerPost({ action: "message", session_id: id, text, to }); setText(""); setTo([]); if (r?.stale) setErr("Sent. This session's evidence is older than 24 hours: re-open the topic for answers on fresh evidence."); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   const accept = async (o: any) => {
-    const what = o.kind === "policy_parameter" ? <>The knob <span className="mono text-emerald-200">{o.knob}</span> moves from {o.from} to {o.value} only after a shadow test on the recorded decisions shows it does better; it then goes live by itself and rolls back by itself if it does worse.</>
+    const what = o.kind === "policy_parameter" ? <>The knob <span className="mono text-ok">{o.knob}</span> moves from {o.from} to {o.value} only after a shadow test on the recorded decisions shows it does better; it then goes live by itself and rolls back by itself if it does worse.</>
       : o.kind === "repository_task" ? <>This needs new code. It is handed to the platform's evolution loop, so Cryptophys builds it, not an outside party. Nothing in trading changes until it is built and tested.</>
       : <>Nothing changes. The decision is recorded.</>;
     if (!(await confirm({ title: `Accept "${o.title}"?`, body: <><p>{what}</p><p className="mt-2 text-slate-400">The session ends with this pick.</p></>, confirmLabel: "Accept", tone: "emerald" }))) return;
@@ -295,7 +296,7 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
         {!enabled ? <span className="text-slate-400">Sessions are off: turn them on above to re-open.</span> : null}
         {!terminal ? <button type="button" disabled={busy} onClick={() => control("close")} title="End this session; it frees a slot and does not count toward the day"
           className="rounded-md bg-slate-700/60 px-2.5 py-0.5 font-semibold text-slate-200 ring-1 ring-slate-500/40 disabled:opacity-40">Close</button> : null}
-        {err ? <span className="text-rose-300">{err}</span> : null}
+        {err ? <span className="text-fault">{err}</span> : null}
       </div>
       <div className="text-[13px] text-slate-200"><span className="font-semibold">{s.question}</span> <span className="text-[11px] text-slate-500">· {s.topic_key} · {s.calls}/16 calls · {STATE_TEXT[s.state] ?? s.state}{s.reason ? ` (${s.reason})` : ""}</span></div>
       {terminal && rounds.length ? (
@@ -313,10 +314,10 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
             <div key={o.option_id} className="glass-inner flex flex-col gap-1 p-3 text-[12px]">
               <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{o.rank}. {o.title}</div>{o.kind && KIND[o.kind] ? <Badge tone={KIND[o.kind].tone}>{KIND[o.kind].text}</Badge> : null}</div>
               <div className="text-slate-300">{o.hypothesis}</div>
-              {o.kind === "policy_parameter" ? <div className="mono text-[11px] text-emerald-200">{o.knob}: {o.from} → {o.value} {o.unit ?? ""}</div> : null}
+              {o.kind === "policy_parameter" ? <div className="mono text-[11px] text-ok">{o.knob}: {o.from} → {o.value} {o.unit ?? ""}</div> : null}
               {o.kind === "repository_task" && o.spec ? <div className="text-[11px] text-amber-100/90">To build: {o.spec}</div> : null}
               <div className="text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div>
-              {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o)} className="mt-1 rounded-md bg-emerald-500/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-emerald-200 ring-1 ring-emerald-400/40 disabled:opacity-40">Accept</button></div> : null}
+              {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o)} className="mt-1 rounded-md bg-ok-fill/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-ok ring-1 ring-ok-fill/40 disabled:opacity-40">Accept</button></div> : null}
             </div>))}</div></div>
       ) : null}
       {!terminal ? (
@@ -340,15 +341,15 @@ function Proposals({ tick }: { tick: number }) {
   if (!rows.length && !live.length) return null;
   return (
     <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div>
-      {live.length ? <div className="mb-2 text-[11.5px] text-emerald-200">Live knob values (tested in shadow first; each rolls back by itself if it does worse): {live.map(([k, v]) => `${k} = ${v}`).join(" · ")}</div> : null}
+      {live.length ? <div className="mb-2 text-[11.5px] text-ok">Live knob values (tested in shadow first; each rolls back by itself if it does worse): {live.map(([k, v]) => `${k} = ${v}`).join(" · ")}</div> : null}
       <div className="grid gap-2 md:grid-cols-2">{rows.map((p) => (
         <div key={p.id} className="glass-inner p-3 text-[12px]">
           <div className="flex items-start justify-between gap-2"><div className="font-semibold text-slate-100">{p.title ?? p.option_id}</div>{KIND[p.kind] ? <Badge tone={KIND[p.kind].tone}>{KIND[p.kind].text}</Badge> : null}</div>
-          {p.kind === "policy_parameter" ? <div className="mono mt-1 text-[11px] text-emerald-200">{p.knob}: {p.from_value} → {p.value}</div> : null}
+          {p.kind === "policy_parameter" ? <div className="mono mt-1 text-[11px] text-ok">{p.knob}: {p.from_value} → {p.value}</div> : null}
           <div className="mt-1 text-[11px] text-slate-400">{PROPOSAL_STATE[p.state] ?? p.state} · accepted {String(p.accepted_at).slice(0, 16).replace("T", " ")} UTC{p.note ? ` · ${p.note}` : ""}</div>
           {p.platform ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
-              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "slate"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
+              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "off"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
               <span>{String(p.platform.at).slice(0, 16).replace("T", " ")} UTC</span>
               {p.platform.reason ? <span className="w-full text-slate-500">{p.platform.reason}</span> : null}
               {p.platform.refs?.merge_sha ? <span className="mono text-slate-500">merge {String(p.platform.refs.merge_sha).slice(0, 7)}</span> : null}
@@ -375,7 +376,7 @@ function Sessions({ topic }: { topic: string | null }) {
       {dialog}
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
-        <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{d?.enabled ? "On" : "Off"}</span>
+        <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-ok-fill/20 text-ok ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{d?.enabled ? "On" : "Off"}</span>
         <button type="button" disabled={busy || d?.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "rose" }))) return; act({ action: "switch", on: !d?.enabled }); }}
           className="rounded-md px-2 py-0.5 text-slate-300 ring-1 ring-slate-600/50 hover:text-slate-100 disabled:opacity-40">{d?.enabled ? "Turn off" : "Turn on"}</button>
         <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
@@ -390,7 +391,7 @@ function Sessions({ topic }: { topic: string | null }) {
             <button type="button" disabled={busy || !text.trim()} onClick={() => act({ action: "start", text })} className="rounded-md bg-cyan-500/20 px-3 py-1 text-[12px] font-semibold text-cyan-200 ring-1 ring-cyan-400/40 disabled:opacity-40">Open</button></div>
         </div>
       ) : null}
-      {err ? <div className="text-[11px] text-rose-300">{err}</div> : null}
+      {err ? <div className="text-[11px] text-fault">{err}</div> : null}
       {d?.sessions?.length ? (
         <div className="flex flex-wrap gap-1.5">{d.sessions.map((x: any) => (
           <button key={x.id} type="button" onClick={() => setOpen(x.id)} className={`rounded-sm px-2 py-0.5 text-[11px] ring-1 ${open === x.id ? "bg-cyan-500/20 text-cyan-200 ring-cyan-400/40" : "text-slate-300 ring-slate-600/50"}`}>{x.topic_text ?? x.topic_key} · {x.state}</button>))}

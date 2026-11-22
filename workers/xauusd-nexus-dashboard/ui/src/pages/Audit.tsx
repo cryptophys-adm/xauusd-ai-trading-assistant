@@ -3,22 +3,25 @@ import { BookOpenCheck } from "lucide-react";
 import { Badge, Empty, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
+import { stanceColor } from "../components/Stance";
 
 const CHARTS: [string, string][] = [["15", "M15"], ["60", "H1"], ["240", "H4"], ["1D", "D1"]];
 const pc = (x?: number | null) => (x == null ? "" : `${Math.round(x * 100)}%`);
 const when = (t?: string | null) => (t ? `${t.slice(5, 16).replace("T", " ")} UTC` : "");
-const stanceTone = (s?: string | null) => (s === "BUY" || s === "bullish" ? "text-emerald-300" : s === "SELL" || s === "bearish" ? "text-rose-300" : "text-slate-300");
-const resultTone = (r?: string) => (r === "hit" ? "text-emerald-300" : r === "miss" || r === "missed_opportunity" ? "text-rose-300" : "text-slate-400");
+// Direction: green bullish, red bearish, amber neutral (WAIT, HOLD, NEUTRAL); no stance in the text colour.
+const stanceTone = (s?: string | null) => (!s ? "text-fg" : stanceColor(s));
+// A scored call: hit ok, miss fault, open plain.
+const resultTone = (r?: string) => (r === "hit" ? "text-ok" : r === "miss" || r === "missed_opportunity" ? "text-fault" : "text-fg-2");
 
 function Card({ c }: { c: any }) {
   const outcomes = Object.entries(c.outcomes ?? {}) as [string, any][];
   return (
-    <Panel title={`${when(c.bar_open)} · ${c.session ?? ""}`} right={<span className="flex gap-1">{c.conclusion?.reconvened ? <Badge tone="purple">reconvened</Badge> : null}{c.compliance?.length ? <Badge tone="amber">{c.compliance.length} rule break{c.compliance.length > 1 ? "s" : ""}</Badge> : <Badge tone="green">clean</Badge>}</span>}>
+    <Panel title={`${when(c.bar_open)} · ${c.session ?? ""}`} right={<span className="flex gap-1">{c.conclusion?.reconvened ? <Badge tone="shadow">reconvened</Badge> : null}{c.compliance?.length ? <Badge tone="late">{c.compliance.length} rule break{c.compliance.length > 1 ? "s" : ""}</Badge> : <Badge tone="ok">clean</Badge>}</span>}>
       <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 text-[12px]">
         <span>Conclusion: <b className={stanceTone(c.conclusion?.stance)}>{c.conclusion?.stance ?? "none"}</b>{c.conclusion?.bias ? <> · bias <b className={stanceTone(c.conclusion.bias)}>{c.conclusion.bias}</b></> : null} {pc(c.conclusion?.confidence)}</span>
         {c.crowd ? <span>Crowd: <b className={stanceTone(c.crowd.weighted_bias)}>{c.crowd.weighted_bias ?? "n/a"}</b>, disagreement {c.crowd.disagreement ?? "n/a"}</span> : null}
         {c.h1 ? <span>H1 decision: <b className={stanceTone(c.h1.decision)}>{c.h1.decision ?? "n/a"}</b> {pc(c.h1.confidence)}</span> : null}
-        {c.stuck_open?.length ? <span className="text-amber-200">Stuck: {c.stuck_open.map((s: any) => `${s.field} ${s.candles}`).join(", ")}</span> : null}
+        {c.stuck_open?.length ? <span className="text-late">Stuck: {c.stuck_open.map((s: any) => `${s.field} ${s.candles}`).join(", ")}</span> : null}
       </div>
       {c.conclusion?.summary ? <p className="mb-2 text-[12px] leading-relaxed text-slate-300">{c.conclusion.summary}</p> : null}
       <div className="table-wrap">
@@ -39,7 +42,7 @@ function Card({ c }: { c: any }) {
         </table>
       </div>
       {c.compliance?.length ? (
-        <ul className="mt-2 list-disc pl-5 text-[11px] text-amber-200">
+        <ul className="mt-2 list-disc pl-5 text-[11px] text-late">
           {c.compliance.map((x: any, i: number) => <li key={i}><span className="mono">{x.agent}</span> · {x.check}{x.detail ? `: ${x.detail}` : ""}</li>)}
         </ul>
       ) : null}
@@ -54,7 +57,7 @@ function ComplianceTable() {
   if (!v) return null;
   const rows: any[] = (v.agents ?? []).filter((a: any) => a.violations > 0);
   return (
-    <Panel title="Rule breaks, 7d" hint={(v.checks ?? []).length ? `Checks: ${(v.checks ?? []).join(", ")}` : undefined} right={<span className="flex gap-1"><Badge tone="slate">{v.total?.violations ?? 0} / {v.total?.messages ?? 0} msgs</Badge><Badge tone={v.total?.violations ? "amber" : "green"}>{v.total?.rate_per_100 ?? 0} per 100</Badge></span>}>
+    <Panel title="Rule breaks, 7d" hint={(v.checks ?? []).length ? `Checks: ${(v.checks ?? []).join(", ")}` : undefined} right={<span className="flex gap-1"><Badge tone="plain">{v.total?.violations ?? 0} / {v.total?.messages ?? 0} msgs</Badge><Badge tone={v.total?.violations ? "late" : "ok"}>{v.total?.rate_per_100 ?? 0} per 100</Badge></span>}>
       {!rows.length ? <Empty>No rule breaks.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -80,7 +83,7 @@ function AetherStatus() {
   if (!a) return null;
   const charts = Object.entries(a.charts ?? {}) as [string, any][];
   return (
-    <Panel title="Aether sync" right={<Badge tone={a.binding === "present" ? "green" : "slate"}>{a.binding === "present" ? "connected" : "not connected"}</Badge>}>
+    <Panel title="Aether sync" right={<Badge tone={a.binding === "present" ? "ok" : "off"}>{a.binding === "present" ? "connected" : "not connected"}</Badge>}>
       <p className="mb-2 text-[12px] text-slate-400">24h: {Object.entries(a.last_24h ?? {}).map(([k, n]) => `${k} ${n}`).join(", ") || "none"}{a.learned_pack?.status ? ` · Learned pack: ${a.learned_pack.status}` : ""}</p>
       {charts.length ? (
         <div className="table-wrap">
@@ -108,11 +111,11 @@ export default function Audit() {
       <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
         <div className="flex flex-wrap gap-2">
           {CHARTS.map(([k, label]) => (
-            <button key={k} onClick={() => setChart(k)} className={`rounded-sm border px-2 py-1 text-[12px] ${chart === k ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-200" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{label}</button>
+            <button key={k} onClick={() => setChart(k)} className={`rounded-sm border px-2 py-1 text-[12px] ${chart === k ? "border-white/30 bg-white/8 text-fg" : "border-white/10 text-fg-2 hover:text-fg"}`}>{label}</button>
           ))}
         </div>
       </Panel>
-      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Decision cards unavailable: {error}</p></Panel>
+      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-fault">Decision cards unavailable: {error}</p></Panel>
         : !cards.length ? <Panel><Empty>No decisions yet.</Empty></Panel> : cards.map((c) => <Card key={c.card_id} c={c} />)}
       <ComplianceTable />
       <AetherStatus />

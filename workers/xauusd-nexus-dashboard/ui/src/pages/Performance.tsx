@@ -19,9 +19,10 @@ import {
   TrendingUp,
   Zap,
 } from "lucide-react";
-import { Badge, Dot, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import { C } from "../components/charts";
+import { T } from "../lib/tokens";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -30,11 +31,11 @@ const r = (x?: number | null, sign = true) => (x == null ? "n/a" : `${sign && (x
 const px = (x?: number | null) => (x == null ? "" : x.toFixed(2));
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
 
-const STATUS_TONE: Record<string, "green" | "amber" | "red" | "slate" | "cyan"> = {
-  pending: "amber",
-  open: "cyan",
-  closed: "slate",
-  cancelled: "slate",
+const STATUS_TONE: Record<string, "ok" | "late" | "off"> = {
+  pending: "late",
+  open: "ok",
+  closed: "off",
+  cancelled: "off",
 };
 
 type ViewMode = "signal_ledger" | "omega_broker" | "disparity_knowledge";
@@ -152,11 +153,11 @@ function InteractiveEquityCurve({
           0 {currency}
         </text>
 
-        {/* High water mark peak line */}
+        {/* High water mark peak line: grey, it is no direction and no warning */}
         <path
           d={peakD}
           fill="none"
-          stroke={C.wait}
+          stroke={T.fg2}
           strokeWidth={1.2}
           strokeDasharray="3 3"
           opacity={0.55}
@@ -193,7 +194,7 @@ function InteractiveEquityCurve({
               cx={getX(hoverIndex)}
               cy={getY(active.peak)}
               r={3}
-              fill={C.wait}
+              fill={T.fg2}
               opacity={0.8}
             />
             <circle
@@ -224,20 +225,20 @@ function InteractiveEquityCurve({
           </div>
           <div className="grid grid-cols-3 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Cumulative</span>
+              <span className="text-[11px] text-muted">Cumulative</span>
               <p className="mono font-bold" style={{ color: active.r >= 0 ? C.bull : C.bear }}>
                 {active.r >= 0 ? "+" : ""}{active.r.toFixed(2)}{currency}
               </p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Peak</span>
-              <p className="mono font-bold text-amber-300">
+              <span className="text-[11px] text-muted">Peak</span>
+              <p className="mono font-bold text-fg-2">
                 {active.peak.toFixed(2)}{currency}
               </p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Drawdown</span>
-              <p className="mono font-bold text-rose-400">
+              <span className="text-[11px] text-muted">Drawdown</span>
+              <p className="mono font-bold text-bear">
                 {active.drawdown.toFixed(2)}{currency}
               </p>
             </div>
@@ -281,10 +282,10 @@ function UnderwaterDrawdownChart({
     <div className="relative mt-2 border-t border-white/5 pt-2">
       <div className="mb-1 flex items-center justify-between text-[11px]">
         <span className="flex items-center gap-1.5 text-slate-400 font-medium">
-          <TrendingDown className="h-3.5 w-3.5 text-rose-400" />
+          <TrendingDown className="h-3.5 w-3.5 text-bear" />
           Drawdown
         </span>
-        <span className="mono text-[10px] text-rose-400">
+        <span className="mono text-[10px] text-bear">
           Max DD: {maxDd.toFixed(2)}{currency}
         </span>
       </div>
@@ -374,7 +375,7 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
                 <td>{cell(b?.tp1)}</td>
                 <td>{cell(b?.tp2)}</td>
                 <td>{cell(o)}</td>
-                <td className="mono text-rose-300">{o?.trades ? (o.max_drawdown_r ? `−${o.max_drawdown_r}R` : "0R") : "—"}</td>
+                <td className="mono text-bear">{o?.trades ? (o.max_drawdown_r ? `−${o.max_drawdown_r}R` : "0R") : "—"}</td>
                 <td className="mono">
                   {pr?.trades ? (
                     <>
@@ -505,15 +506,15 @@ function ExcursionMatrix({ items }: { items: any[] }) {
     <div className="space-y-3 pt-1">
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MFE</span>
-          <p className="mono text-[16px] font-bold text-emerald-400">+{avgMfe.toFixed(2)}R</p>
+          <span className="text-[11px] text-muted">Avg MFE</span>
+          <p className="mono text-[16px] font-bold text-bull">+{avgMfe.toFixed(2)}R</p>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Avg MAE</span>
-          <p className="mono text-[16px] font-bold text-rose-400">−{Math.abs(avgMae).toFixed(2)}R</p>
+          <span className="text-[11px] text-muted">Avg MAE</span>
+          <p className="mono text-[16px] font-bold text-bear">−{Math.abs(avgMae).toFixed(2)}R</p>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/2 p-2.5">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Efficiency</span>
+          <span className="text-[11px] text-muted">Efficiency</span>
           <p className="mono text-[16px] font-bold text-cyan-400">{Math.round(edgeEfficiency)}%</p>
         </div>
       </div>
@@ -524,7 +525,7 @@ function ExcursionMatrix({ items }: { items: any[] }) {
         </div>
         <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-white/6">
           <div
-            className="h-full rounded-full bg-linear-to-r from-rose-500 via-amber-400 to-emerald-400 transition-all duration-500"
+            className="h-full rounded-full bg-linear-to-r from-bear-fill via-amber-400 to-bull-fill transition-all duration-500"
             style={{ width: `${edgeEfficiency}%` }}
           />
         </div>
@@ -544,7 +545,7 @@ function SlPlusPricePoint({ item }: { item: any }) {
   if (item.sl_plus_triggered) {
     return (
       <div className="flex flex-col">
-        <span className="mono font-bold text-emerald-400">
+        <span className="mono font-bold text-ok">
           LOCKED @ {px(slPlusPrice)}
         </span>
         <span className="text-[10px] text-slate-400">
@@ -590,13 +591,13 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setExitNotice({
-        tone: "text-emerald-300",
+        tone: "text-ok",
         text: `Close sent for #${ticket}.`,
       });
       setExitModalPosition(null);
     } catch (err: any) {
       setExitNotice({
-        tone: "text-rose-300",
+        tone: "text-fault",
         text: `Close failed for #${ticket}: ${err?.message || "error"}`,
       });
     } finally {
@@ -644,22 +645,20 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           label="Avg Slippage"
           value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "—"}
           sub={`Max: ${tca.max_slippage_points ?? "—"} pts · ${completedIntents.length} fills`}
-          color={C.cyan}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Latency"
           value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "n/a"}
           sub={`Route: ${route.active_route || "—"}`}
-          color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Fill Quality"
           value={tca.quality || (dynamicAvgSlippage != null ? (dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE") : "—")}
           sub={`${tca.samples_count ?? 0} fills`}
-          color={tca.quality === "PRIME" ? C.bull : C.wait}
-          icon={<ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />}
+          color={tca.quality === "PRIME" ? T.ok : T.late}
+          icon={<ShieldCheck className="h-3.5 w-3.5 text-ok" />}
         />
       </div>
 
@@ -668,23 +667,23 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         <Panel
           title="Order Route"
           icon={<Compass className="h-3.5 w-3.5 text-cyan-400" />}
-          right={<Badge tone={route.status === "trading" ? "green" : "amber"}>{route.status || "—"}</Badge>}
+          right={<Badge tone={route.status === "trading" ? "ok" : "late"}>{route.status || "—"}</Badge>}
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Route</span>
+              <span className="text-[11px] text-muted">Route</span>
               <p className="mono font-semibold text-slate-200">{route.active_route || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Failover</span>
+              <span className="text-[11px] text-muted">Failover</span>
               <p className="mono font-semibold text-slate-200">{route.failover || "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Last Sync</span>
-              <p className="mono font-semibold text-emerald-400">{route.bridge_sync_age_ms != null ? `${Math.round(route.bridge_sync_age_ms / 1000)}s ago` : "—"}</p>
+              <span className="text-[11px] text-muted">Last sync</span>
+              <p className={`mono font-semibold ${route.bridge_sync_age_ms != null ? "text-ok" : "text-off"}`}>{route.bridge_sync_age_ms != null ? `${Math.round(route.bridge_sync_age_ms / 1000)}s ago` : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Terminal</span>
+              <span className="text-[11px] text-muted">Terminal</span>
               <p className="mono font-semibold text-cyan-400">{br.terminal_connected === true ? "connected" : br.terminal_connected === false ? "not connected" : "—"}</p>
             </div>
           </div>
@@ -697,19 +696,19 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
         >
           <div className="grid grid-cols-2 gap-3 pt-1 text-[11px]">
             <div>
-              <span className="text-[10px] uppercase text-slate-500">ATR M15</span>
+              <span className="text-[11px] text-muted">ATR M15</span>
               <p className="mono font-semibold text-slate-200">{vol.atr_value != null ? String(vol.atr_value) : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Spread</span>
+              <span className="text-[11px] text-muted">Spread</span>
               <p className="mono font-semibold text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "n/a"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Risk / Trade</span>
-              <p className="mono font-semibold text-emerald-400">{omega?.engine?.risk_pct != null ? `${omega.engine.risk_pct}% equity` : "—"}</p>
+              <span className="text-[11px] text-muted">Risk / trade</span>
+              <p className={`mono font-semibold ${omega?.engine?.risk_pct != null ? "text-ok" : "text-off"}`}>{omega?.engine?.risk_pct != null ? `${omega.engine.risk_pct}% equity` : "—"}</p>
             </div>
             <div>
-              <span className="text-[10px] uppercase text-slate-500">Adaptive Vol</span>
+              <span className="text-[11px] text-muted">Adaptive vol</span>
               <p className="mono font-semibold text-cyan-400">{vol.adaptive_enabled ? "ACTIVE" : "FIXED"}</p>
             </div>
           </div>
@@ -719,10 +718,10 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* Open Positions in Broker MT5 */}
       <Panel
         title={`Open Positions${br.broker ? ` · ${br.broker}` : ""} (${positions.length})`}
-        icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
+        icon={<Activity className="h-3.5 w-3.5 text-ok" />}
         right={
           <div className="flex items-center gap-2">
-            <Dot tone={positions.length > 0 ? "green" : "slate"} pulse={positions.length > 0} />
+            <Dot tone={positions.length > 0 ? "ok" : "off"} pulse={positions.length > 0} />
             <span className="text-[11px] text-slate-400">{positions.length > 0 ? "In market" : "Idle"}</span>
           </div>
         }
@@ -780,8 +779,8 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                       <td className="mono">{p.volume ?? 0.01}</td>
                       <td className="mono font-semibold text-slate-200">{px(p.open_price)}</td>
                       <td className="mono text-slate-300">{curPx != null ? px(curPx) : px(p.current_price ?? p.open_price)}</td>
-                      <td className="mono text-rose-300">{px(p.sl)}</td>
-                      <td className="mono text-emerald-300">{px(p.tp)}</td>
+                      <td className="mono text-bear">{px(p.sl)}</td>
+                      <td className="mono text-bull">{px(p.tp)}</td>
                       <td className="text-right">
                         <button
                           type="button"
@@ -797,12 +796,12 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                               tp: p.tp,
                             })
                           }
-                          className="inline-flex items-center gap-1 rounded-sm bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 hover:border-rose-400 active:scale-95 transition disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-sm bg-fault-fill/20 px-2.5 py-1 text-[11px] font-bold text-fault border border-fault-fill/40 hover:bg-fault-fill/30 hover:border-fault-fill active:scale-95 transition disabled:opacity-50"
                           title="Close at market"
                         >
                           {closingTicket === p.ticket ? (
                             <span className="inline-flex items-center gap-1">
-                              <span className="inline-block h-2 w-2 rounded-full bg-rose-400 animate-ping" />
+                              <span className="inline-block h-2 w-2 rounded-full bg-fault-fill animate-ping" />
                               CLOSING…
                             </span>
                           ) : (
@@ -857,14 +856,14 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
                       <td className="mono font-medium text-slate-200">{px(it.result?.fill_price ?? it.price ?? it.entry)}</td>
                       <td className="mono">
                         {itSlip != null ? (
-                          <span style={{ color: Math.abs(itSlip) <= 3 ? C.bull : C.bear }}>
+                          <span style={{ color: Math.abs(itSlip) <= 3 ? T.ok : Math.abs(itSlip) <= 10 ? T.late : T.fault }}>
                             {itSlip > 0 ? "+" : ""}{itSlip} pts
                           </span>
                         ) : "—"}
                       </td>
                       <td className="mono text-violet-300">{itLat != null ? `${itLat} ms` : "—"}</td>
                       <td className="mono text-amber-300">{it.result?.ticket ? `#${it.result.ticket}` : "—"}</td>
-                      <td><Badge tone={it.status === "done" ? "green" : it.status === "failed" ? "red" : "amber"}>{it.status || "done"}</Badge></td>
+                      <td><Badge tone={it.status === "done" ? "ok" : it.status === "failed" ? "fault" : "late"}>{it.status || "done"}</Badge></td>
                     </tr>
                   );
                 })}
@@ -987,28 +986,26 @@ function DisparityKnowledgePanel({
           label="Matched"
           value={`${executedRecords.length} / ${items.length}`}
           sub={`last ${days}D`}
-          color={C.cyan}
-          icon={<BrainCircuit className="h-3.5 w-3.5 text-emerald-400" />}
+          icon={<BrainCircuit className="h-3.5 w-3.5 text-ok" />}
         />
         <Kpi
           label="Avg Slippage"
           value={dynamicAvgSlippage != null ? `±${dynamicAvgSlippage} pts` : "—"}
           sub={dynamicMaxSlippage != null ? `Max ${dynamicMaxSlippage} pts · ${slippagesList.length} fills` : "No fills yet"}
-          color={dynamicAvgSlippage == null || dynamicAvgSlippage <= 5 ? C.cyan : C.bear}
+          color={dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 5 ? T.ok : T.fault}
           icon={<Split className="h-3.5 w-3.5 text-cyan-400" />}
         />
         <Kpi
           label="Latency"
           value={dynamicAvgLatency != null ? `${dynamicAvgLatency} ms` : "—"}
           sub={latenciesList.length ? `${latenciesList.length} fills` : "No fills yet"}
-          color={C.violet}
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
           label="Spread"
           value={dynamicLiveSpread != null ? `${dynamicLiveSpread} pts` : "—"}
           sub={`Bid: ${px(br.bid)} · Ask: ${px(br.ask)}`}
-          color={dynamicLiveSpread == null || dynamicLiveSpread <= 30 ? C.bull : C.wait}
+          color={dynamicLiveSpread == null ? undefined : dynamicLiveSpread <= 30 ? T.ok : T.late}
           icon={<Activity className="h-3.5 w-3.5 text-amber-400" />}
         />
       </div>
@@ -1038,12 +1035,12 @@ function DisparityKnowledgePanel({
                 <td className="mono text-slate-200">
                   {executedRecords[0]?.fillPrice ? `${px(executedRecords[0].fillPrice)} (latest)` : "No fill"}
                 </td>
-                <td className="mono" style={{ color: dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 3 ? C.bull : dynamicAvgSlippage <= 10 ? C.wait : C.bear }}>
+                <td className="mono" style={{ color: dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 3 ? T.ok : dynamicAvgSlippage <= 10 ? T.late : T.fault }}>
                   {dynamicAvgSlippage != null ? `Avg ${dynamicAvgSlippage} pts · ${favorableCount} fav / ${adverseCount} adv` : "—"}
                 </td>
                 <td>
                   {dynamicAvgSlippage == null ? <Badge tone="slate">NO SAMPLE</Badge> : (
-                    <Badge tone={dynamicAvgSlippage <= 5 ? "green" : dynamicAvgSlippage <= 15 ? "amber" : "red"}>
+                    <Badge tone={dynamicAvgSlippage <= 5 ? "ok" : dynamicAvgSlippage <= 15 ? "late" : "fault"}>
                       {dynamicAvgSlippage <= 5 ? "≤ 5 pts" : dynamicAvgSlippage <= 15 ? "5–15 pts" : "> 15 pts"}
                     </Badge>
                   )}
@@ -1059,7 +1056,7 @@ function DisparityKnowledgePanel({
                   {dynamicAvgLatency != null ? `Avg ${dynamicAvgLatency} ms` : "—"}
                 </td>
                 <td>
-                  {dynamicAvgLatency == null ? <Badge tone="slate">NO SAMPLE</Badge> : <Badge tone={dynamicAvgLatency <= 1500 ? "green" : "amber"}>{dynamicAvgLatency <= 1500 ? "≤ 1.5 s" : "> 1.5 s"}</Badge>}
+                  {dynamicAvgLatency == null ? <Badge tone="slate">NO SAMPLE</Badge> : <Badge tone={dynamicAvgLatency <= 1500 ? "ok" : "late"}>{dynamicAvgLatency <= 1500 ? "≤ 1.5 s" : "> 1.5 s"}</Badge>}
                 </td>
               </tr>
 
@@ -1074,7 +1071,7 @@ function DisparityKnowledgePanel({
                   {executedRecords.filter((m) => m.sl_plus_triggered).length} of {executedRecords.length} triggered
                 </td>
                 <td>
-                  <Badge tone={executedRecords.some((m) => m.sl_plus_triggered) ? "green" : "slate"}>
+                  <Badge tone={executedRecords.some((m) => m.sl_plus_triggered) ? "ok" : "off"}>
                     {executedRecords.some((m) => m.sl_plus_triggered) ? "SL+ REACHED" : "NOT YET"}
                   </Badge>
                 </td>
@@ -1121,7 +1118,7 @@ function DisparityKnowledgePanel({
                     <td className="mono font-semibold text-slate-200">{px(m.fillPrice)}</td>
                     <td className="mono">
                       {m.slippagePoints != null ? (
-                        <span style={{ color: m.slippagePoints >= 0 ? C.bull : Math.abs(m.slippagePoints) <= 5 ? C.wait : C.bear }}>
+                        <span style={{ color: m.slippagePoints >= 0 ? T.ok : Math.abs(m.slippagePoints) <= 5 ? T.late : T.fault }}>
                           {m.slippagePoints > 0 ? "+" : ""}{m.slippagePoints} pts
                         </span>
                       ) : "—"}
@@ -1131,7 +1128,7 @@ function DisparityKnowledgePanel({
                     <td className="mono text-amber-300">{m.ticket ? `#${m.ticket}` : "—"}</td>
                     <td>
                       {m.isLivePosition ? (
-                        <Badge tone="green"><Dot tone="green" pulse /> LIVE</Badge>
+                        <Badge tone="ok"><Dot tone="ok" pulse /> LIVE</Badge>
                       ) : m.hasExecutionRecord ? (
                         <Badge tone="cyan">FILLED</Badge>
                       ) : (
@@ -1160,7 +1157,7 @@ function OmegaParityPanel({ parity }: { parity: any }) {
   const era = parity.era ?? {};
   const earlier = parity.earlier;
   const status: string = parity.status ?? (parity.pass ? "pass" : "fail");
-  const tone = status === "pass" ? "green" : status === "fail" ? "red" : "amber";
+  const tone = status === "pass" ? "ok" : status === "fail" ? "fault" : "late";
   const stamp = (t: any) => String(t ?? "").replace("T", " ").slice(0, 16);
   const trades: any[] = parity.trades ?? [];
   return (
@@ -1186,8 +1183,9 @@ function OmegaParityPanel({ parity }: { parity: any }) {
           {" · switches "}
           <span className="mono text-slate-300">{Array.isArray(era.switches) && era.switches.length ? era.switches.join(", ") : "all at default"}</span>
           {Array.isArray(era.carried) && era.carried.length ? ` · carried over ${era.carried.length} code change${era.carried.length === 1 ? "" : "s"} (behaviour identical)` : ""}
+          {/* The note about eras, in the (i) hint since 2026-11-22 (one-line notes on the page). */}
+          <Hint className="ml-1.5 align-middle" text="A change of the engine's behaviour (at its deploy) or of a behaviour switch (at the settings change) starts a new parity window; a code change with identical behaviour carries it over." />
         </span>
-        <span className="text-slate-500">A change of the engine's behaviour (at its deploy) or of a behaviour switch (at the settings change) starts a new parity window; a code change with identical behaviour carries it over.</span>
       </div>
       {Array.isArray(era.previous) && era.previous.length ? (
         <p className="text-[11px] text-slate-500">
@@ -1233,15 +1231,15 @@ function OmegaParityPanel({ parity }: { parity: any }) {
                     {String(t.issued_at).replace("T", " ").slice(0, 16)}
                     {t.live_code === "earlier" ? <span className="ml-1 text-[10px] text-slate-500">earlier (not counted)</span> : null}
                   </td>
-                  <td className={`mono font-semibold ${t.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{t.side}</td>
+                  <td className={`mono font-semibold ${t.side === "BUY" ? "text-bull" : "text-bear"}`}>{t.side}</td>
                   <td className="text-slate-300 capitalize">{t.mode ?? "—"}</td>
-                  <td>{t.v4_only ? <Badge tone="amber">v4 only</Badge> : t.matched ? <Badge tone="cyan">yes</Badge> : <Badge tone="red">no</Badge>}</td>
+                  <td>{t.v4_only ? <Badge tone="late">v4 only</Badge> : t.matched ? <Badge tone="ok">yes</Badge> : <Badge tone="fault">no</Badge>}</td>
                   <td className="mono text-[11px]">{t.entry_diff_s == null ? "—" : `${t.entry_diff_s > 0 ? "+" : ""}${t.entry_diff_s}s`}</td>
                   <td className="text-[11px]">{exitText(t.live_exit)}</td>
-                  <td className="text-[11px]" style={{ color: t.same_exit ? C.bull : undefined }}>{t.v4_exit ? exitText(t.v4_exit) : t.v4_status ?? "—"}</td>
+                  <td className="text-[11px]" style={{ color: t.same_exit ? T.ok : undefined }}>{t.v4_exit ? exitText(t.v4_exit) : t.v4_status ?? "—"}</td>
                   <td className="mono">{r(t.live_r)}</td>
                   <td className="mono">{r(t.v4_r)}</td>
-                  <td className="mono" style={{ color: t.dr != null && Math.abs(t.dr) > (th.mean_abs_dr_max ?? 0.1) ? C.bear : undefined }}>{t.dr == null ? "—" : r(t.dr)}</td>
+                  <td className="mono" style={{ color: t.dr != null && Math.abs(t.dr) > (th.mean_abs_dr_max ?? 0.1) ? T.fault : undefined }}>{t.dr == null ? "—" : r(t.dr)}</td>
                   <td className="text-[11px] text-slate-400">{t.cause ?? "—"}</td>
                 </tr>
               ))}
@@ -1302,8 +1300,8 @@ function MakerTakerPanel({ byMode }: { byMode: any }) {
                   )}
                 </td>
                 <td className="mono">{p?.mean_dr == null ? "—" : r(p.mean_dr)}</td>
-                <td className="mono text-emerald-300">{p?.n ? p.maker_better : "—"}</td>
-                <td className="mono text-rose-300">{p?.n ? p.taker_better : "—"}</td>
+                <td className="mono text-bull">{p?.n ? p.maker_better : "—"}</td>
+                <td className="mono text-bear">{p?.n ? p.taker_better : "—"}</td>
                 <td className="text-[11px] text-slate-400">
                   {Object.entries(lim?.missed_by ?? {})
                     .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
@@ -1481,7 +1479,7 @@ export default function Performance() {
         </Panel>
       ) : error && !data ? (
         <Panel>
-          <p className="text-[12px] text-rose-300">Failed to load: {error}</p>
+          <p className="text-[12px] text-fault">Failed to load: {error}</p>
         </Panel>
       ) : (
         <>
@@ -1494,7 +1492,6 @@ export default function Performance() {
                   label="Closed Trades"
                   value={String(perf?.trades ?? 0)}
                   sub={policy === "omega4" ? `${block.omega4?.decisions ?? 0} decisions · ${block.omega4?.open ?? 0} open · ${block.omega4?.pending ?? 0} pending` : `${block.signals} signals · ${block.open} open · ${block.pending} pending`}
-                  color={C.cyan}
                   icon={<Activity className="h-3.5 w-3.5 text-cyan-400" />}
                 />
                 <Kpi
@@ -1502,7 +1499,7 @@ export default function Performance() {
                   value={pct(perf?.win_rate)}
                   sub={`${perf?.wins ?? 0} wins / ${perf?.losses ?? 0} losses`}
                   color={(perf?.win_rate ?? 0) >= 0.5 ? C.bull : C.wait}
-                  icon={<Scale className="h-3.5 w-3.5 text-emerald-400" />}
+                  icon={<Scale className="h-3.5 w-3.5 text-ok" />}
                 />
                 <Kpi
                   label="Expectancy"
@@ -1515,7 +1512,7 @@ export default function Performance() {
                       ? C.bear
                       : C.muted
                   }
-                  icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-400" />}
+                  icon={<TrendingUp className="h-3.5 w-3.5 text-ok" />}
                 />
                 <Kpi
                   label="Net R"
@@ -1525,9 +1522,8 @@ export default function Performance() {
                   icon={<LineChart className="h-3.5 w-3.5 text-cyan-400" />}
                 />
                 <Kpi
-                  label="Profit Factor"
+                  label="Profit factor"
                   value={perf?.profit_factor == null ? "n/a" : String(perf.profit_factor)}
-                  color={C.violet}
                   icon={<BarChart3 className="h-3.5 w-3.5 text-violet-400" />}
                 />
                 <Kpi
@@ -1535,7 +1531,7 @@ export default function Performance() {
                   value={perf?.max_drawdown_r ? `−${perf.max_drawdown_r}R` : "0.00R"}
                   sub={`fill rate ${pct(block.fill_rate)}`}
                   color={C.bear}
-                  icon={<TrendingDown className="h-3.5 w-3.5 text-rose-400" />}
+                  icon={<TrendingDown className="h-3.5 w-3.5 text-bear" />}
                 />
               </div>
 
@@ -1569,14 +1565,14 @@ export default function Performance() {
               {/* Interactive Equity Curve & Underwater Chart */}
               <Panel
                 title="Equity Curve"
-                icon={<TrendingUp className="h-3.5 w-3.5 text-emerald-400" />}
+                icon={<TrendingUp className="h-3.5 w-3.5 text-ok" />}
                 right={
                   <div className="flex items-center gap-3 text-[11px] text-slate-400">
                     <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" /> Equity (R)
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: (perf?.equity?.at(-1)?.r ?? 0) >= 0 ? C.bull : C.bear }} /> Equity (R)
                     </span>
                     <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full bg-amber-400 opacity-60" /> Peak
+                      <span className="inline-block h-2 w-2 rounded-full bg-fg-2" /> Peak
                     </span>
                     <Badge tone="cyan">{policy.toUpperCase()}</Badge>
                   </div>
@@ -1606,7 +1602,7 @@ export default function Performance() {
 
                 <Panel
                   title="MFE / MAE"
-                  icon={<Crosshair className="h-3.5 w-3.5 text-emerald-400" />}
+                  icon={<Crosshair className="h-3.5 w-3.5 text-ok" />}
                 >
                   <ExcursionMatrix items={items} />
                 </Panel>
@@ -1628,7 +1624,7 @@ export default function Performance() {
                         {(l.held.items as any[]).map((h) => (
                           <tr key={h.decision_key}>
                             <td className="mono text-[11px]">{String(h.held_at).replace("T", " ").slice(0, 16)}</td>
-                            <td className={`mono font-semibold ${h.side === "BUY" ? "text-emerald-300" : "text-rose-300"}`}>{h.side}</td>
+                            <td className={`mono font-semibold ${h.side === "BUY" ? "text-bull" : "text-bear"}`}>{h.side}</td>
                             <td className="text-[11px] text-slate-300">{h.reason}</td>
                             <td className="mono text-[10.5px] text-slate-500">{String(h.blocking_id ?? "").replace("decision:", "")}</td>
                           </tr>
@@ -1681,15 +1677,15 @@ export default function Performance() {
                                 {x.side}
                               </td>
                               <td className="mono">{px(x.entry)}</td>
-                              <td className="mono text-rose-300">{px(x.stop)}</td>
+                              <td className="mono text-bear">{px(x.stop)}</td>
                               <td className="mono">
                                 <SlPlusPricePoint item={x} />
                               </td>
-                              <td className="mono text-emerald-300">{px(x.tp1)}</td>
-                              <td className="mono text-emerald-400">{px(x.tp2)}</td>
+                              <td className="mono text-bull">{px(x.tp1)}</td>
+                              <td className="mono text-bull">{px(x.tp2)}</td>
                               <td className="text-slate-300 capitalize">{x.trading_mode ?? "—"}</td>
                               <td>
-                                <Badge tone={STATUS_TONE[x.status] ?? "slate"}>{x.status}</Badge>
+                                <Badge tone={STATUS_TONE[x.status] ?? "plain"}>{x.status}</Badge>
                                 {x.ambiguous ? (
                                   <span className="ml-1 text-[10px] text-amber-200">ambiguous</span>
                                 ) : null}

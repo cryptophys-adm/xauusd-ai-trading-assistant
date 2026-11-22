@@ -6,6 +6,7 @@ import { useMarket } from "../lib/market";
 import { tabLabel } from "../lib/tab";
 import { utc } from "../lib/format";
 import { nearestCandidates } from "../lib/keyZones";
+import { TEXT, directionTone } from "../lib/tokens";
 
 const ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
 const OPACITY: Record<string, number> = { strong: 0.55, medium: 0.35, weak: 0.18 };
@@ -186,7 +187,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             return (
               <div className="glass-inner mb-2 px-2.5 py-1.5 text-[11px]">
                 <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">15m setup · {g.strategy.direction.toLowerCase()}</span>
-                <div className={st.type === "none" ? "text-slate-400" : "font-semibold text-emerald-200"}>{SETUP_LABEL[st.type] ?? "No setup"}</div>
+                <div className={st.type === "none" ? "text-slate-400" : `font-semibold ${TEXT[directionTone(g.strategy.direction)]}`}>{SETUP_LABEL[st.type] ?? "No setup"}</div>
                 {st.evidence?.length ? <div className="text-[10.5px] text-slate-400">{st.evidence.join(" · ")}</div> : null}
               </div>
             );
@@ -197,7 +198,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
               <button key={s.tf} type="button" onClick={() => setPick(s.tf)}
                 className={`rounded-md border px-2 py-0.5 text-[10px] ${set && s.tf === set.tf ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{s.label}</button>
             )) : <span className="text-[10px] text-slate-400">{set?.label ?? "no snapshot"}</span>}
-            {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-emerald-300" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
+            {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-ok" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
           </div>
           <div className="mb-0.5 flex justify-between px-1 text-[9px] uppercase tracking-[0.12em] text-slate-600">
             <span>Camarilla · pivots</span><span>{hasK ? "Zones" : "No zones"}</span>

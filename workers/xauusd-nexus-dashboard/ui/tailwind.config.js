@@ -1,15 +1,13 @@
-/** Obsidian palette and motion: the same as the Cerebrum Console (cryptophys-cloud-platform workers/console/ui). */
+/**
+ * Obsidian surfaces and motion: the same as the Cerebrum Console (cryptophys-cloud-platform workers/console/ui).
+ * The Nexus colour set (direction, status, text) is the @theme block in src/index.css with src/lib/tokens.ts.
+ */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
         obsidian: { DEFAULT: "#05070c", deep: "#080b11", panel: "#0b0f18", bar: "#0f1522", foot: "#081019" },
-        tv: {
-          bg: "#0b0e14", panel: "#131722", surface: "#1a1f2e", border: "#2a2e39", "border-hi": "#3d4257",
-          text: "#d1d4dc", muted: "#787b86", dim: "#4c505c", green: "#26a69a", red: "#ef5350",
-          amber: "#f59e0b", blue: "#5b9cf6", purple: "#9b6dff", cyan: "#00bcd4",
-        },
       },
       fontFamily: { mono: ["JetBrains Mono", "ui-monospace", "SF Mono", "Fira Code", "monospace"] },
       keyframes: {
