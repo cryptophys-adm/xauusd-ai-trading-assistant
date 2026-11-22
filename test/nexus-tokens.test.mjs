@@ -141,7 +141,7 @@ test("NT10 the owner's decisions on the open questions", () => {
   assert.match(omega, /setupTab === key \? "border-white\/30 bg-white\/8 text-fg"/, "the active Setup tab is white 8%");
   assert.doesNotMatch(omega, /bg-\[#0[0-9a-f]{5}\]|from-\[#|to-\[#/, "no hard-coded panel colours");
   const perf = src("pages/Performance.tsx");
-  assert.match(perf, /stroke=\{T\.fg2\}/, "the equity peak line is grey");
+  assert.match(perf, /stroke=\{T\.off\} strokeOpacity=\{0\.7\}/, "the equity peak line is grey (mockup \"Nexus data states\", part B: off, thin)");
   assert.doesNotMatch(perf, /stroke=\{C\.wait\}/);
   assert.match(perf, /dynamicAvgSlippage <= 3 \? T\.ok :/, "good slippage is ok cyan");
   assert.match(perf, /<Badge tone=\{dynamicAvgLatency <= 1500 \? "ok" : "late"\}>/, "good latency is ok cyan");

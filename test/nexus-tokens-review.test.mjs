@@ -123,8 +123,9 @@ test("NR10 the nits: the bar's colour from the scaled value, SL+ its own hue, th
   assert.match(pc, /line\(p\.progressive_stop, "SL\+", SL_PLUS, LineStyle\.Dashed\)/);
   assert.doesNotMatch(pc, /"SL\+", T\.neutralFill/, "not the KWW yellow");
   const perf = src("pages/Performance.tsx");
-  assert.match(perf, /style=\{\{ background: \(perf\?\.equity\?\.at\(-1\)\?\.r \?\? 0\) >= 0 \? C\.bull : C\.bear \}\} \/> Equity \(R\)/);
-  assert.match(perf, /const strokeColor = netPositive \? C\.bull : C\.bear;/, "the curve's own rule");
+  // Part B of "Nexus data states" moved the legend under the title; its swatch takes the curve's colour.
+  assert.match(perf, /const lineColor = \(last\?\.r \?\? 0\) >= 0 \? T\.bullFill : T\.bearFill;/);
+  assert.match(perf, /<Swatch color=\{lineColor\} \/>Equity/);
   for (const t of ["Last sync", "Risk / trade", "Profit factor"]) assert.ok(perf.includes(t), t);
   for (const t of ["Last Sync", "Risk / Trade", "Profit Factor"]) assert.ok(!perf.includes(t), t);
   assert.match(src("components/AssistantPanel.tsx"), /<SectionToggle title="Decision & plan"/);

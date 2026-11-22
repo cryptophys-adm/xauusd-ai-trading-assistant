@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -25,6 +25,10 @@ import { C } from "../components/charts";
 import { T } from "../lib/tokens";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
+import {
+  equityRows, linear, localStamp, maxDrawdownIndex, nearestIndex, niceTicks, rTick, rValue, stepPath, stepPoints, utcDayLabel,
+  utcDayTicks, utcStamp,
+} from "../lib/chartScale";
 
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const r = (x?: number | null, sign = true) => (x == null ? "n/a" : `${sign && (x ?? 0) > 0 ? "+" : ""}${Math.round((x ?? 0) * 100) / 100}R`);
@@ -46,274 +50,264 @@ interface EquityPoint {
   id: string;
 }
 
-/**
- * Interactive Equity Curve with area gradient, high-water mark, zero line, and rich hover inspection.
- */
-function InteractiveEquityCurve({
-  points,
-  currency = "R",
-}: {
-  points: EquityPoint[];
-  currency?: "R" | "USD";
-}) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const gradId = `equity-grad-${useId().replace(/:/g, "")}`;
+/** Below this measured width the charts take the phone layout: smaller text and margins, fewer ticks, the card in flow. */
+const NARROW = 560;
+const GRID = "rgba(255,255,255,0.06)";
+const ZERO = "rgba(255,255,255,0.24)";
+const CROSS = "rgba(255,255,255,0.35)";
 
-  if (points.length < 2) {
-    return <Empty>Needs two closed trades.</Empty>;
-  }
-
-  const w = 780;
-  const h = 230;
-  const padTop = 18;
-  const padBottom = 26;
-  const padLeft = 14;
-  const padRight = 14;
-
-  let runningPeak = -Infinity;
-  const metrics = points.map((p) => {
-    runningPeak = Math.max(runningPeak, p.r);
-    return {
-      ...p,
-      peak: runningPeak,
-      drawdown: p.r - runningPeak,
-    };
-  });
-
-  const ys = [0, ...metrics.map((m) => m.r), ...metrics.map((m) => m.peak)];
-  const lo = Math.min(...ys);
-  const hi = Math.max(...ys);
-  const span = hi - lo || 1;
-
-  const getX = (i: number) => padLeft + (i / (points.length - 1)) * (w - padLeft - padRight);
-  const getY = (v: number) => h - padBottom - ((v - lo) / span) * (h - padTop - padBottom);
-
-  const lineD = metrics
-    .map((p, i) => `${i === 0 ? "M" : "L"}${getX(i).toFixed(1)},${getY(p.r).toFixed(1)}`)
-    .join(" ");
-
-  const peakD = metrics
-    .map((p, i) => `${i === 0 ? "M" : "L"}${getX(i).toFixed(1)},${getY(p.peak).toFixed(1)}`)
-    .join(" ");
-
-  const zeroY = getY(0);
-  const areaD = `${lineD} L${getX(points.length - 1).toFixed(1)},${zeroY.toFixed(1)} L${getX(0).toFixed(1)},${zeroY.toFixed(1)} Z`;
-
-  const lastR = points.at(-1)?.r ?? 0;
-  const netPositive = lastR >= 0;
-  const strokeColor = netPositive ? C.bull : C.bear;
-
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const xPos = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, (xPos - padLeft) / (rect.width - padLeft - padRight)));
-    const idx = Math.round(ratio * (points.length - 1));
-    setHoverIndex(idx);
-  };
-
-  const active = hoverIndex != null && metrics[hoverIndex] ? metrics[hoverIndex] : null;
-
-  return (
-    <div className="relative w-full">
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="none"
-        className="h-[230px] w-full cursor-crosshair select-none"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHoverIndex(null)}
-        role="img"
-        aria-label={`Cumulative equity curve ${lastR}R over ${points.length} signals`}
-      >
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={strokeColor} stopOpacity={0.28} />
-            <stop offset="65%" stopColor={strokeColor} stopOpacity={0.06} />
-            <stop offset="100%" stopColor={strokeColor} stopOpacity={0.0} />
-          </linearGradient>
-        </defs>
-
-        {/* Zero baseline */}
-        <line
-          x1={padLeft}
-          x2={w - padRight}
-          y1={zeroY}
-          y2={zeroY}
-          stroke="rgba(255,255,255,0.18)"
-          strokeDasharray="4 4"
-          strokeWidth={1}
-          vectorEffect="non-scaling-stroke"
-        />
-        <text
-          x={padLeft + 4}
-          y={zeroY - 4}
-          fontSize="9"
-          fill="#64748b"
-          className="mono"
-        >
-          0 {currency}
-        </text>
-
-        {/* High water mark peak line: grey, it is no direction and no warning */}
-        <path
-          d={peakD}
-          fill="none"
-          stroke={T.fg2}
-          strokeWidth={1.2}
-          strokeDasharray="3 3"
-          opacity={0.55}
-          vectorEffect="non-scaling-stroke"
-        />
-
-        {/* Area fill */}
-        <path d={areaD} fill={`url(#${gradId})`} />
-
-        {/* Main equity curve line */}
-        <path
-          d={lineD}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth={2.4}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-
-        {/* Interactive hover crosshair and marker */}
-        {active && hoverIndex != null && (
-          <g>
-            <line
-              x1={getX(hoverIndex)}
-              x2={getX(hoverIndex)}
-              y1={padTop}
-              y2={h - padBottom}
-              stroke="rgba(255,255,255,0.3)"
-              strokeDasharray="2 2"
-              vectorEffect="non-scaling-stroke"
-            />
-            <circle
-              cx={getX(hoverIndex)}
-              cy={getY(active.peak)}
-              r={3}
-              fill={T.fg2}
-              opacity={0.8}
-            />
-            <circle
-              cx={getX(hoverIndex)}
-              cy={getY(active.r)}
-              r={7}
-              fill={strokeColor}
-              opacity={0.25}
-            />
-            <circle
-              cx={getX(hoverIndex)}
-              cy={getY(active.r)}
-              r={4}
-              fill="#ffffff"
-              stroke={strokeColor}
-              strokeWidth={2}
-            />
-          </g>
-        )}
-      </svg>
-
-      {/* Hover tooltip card */}
-      {active && (
-        <div className="pointer-events-none absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-lg border border-cyan-400/30 bg-[#0d121c]/95 p-2.5 shadow-xl backdrop-blur-md">
-          <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-1 text-[10px] text-slate-400">
-            <span className="mono">#{hoverIndex! + 1} · {when(active.t)}</span>
-            <span className="mono text-cyan-300 font-semibold">{active.id.slice(0, 16)}...</span>
-          </div>
-          <div className="grid grid-cols-3 gap-3 pt-1 text-[11px]">
-            <div>
-              <span className="text-[11px] text-muted">Cumulative</span>
-              <p className="mono font-bold" style={{ color: active.r >= 0 ? C.bull : C.bear }}>
-                {active.r >= 0 ? "+" : ""}{active.r.toFixed(2)}{currency}
-              </p>
-            </div>
-            <div>
-              <span className="text-[11px] text-muted">Peak</span>
-              <p className="mono font-bold text-fg-2">
-                {active.peak.toFixed(2)}{currency}
-              </p>
-            </div>
-            <div>
-              <span className="text-[11px] text-muted">Drawdown</span>
-              <p className="mono font-bold text-bear">
-                {active.drawdown.toFixed(2)}{currency}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+/** The width of an element as it is drawn (ResizeObserver), so a chart draws at real pixels and its text never stretches. */
+function useMeasuredWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setWidth(Math.round(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
 }
 
+/** A legend swatch: a short line at the series' own weight. */
+const Swatch = ({ color, h = 2, w = 14, opacity = 1 }: { color: string; h?: number; w?: number; opacity?: number }) => (
+  <span aria-hidden="true" className="inline-block rounded-[2px]" style={{ width: w, height: h, background: color, opacity }} />
+);
+
 /**
- * Underwater Drawdown Curve (measuring depth and duration of equity retracements).
+ * The equity curve and its drawdown (mockup "Nexus data states", part B, owner-approved 2026-11-22), drawn at the
+ * measured width on one UTC time axis by close time (lib/chartScale.ts):
+ * - equity as a step from 0 at the window start, bull green when it ends at or above 0, else bear red; the peak a thin
+ *   grey line; R ticks on clean steps, a solid hairline grid and a solid zero line; the end value at the last point;
+ * - drawdown from the running peak with its own R ticks, its deepest point marked with value and date;
+ * - one crosshair through both; the card beside the point (in flow under the axis on a phone, where a tap shows it);
+ * - focusable: ← → step the crosshair through the trades, Home and End jump, Esc clears.
  */
-function UnderwaterDrawdownChart({
+function EquityDrawdownCharts({
   points,
-  currency = "R",
+  startMs,
+  endMs,
+  days,
+  policyLabel,
 }: {
   points: EquityPoint[];
-  currency?: "R" | "USD";
+  startMs: number;
+  endMs: number;
+  days: number;
+  policyLabel: string;
 }) {
-  if (points.length < 2) return null;
+  const [wrapRef, width] = useMeasuredWidth<HTMLDivElement>();
+  const [active, setActive] = useState<number | null>(null);
+  const clipId = `eq-clip-${useId().replace(/:/g, "")}`;
 
-  const w = 780;
-  const h = 100;
-  const pad = 12;
+  const rows = useMemo(() => equityRows(points), [points]);
+  const times = useMemo(() => rows.map((x) => x.t), [rows]);
+  const n = rows.length;
+  const x0 = Math.min(startMs, times[0] ?? startMs);
+  const x1 = Math.max(endMs, times[n - 1] ?? endMs);
 
-  let peak = -Infinity;
-  const dds = points.map((p) => {
-    peak = Math.max(peak, p.r);
-    return p.r - peak;
-  });
+  const narrow = width > 0 && width < NARROW;
+  const font = narrow ? 10 : 11;
+  const left = narrow ? 34 : 48;
+  const right = narrow ? 46 : 72;
+  const plotW = Math.max(1, width - left - right);
+  const eqH = narrow ? 180 : 240, eqTop = 10, eqBottom = narrow ? 174 : 234;
+  const ddH = narrow ? 86 : 110, ddTop = 4, ddBottom = narrow ? 64 : 88, ddAxisY = narrow ? 81 : 105;
 
-  const maxDd = Math.min(...dds, -0.01);
-  const getX = (i: number) => pad + (i / (points.length - 1)) * (w - 2 * pad);
-  const getY = (val: number) => pad + (val / maxDd) * (h - 2 * pad);
+  const last = rows[n - 1];
+  const lineColor = (last?.r ?? 0) >= 0 ? T.bullFill : T.bearFill;
+  const ddIdx = maxDrawdownIndex(rows.map((x) => x.dd));
+  const ddRow = ddIdx >= 0 ? rows[ddIdx] : null;
+  const peakMax = rows.reduce((m, x) => Math.max(m, x.peak), 0);
 
-  const lineD = dds.map((v, i) => `${i === 0 ? "M" : "L"}${getX(i).toFixed(1)},${getY(v).toFixed(1)}`).join(" ");
-  const areaD = `${lineD} L${getX(points.length - 1).toFixed(1)},${pad} L${getX(0).toFixed(1)},${pad} Z`;
+  const eqScale = niceTicks(Math.min(0, ...rows.map((x) => x.r)), peakMax, narrow ? 4 : 6);
+  const ddScale = niceTicks(ddRow ? ddRow.dd : -1, 0, 3);
+  const xTicks = utcDayTicks(x0, x1, plotW, narrow ? 56 : 72).ticks;
+
+  const X = linear(x0, x1, left, left + plotW);
+  const Ye = linear(eqScale.lo, eqScale.hi, eqBottom, eqTop);
+  const Yd = linear(ddScale.lo, 0, ddBottom, ddTop);
+
+  const eqPts = stepPoints(times, rows.map((x) => x.r), x0, x1).map((p) => ({ x: X(p.t), y: Ye(p.v) }));
+  const peakPts = stepPoints(times, rows.map((x) => x.peak), x0, x1).map((p) => ({ x: X(p.t), y: Ye(p.v) }));
+  const ddPts = stepPoints(times, rows.map((x) => x.dd), x0, x1).map((p) => ({ x: X(p.t), y: Yd(p.v) }));
+  const eqLine = stepPath(eqPts);
+  const ddLine = stepPath(ddPts);
+  const zeroY = Ye(0);
+  const eqArea = `${eqLine}V${zeroY.toFixed(1)}H${left.toFixed(1)}Z`;
+  const ddArea = `${ddLine}V${ddTop.toFixed(1)}H${left.toFixed(1)}Z`;
+
+  const row = active != null ? rows[active] : null;
+  const ax = row ? X(row.t) : 0;
+
+  // Pointer: the nearest close to the pointer's x. A mouse clears on leave; a tap keeps the card until a tap elsewhere.
+  const pick = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const t = x0 + ((e.clientX - rect.left - left) / plotW) * (x1 - x0);
+    setActive(nearestIndex(times, t));
+  };
+  const leave = (e: React.PointerEvent<SVGSVGElement>) => { if (e.pointerType === "mouse") setActive(null); };
+  useEffect(() => {
+    if (active == null) return;
+    const away = (e: PointerEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setActive(null); };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [active, wrapRef]);
+  useEffect(() => { setActive((a) => (a != null && a >= n ? null : a)); }, [n]);
+
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = (to: number) => { e.preventDefault(); setActive(Math.max(0, Math.min(n - 1, to))); };
+    if (e.key === "ArrowRight") step(active == null ? 0 : active + 1);
+    else if (e.key === "ArrowLeft") step(active == null ? n - 1 : active - 1);
+    else if (e.key === "Home") step(0);
+    else if (e.key === "End") step(n - 1);
+    else if (e.key === "Escape" && active != null) { e.preventDefault(); setActive(null); }
+  };
+
+  const summary =
+    `Equity curve, ${policyLabel}: ${rValue(last?.r ?? 0)} after ${n} closed trade${n === 1 ? "" : "s"} in ${days} days, ` +
+    `peak ${rValue(peakMax)}; drawdown ${ddRow ? `max ${rValue(ddRow.dd)} on ${utcDayLabel(ddRow.t)}` : "none"}. ` +
+    `Left and right arrow keys step through the trades.`;
+
+  const card = row && active != null && (
+    <div className="flex flex-col gap-2">
+      <div className="mono flex flex-col gap-0.5 text-[11px]">
+        <span className="text-fg">{utcStamp(row.t)} <span className="text-fg-2">· {localStamp(row.t)}</span></span>
+        <span className="text-fg-2">#{active + 1} of {n} · trade <span className="text-fg">{rValue(row.trade)}</span></span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-[11px]">
+        {([["Equity", rValue(row.r), lineColor, 2, 1], ["Peak", rValue(row.peak), T.off, 1, 0.8], ["Drawdown", rValue(row.dd), T.bearFill, 2, 1]] as const).map(([k, v, c, h, o]) => (
+          <div key={k} className="flex flex-col gap-0.5">
+            <span className="inline-flex items-center gap-1.5 text-fg-2"><Swatch color={c} h={h} w={12} opacity={o} />{k}</span>
+            <span className="mono font-semibold text-fg">{v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  const cardW = 236;
+  const cardLeft = row ? (ax + 14 + cardW <= width ? ax + 14 : Math.max(0, ax - 14 - cardW)) : 0;
+  const cardTop = row ? Math.max(0, Math.min(eqH - 96, Ye(row.r) - 60)) : 0;
+
+  const axisText = { fontSize: font, fill: T.fg2, fontFamily: "JetBrains Mono, ui-monospace, monospace" } as const;
+  const ddLabelRight = ddRow ? X(ddRow.t) + 64 < width : true;
 
   return (
-    <div className="relative mt-2 border-t border-white/5 pt-2">
-      <div className="mb-1 flex items-center justify-between text-[11px]">
-        <span className="flex items-center gap-1.5 text-slate-400 font-medium">
-          <TrendingDown className="h-3.5 w-3.5 text-bear" />
-          Drawdown
-        </span>
-        <span className="mono text-[10px] text-bear">
-          Max DD: {maxDd.toFixed(2)}{currency}
+    <div>
+      {/* The legend, under the panel title (mockup): equity, peak, the policy */}
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3.5 text-[11px] text-fg-2">
+          <span className="inline-flex items-center gap-1.5"><Swatch color={lineColor} />Equity</span>
+          <span className="inline-flex items-center gap-1.5"><Swatch color={T.off} h={1} opacity={0.8} />Peak</span>
+        </div>
+        <Badge tone="cyan">{policyLabel}</Badge>
+      </div>
+
+      <div
+        ref={wrapRef}
+        tabIndex={0}
+        role="group"
+        aria-roledescription="chart"
+        aria-label={summary}
+        onKeyDown={onKey}
+        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setActive(null); }}
+        className="relative rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ok-fill/60 focus-visible:ring-offset-4 focus-visible:ring-offset-panel"
+      >
+        {width > 0 && (
+          <>
+            <div className="relative">
+              <svg width={width} height={eqH} viewBox={`0 0 ${width} ${eqH}`} aria-hidden="true" className="block cursor-crosshair select-none overflow-visible" style={{ touchAction: "pan-y" }}
+                onPointerMove={pick} onPointerDown={pick} onPointerLeave={leave}>
+                <defs><clipPath id={clipId}><rect x={left} y={0} width={plotW + 1} height={eqH} /></clipPath></defs>
+                {xTicks.map((t) => <line key={t} x1={X(t)} x2={X(t)} y1={eqTop} y2={eqBottom} stroke={GRID} />)}
+                {eqScale.ticks.map((v) => (
+                  <g key={v}>
+                    <line x1={left} x2={left + plotW} y1={Ye(v)} y2={Ye(v)} stroke={v === 0 ? ZERO : GRID} />
+                    <text x={left - 8} y={Ye(v) + 4} textAnchor="end" {...axisText}>{rTick(v)}</text>
+                  </g>
+                ))}
+                <g clipPath={`url(#${clipId})`}>
+                  <path d={eqArea} fill={lineColor} fillOpacity={0.1} />
+                  {/* The peak (high-water mark): thin grey, it is no direction and no warning */}
+                  <path d={stepPath(peakPts)} fill="none" stroke={T.off} strokeOpacity={0.7} strokeWidth={1} />
+                  <path d={eqLine} fill="none" stroke={lineColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                </g>
+                {last && (
+                  <>
+                    <circle cx={left + plotW} cy={Ye(last.r)} r={4} fill={lineColor} stroke={T.panel} strokeWidth={2} />
+                    <text x={left + plotW + 8} y={Ye(last.r) + 4} fontSize={font + 1} fontWeight={600} fill={T.fg} fontFamily={axisText.fontFamily}>{rValue(last.r)}</text>
+                  </>
+                )}
+                {row && (
+                  <g pointerEvents="none">
+                    <line x1={ax} x2={ax} y1={eqTop} y2={eqH} stroke={CROSS} />
+                    <circle cx={ax} cy={Ye(row.peak)} r={3} fill={T.off} stroke={T.panel} strokeWidth={2} />
+                    <circle cx={ax} cy={Ye(row.r)} r={4.5} fill={lineColor} stroke={T.panel} strokeWidth={2} />
+                  </g>
+                )}
+              </svg>
+              {row && !narrow && (
+                <div role="presentation" className="pointer-events-none absolute z-10 box-border rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+                  style={{ left: cardLeft, top: cardTop, width: cardW }}>
+                  {card}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-1 mt-3 flex items-center justify-between gap-2 text-[11px] text-fg-2" style={{ paddingLeft: left }}>
+              <span className="inline-flex items-center gap-1.5">
+                <TrendingDown className="h-3.5 w-3.5" style={{ color: T.bearFill }} aria-hidden="true" />
+                {narrow ? "Drawdown" : "Drawdown from peak"}
+              </span>
+              <span className="mono">{ddRow ? `max ${rValue(ddRow.dd)}${narrow ? "" : ` · ${utcDayLabel(ddRow.t)}`}` : "no drawdown"}</span>
+            </div>
+            <svg width={width} height={ddH} viewBox={`0 0 ${width} ${ddH}`} aria-hidden="true" className="block cursor-crosshair select-none overflow-visible" style={{ touchAction: "pan-y" }}
+              onPointerMove={pick} onPointerDown={pick} onPointerLeave={leave}>
+              {xTicks.map((t) => (
+                <g key={t}>
+                  <line x1={X(t)} x2={X(t)} y1={ddTop} y2={ddBottom} stroke={GRID} />
+                  <line x1={X(t)} x2={X(t)} y1={ddBottom} y2={ddBottom + 4} stroke={ZERO} />
+                  <text x={X(t)} y={ddAxisY} textAnchor="middle" {...axisText}>{utcDayLabel(t)}</text>
+                </g>
+              ))}
+              {ddScale.ticks.map((v) => (
+                <g key={v}>
+                  <line x1={left} x2={left + plotW} y1={Yd(v)} y2={Yd(v)} stroke={v === 0 ? ZERO : GRID} />
+                  <text x={left - 8} y={Yd(v) + 4} textAnchor="end" {...axisText}>{rTick(v)}</text>
+                </g>
+              ))}
+              <path d={ddArea} fill={T.bearFill} fillOpacity={0.12} />
+              <path d={ddLine} fill="none" stroke={T.bearFill} strokeWidth={2} strokeLinejoin="round" />
+              {ddRow && (
+                <>
+                  <circle cx={X(ddRow.t)} cy={Yd(ddRow.dd)} r={4} fill={T.bearFill} stroke={T.panel} strokeWidth={2} />
+                  <text x={X(ddRow.t) + (ddLabelRight ? 6 : -6)} y={Yd(ddRow.dd) - 8} textAnchor={ddLabelRight ? "start" : "end"} fontSize={font} fill={T.fg} fontFamily={axisText.fontFamily}>{rValue(ddRow.dd)}</text>
+                </>
+              )}
+              {row && (
+                <g pointerEvents="none">
+                  <line x1={ax} x2={ax} y1={0} y2={ddBottom} stroke={CROSS} />
+                  <circle cx={ax} cy={Yd(row.dd)} r={3.5} fill={T.bearFill} stroke={T.panel} strokeWidth={2} />
+                </g>
+              )}
+              <text x={left + plotW + 6} y={ddAxisY} {...axisText}>UTC</text>
+            </svg>
+
+            {narrow && (
+              <div className="mt-2 min-h-[84px] rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5">
+                {card || <span className="text-[11px] text-fg-2">Tap the chart to see a trade.</span>}
+              </div>
+            )}
+          </>
+        )}
+        {width === 0 && <div style={{ height: 380 }} />}
+        <span className="sr-only" aria-live="polite">
+          {row && active != null ? `Trade ${active + 1} of ${n}, closed ${utcStamp(row.t)}: trade ${rValue(row.trade)}, equity at ${rValue(row.r)}, drawdown ${rValue(row.dd)}.` : ""}
         </span>
       </div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="none"
-        className="h-[80px] w-full"
-        role="img"
-        aria-label="Underwater drawdown curve"
-      >
-        <line
-          x1={pad}
-          x2={w - pad}
-          y1={pad}
-          y2={pad}
-          stroke="rgba(255,255,255,0.15)"
-          strokeDasharray="3 3"
-          vectorEffect="non-scaling-stroke"
-        />
-        <path d={areaD} fill="rgba(251,113,133,0.18)" />
-        <path
-          d={lineD}
-          fill="none"
-          stroke={C.bear}
-          strokeWidth={1.5}
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
     </div>
   );
 }
@@ -1573,18 +1567,7 @@ export default function Performance() {
               {/* Interactive Equity Curve & Underwater Chart */}
               <Panel
                 title="Equity Curve"
-                icon={<TrendingUp className="h-3.5 w-3.5 text-ok" />}
-                right={
-                  <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                    <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: (perf?.equity?.at(-1)?.r ?? 0) >= 0 ? C.bull : C.bear }} /> Equity (R)
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-full bg-fg-2" /> Peak
-                    </span>
-                    <Badge tone="cyan">{policy.toUpperCase()}</Badge>
-                  </div>
-                }
+                icon={<TrendingUp className="h-3.5 w-3.5" style={{ color: (perf?.total_r ?? 0) >= 0 ? T.bullFill : T.bearFill }} />}
               >
                 {(perf?.equity?.length ?? 0) < 2 ? (
                   // Empty (mockup "Nexus data states"): what is missing, and when it fills.
@@ -1592,12 +1575,16 @@ export default function Performance() {
                     {perf?.trades ?? 0} closed trade{(perf?.trades ?? 0) === 1 ? "" : "s"} · {days}D · {POLICY_SHORT[policy]}
                   </Empty>
                 ) : (
-                  <>
-                    <InteractiveEquityCurve points={perf?.equity ?? []} currency="R" />
-                    <UnderwaterDrawdownChart points={perf?.equity ?? []} currency="R" />
-                  </>
+                  // Part B: x by close time over the window the page asked for, ending at the last good read.
+                  <EquityDrawdownCharts
+                    points={perf?.equity ?? []}
+                    startMs={(ledgerPoll.lastOk ?? Date.now()) - days * 86_400_000}
+                    endMs={ledgerPoll.lastOk ?? Date.now()}
+                    days={days}
+                    policyLabel={POLICY_SHORT[policy]}
+                  />
                 )}
-                <p className="mt-2 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-fg-2">
                   Unfilled:{" "}
                   {Object.entries(block.cancelled ?? {})
                     .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
