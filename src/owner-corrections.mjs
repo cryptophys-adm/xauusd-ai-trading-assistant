@@ -32,6 +32,7 @@ export const CORRECTION_CATEGORIES = Object.freeze([
 export const CORRECTION_ATTESTATIONS = Object.freeze(["cerebrum_access", "xauusd_nexus_access"]);
 export const CORRECTION_REDACTIONS = Object.freeze(["secret", "price", "truncated"]);
 export const CORRECTION_TEXT_MAX = 500;
+export const CATEGORY_RAW_MAX = 60;
 export const CORRECTION_REFS_MAX = 10;
 export const LABEL_WEIGHT = Object.freeze({ owner_rating: 3, owner_correction: 3, owner_decision: 1, reviewer_correction: 2 });
 export const NON_OWNER_WEIGHT = 1;
@@ -168,12 +169,11 @@ export async function buildCorrection(input, ctx) {
     if (CORRECTION_CATEGORIES.includes(input.category)) category = input.category;
     else {
       category = "other";
-      // Orchestrator review of #521: the raw category leaves too, so it is masked like the text (the platform's
-      // correction.ts copies it as is; the platform is told).
-      let raw = input.category.slice(0, 60);
-      if (secretInText(raw)) { raw = redactText(raw); redactions.add("secret"); }
-      if (PRICE.test(raw)) { raw = raw.replace(PRICE_G, "[level]"); redactions.add("price"); }
-      categoryRaw = raw;
+      // The platform's order (claude/correction-category-mask): the raw category goes through safeText like the text
+      // (normalised, secrets redacted, prices masked), then is cut to CATEGORY_RAW_MAX. Masking first means a cut can
+      // never split a price or a secret into a piece the mask no longer sees.
+      const raw = safeText(input.category, redactions);
+      if (raw) categoryRaw = raw.slice(0, CATEGORY_RAW_MAX);
     }
   }
   const text = safeText(input.text, redactions);
@@ -246,7 +246,13 @@ export function validateCorrection(c) {
   if (label === "owner_rating" && c.rating === null) errors.push("owner_rating_without_rating");
   if (label === "owner_correction" && c.category === null && c.text === null) errors.push("owner_correction_without_content");
   if (label === "owner_decision" && c.text === null) errors.push("owner_decision_without_reason");
-  if (c.category_raw !== undefined && (c.category !== "other" || typeof c.category_raw !== "string")) errors.push("category_raw");
+  if (c.category_raw !== undefined) {
+    if (c.category !== "other" || typeof c.category_raw !== "string" || !c.category_raw.trim() || c.category_raw.length > CATEGORY_RAW_MAX) errors.push("category_raw");
+    else {
+      if (secretInText(c.category_raw)) errors.push("category_raw_carries_secret");
+      if (PRICE.test(c.category_raw)) errors.push("category_raw_carries_price");
+    }
+  }
   if (c.invalid_refs !== undefined && !(Number.isInteger(c.invalid_refs) && c.invalid_refs > 0)) errors.push("invalid_refs");
   return errors;
 }

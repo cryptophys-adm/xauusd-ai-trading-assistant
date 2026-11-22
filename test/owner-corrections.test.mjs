@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import {
-  buildCorrection, validateCorrection, correctionContentHash, correctionDedupHash, recordPayload, recordOwnerCorrection, sendOwnerCorrections,
+  CATEGORY_RAW_MAX, buildCorrection, validateCorrection, correctionContentHash, correctionDedupHash, recordPayload, recordOwnerCorrection, sendOwnerCorrections,
   resetOwnerCorrectionsSchemaForTests, correctionsEnabled, payloadLeaks, NEXUS_TEACHER_ID, CORRECTIONS_CAPABILITY, CORRECTIONS_MAX_ATTEMPTS, CORRECTIONS_BACKOFF_MS
 } from "../src/owner-corrections.mjs";
 
@@ -149,6 +149,19 @@ test("OC7 nothing that leaves carries a price or a secret: the raw category is m
   assert.equal(r.correction.category_raw, "SL at [level] too tight");
   assert.deepEqual(r.correction.redactions, ["price"]);
   assert.deepEqual(payloadLeaks(recordPayload(r.correction)), []);
+  assert.deepEqual(validateCorrection(r.correction), []);
+  // The platform's order: mask first, then cut, so a cut never splits a price the mask no longer sees.
+  const long = await buildCorrection({ side: "nexus", source: "nexus_card", category: `${"x".repeat(56)} 4095.5 too tight`, target: INPUT.target }, ctx);
+  assert.equal(long.correction.category_raw, `${"x".repeat(56)} [le`);
+  assert.equal(long.correction.category_raw.length, CATEGORY_RAW_MAX);
+  assert.deepEqual(long.correction.redactions, ["price"]);
+  assert.deepEqual(validateCorrection(long.correction), []);
+  const spaced = await buildCorrection({ side: "nexus", source: "nexus_card", category: "  too   tight  ", target: INPUT.target }, ctx);
+  assert.equal(spaced.correction.category_raw, "too tight", "normalised like the text");
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "SL at 4095.5" }), ["category_raw_carries_price"]);
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "Bearer abcdefghijklmnopqrstuvwxyz" }), ["category_raw_carries_secret"]);
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "x".repeat(CATEGORY_RAW_MAX + 1) }), ["category_raw"]);
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "  " }), ["category_raw"]);
   assert.deepEqual(payloadLeaks({ text: "the 4,095 level", evidence_refs: ["ev:xauusd/card/d:15:1795211100000:0"], target: { ref: "ev:xauusd/card/d:15:1795211100000:0" } }), ["text"]);
   resetOwnerCorrectionsSchemaForTests();
   const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => ({ outcome: "succeeded", result: {} }) } };
