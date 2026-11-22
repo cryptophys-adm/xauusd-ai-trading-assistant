@@ -43,9 +43,13 @@ export function nexusStreamRequest(request) {
   return new Request(url.toString(), request);
 }
 
-/** Pure: the message a page receives for a topic. */
-export function pushMessage(topic, entry) {
-  return JSON.stringify({ type: "snapshot", topic, at: entry?.at ?? null, data: entry?.data ?? null });
+/**
+ * Pure: the message a page receives for a topic. `replay` is true for the stored snapshot a page gets when it
+ * connects and false for a live publish (#520, fifth review: the page never lets a replay clear a failed read or
+ * count as fresh, and without the flag it could only guess that a socket's first message is the replay).
+ */
+export function pushMessage(topic, entry, { replay = false } = {}) {
+  return JSON.stringify({ type: "snapshot", topic, at: entry?.at ?? null, data: entry?.data ?? null, replay: replay === true });
 }
 
 /**
@@ -73,7 +77,7 @@ export class PushHubCore {
       // A topic with a freshness bound (the Omega overview) is not replayed once stale: the page reads it.
       const maxAge = FRESH_ON_CONNECT_MS[topic];
       if (entry && maxAge && !(Date.parse(entry.at) >= this.now() - maxAge)) continue;
-      if (entry) { try { server.send(pushMessage(topic, entry)); } catch { /* the page polls */ } }
+      if (entry) { try { server.send(pushMessage(topic, entry, { replay: true })); } catch { /* the page polls */ } }
     }
     return this.upgraded(client);
   }
