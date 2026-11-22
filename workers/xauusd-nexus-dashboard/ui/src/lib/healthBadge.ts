@@ -3,7 +3,7 @@
  * test/nexus-poll-states.test.mjs runs it in Node. "all nominal" only when both reads are live; a failed or stale
  * /api/status (or /api/local-lane) never reads as nominal, because its rows are missing or old.
  */
-export type ReadState = "live" | "stale" | "error" | "loading" | "idle";
+export type ReadState = "live" | "stale" | "error" | "checking" | "loading" | "idle";
 export type BadgeTone = "red" | "amber" | "green" | "slate";
 
 export function overviewBadge({ bad, warn, status, lane }: { bad: number; warn: number; status: ReadState; lane: ReadState }): { tone: BadgeTone; text: string } {

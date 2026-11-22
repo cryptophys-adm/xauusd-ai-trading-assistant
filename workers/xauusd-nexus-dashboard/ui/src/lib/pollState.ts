@@ -15,6 +15,10 @@
  * Fourth review of #520: a hub replay (the stored snapshot the hub sends on every connect) may show data, but it never
  * clears an error and never moves lastOk; its age is its `at` on the server clock, carried to the local clock by the
  * reads' `Date` header (serverClock), so a 2-hour-old replay on a reload reads "stale 2h" at once.
+ * Fifth review of #520: while a route's own first read is in flight and no Date is known, a replay on screen is
+ * "checking" (no stale chip, the plan dimmed); a route whose last read failed reads on the fast cadence, and once
+ * when the push turns live or a replay arrives for it (cadenceOf, dueReads, recoveryReads); a cadence change keeps
+ * the phase (the next read at max(now, last send + interval)).
  */
 export type PollFacts = {
   hasData: boolean;
@@ -34,10 +38,16 @@ export type PollFacts = {
    */
   replayed?: boolean;
   replayAt?: number | null;
+  /**
+   * The route's own first read is in flight and no Date is known yet (fifth review of #520): a replay on screen of
+   * unknown age is "checking" (no stale chip, the plan dimmed, not dropped) until that read settles; stale (and the
+   * plan hidden) only if it fails without a Date or brings none.
+   */
+  checking?: boolean;
 };
 
 /** The facts an age is read from: lastOk, or a replay's server-aged time (ageBase). */
-export type AgeFacts = Pick<PollFacts, "lastOk"> & Partial<Pick<PollFacts, "replayed" | "replayAt">>;
+export type AgeFacts = Pick<PollFacts, "lastOk"> & Partial<Pick<PollFacts, "replayed" | "replayAt" | "checking">>;
 
 /**
  * The time the data on screen is as of (ms, localNow), for its age (fourth review of #520): lastOk, or for a hub
@@ -49,7 +59,16 @@ export function ageBase(f: AgeFacts): number | null {
   return f.lastOk == null ? f.replayAt : Math.max(f.lastOk, f.replayAt);
 }
 
-export type PollPhase = "loading" | "error" | "stale" | "live" | "idle";
+export type PollPhase = "loading" | "error" | "stale" | "checking" | "live" | "idle";
+
+/**
+ * A hub replay of unknown age while the route's own first read is in flight (fifth review of #520): neither stale
+ * nor live yet. The connect replay often lands before the first dated read settles on a normal reload; it used to
+ * flash "stale" and drop the plan.
+ */
+export function isChecking(f: Pick<PollFacts, "error"> & AgeFacts): boolean {
+  return !!f.checking && !!f.replayed && f.error == null && ageBase(f) == null;
+}
 
 /**
  * How far ahead of `now` a last good read may sit before it is not believed (ms; re-review of #520). The pages read
@@ -63,21 +82,21 @@ export type StaleFacts = Pick<PollFacts, "hasData" | "error" | "lastOk" | "inter
 
 /**
  * Data on screen AND (the last read failed OR no good read for 2 × the interval OR the last good read is more than
- * CLOCK_SLACK_MS in the future: the clock moved back OR the data is a hub replay of unknown age). An interval of 0
- * never ages. The age is ageBase's: lastOk, or a replay's server-aged time.
+ * CLOCK_SLACK_MS in the future: the clock moved back OR the data is a hub replay of unknown age, unless it is still
+ * checking: isChecking). An interval of 0 never ages. The age is ageBase's: lastOk, or a replay's server-aged time.
  */
 export function isStale(f: StaleFacts, now: number): boolean {
   if (!f.hasData) return false;
   if (f.error != null) return true;
   const t = ageBase(f);
-  if (f.replayed && t == null) return true;
+  if (f.replayed && t == null) return !isChecking(f);
   if (t != null && t > now + CLOCK_SLACK_MS) return true;
   return f.intervalMs > 0 && t != null && now - t > 2 * f.intervalMs;
 }
 
 /** Which state the panel shows. An error with no data stays an error while its retry is in flight (no skeleton flash). */
 export function pollPhase(f: PollFacts, now: number): PollPhase {
-  if (f.hasData) return isStale(f, now) ? "stale" : "live";
+  if (f.hasData) return isStale(f, now) ? "stale" : isChecking(f) ? "checking" : "live";
   if (f.error != null) return "error";
   if (f.loading) return "loading";
   return "idle";
@@ -170,14 +189,19 @@ export function staleChanged(shown: boolean, f: StaleFacts, now: number): boolea
  * pause, still counts) but never backward: on a backward step (NTP, a VM resume) it advances by the monotonic clock
  * instead (third review of #520). Every local age (lastOk, lastFail, the stale tag, the plan lines) is read on it, so a
  * backward step never freezes a live tag or a stale verdict. Pure: give it the two sources to test it.
+ *
+ * Fifth review of #520: anchored, t = t0 + max(w − w0, m − m0, 0), so it never sums the per-call maxima of two
+ * jittering clocks (that ran every age 0.1–0.3% old). A backward wall step re-anchors it at the time already
+ * reached plus the monotonic time since the last call: a step back never moves it backward, and a later forward
+ * step (a sleep) is counted in full.
  */
 export function steadyClock(wall: () => number = () => Date.now(), mono: () => number = monotonic): () => number {
-  let w0 = wall(), m0 = mono(), t = w0;
+  let w0 = wall(), m0 = mono(), t0 = w0, last = t0, wPrev = w0, mPrev = m0;
   return () => {
     const w = wall(), m = mono();
-    const dw = w - w0, dm = Math.max(0, m - m0);
-    t += dw >= 0 ? Math.max(dw, dm) : dm;
-    w0 = w; m0 = m;
+    if (w < wPrev) { t0 = last + Math.max(0, m - mPrev); w0 = w; m0 = m; }
+    const t = Math.max(last, t0 + Math.max(w - w0, m - m0, 0));
+    last = t; wPrev = w; mPrev = Math.max(mPrev, m);
     return t;
   };
 }
@@ -246,7 +270,9 @@ export function singleFlight(clock: () => number = localNow) {
  * step and a sleep) ran ahead of the monotonic one by more than `limitMs` since the last check. A wall-clock step
  * forward (NTP) or a wake from sleep schedules no read, so the age of the data on screen jumps with it ("stale 16m",
  * dimmed plan lines) until the next scheduled read; on a jump the poll reads once at once (usePoll, useSchedule).
- * Pure: give it the two clocks to test it.
+ * Pure: give it the two clocks to test it. Fifth review: one detector per poll for its whole life (a ref), never
+ * re-created with the interval: a wake with the socket dropped changes the interval before the first tick, and a
+ * new detector would take its baselines after the jump and miss it.
  */
 export function clockJump(steady: () => number = localNow, mono: () => number = monotonic): (limitMs: number) => boolean {
   let s0 = steady(), m0 = mono();
@@ -267,6 +293,9 @@ export const DATE_SLACK_MS = 1_000;
 /** How many reads the server-to-local offset is the minimum of (serverClock). */
 export const OFFSET_SAMPLES = 6;
 
+/** A read whose settle is more than this from its `Date` (ms) is not a clock sample (a broken proxy or clock). */
+export const OFFSET_MAX_MS = 86_400_000;
+
 /**
  * The server clock as the page sees it (fourth review of #520): each poll or retry read records its response's `Date`
  * (the server's ms, whole seconds; a failed read's 502 carries one too) and the local time it settled (localNow). Each
@@ -275,12 +304,18 @@ export const OFFSET_SAMPLES = 6;
  * CORS-safelisted header, but a same-origin response exposes every header) and no-store (a cached response carries
  * the cache's Date): api.ts getDated, usePoll.ts readDated. The hub's `at` is on the same Cloudflare clock, so a
  * replay's local time is `at + offset` (replayLocal). Null before any read brought a Date.
+ *
+ * The offset errs YOUNGER (fifth review of #520): the server stamps Date before the response leaves it and truncates
+ * it to the second, so (local settle) − Date is the true offset plus the latency plus up to 1 s; a replay's local
+ * time is that much late, and its age is underestimated by the latency plus up to 1 s (never overestimated).
+ * Samples more than OFFSET_MAX_MS (a day) from the local clock are ignored.
  */
 export function serverClock(samples: number = OFFSET_SAMPLES) {
   let seen: number[] = [];
   return {
     note(date: number | null, local: number): void {
       if (date == null || !Number.isFinite(date) || !Number.isFinite(local)) return;
+      if (Math.abs(local - date) > OFFSET_MAX_MS) return;
       seen = [...seen.slice(1 - samples), local - date];
     },
     offset(): number | null { return seen.length ? Math.min(...seen) : null; },
@@ -364,6 +399,11 @@ export type PushSide = PushArrival & { data: unknown };
  * - a replay: only when its `at` is newer than the read's `Date` less DATE_SLACK_MS. A read with no Date wins (the
  *   replay cannot be shown newer). A read in flight is compared when it settles: this runs on every settle.
  * With no read, the push.
+ *
+ * Known limit (fifth review of #520): `Date` is stamped when the response leaves the server, not when the server
+ * read its data. A read that leaves the server more than DATE_SLACK_MS after reading its data can beat a newer
+ * replay of a publish the socket missed (published between that data read and the response). The window is narrow
+ * (a publish within the read's own server time) and main has it too; the next live push or read corrects it.
  */
 export function pushWins(read: ReadSide | null, p: PushSide | null): boolean {
   if (p == null) return false;
@@ -400,10 +440,13 @@ export function shownSide(read: ReadSide | null, pushed: PushSide | null): { dat
 /**
  * The facts of what is on screen (fourth review of #520): the read's facts with the last live push (withPush), and,
  * when the data shown is a replay's, its server-aged time (replayLocal: null while no Date is known, unknown age).
+ * Fifth review: `firstPending` (the route's own first read is in flight) with no Date known marks it `checking`.
  */
-export function shownFacts<F extends ReadFacts>(f: F, live: PushMark | null, shown: PushSide | null, offset: number | null): F & Partial<Pick<PollFacts, "replayed" | "replayAt">> {
+export function shownFacts<F extends ReadFacts>(f: F, live: PushMark | null, shown: PushSide | null, offset: number | null, firstPending = false): F & Partial<Pick<PollFacts, "replayed" | "replayAt" | "checking">> {
   const g = withPush(f, live);
-  return shown?.replay ? { ...g, replayed: true, replayAt: replayLocal(shown.at, offset) } : g;
+  if (!shown?.replay) return g;
+  const replayAt = replayLocal(shown.at, offset);
+  return replayAt == null && firstPending ? { ...g, replayed: true, replayAt, checking: true } : { ...g, replayed: true, replayAt };
 }
 
 /**
@@ -467,12 +510,16 @@ export function routePushed(s: RouteState, data: unknown, p: PushArrival): Route
   return next == null ? s : withShown({ ...s, ...next });
 }
 
+/** The route's own first read is in flight: sent, and none of its reads has settled (fifth review of #520). */
+export const firstPending = (s: Pick<RouteState, "sent" | "settled">): boolean => s.sent > 0 && s.settled === 0;
+
 /**
  * The route's facts as a poll shows them (shownFacts): its own reads with the last live push, and a replay on screen
- * aged through `offset` (pageServer.offset(): the server-to-local offset; null: unknown age).
+ * aged through `offset` (pageServer.offset(): the server-to-local offset; null: unknown age), checking while its
+ * first read is in flight (firstPending).
  */
-export function routeFacts(s: RouteState, offset: number | null = null): ReadFacts & Partial<Pick<PollFacts, "replayed" | "replayAt">> {
-  return shownFacts({ error: s.error, lastOk: s.lastOk, lastFail: s.lastFail, failSeq: s.failSeq, failures: s.failures }, s.push, shownSide(s.read, s.pushed).push, offset);
+export function routeFacts(s: RouteState, offset: number | null = null): ReadFacts & Partial<Pick<PollFacts, "replayed" | "replayAt" | "checking">> {
+  return shownFacts({ error: s.error, lastOk: s.lastOk, lastFail: s.lastFail, failSeq: s.failSeq, failures: s.failures }, s.push, shownSide(s.read, s.pushed).push, offset, firstPending(s));
 }
 
 /** How long a stale decision's plan lines stay on the chart, dimmed and labelled, before they are dropped (ms). */
@@ -483,11 +530,77 @@ export const PLAN_HIDE_MS = 2 * 3_600_000;
  * that read's poll facts: at full strength while live; dimmed with " · stale 1h" on each title while stale; dropped,
  * with a small note, once the decision is older than PLAN_HIDE_MS (or of unknown age). The age is ageBase's: a hub
  * replay's is its server-aged time (fourth review), so a 2-hour-old replay is hidden at once.
+ * Fifth review: while checking (isChecking) dimmed with " · checking", never dropped; a data time more than
+ * CLOCK_SLACK_MS in the future (not believable, isStale) is hidden, never drawn dimmed with no age.
  */
 export function planMark(f: StaleFacts, now: number): { show: boolean; dim: boolean; suffix: string; note: string | null } {
-  if (!isStale(f, now)) return { show: true, dim: false, suffix: "", note: null };
+  if (!isStale(f, now)) return isChecking(f) ? { show: true, dim: true, suffix: " · checking", note: null } : { show: true, dim: false, suffix: "", note: null };
   const t = ageBase(f);
   const age = t == null ? null : now - t;
-  if (age == null || age >= PLAN_HIDE_MS) return { show: false, dim: true, suffix: "", note: `plan hidden: decision stale${age == null ? "" : ` ${shortAge(age)}`}` };
+  if (age == null || age < -CLOCK_SLACK_MS || age >= PLAN_HIDE_MS) return { show: false, dim: true, suffix: "", note: `plan hidden: decision stale${age == null || age < 0 ? "" : ` ${shortAge(age)}`}` };
   return { show: true, dim: true, suffix: age < 0 ? " · stale" : ` · stale ${shortAge(age)}`, note: null };
+}
+
+/** The clock of the chart's plan mark (ms): the decision card's 1 s clock (fifth review of #520). */
+export const PLAN_TICK_MS = 1_000;
+
+/** A plan mark as one string, so the chart renders only when it changes. */
+export const markKey = (m: ReturnType<typeof planMark>): string => `${m.show}|${m.dim}|${m.suffix}|${m.note ?? ""}`;
+
+/**
+ * The cadence a route reads at (fifth review of #520): `fastMs` while its last read failed (an errored route never
+ * waits the 5-minute fallback of a live push: a transient 502 recovers within the fast cadence), else `intervalMs`.
+ * An interval of 0 (no refresh) stays 0.
+ */
+export function cadenceOf(errored: boolean, intervalMs: number, fastMs: number): number {
+  if (!intervalMs) return 0;
+  return errored && fastMs > 0 ? Math.min(intervalMs, fastMs) : intervalMs;
+}
+
+/** A route on a schedule: its key, its last send (ms, localNow; null before one) and its cadence (ms; 0: none). */
+export type Cadence = { key: string; lastSend: number | null; every: number };
+
+/**
+ * The reads due now, and how long until the next check (fifth review of #520). A route is due at
+ * max(now, lastSend + every): a cadence change keeps the phase (it never restarts the interval, so a socket that
+ * flaps every 1–4 minutes no longer postpones the fallback read forever, and a route that turns errored reads at
+ * once if its last send is older than the fast cadence). While the tab is hidden nothing is read (the tab becoming
+ * visible reads) and a due route is checked again a cadence later. `waitMs` is null with no route on a cadence.
+ */
+export function dueReads(routes: Cadence[], now: number, visible = true): { due: string[]; waitMs: number | null } {
+  const due: string[] = [];
+  let next: number | null = null;
+  for (const r of routes) {
+    if (!r.every) continue;
+    const at = r.lastSend == null ? now : r.lastSend + r.every;
+    let then = at;
+    if (at <= now) {
+      if (visible) due.push(r.key);
+      then = now + r.every;
+    }
+    next = next == null ? then : Math.min(next, then);
+  }
+  return { due, waitMs: next == null ? null : Math.max(0, next - now) };
+}
+
+/** The push turned live (every topic delivered on the open socket) since the last render (fifth review of #520). */
+export const turnedLive = (was: boolean, live: boolean): boolean => live && !was;
+
+/**
+ * The routes to read once at once (fifth review of #520): of `routes` (every route when the push turns live, the
+ * routes a replay carries when one arrives), those whose last read failed and whose read is not in flight
+ * (single-flight). The hub answering means the network is back, so an errored route need not wait its cadence.
+ */
+export function recoveryReads(routes: readonly string[], errored: (key: string) => boolean, inFlight: (key: string) => boolean): string[] {
+  return routes.filter((k) => errored(k) && !inFlight(k));
+}
+
+/**
+ * Whether a pushed snapshot is the replay of a connect (fifth review of #520): the hub's own flag when it sends one
+ * (`replay: true` on its connect sends, `false` on a live publish), else the first snapshot of the topic on this
+ * socket (the older hub's behaviour: a topic's first live publish after a connect with nothing stored is then taken
+ * for a replay and cannot clear an error).
+ */
+export function isReplay(flag: unknown, firstOnSocket: boolean): boolean {
+  return typeof flag === "boolean" ? flag : firstOnSocket;
 }

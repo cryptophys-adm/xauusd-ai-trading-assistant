@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { Panel } from "./ui";
 import { CHART_READ, get } from "../lib/api";
 import { GLOBAL_PATH, useMarket } from "../lib/market";
-import { localNow, planMark } from "../lib/pollState";
+import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
 import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
@@ -77,11 +77,19 @@ export default function PriceChart() {
   // the chart never shows an old plan at full strength when the decision card is collapsed or below it.
   const decisionPoll = pollOf(GLOBAL_PATH);
   // Third review: the decision's age is local (lastOk on the steady clock, localNow), so a backward wall-clock step
-  // never holds an old plan at full strength; the tick only re-renders.
+  // never holds an old plan at full strength. Fourth review: a hub replay's plan is aged by its server-aged time
+  // (replayAt), hidden while of unknown age; fifth review: dimmed while checking (the first read in flight).
+  const planFacts = { hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, replayed: decisionPoll.replayed, replayAt: decisionPoll.replayAt, checking: decisionPoll.checking, intervalMs: decisionPoll.intervalMs };
+  const mark = planMark(planFacts, localNow());
+  // Fifth review: the mark follows the decision card's 1 s clock (PLAN_TICK_MS), so after a wake or a forward step the
+  // plan dims within a second of the card's stale tag; the chart renders only when the mark changes (markKey).
+  const markNow = useRef({ facts: planFacts, key: markKey(mark) });
+  markNow.current = { facts: planFacts, key: markKey(mark) };
   const [, setClock] = useState(0);
-  useEffect(() => { const t = window.setInterval(() => setClock((n) => n + 1), 30_000); return () => window.clearInterval(t); }, []);
-  // Fourth review: a hub replay's plan is aged by its server-aged time (replayAt), hidden while of unknown age.
-  const mark = planMark({ hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, replayed: decisionPoll.replayed, replayAt: decisionPoll.replayAt, intervalMs: decisionPoll.intervalMs }, localNow());
+  useEffect(() => {
+    const t = window.setInterval(() => { if (markKey(planMark(markNow.current.facts, localNow())) !== markNow.current.key) setClock((n) => n + 1); }, PLAN_TICK_MS);
+    return () => window.clearInterval(t);
+  }, []);
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
 
   // Synchronize chart timeframe with active War Room tab unless unlinked by user.
@@ -334,7 +342,7 @@ export default function PriceChart() {
 
   // The note only when something was dropped: a clear decision's plan, or the zones.
   const planHidden = !mark.show && ((showPlan && !!strategy?.plan && (strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL")) || (showZones && (strategy?.key_levels?.candidates?.length ?? 0) > 0));
-  const hiddenWhy = decisionPoll.replayed && decisionPoll.replayAt == null ? "the decision is a hub replay of unknown age (no read has answered yet)" : "the decision's plan and zones are older than 2h";
+  const hiddenWhy = decisionPoll.replayed && decisionPoll.replayAt == null ? "the decision is a hub replay of unknown age (no read has answered yet)" : mark.note === "plan hidden: decision stale" ? "the decision's age is unknown or ahead of this clock" : "the decision's plan and zones are older than 2h";
   const staleTitle = decisionPoll.error ? `${decisionPoll.error} · ${hiddenWhy}` : hiddenWhy;
   const up = (head.change ?? 0) >= 0;
   const chip = (on: boolean) => clsx("rounded-md border px-2 py-1 text-[11px] font-semibold transition shrink-0", on ? "border-violet-400/40 bg-violet-400/10 text-violet-100" : "border-white/10 text-slate-500 hover:text-white");

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { localNow, nextSeq, pushTime, type PushArrival } from "./pollState";
+import { isReplay, localNow, nextSeq, pushTime, type PushArrival } from "./pollState";
 
 /**
  * One topic's latest snapshot: its body, the hub's own time (`at`: when the hub published it, ms, the hub's clock; null
  * when the message had none), and its arrival (third review of #520): the local sequence (`seq`, nextSeq) and the
- * steady clock (`local`, localNow) when it reached the page, and `replay`: the first snapshot of the topic on this
- * socket, which the hub sends from its store on every connect. A page orders it by `seq` and counts its age from
+ * steady clock (`local`, localNow) when it reached the page, and `replay`: a snapshot the hub sends from its store on
+ * a connect (its `replay: true`; with an older hub, the first snapshot of the topic on this socket). A page orders it by `seq` and counts its age from
  * `local`; `at` only recognises a replay older than the data on screen (pushApplies in lib/pollState.ts). Fourth
  * review: a replay never counts as a good arrival; its age is `at` on the server clock (the reads' Date, takePush).
  */
@@ -48,7 +48,10 @@ export function usePushMany(topics: string[], path = "/api/stream") {
         try {
           const msg = JSON.parse(String(ev.data));
           if (msg?.type === "snapshot" && wanted.includes(msg.topic) && msg.data) {
-            const arrival: PushArrival = { seq: nextSeq(), local: localNow(), at: pushTime(msg.at), replay: !seen.has(msg.topic) };
+            // Fifth review of #520: the hub marks its connect sends `replay: true` and its live publishes `replay:
+            // false` (push-hub.mjs pushMessage); that flag is used when it is a boolean. Without it (a hub deployed
+            // before the flag) the first snapshot of a topic on this socket is taken for the replay (isReplay).
+            const arrival: PushArrival = { seq: nextSeq(), local: localNow(), at: pushTime(msg.at), replay: isReplay(msg.replay, !seen.has(msg.topic)) };
             setSnap((d) => ({ ...d, [msg.topic]: { data: msg.data, ...arrival } }));
             seen.add(msg.topic);
             if (seen.size === wanted.length) setLive(true);

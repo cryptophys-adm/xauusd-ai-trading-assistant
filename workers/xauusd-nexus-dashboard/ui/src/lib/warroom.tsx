@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { get, type Dated } from "./api";
 import { readDated, usePoll, type Poll } from "./usePoll";
 import { usePush } from "./push";
-import { isStale, localNow, pageServer, shownFacts, shownSide, takePush, type PushSlots, type ReadSide } from "./pollState";
+import { isStale, localNow, pageServer, recoveryReads, shownFacts, shownSide, takePush, turnedLive, type PushSlots, type ReadSide } from "./pollState";
 
 export type Room = any;
 /**
@@ -33,7 +33,9 @@ const noPush: PushSlots = { pushed: null, push: null, pushAt: null };
 export function WarRoomProvider({ children }: { children: ReactNode }) {
   const push = usePush<any>("war-room");
   // The read is dated (fourth review of #520): no-store, same-origin, its Date noted into the page's server clock.
-  const war = usePoll(() => readDated(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS);
+  // Fifth review of #520: while the read's last try failed it stays on the fast 10 s cadence even with the push live
+  // (errorMs), and the schedule keeps its phase across the cadence changes (usePoll, dueReads).
+  const war = usePoll(() => readDated(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS, [], POLL_MS);
   const dec = usePoll(() => get("/api/decisions?limit=1"), 60_000);
   // The read's room, its send and its Date; the pushes kept apart (pollState.ts takePush), as lib/market.tsx's routes:
   // - a live push is shown when it arrived after the read on screen was sent; its arrival counts toward lastOk and
@@ -46,17 +48,29 @@ export function WarRoomProvider({ children }: { children: ReactNode }) {
   const readRef = useRef(read);
   readRef.current = read;
   const [slots, setSlots] = useState<PushSlots>(noPush);
+  // An errored read reads once at once when a replay arrives or the push turns live (the hub answers again), never
+  // beside its read in flight (recoveryReads, usePoll's nudge: single-flight).
+  const recover = useRef(() => {});
+  recover.current = () => { if (recoveryReads([WAR_ROOM_PATH], () => war.error != null, () => !!war.busy).length) war.nudge(); };
   useEffect(() => {
     const snap = push.snap;
     if (!snap?.data) return;
     setSlots((s) => takePush(s, readRef.current, snap.data, snap) ?? s);
+    if (snap.replay) recover.current();
   }, [push.snap]);
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (turnedLive(wasLive.current, push.live)) recover.current();
+    wasLive.current = push.live;
+  }, [push.live]);
   const shown = shownSide(read, slots.pushed);
   const latest = (shown.data ?? null) as any;
-  const f = shownFacts({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, slots.push, shown.push, pageServer.offset());
+  // Checking (fifth review): a replay of unknown age while the read's own first try is in flight (none has settled).
+  const firstPending = war.loading && war.lastOk == null && war.lastFail == null;
+  const f = shownFacts({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, slots.push, shown.push, pageServer.offset(), firstPending);
   const poll: Poll = {
     ...war, ...f, data: latest,
-    replayed: f.replayed ?? false, replayAt: f.replayAt ?? null,
+    replayed: f.replayed ?? false, replayAt: f.replayAt ?? null, checking: f.checking ?? false,
     loading: !latest && war.loading,
     stale: isStale({ hasData: latest != null, ...f, intervalMs: war.intervalMs }, localNow()),
   };

@@ -54,7 +54,8 @@ export function cacheOf(path: string, opts: GetOptions = {}): RequestCache {
 /**
  * Read-only API of the Nexus Worker: /api/ohlcv and /api/local-lane are its own RPC reads; every
  * other /api/* path is proxied to the AI Worker. Same origin, GET only: Nexus never changes state.
- * A failure throws an ApiError (above).
+ * A failure throws an ApiError (above); so does a good answer that is not JSON (fifth review of #520: a captive
+ * portal's or an SPA fallback's 200 HTML page is "/api/x 200 not_json", never a good read of null data).
  */
 export async function get<T = any>(path: string, opts: GetOptions = {}): Promise<T> {
   return (await fetchJson<T>(path, cacheOf(path, opts))).data;
@@ -63,8 +64,23 @@ export async function get<T = any>(path: string, opts: GetOptions = {}): Promise
 /** A read's answer with its response's `Date` (server ms, whole seconds; null when the response had none). */
 export type Dated<T = any> = { data: T; date: number | null };
 
-/** Whether a path is on this origin: one leading slash ("/api/…"), never "//host" or a URL. */
-export const sameOrigin = (path: string): boolean => /^\/(?!\/)/.test(path) && !path.includes("\\");
+/** The base a path is resolved against where there is no page (Node tests): an origin nothing can share. */
+const SAFE_BASE = "https://nexus.invalid/";
+
+/**
+ * Whether a path is on this origin (fifth review of #520): it starts with "/", carries no control character (the URL
+ * parser drops tab, CR and LF, so "/\t/evil.example/x" resolves to "//evil.example/x", another origin in a browser),
+ * and resolves against the page to the page's own origin (never "//host", "/\\host" or a URL).
+ */
+export function sameOrigin(path: string): boolean {
+  if (typeof path !== "string" || !path.startsWith("/") || /[\u0000-\u001f\u007f]/.test(path)) return false;
+  const here = typeof location !== "undefined" && location?.href ? location.href : SAFE_BASE;
+  try {
+    return new URL(path, here).origin === new URL(here).origin;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A poll or retry read with its response's `Date` (fourth review of #520), for the server clock that ages a hub
@@ -87,12 +103,18 @@ async function fetchJson<T>(path: string, cache: RequestCache): Promise<Dated<T>
     throw new ApiError(path, 0, null);
   }
   const date = httpDate(r.headers.get("date"));
-  const body = await r.json().catch(() => null);
-  if (r.status === 404 && body && body.status === "not_found") return { data: body as T, date };
+  // Only a JSON content type is parsed: an HTML page (a captive portal, an SPA fallback) is never a body.
+  const json = /\bjson\b/i.test(r.headers.get("content-type") ?? "");
+  let body: any = null, parsed = false;
+  if (json) {
+    try { body = await r.json(); parsed = true; } catch { /* not JSON after all */ }
+  }
+  if (r.status === 404 && parsed && body && body.status === "not_found") return { data: body as T, date };
   if (!r.ok) {
     const code = body && typeof body === "object" ? (typeof body.error === "string" ? body.error : typeof body.status === "string" ? body.status : null) : null;
     throw new ApiError(path, r.status, code, date);
   }
+  if (!parsed) throw new ApiError(path, r.status, "not_json", date);
   return { data: body as T, date };
 }
 

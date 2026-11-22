@@ -21,10 +21,11 @@ export function Hint({ text, className }: { text: string; className?: string }) 
 
 /**
  * The state a poll puts its panel in, now (its times are on the steady local clock, localNow). A hub replay on screen
- * is aged by its server-aged time, and is stale while of unknown age (fourth review of #520: ageBase).
+ * is aged by its server-aged time, and is stale while of unknown age (fourth review of #520: ageBase), unless the
+ * route's own first read is still in flight: then it is "checking" (fifth review: no stale chip on a normal reload).
  */
 export function phaseOf(poll: Poll): PollPhase {
-  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs, replayed: poll.replayed, replayAt: poll.replayAt }, localNow());
+  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs, replayed: poll.replayed, replayAt: poll.replayAt, checking: poll.checking }, localNow());
 }
 
 /**
@@ -36,7 +37,7 @@ export function Panel({ title, icon, right, hint, children, className, poll, liv
   // `staleOpen`: the stale detail (what failed, the last good read) starts open, for a panel traded from.
   const [open, setOpen] = useState(staleOpen);
   const phase = poll ? phaseOf(poll) : null;
-  const tag = poll && phase && (phase === "stale" || phase === "error" || (live && phase === "live"))
+  const tag = poll && phase && (phase === "stale" || phase === "error" || phase === "checking" || (live && phase === "live"))
     ? <PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry={pollRetry} />
     : null;
   return (
@@ -67,8 +68,12 @@ const shownTimes = (poll: Poll): Poll => ({ ...poll, lastOk: wallOf(poll.lastOk)
 const tagText = "mono whitespace-nowrap text-[11px]";
 const tagChip = "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5";
 
-/** The header tag of a poll: stale (amber, late), error (red, fault) or live (cyan, ok). */
+/** The header tag of a poll: stale (amber, late), error (red, fault), checking (muted) or live (cyan, ok). */
 function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: PollPhase; open: boolean; onToggle: () => void; retry: boolean }) {
+  if (phase === "checking") {
+    // Fifth review of #520: a hub replay on screen while the first read is in flight: its age is not known yet.
+    return <span className={clsx(tagText, "inline-flex items-center gap-1.5 text-fg-2")} title="replayed by the hub · checking its age with the first read" aria-label="Checking"><Dot tone="plain" />checking</span>;
+  }
   if (phase === "error") {
     return <span className={clsx(tagText, tagChip, "border-fault-fill/35 bg-fault-fill/10 text-fault")} title={`${poll.error} · retry ${retryEvery(poll.intervalMs)}`}><Dot tone="fault" />error</span>;
   }
@@ -184,7 +189,7 @@ export function ErrorLine({ error }: { error: string }) {
 export function PollStrip({ poll, live = false, className }: { poll: Poll; live?: boolean; className?: string }) {
   const [open, setOpen] = useState(false);
   const phase = phaseOf(poll);
-  if (!(phase === "stale" || (live && phase === "live"))) return null;
+  if (!(phase === "stale" || phase === "checking" || (live && phase === "live"))) return null;
   return (
     <div className={clsx("mb-2", className)}>
       <div className="flex flex-wrap items-center justify-end gap-2"><PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry /></div>

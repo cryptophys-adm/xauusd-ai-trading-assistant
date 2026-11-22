@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useReducer, useRef, type ReactNod
 import { errorText, type ApiError } from "./api";
 import { readDated, useSchedule, type Poll } from "./usePoll";
 import { usePushMany } from "./push";
-import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, pageServer, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
+import { STALE_TICK_MS, cadenceOf, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, pageServer, recoveryReads, routeFacts, routePushed, routeSent, routeSettled, turnedLive, type Cadence, type ReadOutcome, type RouteState } from "./pollState";
 
 /** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
 const POLL_LIVE_MS = 300_000;
@@ -34,7 +34,7 @@ type Ctx = {
   failed: Record<string, string>;
   /** The last good arrival of each read, by path (ms, the steady local clock localNow). */
   okAt: Record<string, number>;
-  /** The retry cadence of the read at a path (ms). */
+  /** The retry cadence of the read at a path (ms): the fast one while its last read failed (fifth review of #520). */
   intervalOf: (path: string) => number;
   /**
    * One read as a poll (review of #520): the last good answer of that path (a failed read keeps it on screen), its
@@ -97,6 +97,14 @@ function shownOf(path: string, body: any): unknown {
  * - a replay replaces a read's data only when its `at` is newer than that read's `Date` (less 1 s), in either
  *   arrival order (a read in flight is compared when it settles); a live push keeps the f42efc2 rule;
  * - a forward clock jump reads every path once at once (useSchedule), skipping a path whose read is in flight.
+ *
+ * Fifth review of #520:
+ * - a path whose last read failed reads every 60 s even while the push is live (cadenceOf), and once at once when the
+ *   push turns live or a replay arrives for it (recoveryReads; never beside its read in flight), so a transient 502
+ *   or an offline start no longer leaves the decision and the rooms stale for the 5-minute fallback;
+ * - each path's next read is at max(now, its last send + its cadence) (useSchedule, dueReads): a cadence change
+ *   keeps the phase, so a socket that flaps every 1–4 minutes still gets its fallback reads;
+ * - a replay that lands before the path's first dated read settles is "checking" (routeFacts, firstPending).
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
@@ -107,13 +115,17 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const route = (path: string): RouteState => routes.current[path] ?? emptyRoute;
   const slowMs = push.live ? POLL_LIVE_MS : POLL_MS;
-  const intervalOf = (path: string) => (FAST_PATHS.includes(path) ? POLL_MS : slowMs);
+  // The cadence of a path: 60 s while its last read failed, else its own (60 s, or 5 minutes while the push is live).
+  const intervalOf = (path: string) => cadenceOf(route(path).error != null, FAST_PATHS.includes(path) ? POLL_MS : slowMs, POLL_MS);
+  // Each path's last send (localNow), for the schedule's phase.
+  const sentAt = useRef<Record<string, number>>({});
 
   // One read of one path: its own catch, its own settle. A failed read records what failed and when and keeps the
   // data as it was (routeSettled never sets it to null); a read overtaken by a newer settled one is dropped.
   const read = (path: string): Promise<void> => {
     const id = nextSeq();
     routes.current[path] = routeSent(route(path), id);
+    sentAt.current[path] = localNow();
     const settle = (r: ReadOutcome) => { routes.current[path] = routeSettled(route(path), id, r); bump(); };
     const p = readDated(path).then(
       (r) => settle({ ok: true, data: r.data, at: localNow(), date: r.date }),
@@ -148,27 +160,41 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
-  // A forward clock jump: each path once at once, unless its read is in flight (single-flight).
+  // Each path on its own cadence, its phase kept (dueReads); a forward clock jump: each path once at once, unless its
+  // read is in flight (single-flight).
   const inFlight = (p: string) => route(p).sent > route(p).settled;
-  useSchedule(() => { for (const p of SLOW_PATHS) void read(p); }, slowMs, () => { for (const p of SLOW_PATHS) if (!inFlight(p)) void read(p); });
+  const errored = (p: string) => route(p).error != null;
+  const plan = (paths: string[]) => (): Cadence[] => paths.map((p) => ({ key: p, lastSend: sentAt.current[p] ?? null, every: intervalOf(p) }));
+  const cadenceKey = (paths: string[]) => paths.map(intervalOf).join(",");
+  useSchedule(plan(SLOW_PATHS), (due) => { for (const p of due) void read(p); }, cadenceKey(SLOW_PATHS), () => { for (const p of SLOW_PATHS) if (!inFlight(p)) void read(p); });
   // News Daily and the 5m context are not pushed yet: every 60 s, as before.
-  useSchedule(() => { for (const p of FAST_PATHS) void read(p); }, POLL_MS, () => { for (const p of FAST_PATHS) if (!inFlight(p)) void read(p); });
+  useSchedule(plan(FAST_PATHS), (due) => { for (const p of due) void read(p); }, cadenceKey(FAST_PATHS), () => { for (const p of FAST_PATHS) if (!inFlight(p)) void read(p); });
 
   // A push: each room and the decision, by its arrival (routePushed; the hub's `at` only keeps a replay out).
   const threadsSnap = push.snap.threads ?? null;
   const decisionSnap = push.snap.decision ?? null;
+  // A replay means the hub answers again: each errored path it carries reads once at once (recoveryReads).
   useEffect(() => {
     if (!threadsSnap) return;
     for (const c of TF_CHARTS) routes.current[threadPath(c)] = routePushed(route(threadPath(c)), threadsSnap.data?.[c] ?? null, threadsSnap);
+    if (threadsSnap.replay) for (const p of recoveryReads(TF_CHARTS.map(threadPath), errored, inFlight)) void read(p);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadsSnap]);
   useEffect(() => {
     if (!decisionSnap) return;
     routes.current[GLOBAL_PATH] = routePushed(route(GLOBAL_PATH), decisionSnap.data, decisionSnap);
+    if (decisionSnap.replay) for (const p of recoveryReads([GLOBAL_PATH], errored, inFlight)) void read(p);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decisionSnap]);
+  // The push turned live (the network is back): every errored path reads once at once, never beside its read in flight.
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (turnedLive(wasLive.current, push.live)) for (const p of recoveryReads(ALL_PATHS, errored, inFlight)) void read(p);
+    wasLive.current = push.live;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [push.live]);
 
   const pollOf = (path: string): Poll => {
     const s = route(path);
@@ -177,7 +203,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     const intervalMs = intervalOf(path);
     return {
       data, error: f.error, lastOk: f.lastOk, lastFail: f.lastFail, failures: f.failures, intervalMs,
-      replayed: f.replayed ?? false, replayAt: f.replayAt ?? null,
+      replayed: f.replayed ?? false, replayAt: f.replayAt ?? null, checking: f.checking ?? false,
       loading: data == null && s.settled === 0, busy: s.sent > s.settled, refresh: () => refresh(path),
       stale: isStale({ hasData: data != null, ...f, intervalMs }, now),
     };
