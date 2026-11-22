@@ -331,8 +331,49 @@ export function agentStatuses(env, { records = null } = {}) {
 }
 
 /**
- * Tells the owner once when the breaker suspends an agent that the switches set live, or lets it back
- * (KV keeps the last told set). Never throws.
+ * Pure: the name of what an agent trades under a key: the agent's own variant label (an agent may declare
+ * `variants: { key: label }`, such as the two opening ranges of one agent), else the catalogue pattern's name.
+ */
+export function variantName(agentId, key) {
+  const variant = STRATEGY_AGENTS.find((a) => a.id === agentId)?.variants?.[key];
+  return typeof variant === "string" ? variant : patternInfo(key)?.name ?? null;
+}
+
+/** Pure: the roster as the switches set it (the breaker does not move an agent here): { id: { status, version } }. */
+export function agentRoster(env) {
+  const statuses = agentStatuses(env);
+  return Object.fromEntries(STRATEGY_AGENTS.map((a) => [a.id, { status: statuses[a.id], version: a.version }]));
+}
+
+/**
+ * Pure: the roster lines for the owner (Track A PR 3): one line per agent added, removed, version-bumped, or moved
+ * between live, shadow and off; the whole roster once when nothing was stored before; nothing when nothing changed.
+ */
+export function rosterLines(before, now) {
+  const label = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
+  if (!before || typeof before !== "object") {
+    const by = (status) => Object.entries(now).filter(([, x]) => x.status === status).map(([id, x]) => `${label(id)} v${x.version}`);
+    const parts = ["live", "shadow", "off"].map((s) => [s, by(s)]).filter(([, list]) => list.length).map(([s, list]) => `${s[0].toUpperCase()}${s.slice(1)}: ${list.join(", ")}.`);
+    return [`The roster: ${Object.keys(now).length} strategy agents. ${parts.join(" ")}`];
+  }
+  const lines = [];
+  for (const [id, x] of Object.entries(now)) {
+    const was = before[id];
+    if (!was) lines.push(`${label(id)} joins the roster: v${x.version}, ${x.status}.`);
+    else {
+      if (was.version !== x.version) lines.push(`${label(id)} is now v${x.version} (was v${was.version}).`);
+      if (was.status !== x.status) lines.push(`${label(id)} moves from ${was.status} to ${x.status}.`);
+    }
+  }
+  for (const id of Object.keys(before)) if (!now[id]) lines.push(`${id} leaves the roster.`);
+  return lines;
+}
+
+/**
+ * Tells the owner once when the breaker suspends an agent that the switches set live, or lets it back, and
+ * when the roster changes (Track A PR 3). KV keeps the last told set and roster in one value. A breaker
+ * suspension sends only its own line: the roster is the switches' view, which the breaker does not move.
+ * Never throws.
  */
 export async function syncAgentBreaker(env, records, { send = null, now = Date.now() } = {}) {
   try {
@@ -341,21 +382,46 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
     const held = on ? suspendedAgents(records).filter((x) => wanted.includes(x.id)) : [];
     // A pattern of a family the switches set live (a suspended family says it once for all its patterns).
     const patterns = on ? suspendedPatterns(records).filter((x) => wanted.includes(x.agent) && !held.some((h) => h.id === x.agent)) : [];
-    const before = JSON.parse((await env?.SIGNAL_CACHE?.get?.(AGENT_BREAKER_KEY)) || "null")?.ids ?? [];
+    const stored = JSON.parse((await env?.SIGNAL_CACHE?.get?.(AGENT_BREAKER_KEY)) || "null");
+    const before = stored?.ids ?? [];
     const key = (x) => `pattern:${x.agent}:${x.id}`;
     const ids = [...held.map((x) => x.id), ...patterns.map(key)].sort();
-    if (JSON.stringify(ids) === JSON.stringify([...before].sort())) return { status: "unchanged", suspended: ids };
-    await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ids, at: new Date(now).toISOString() }));
+    const roster = agentRoster(env);
+    const told = rosterLines(stored?.roster ?? null, roster);
+    const idsSame = JSON.stringify(ids) === JSON.stringify([...before].sort());
+    if (idsSame && !told.length) return { status: "unchanged", suspended: ids };
     const agentLabel = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
     // "pattern:<agent>:<pattern>": a pattern is judged per agent (its breaks and its swings inside are different trades).
-    const label = (id) => { if (!id.startsWith("pattern:")) return agentLabel(id); const [, agent, pattern] = id.split(":"); return `The ${patternInfo(pattern)?.name ?? pattern} pattern (${agentLabel(agent)})`; };
-    const lines = [
+    // A variant of the agent's own (variants: { key: label }) is named by its label, before the catalogue's names.
+    const label = (id) => {
+      if (!id.startsWith("pattern:")) return agentLabel(id);
+      const [, agent, pattern] = id.split(":");
+      const variant = STRATEGY_AGENTS.find((a) => a.id === agent)?.variants?.[pattern];
+      return typeof variant === "string" ? `The ${variant} (${agentLabel(agent)})` : `The ${patternInfo(pattern)?.name ?? pattern} pattern (${agentLabel(agent)})`;
+    };
+    const lines = idsSame ? [] : [
       ...held.filter((x) => !before.includes(x.id)).map((x) => `${label(x.id)} is suspended: ${x.mean_r}R per setup over ${x.setups} setups. It stays measured in shadow and returns by itself when its record is no longer negative.`),
       ...patterns.filter((x) => !before.includes(key(x))).map((x) => `${label(key(x))} is held back: ${x.mean_r}R per setup over ${x.setups} setups of its own. The rest of its family trades on.`),
       ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is ${id.startsWith("pattern:") ? "traded" : "live"} again: its record is no longer negative.`)
     ];
-    if (lines.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...lines].join("\n"));
-    return { status: "changed", suspended: ids, told: lines.length };
+    // Send first, then keep only what was told (Track A PR 3 review): a send that fails leaves its part of the stored
+    // value as it was, so the next ledger step sends the same lines again. A crash between a send and the write can
+    // repeat a notice; it never loses one.
+    let error = null;
+    const tell = async (body) => {
+      if (!body.length || typeof send !== "function") return true;
+      try { await send(["XAUUSD STRATEGY AGENTS", ...body].join("\n")); return true; } catch (e) { error = String(e?.message ?? e).slice(0, 160); return false; }
+    };
+    const rosterTold = await tell(told);
+    const idsTold = await tell(lines);
+    const keep = { ids: idsTold ? ids : [...before].sort(), roster: rosterTold ? roster : (stored?.roster ?? null) };
+    if (JSON.stringify(keep.ids) !== JSON.stringify([...before].sort()) || JSON.stringify(keep.roster) !== JSON.stringify(stored?.roster ?? null)) {
+      await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ...keep, at: new Date(now).toISOString() }));
+    }
+    const rosterOut = told.length ? { roster: { status: rosterTold ? "changed" : "failed", told: rosterTold ? told.length : 0 } } : {};
+    if (error) return { status: "failed", error, suspended: keep.ids, ...rosterOut };
+    if (idsSame) return { status: "unchanged", suspended: ids, ...rosterOut };
+    return { status: "changed", suspended: ids, told: lines.length, ...rosterOut };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
   }
@@ -442,7 +508,8 @@ export function agentsConsensus({ long = {}, short = {} } = {}, { records = null
   const speakers = (plans) => Object.entries(plans || {})
     .filter(([id, a]) => agentSpeaks(id, a, passes))
     .map(([id, a]) => {
-      const pattern = a.plan.pattern ? (patternInfo(a.plan.pattern)?.name ?? null) : null;
+      // An agent's own variant label first (variants: { key: label }), then the catalogue pattern's name.
+      const pattern = a.plan.pattern ? variantName(id, a.plan.pattern) : null;
       return { id, name: STRATEGY_AGENTS.find((x) => x.id === id)?.label ?? id, voice: agentVoice(recordOfAgent(id)), ...(pattern ? { pattern } : {}) };
     });
   const buy = speakers(long), sell = speakers(short);
