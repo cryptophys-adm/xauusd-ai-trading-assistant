@@ -203,7 +203,8 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-ok" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
           </div>
           <div className="mb-0.5 flex justify-between px-1 text-[9px] uppercase tracking-[0.12em] text-slate-600">
-            <span>Camarilla · pivots</span><span>{hasK ? "Zones" : "No zones"}</span>
+            {/* Re-review of #520: no zones because the decision read failed is that read's error, not "No zones". */}
+            <span>Camarilla · pivots</span>{hasK ? <span>Zones</span> : readError ? <span className="mono normal-case tracking-normal text-fault">{readError}</span> : <span>No zones</span>}
           </div>
           <KeyLevelMap k={hasK ? k : null} cam={set?.levels ?? null} close={levels?.close ?? null} daily={levels?.cpr?.daily} weekly={levels?.cpr?.weekly} />
           {set && (

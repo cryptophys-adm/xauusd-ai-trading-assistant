@@ -105,27 +105,34 @@ function StaleDetail({ poll }: { poll: Poll }) {
   );
 }
 
-/** A read of the poll is in flight (a poll without `busy` falls back to its first-load `loading`). */
+/** A read of the poll is in flight (a poll without `busy` falls back to its first-load `loading`). Informational. */
 export const pollBusy = (poll: Poll) => poll.busy ?? poll.loading;
 
+/** The longest Retry now spins for its own click (ms): a click that joined a read that then hangs frees the button. */
+export const RETRY_SPIN_MS = 10_000;
+
 /**
- * Retry now: an icon (in a header) or a labelled button (in the error box); 44 px tall on a phone. Busy-guarded
- * (review of #520): disabled while the caller's read is in flight and while its own click's retry runs, so repeated
- * clicks never start parallel reads.
+ * Retry now: an icon (in a header) or a labelled button (in the error box); 44 px tall on a phone. Guarded by its
+ * own click only (re-review of #520): disabled and spinning while that click's retry runs, at most RETRY_SPIN_MS. A
+ * read in flight elsewhere (`busy`, e.g. the hung read that made the panel stale) never disables it: the poll's
+ * refresh joins a young read and starts a new one past an old one (joinsInFlight), so clicks never start parallel
+ * reads and the owner never has to reload.
  */
 export function RetryButton({ onRetry, busy = false, compact = false }: { onRetry: () => void | Promise<void>; busy?: boolean; compact?: boolean }) {
   const [running, setRunning] = useState(false);
-  const off = busy || running;
   const click = () => {
-    if (off) return;
+    if (running) return;
     setRunning(true);
-    Promise.resolve().then(onRetry).catch(() => {}).finally(() => setRunning(false));
+    let t = 0;
+    const end = () => { window.clearTimeout(t); setRunning(false); };
+    t = window.setTimeout(end, RETRY_SPIN_MS);
+    Promise.resolve().then(onRetry).catch(() => {}).finally(end);
   };
   return (
-    <button type="button" onClick={click} disabled={off} aria-label="Retry now" aria-busy={off} title={compact ? "Retry now" : undefined}
+    <button type="button" onClick={click} disabled={running} aria-label="Retry now" aria-busy={running} data-reading={busy || undefined} title={compact ? "Retry now" : undefined}
       className={clsx("inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/4 text-[12px] font-medium text-fg transition hover:border-white/20 hover:bg-white/8 disabled:cursor-wait disabled:opacity-60",
         compact ? "h-11 w-11 sm:h-7 sm:w-7" : "h-11 px-2.5 sm:h-8")}>
-      <RefreshCw className={clsx("h-3.5 w-3.5 text-fg-2", off && "animate-spin")} aria-hidden="true" />{compact ? null : "Retry now"}
+      <RefreshCw className={clsx("h-3.5 w-3.5 text-fg-2", running && "animate-spin")} aria-hidden="true" />{compact ? null : "Retry now"}
     </button>
   );
 }

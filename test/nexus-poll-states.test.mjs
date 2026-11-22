@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { STALE_TICK_MS, isStale, okLine, pollPhase, retryEvery, shortAge, singleFlight, staleAt, staleChanged, staleTitle, staleWake, utcClock, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
+import { CLOCK_SLACK_MS, PLAN_HIDE_MS, RETRY_JOIN_MS, STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, okLine, planMark, pollPhase, pushApplies, pushTime, retryEvery, routeFacts, routePushed, routeSent, routeSettled, shortAge, singleFlight, staleAt, staleChanged, staleTitle, staleWake, utcClock, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
 import { overviewBadge } from "../workers/xauusd-nexus-dashboard/ui/src/lib/healthBadge.ts";
 import { ApiError, errorText, get } from "../workers/xauusd-nexus-dashboard/ui/src/lib/api.ts";
 
@@ -112,8 +112,15 @@ test("PS8 Model checks for an error before saying \"No … yet\"", () => {
 
 test("PS9 market.tsx keeps the per-read catch and exposes which routes failed; the News tab shows it", () => {
   const mk = src("lib/market.tsx");
-  assert.match(mk, /\(e\) => \{\n\s+const was = facts\.current\[path\] \?\? noFacts;\n\s+failed\[path\] = errorText\(e\);/, "each read still catches its own failure");
-  assert.match(mk, /for \(const \[path, f\] of Object\.entries\(facts\.current\)\) \{\n\s+if \(f\.error\) failed\[path\] = f\.error;/, "which routes failed, from each path's own facts");
+  // Re-review of #520: the per-read catch settles that path as a failure, and a failed read never becomes null data.
+  assert.match(mk, /\(e\) => settle\(\{ ok: false, error: errorText\(e\), at: Date\.now\(\) \}\),/, "each read still catches its own failure");
+  assert.doesNotMatch(mk, /return null;\n\s+\}\);/, "the catch no longer answers null for the batch");
+  const was = { ...emptyRoute, data: { engine: { stance: "SELL" } }, shownAt: now - 60_000, lastOk: now - 59_000, sent: 1, settled: 1 };
+  const failedRead = routeSettled(routeSent(was), 2, { ok: false, error: "/api/conclusion/global 502", at: now });
+  assert.equal(failedRead.data, was.data, "a failed read keeps the data as it was: never null");
+  assert.deepEqual([failedRead.error, failedRead.lastFail, failedRead.failures, failedRead.lastOk], ["/api/conclusion/global 502", now, 1, now - 59_000]);
+  assert.equal(routeSettled({ ...emptyRoute, sent: 1 }, 1, { ok: false, error: "/api/x 502", at: now }).data, null, "with nothing on screen it stays nothing (the error box), not a null answer");
+  assert.match(mk, /for \(const path of ALL_PATHS\) \{\n\s+const f = routeFacts\(route\(path\)\);\n\s+if \(f\.error\) failed\[path\] = f\.error;/, "which routes failed, from each path's own facts");
   assert.doesNotMatch(mk, /\.catch\(\(\) => null\)/, "no silent catch left");
   const tp = src("components/ThreadsPanel.tsx");
   assert.match(tp, /if \(tab === "NEWS"\) return news \? <><PollStrip poll=\{pollOf\(NEWS_PATH\)\} \/><NewsTab d=\{news\} \/><\/> : failure\(NEWS_PATH\) \?\? <p className="text-\[12px\] text-muted">No news analysis yet\.<\/p>;/);
@@ -193,27 +200,31 @@ test("PS14 Retry now is busy-guarded: a retry joins the read in flight; the poll
   assert.equal(failing.busy, false, "a failed read frees the guard");
 
   const u = src("components/ui.tsx");
-  assert.match(u, /const off = busy \|\| running;\n\s+const click = \(\) => \{\n\s+if \(off\) return;/, "the button ignores clicks while busy");
-  assert.match(u, /onClick=\{click\} disabled=\{off\}/);
-  assert.match(u, /<RetryButton onRetry=\{poll\.refresh\} busy=\{pollBusy\(poll\)\} compact \/>/, "the stale tag's Retry is busy while a read is in flight");
-  assert.match(src("lib/usePoll.ts"), /const refresh = useCallback\(\(\) => flight\.current\.retry\(read\), \[read\]\);/);
+  // Re-review of #520: the button is guarded by its own click only (PS23), and refresh joins only a young read.
+  assert.match(u, /const click = \(\) => \{\n\s+if \(running\) return;/, "the button ignores clicks while its own click runs");
+  assert.match(u, /onClick=\{click\} disabled=\{running\}/);
+  assert.match(u, /<RetryButton onRetry=\{poll\.refresh\} busy=\{pollBusy\(poll\)\} compact \/>/);
+  assert.match(src("lib/usePoll.ts"), /const refresh = useCallback\(\(\) => flight\.current\.retry\(read, intervalRef\.current\), \[read\]\);/);
   const mk = src("lib/market.tsx");
-  assert.match(mk, /const retry = async \(\) => \{ await Promise\.all\(\[slow\.refresh\(\), fast\.refresh\(\)\]\); \};/, "the War Room retry joins both polls' reads: two clicks, six requests, not twelve");
-  assert.match(src("components/ThreadsPanel.tsx"), /retrying=\{busy\} onRetry=\{retry\}/);
+  assert.match(mk, /const retry = async \(\) => \{ await Promise\.all\(ALL_PATHS\.map\(refresh\)\); \};/, "the market retry joins each path's young read: two clicks, six requests, not twelve");
+  assert.match(src("components/ThreadsPanel.tsx"), /const failure = \(path: string\) => failed\[path\] \? <PollError poll=\{pollOf\(path\)\} \/> : null;/, "a tab's error box retries its own path");
 });
 
 test("PS15 a push after the last failed read is a good arrival; a failed read after the push still counts", () => {
   const failedRead = { error: "/api/conclusion/global 502", lastOk: now - 600_000, lastFail: now - 10_000, failures: 2 };
   assert.deepEqual(withPush(failedRead, now - 5_000), { error: null, lastOk: now - 5_000, lastFail: now - 10_000, failures: 0 });
-  assert.deepEqual(withPush(failedRead, now - 20_000), { ...failedRead, lastOk: now - 20_000 });
+  assert.equal(withPush(failedRead, now - 20_000), failedRead, "a push from before the failure changes nothing: no cleared error, no newer lastOk (re-review)");
+  assert.equal(withPush(failedRead, now - 10_000), failedRead, "nor one from the same instant");
   assert.equal(withPush(failedRead, null), failedRead);
 });
 
 test("PS16 item 1: the Decision Engine keeps its last decision on a failed read, and never says \"No decision yet.\" then", () => {
   const mk = src("lib/market.tsx");
-  assert.match(mk, /if \(!d\.failed\[GLOBAL_PATH\]\) setDecisionBody\(d\.decision\);/, "a failed read leaves the last decision in place");
-  assert.doesNotMatch(mk, /setDecisionBody\(d\.decision\); \}/, "the old unconditional replace blanked the card");
-  assert.match(mk, /for \(const c of TF_CHARTS\) if \(!d\.failed\[threadPath\(c\)\]\) got\[c\] = d\.threads\[c\];/, "the rooms too");
+  // Re-review: each route keeps its own last good answer (routeSettled: a failure never touches `data`, PS9).
+  const ps = readFileSync(new URL("../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts", import.meta.url), "utf8");
+  assert.match(ps, /if \(!r\.ok\) return \{ \.\.\.s, settled: id, error: r\.error, lastFail: r\.at, failures: s\.failures \+ 1 \};/, "a failed read leaves the last decision in place");
+  assert.doesNotMatch(mk, /setDecisionBody\(/, "the old batch replace is gone");
+  assert.match(mk, /const glob = route\(GLOBAL_PATH\)\.data as any;/, "the decision is its route's data; the rooms too");
   const gd = src("components/GlobalDecision.tsx");
   assert.match(gd, /const poll = pollOf\(GLOBAL_PATH\);/);
   assert.match(gd, /poll=\{poll\} staleOpen/, "the stale tag with its detail open: the age, the last good read, the route and code, Retry now");
@@ -277,4 +288,138 @@ test("PS19 item 5: the stale/live tag on Status, Shadow, Councils, Calendar and 
   const tp = src("components/ThreadsPanel.tsx");
   for (const p of ["<PollStrip poll={roomPoll} />", "<PollStrip poll={pollOf(NEWS_PATH)} />", "<PollStrip poll={pollOf(threadPath(tab))} />"]) assert.ok(tp.includes(p), p);
   assert.match(src("components/ui.tsx"), /export function PollStrip\(/);
+});
+
+// Re-review of #520: a push replay never clears a live failure; each route applies on its own; stale plan lines are
+// marked; Retry now is never stuck.
+
+test("PS20 MUST 1: the hub's replay of an old snapshot never clears a live REST failure or replaces newer data", () => {
+  // The push keeps its own time (the hub's `at`), never the time it reached the page.
+  const p = src("lib/push.ts");
+  assert.match(p, /const at = pushTime\(msg\.at, Date\.now\(\)\);\n\s+setSnap\(\(d\) => \(\{ \.\.\.d, \[msg\.topic\]: \{ data: msg\.data, at \} \}\)\);/);
+  assert.equal(pushTime("2026-11-22T13:00:00.000Z", now), Date.parse("2026-11-22T13:00:00Z"));
+  assert.equal(pushTime(null, now), null);
+  assert.equal(pushTime("not a date", now), null);
+  assert.equal(pushTime("2026-11-22T15:00:00Z", now), now, "a hub clock ahead never dates a snapshot in the future");
+  assert.equal(pushApplies(null, null), false, "a push with no time never applies");
+  assert.equal(pushApplies(now - 1, now), false, "older than the data on screen: kept off");
+  assert.equal(pushApplies(now, now), false, "the same snapshot again: kept off");
+  assert.equal(pushApplies(now + 1, now), true);
+  assert.equal(pushApplies(now - 86_400_000, null), true, "nothing on screen: shown (its own age marks it stale)");
+
+  // The reproduction: a good read at 13:52, the decision changes, /api/conclusion/global 502 at 13:57 (stale 5m,
+  // "502 · 1 failed"); the socket reconnects and the hub replays the 13:45 snapshot.
+  const sell = { engine: { stance: "SELL" } }, old = { engine: { stance: "BUY", old: true } };
+  let r = routeSettled(routeSent(emptyRoute), 1, { ok: true, data: sell, startedAt: now - 600_000, at: now - 599_000 });
+  r = routeSettled(routeSent(r), 2, { ok: false, error: "/api/conclusion/global 502", at: now - 300_000 });
+  const replay = routePushed(r, old, now - 1_020_000);
+  assert.equal(replay, r, "the replay is older than the data on screen: nothing changes");
+  assert.deepEqual(routeFacts(replay), { error: "/api/conclusion/global 502", lastOk: now - 599_000, lastFail: now - 300_000, failures: 1 });
+  assert.equal(isStale({ hasData: true, ...routeFacts(replay), intervalMs: 300_000 }, now), true, "the card stays stale");
+  // A snapshot newer than the data on screen but older than the failure: shown, and still stale.
+  const between = routePushed(r, old, now - 400_000);
+  assert.equal(between.data, old, "newer than the data on screen: shown");
+  assert.deepEqual(routeFacts(between), { error: "/api/conclusion/global 502", lastOk: now - 599_000, lastFail: now - 300_000, failures: 1 }, "but older than the failure: no cleared error, no newer lastOk");
+  // A real publish after the failure is a good arrival.
+  const fresh = routePushed(r, old, now - 5_000);
+  assert.deepEqual(routeFacts(fresh), { error: null, lastOk: now - 5_000, lastFail: now - 300_000, failures: 0 });
+  // Reconnect repeats: the same replay again and again never turns it live.
+  let again = r;
+  for (let i = 0; i < 5; i++) again = routePushed(again, old, now - 1_020_000);
+  assert.equal(routeFacts(again).error, "/api/conclusion/global 502");
+  // A read whose start is older than the push on screen refreshes lastOk but never puts its older body back.
+  const pushed = routePushed(routeSent(r), { engine: { stance: "BUY" } }, now - 5_000);
+  const lateRead = routeSettled(pushed, 3, { ok: true, data: sell, startedAt: now - 10_000, at: now - 1_000 });
+  assert.deepEqual([lateRead.data.engine.stance, lateRead.lastOk, lateRead.error], ["BUY", now - 1_000, null]);
+
+  const mk = src("lib/market.tsx");
+  assert.doesNotMatch(mk, /setPushAt\(|Date\.now\(\) \}\)\); \} \}, \[push\.data/, "no push stamped with the page's clock");
+  assert.match(mk, /routePushed\(route\(GLOBAL_PATH\), decisionSnap\.data, decisionSnap\.at\)/);
+  assert.match(mk, /routePushed\(route\(threadPath\(c\)\), threadsSnap\.data\?\.\[c\] \?\? null, threadsSnap\.at\)/);
+  const wr = src("lib/warroom.tsx");
+  assert.match(wr, /pushApplies\(snap\.at, s\.at\) \? \{ data: snap\.data, at: snap\.at, pushAt:/, "the War Room's 15m room too");
+  assert.doesNotMatch(wr, /setPushAt\(Date\.now\(\)\)/);
+  assert.match(src("pages/Omega.tsx"), /const pushed = push\.snap\["omega-overview"\]\?\.data;/, "Omega reads the same snapshot shape");
+});
+
+test("PS21 SHOULD 2: each route applies its own answer as it resolves; a hung sibling never holds the decision back", async () => {
+  // D1's thread read hangs; /api/conclusion/global answers BUY: the decision is BUY at once, and live.
+  let d1 = routeSent(emptyRoute);
+  let gl = routeSettled(routeSent(emptyRoute), 1, { ok: true, data: { engine: { stance: "SELL" } }, startedAt: now - 400_000, at: now - 399_000 });
+  for (let i = 2; i <= 7; i++) {
+    d1 = routeSent(d1);
+    gl = routeSettled(routeSent(gl), i, { ok: true, data: { engine: { stance: "BUY" } }, startedAt: now - 60_000 * (8 - i), at: now - 60_000 * (8 - i) + 500 });
+  }
+  assert.equal(gl.data.engine.stance, "BUY", "six good answers, applied as each came");
+  assert.equal(isStale({ hasData: true, ...routeFacts(gl), intervalMs: 60_000 }, now), false);
+  assert.equal(d1.settled, 0, "the hung read is D1's alone");
+  assert.equal(isStale({ hasData: true, ...routeFacts({ ...d1, data: {}, lastOk: now - 400_000 }), intervalMs: 60_000 }, now), true, "and D1 reads as stale");
+  // An overtaken read never undoes a newer answer.
+  const a = routeSent(routeSent(emptyRoute));
+  const newer = routeSettled(a, 2, { ok: true, data: "new", startedAt: now - 1_000, at: now });
+  assert.equal(routeSettled(newer, 1, { ok: true, data: "old", startedAt: now - 9_000, at: now + 1 }), newer);
+  assert.equal(routeSettled(newer, 1, { ok: false, error: "/api/x 502", at: now + 1 }), newer, "nor a late failure of an older read");
+  // lastOk is recorded only with that path's own answer.
+  const mk = src("lib/market.tsx");
+  assert.match(mk, /const settle = \(r: ReadOutcome\) => \{ routes\.current\[path\] = routeSettled\(route\(path\), id, r\); bump\(\); \};/, "each read settles its own path and renders");
+  assert.doesNotMatch(mk, /Promise\.all\(\[\n?\s*\.\.\.TF_CHARTS\.map/, "no batch that waits on the slowest read");
+  assert.match(mk, /useSchedule\(\(\) => \{ for \(const p of SLOW_PATHS\) void read\(p\); \}, slowMs\);/);
+  assert.match(mk, /busy: s\.sent > s\.settled, refresh: \(\) => refresh\(path\)/, "busy and refresh are the path's own");
+  assert.match(src("lib/usePoll.ts"), /export function useSchedule\(run: \(\) => void, intervalMs: number\)/);
+});
+
+test("PS22 SHOULD 3: the chart's plan lines and zones from a stale decision are dimmed and labelled, then dropped", () => {
+  const live = { hasData: true, error: null, lastOk: now - 30_000, intervalMs: 300_000 };
+  assert.deepEqual(planMark(live, now), { show: true, dim: false, suffix: "", note: null });
+  assert.deepEqual(planMark({ ...live, error: "/api/conclusion/global 502", lastOk: now - 3_600_000 }, now), { show: true, dim: true, suffix: " · stale 1h", note: null }, "Entry · stale 1h");
+  assert.deepEqual(planMark({ ...live, lastOk: now - 11 * 60_000 }, now), { show: true, dim: true, suffix: " · stale 11m", note: null }, "no good read for 2 × the interval");
+  assert.deepEqual(planMark({ ...live, error: "/api/conclusion/global 502", lastOk: now - PLAN_HIDE_MS }, now), { show: false, dim: true, suffix: "", note: "plan hidden: decision stale 2h" });
+  assert.equal(planMark({ ...live, error: "x", lastOk: null }, now).show, false, "of unknown age: hidden");
+  assert.equal(PLAN_HIDE_MS, 2 * 3_600_000);
+  const pc = src("components/PriceChart.tsx");
+  assert.match(pc, /const decisionPoll = pollOf\(GLOBAL_PATH\);/);
+  assert.match(pc, /title: title \+ mark\.suffix, color: mark\.dim \? rgba\(color, STALE_LINE_ALPHA\) : color,/, "each plan line dimmed and labelled");
+  assert.match(pc, /const p = showPlan && hasClearDecision && mark\.show \? strategy\?\.plan : null;/, "dropped past the threshold");
+  assert.match(pc, /const candidates: any\[\] = showZones && mark\.show \?/, "the zones too");
+  assert.match(pc, /\* \(mark\.dim \? 0\.5 : 1\)/);
+  assert.match(pc, /\{planHidden \? <div [^>]*>\{mark\.note\}<\/div> : null\}/, "the note on the chart");
+  assert.match(pc, /\}, \[strategy, showZones, showPlan, mark\.show, mark\.dim, mark\.suffix\]\);/, "redrawn when the mark changes");
+});
+
+test("PS23 SHOULD 4: Retry now is never stuck behind a hung read", async () => {
+  assert.equal(joinsInFlight(null, now, 60_000), false, "nothing in flight: read");
+  assert.equal(joinsInFlight(now - 59_999, now, 60_000), true, "a young read: joined");
+  assert.equal(joinsInFlight(now - 60_000, now, 60_000), false, "older than the interval: a new read");
+  assert.equal(joinsInFlight(now - RETRY_JOIN_MS + 1, now, 0), true, "a poll with no interval joins for RETRY_JOIN_MS");
+  assert.equal(joinsInFlight(now - RETRY_JOIN_MS, now, 0), false);
+  assert.equal(joinsInFlight(now + 5, now, 60_000), false, "a clock that moved back never joins");
+  let t = 0;
+  const f = singleFlight(() => t);
+  let n = 0;
+  const hang = () => { n++; return new Promise(() => {}); };
+  const first = f.retry(hang, 60_000);
+  assert.equal(f.retry(hang, 60_000), first, "a second click within the interval joins");
+  assert.equal(n, 1);
+  t = 60_000;
+  assert.notEqual(f.retry(hang, 60_000), first, "past the interval the hung read is not joined");
+  assert.equal(n, 2);
+  const u = src("components/ui.tsx");
+  const btn = u.slice(u.indexOf("export function RetryButton("), u.indexOf("/**\n * A failed read with nothing on screen"));
+  assert.doesNotMatch(btn, /busy \|\| running|disabled=\{off\}|disabled=\{busy/, "a read in flight elsewhere never disables it");
+  assert.match(btn, /t = window\.setTimeout\(end, RETRY_SPIN_MS\);/, "its own spin is capped");
+  assert.match(u, /export const RETRY_SPIN_MS = 10_000;/);
+  const mk = src("lib/market.tsx");
+  assert.match(mk, /return f && joinsInFlight\(f\.since, monotonic\(\), intervalOf\(path\)\) \? f\.p : read\(path\);/, "per path: a young read is joined, an old one is not");
+  assert.match(src("lib/api.ts"), /fetch\(path, \{ headers: \{ accept: "application\/json" \}, cache: "no-store" \}\)/, "no browser cache lock behind a hung read of the same URL");
+});
+
+test("PS24 nits: a backward clock jump, Key levels' read error, System issues' lane read", () => {
+  assert.equal(isStale({ ...base, lastOk: now + CLOCK_SLACK_MS }, now), false, "within the slack: live");
+  assert.equal(isStale({ ...base, lastOk: now + CLOCK_SLACK_MS + 1 }, now), true, "a last good read more than 60 s in the future: the clock moved back, stale");
+  assert.equal(CLOCK_SLACK_MS, 60_000);
+  const kl = src("components/KeyLevels.tsx");
+  assert.match(kl, /\{hasK \? <span>Zones<\/span> : readError \? <span className="[^"]*text-fault">\{readError\}<\/span> : <span>No zones<\/span>\}/, "the read error, not \"No zones\"");
+  const si = src("components/SystemIssues.tsx");
+  assert.match(si, /\["lane-read", "Pull adapter", lanePoll\]/, "a failed or stale /api/local-lane is listed");
+  assert.match(si, /const \{ items, poll, lanePoll \} = useSystemHealth\(\);/);
 });

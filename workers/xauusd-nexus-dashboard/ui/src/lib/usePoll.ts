@@ -14,7 +14,8 @@ import { STALE_TICK_MS, isStale, singleFlight, staleAt, staleChanged, staleWake 
  * the last read failed, or no good read for 2 × the interval). A failed refresh keeps the data as it was.
  *
  * Review of #520: `busy` is true while any read is in flight, and `refresh` (Retry now) joins the read in flight
- * instead of starting another. The stale verdict follows the wall clock after a sleep or a clock jump: the tab
+ * instead of starting another, but only while that read is younger than the interval (re-review: a hung read is
+ * never joined, so Retry now always gets a new read past it; joinsInFlight in lib/pollState.ts). The stale verdict follows the wall clock after a sleep or a clock jump: the tab
  * becoming visible re-evaluates it before the refresh, a coarse tick (STALE_TICK_MS) re-evaluates it while data is
  * on screen, and a stale timer that fires early (the clock moved back) is armed again (staleWake).
  */
@@ -29,6 +30,8 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const loadRef = useRef(load);
   loadRef.current = load;
+  const intervalRef = useRef(intervalMs);
+  intervalRef.current = intervalMs;
   const hasData = useRef(false);
   const seq = useRef(0);
   const pending = useRef(0);
@@ -53,8 +56,8 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   }, []);
   /** The poll's own reads (mount, deps, the interval, the tab coming back): always run; the newest one wins. */
   const start = useCallback(() => flight.current.start(read), [read]);
-  /** Retry now: joins the read in flight, so repeated clicks never start parallel reads. */
-  const refresh = useCallback(() => flight.current.retry(read), [read]);
+  /** Retry now: joins a read in flight younger than the interval (repeated clicks start no parallel reads), else reads. */
+  const refresh = useCallback(() => flight.current.retry(read, intervalRef.current), [read]);
 
   // The data: loaded on mount, and again (from empty) when the deps change.
   useEffect(() => {
@@ -112,6 +115,23 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs, busy };
 }
 
+/**
+ * Run `run` on mount, every `intervalMs` while the tab is visible (0 = once) and at once when the tab becomes visible
+ * again: usePoll's cadence without its state, for a provider that keeps each route's state itself (lib/market.tsx).
+ */
+export function useSchedule(run: () => void, intervalMs: number) {
+  const runRef = useRef(run);
+  runRef.current = run;
+  useEffect(() => { runRef.current(); }, []);
+  useEffect(() => {
+    if (!intervalMs) return;
+    const t = window.setInterval(() => { if (document.visibilityState === "visible") runRef.current(); }, intervalMs);
+    const onVisible = () => { if (document.visibilityState === "visible") runRef.current(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+  }, [intervalMs]);
+}
+
 /** What a panel needs of a poll to show its state (components/ui.tsx Panel, PollBody, PollError). */
 export type Poll = {
   data: unknown;
@@ -123,6 +143,6 @@ export type Poll = {
   failures: number;
   stale: boolean;
   intervalMs: number;
-  /** A read is in flight (Retry now is disabled meanwhile). */
+  /** The poll's own read is in flight (informational: Retry now is disabled only while its own click runs). */
   busy?: boolean;
 };

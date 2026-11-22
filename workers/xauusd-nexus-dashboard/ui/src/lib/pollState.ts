@@ -8,7 +8,8 @@
  * - live: the last read was good.
  * An empty answer is the page's own call (`empty` on PollBody): a good read with nothing to draw.
  *
- * The API carries no generated_at, so every age is the browser clock's time since the last good read.
+ * The API carries no generated_at, so every age is the browser clock's time since the last good read; a pushed
+ * snapshot counts from its own `at` (the hub's publish time), never from when it reached the page.
  */
 export type PollFacts = {
   hasData: boolean;
@@ -25,10 +26,21 @@ export type PollFacts = {
 
 export type PollPhase = "loading" | "error" | "stale" | "live" | "idle";
 
-/** Data on screen AND (the last read failed OR no good read for 2 × the interval). An interval of 0 never ages. */
+/**
+ * How far ahead of the browser clock a last good read may sit before it is not believed (ms): a clock moved back by
+ * more than this left the read "in the future", and a hung read would read as live for the size of the jump
+ * (re-review of #520).
+ */
+export const CLOCK_SLACK_MS = 60_000;
+
+/**
+ * Data on screen AND (the last read failed OR no good read for 2 × the interval OR the last good read is more than
+ * CLOCK_SLACK_MS in the future: the clock moved back). An interval of 0 never ages.
+ */
 export function isStale(f: Pick<PollFacts, "hasData" | "error" | "lastOk" | "intervalMs">, now: number): boolean {
   if (!f.hasData) return false;
   if (f.error != null) return true;
+  if (f.lastOk != null && f.lastOk > now + CLOCK_SLACK_MS) return true;
   return f.intervalMs > 0 && f.lastOk != null && now - f.lastOk > 2 * f.intervalMs;
 }
 
@@ -117,22 +129,44 @@ export function staleChanged(shown: boolean, f: Pick<PollFacts, "hasData" | "err
   return isStale(f, now) !== shown;
 }
 
+/** A manual retry joins a read in flight only while it is younger than this, when the poll has no interval (ms). */
+export const RETRY_JOIN_MS = 30_000;
+
 /**
- * One read at a time for a manual retry (review of #520): while a read is in flight, `retry` joins it instead of
- * starting another, so repeated clicks on Retry now never start parallel reads. `start` (the poll's own timer, a
- * deps change) always runs; the newest read is the one tracked.
+ * Whether Retry now joins the read in flight (started at `since`, on a monotonic clock) rather than start another
+ * (re-review of #520): only while it is younger than the poll's interval (RETRY_JOIN_MS without one). An older read
+ * is the hung one that made the panel stale: a click must start a new read, never wait on it.
  */
-export function singleFlight() {
+export function joinsInFlight(since: number | null, now: number, intervalMs: number): boolean {
+  if (since == null) return false;
+  const limit = intervalMs > 0 ? intervalMs : RETRY_JOIN_MS;
+  return now >= since && now - since < limit;
+}
+
+/** A monotonic clock (ms) for the ages of reads in flight: a wall-clock jump never makes a hung read young. */
+export const monotonic = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+/**
+ * One read at a time for a manual retry (review of #520): while a young read is in flight, `retry` joins it instead
+ * of starting another, so repeated clicks on Retry now never start parallel reads; a read older than `intervalMs`
+ * (joinsInFlight) is not joined, so a hung read never blocks the retry. `start` (the poll's own timer, a deps
+ * change) always runs; the newest read is the one tracked.
+ */
+export function singleFlight(clock: () => number = monotonic) {
   let current: Promise<unknown> | null = null;
+  let since: number | null = null;
   const track = <T>(p: Promise<T>): Promise<T> => {
     current = p;
-    const done = () => { if (current === p) current = null; };
+    since = clock();
+    const done = () => { if (current === p) { current = null; since = null; } };
     p.then(done, done);
     return p;
   };
   return {
     start<T>(load: () => Promise<T>): Promise<T> { return track(load()); },
-    retry<T>(load: () => Promise<T>): Promise<T> { return current != null ? (current as Promise<T>) : track(load()); },
+    retry<T>(load: () => Promise<T>, intervalMs = 0): Promise<T> {
+      return current != null && joinsInFlight(since, clock(), intervalMs) ? (current as Promise<T>) : track(load());
+    },
     get busy() { return current != null; },
   };
 }
@@ -140,11 +174,107 @@ export function singleFlight() {
 /**
  * A read that a push can also deliver (the War Room's rooms and decision, ADR-0015): the newest arrival wins. A push
  * after the last failed read is a good arrival, so the panel is live again; a failed read after the push still
- * counts. `pushAt` is when the push last delivered (ms), null before one.
+ * counts, and a push from before it changes nothing (neither the error nor lastOk). `pushAt` is the own time (`at`, when the hub published it) of the last push that was applied
+ * (pushApplies), null before one: never the time it reached the page, so a replayed old snapshot never clears a
+ * failure that came after it (re-review of #520).
  */
 export function withPush<F extends Pick<PollFacts, "error" | "lastOk" | "lastFail" | "failures">>(f: F, pushAt: number | null): F {
   if (pushAt == null) return f;
-  const lastOk = f.lastOk == null ? pushAt : Math.max(f.lastOk, pushAt);
-  const failedSince = f.error != null && f.lastFail != null && f.lastFail > pushAt;
-  return { ...f, lastOk, error: failedSince ? f.error : null, failures: failedSince ? f.failures : 0 };
+  // A push from before (or at) the last failed read changes nothing: no cleared error, no newer lastOk.
+  if (f.lastFail != null && pushAt <= f.lastFail) return f;
+  return { ...f, lastOk: f.lastOk == null ? pushAt : Math.max(f.lastOk, pushAt), error: null, failures: 0 };
+}
+
+/**
+ * The own time of a pushed snapshot (ms) from its `at` (the hub's publish time, ISO): null when missing or not a
+ * date; never later than the browser's `now` (a hub clock ahead of the browser must not date a snapshot in the
+ * future, where it would win over every read).
+ */
+export function pushTime(at: unknown, now: number): number | null {
+  const t = typeof at === "string" ? Date.parse(at) : typeof at === "number" ? at : NaN;
+  return Number.isFinite(t) ? Math.min(t, now) : null;
+}
+
+/**
+ * Whether a pushed snapshot replaces the data on screen (re-review of #520): only when its own time is newer than
+ * that data's (`shownAt`: a read's start, or the push it came from). The hub replays each topic's stored snapshot on
+ * every connect, so after a reload, a wake or a deploy an old snapshot arrives again: it must not replace newer data
+ * or count as a good arrival. A push without a time never applies.
+ */
+export function pushApplies(at: number | null, shownAt: number | null): boolean {
+  if (at == null) return false;
+  return shownAt == null || at > shownAt;
+}
+
+/**
+ * One route's reads and pushes (lib/market.tsx, re-review of #520): each route applies its own answer as it
+ * resolves, so a hung sibling read never holds a good answer back.
+ * - `data`: the last good answer (or applied push), null before one; a failed read never touches it.
+ * - `shownAt`: how new that data is (ms): the start of the read that brought it, or the push's own `at`.
+ * - `pushAt`: the own `at` of the last applied push (withPush).
+ * - `sent`, `settled`: the newest read started and the newest settled (their ids). A read that settles after a newer
+ *   one has is dropped; `sent > settled` is the route's own read in flight.
+ */
+export type RouteState = {
+  data: unknown;
+  shownAt: number | null;
+  lastOk: number | null;
+  lastFail: number | null;
+  error: string | null;
+  failures: number;
+  pushAt: number | null;
+  sent: number;
+  settled: number;
+};
+
+export const emptyRoute: RouteState = { data: null, shownAt: null, lastOk: null, lastFail: null, error: null, failures: 0, pushAt: null, sent: 0, settled: 0 };
+
+/** A read of the route starts: its id is `sent` of the result. */
+export function routeSent(s: RouteState): RouteState {
+  return { ...s, sent: s.sent + 1 };
+}
+
+/** What a read brought: its answer, or its error; `startedAt` and `at` are the wall-clock times it started and ended. */
+export type ReadOutcome = { ok: true; data: unknown; startedAt: number; at: number } | { ok: false; error: string; at: number };
+
+/**
+ * A read of the route settled. Dropped when a newer read has settled already (an overtaken read never undoes a
+ * newer answer). A good answer clears the error and refreshes lastOk; its data replaces what is on screen unless a
+ * push newer than the read's start is there. A failed read records the failure and keeps the data as it was: it
+ * never becomes null data.
+ */
+export function routeSettled(s: RouteState, id: number, r: ReadOutcome): RouteState {
+  if (id <= s.settled) return s;
+  if (!r.ok) return { ...s, settled: id, error: r.error, lastFail: r.at, failures: s.failures + 1 };
+  const fresher = s.shownAt == null || r.startedAt >= s.shownAt;
+  return {
+    ...s, settled: id, error: null, failures: 0, lastOk: r.at,
+    ...(fresher ? { data: r.data, shownAt: r.startedAt } : {}),
+  };
+}
+
+/** A push of the route: applied only when newer than the data on screen (pushApplies); else nothing changes. */
+export function routePushed(s: RouteState, data: unknown, at: number | null): RouteState {
+  if (data == null || !pushApplies(at, s.shownAt)) return s;
+  return { ...s, data, shownAt: at, pushAt: s.pushAt == null ? at : Math.max(s.pushAt, at as number) };
+}
+
+/** The route's facts as a poll shows them: its own reads with an applied push counted as a good arrival. */
+export function routeFacts(s: RouteState): Pick<PollFacts, "error" | "lastOk" | "lastFail" | "failures"> {
+  return withPush({ error: s.error, lastOk: s.lastOk, lastFail: s.lastFail, failures: s.failures }, s.pushAt);
+}
+
+/** How long a stale decision's plan lines stay on the chart, dimmed and labelled, before they are dropped (ms). */
+export const PLAN_HIDE_MS = 2 * 3_600_000;
+
+/**
+ * How the chart draws the plan of the global decision (Entry, Stop, SL+, TP and the zones; re-review of #520), from
+ * that read's poll facts: at full strength while live; dimmed with " · stale 1h" on each title while stale; dropped,
+ * with a small note, once the decision is older than PLAN_HIDE_MS (or of unknown age).
+ */
+export function planMark(f: Pick<PollFacts, "hasData" | "error" | "lastOk" | "intervalMs">, now: number): { show: boolean; dim: boolean; suffix: string; note: string | null } {
+  if (!isStale(f, now)) return { show: true, dim: false, suffix: "", note: null };
+  const age = f.lastOk == null ? null : now - f.lastOk;
+  if (age == null || age >= PLAN_HIDE_MS) return { show: false, dim: true, suffix: "", note: `plan hidden: decision stale${age == null ? "" : ` ${shortAge(age)}`}` };
+  return { show: true, dim: true, suffix: age < 0 ? " · stale" : ` · stale ${shortAge(age)}`, note: null };
 }

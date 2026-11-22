@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { get } from "./api";
 import { usePoll, type Poll } from "./usePoll";
 import { usePush } from "./push";
-import { isStale, withPush } from "./pollState";
+import { isStale, pushApplies, withPush } from "./pollState";
 
 export type Room = any;
 /**
@@ -30,11 +30,19 @@ export function WarRoomProvider({ children }: { children: ReactNode }) {
   const push = usePush<any>("war-room");
   const war = usePoll(() => get(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS);
   const dec = usePoll(() => get("/api/decisions?limit=1"), 60_000);
-  const [latest, setLatest] = useState<any>(null);
-  useEffect(() => { if (war.data) setLatest(war.data); }, [war.data]);
-  const [pushAt, setPushAt] = useState<number | null>(null);
-  useEffect(() => { if (push.data) { setLatest(push.data); setPushAt(Date.now()); } }, [push.data]);
-  const f = withPush({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failures: war.failures }, pushAt);
+  // The room on screen and how new it is (`at`: a read's answer time, or a push's own `at`), and the own `at` of the
+  // last push applied. Re-review of #520: a push applies only when newer than the room on screen, and counts as a good
+  // arrival only when newer than the last failed read (withPush), so the hub's replay of an old snapshot on reconnect
+  // never replaces a newer room or clears a live failure.
+  const [shown, setShown] = useState<{ data: any; at: number | null; pushAt: number | null }>({ data: null, at: null, pushAt: null });
+  useEffect(() => { if (war.data) setShown((s) => ({ ...s, data: war.data, at: war.lastOk })); }, [war.data]);
+  useEffect(() => {
+    const snap = push.snap;
+    if (!snap?.data) return;
+    setShown((s) => (pushApplies(snap.at, s.at) ? { data: snap.data, at: snap.at, pushAt: Math.max(s.pushAt ?? -Infinity, snap.at as number) } : s));
+  }, [push.snap]);
+  const latest = shown.data;
+  const f = withPush({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failures: war.failures }, shown.pushAt);
   const poll: Poll = {
     ...war, ...f, data: latest,
     loading: !latest && war.loading,

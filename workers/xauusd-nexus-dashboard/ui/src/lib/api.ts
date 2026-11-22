@@ -36,7 +36,9 @@ export function errorText(e: unknown): string {
 export async function get<T = any>(path: string): Promise<T> {
   let r: Response;
   try {
-    r = await fetch(path, { headers: { accept: "application/json" } });
+    // No HTTP cache (re-review of #520): the browser holds a second GET of a URL behind one in flight (its cache
+    // lock, up to ~20 s), so Retry now past a hung read would wait on it; a poll wants the answer of now anyway.
+    r = await fetch(path, { headers: { accept: "application/json" }, cache: "no-store" });
   } catch {
     throw new ApiError(path, 0, null);
   }

@@ -1,8 +1,8 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useReducer, useRef, type ReactNode } from "react";
 import { errorText, get } from "./api";
-import { usePoll, type Poll } from "./usePoll";
+import { useSchedule, type Poll } from "./usePoll";
 import { usePushMany } from "./push";
-import { isStale, withPush } from "./pollState";
+import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, monotonic, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
 
 /** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
 const POLL_LIVE_MS = 300_000;
@@ -25,6 +25,7 @@ type Ctx = {
   /** The live Decision Engine setups with their locked levels and lifecycle (the ledger's rows). */
   setups: any[];
   loading: boolean;
+  /** The first failed route's error (see `failed`), null when none failed. */
   error: string | null;
   /**
    * The reads that failed on their latest try, by path (e.g. "/api/news/daily" → "/api/news/daily 502"): each read
@@ -37,12 +38,13 @@ type Ctx = {
   intervalOf: (path: string) => number;
   /**
    * One read as a poll (review of #520): the last good answer of that path (a failed read keeps it on screen), its
-   * error, times and failures, so a panel shows it with the shared tag, error box and Retry now.
+   * error, times and failures, so a panel shows it with the shared tag, error box and Retry now. Its `busy` and
+   * `refresh` are that path's own (re-review): Retry now reads that path again, past a hung read of it.
    */
   pollOf: (path: string) => Poll;
-  /** A read is in flight. */
+  /** A read of some path is in flight. */
   busy: boolean;
-  /** Read everything again now (joins the reads in flight: repeated clicks start no parallel reads). */
+  /** Read every path again now (each joins its own young read in flight: repeated clicks start no parallel reads). */
   retry: () => Promise<void>;
 };
 const idlePoll: Poll = { data: null, error: null, loading: true, refresh: () => {}, lastOk: null, lastFail: null, failures: 0, stale: false, intervalMs: 0 };
@@ -54,9 +56,18 @@ export const M5_PATH = "/api/m5-context";
 export const GLOBAL_PATH = "/api/conclusion/global";
 export const threadPath = (c: TfChart) => `/api/threads/timeframe?chart=${c}`;
 
-/** What is known of one path's reads (ms, the browser clock). */
-type PathFacts = { lastOk: number | null; lastFail: number | null; error: string | null; failures: number };
-const noFacts: PathFacts = { lastOk: null, lastFail: null, error: null, failures: 0 };
+/** The pushed reads (the rooms and the decision, ADR-0015), every 60 s or 5 minutes; the others every 60 s. */
+const SLOW_PATHS = [...TF_CHARTS.map(threadPath), GLOBAL_PATH];
+const FAST_PATHS = [NEWS_PATH, M5_PATH];
+const ALL_PATHS = [...SLOW_PATHS, ...FAST_PATHS];
+
+/** What a panel shows of a route's body: News Daily's `daily`, the 5m `context`, a room's `thread`, the decision whole. */
+function shownOf(path: string, body: any): unknown {
+  if (path === GLOBAL_PATH) return body ?? null;
+  if (path === NEWS_PATH) return body?.daily ?? null;
+  if (path === M5_PATH) return body?.context ?? null;
+  return body?.thread ?? null;
+}
 
 /**
  * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion (the rooms and the conclusion pushed
@@ -65,97 +76,114 @@ const noFacts: PathFacts = { lastOk: null, lastFail: null, error: null, failures
  *
  * Review of #520: a failed read keeps that path's last good answer on screen (it used to blank the Decision Engine
  * card on a later 502), and each path has its own facts, so `pollOf(path)` marks it stale or shows its error.
+ *
+ * Re-review of #520 (lib/pollState.ts RouteState):
+ * - each path applies its own answer as it resolves, and records lastOk only then: a hung sibling read (D1's room)
+ *   no longer holds the decision back while it reads as live;
+ * - a push applies only when its own `at` (the hub's publish time) is newer than the data on screen, and counts as a
+ *   good arrival only when newer than the last failed read: the hub's replay of an old snapshot on reconnect never
+ *   clears a live failure or replaces newer data;
+ * - `busy` and Retry now are per path, and Retry now never waits on a read older than the path's interval.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
   // stays every 60 s until the hub has delivered both, then runs every 5 minutes as a fallback.
   const push = usePushMany(["threads", "decision"]);
-  // Each read keeps its own catch (one failure never blanks the others) and records what failed and when.
-  const facts = useRef<Record<string, PathFacts>>({});
-  const read = (path: string, failed: Record<string, string>) =>
-    get(path).then((v) => {
-      facts.current[path] = { lastOk: Date.now(), lastFail: facts.current[path]?.lastFail ?? null, error: null, failures: 0 };
-      return v;
-    }, (e) => {
-      const was = facts.current[path] ?? noFacts;
-      failed[path] = errorText(e);
-      facts.current[path] = { ...was, lastFail: Date.now(), error: failed[path], failures: was.failures + 1 };
-      return null;
-    });
+  const routes = useRef<Record<string, RouteState>>({});
+  const flights = useRef<Record<string, { since: number; p: Promise<void> }>>({});
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const route = (path: string): RouteState => routes.current[path] ?? emptyRoute;
   const slowMs = push.live ? POLL_LIVE_MS : POLL_MS;
-  const slow = usePoll(async () => {
-    const failed: Record<string, string> = {};
-    const [d1, h4, h1, glob] = await Promise.all([
-      ...TF_CHARTS.map((c) => read(threadPath(c), failed)),
-      read(GLOBAL_PATH, failed),
-    ]);
-    return { threads: { D1: d1, H4: h4, H1: h1 }, decision: glob, failed };
-  }, slowMs);
-  // News Daily and the 5m context are not pushed yet: every 60 s, as before.
-  const fast = usePoll(async () => {
-    const failed: Record<string, string> = {};
-    const [news, m5] = await Promise.all([read(NEWS_PATH, failed), read(M5_PATH, failed)]);
-    return { news: news?.daily ?? null, m5: m5?.context ?? null, failed };
-  }, POLL_MS);
-  // The newest arrival of each, read or pushed, is shown; a failed read leaves the last good one in place.
-  const [threadsBody, setThreadsBody] = useState<Partial<Record<TfChart, any>>>({});
-  const [decisionBody, setDecisionBody] = useState<any>(null);
-  const [fastBody, setFastBody] = useState<{ news: any; m5: any } | null>(null);
-  const [pushAt, setPushAt] = useState<{ threads: number | null; decision: number | null }>({ threads: null, decision: null });
-  useEffect(() => {
-    const d = slow.data as any;
-    if (!d) return;
-    const got: Partial<Record<TfChart, any>> = {};
-    for (const c of TF_CHARTS) if (!d.failed[threadPath(c)]) got[c] = d.threads[c];
-    if (Object.keys(got).length) setThreadsBody((prev) => ({ ...prev, ...got }));
-    if (!d.failed[GLOBAL_PATH]) setDecisionBody(d.decision);
-  }, [slow.data]);
-  useEffect(() => {
-    const d = fast.data as any;
-    if (!d) return;
-    setFastBody((prev) => ({ news: d.failed[NEWS_PATH] ? prev?.news ?? null : d.news, m5: d.failed[M5_PATH] ? prev?.m5 ?? null : d.m5 }));
-  }, [fast.data]);
-  useEffect(() => { if (push.data.threads) { setThreadsBody((prev) => ({ ...prev, ...push.data.threads })); setPushAt((p) => ({ ...p, threads: Date.now() })); } }, [push.data.threads]);
-  useEffect(() => { if (push.data.decision) { setDecisionBody(push.data.decision); setPushAt((p) => ({ ...p, decision: Date.now() })); } }, [push.data.decision]);
-  const glob = decisionBody;
-  const busy = !!(slow.busy || fast.busy);
-  const retry = async () => { await Promise.all([slow.refresh(), fast.refresh()]); };
-  const intervalOf = (path: string) => (path === NEWS_PATH || path === M5_PATH ? POLL_MS : slowMs);
-  const dataOf = (path: string): unknown => {
-    if (path === GLOBAL_PATH) return glob;
-    if (path === NEWS_PATH) return fastBody?.news ?? null;
-    if (path === M5_PATH) return fastBody?.m5 ?? null;
-    const c = TF_CHARTS.find((x) => threadPath(x) === path);
-    return c ? threadsBody[c]?.thread ?? null : null;
+  const intervalOf = (path: string) => (FAST_PATHS.includes(path) ? POLL_MS : slowMs);
+
+  // One read of one path: its own catch, its own settle. A failed read records what failed and when and keeps the
+  // data as it was (routeSettled never sets it to null); a read overtaken by a newer settled one is dropped.
+  const read = (path: string): Promise<void> => {
+    const sent = routeSent(route(path));
+    routes.current[path] = sent;
+    const id = sent.sent;
+    const startedAt = Date.now();
+    const settle = (r: ReadOutcome) => { routes.current[path] = routeSettled(route(path), id, r); bump(); };
+    const p = get(path).then(
+      (data) => settle({ ok: true, data, startedAt, at: Date.now() }),
+      (e) => settle({ ok: false, error: errorText(e), at: Date.now() }),
+    );
+    flights.current[path] = { since: monotonic(), p };
+    void p.then(() => { if (flights.current[path]?.p === p) delete flights.current[path]; });
+    bump();
+    return p;
   };
+  /** Retry now for one path: joins its read in flight while younger than its interval, else reads again. */
+  const refresh = (path: string): Promise<void> => {
+    const f = flights.current[path];
+    return f && joinsInFlight(f.since, monotonic(), intervalOf(path)) ? f.p : read(path);
+  };
+  const retry = async () => { await Promise.all(ALL_PATHS.map(refresh)); };
+
+  // The stale verdicts follow the clock: a coarse tick (and the tab coming back) renders when one of them changed.
+  const staleOf = (path: string, t: number) => {
+    const f = routeFacts(route(path));
+    return isStale({ hasData: shownOf(path, route(path).data) != null, error: f.error, lastOk: f.lastOk, intervalMs: intervalOf(path) }, t);
+  };
+  const staleSig = (t: number) => ALL_PATHS.map((p) => (staleOf(p, t) ? "1" : "0")).join("");
+  const now = Date.now();
+  const sig = useRef({ shown: "", of: staleSig });
+  sig.current = { shown: staleSig(now), of: staleSig };
+  useEffect(() => {
+    const check = () => { if (sig.current.of(Date.now()) !== sig.current.shown) bump(); };
+    const t = window.setInterval(check, STALE_TICK_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
+  useSchedule(() => { for (const p of SLOW_PATHS) void read(p); }, slowMs);
+  // News Daily and the 5m context are not pushed yet: every 60 s, as before.
+  useSchedule(() => { for (const p of FAST_PATHS) void read(p); }, POLL_MS);
+
+  // A push: each room and the decision, by its own `at` (routePushed).
+  const threadsSnap = push.snap.threads ?? null;
+  const decisionSnap = push.snap.decision ?? null;
+  useEffect(() => {
+    if (!threadsSnap) return;
+    for (const c of TF_CHARTS) routes.current[threadPath(c)] = routePushed(route(threadPath(c)), threadsSnap.data?.[c] ?? null, threadsSnap.at);
+    bump();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadsSnap]);
+  useEffect(() => {
+    if (!decisionSnap) return;
+    routes.current[GLOBAL_PATH] = routePushed(route(GLOBAL_PATH), decisionSnap.data, decisionSnap.at);
+    bump();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisionSnap]);
+
   const pollOf = (path: string): Poll => {
-    const own = facts.current[path] ?? noFacts;
-    const pushed = path === GLOBAL_PATH ? pushAt.decision : path.startsWith("/api/threads/timeframe") ? pushAt.threads : null;
-    const f = withPush(own, pushed);
-    const data = dataOf(path);
+    const s = route(path);
+    const f = routeFacts(s);
+    const data = shownOf(path, s.data);
     const intervalMs = intervalOf(path);
-    const isFast = path === NEWS_PATH || path === M5_PATH;
-    const p = isFast ? fast : slow;
     return {
       data, error: f.error, lastOk: f.lastOk, lastFail: f.lastFail, failures: f.failures, intervalMs,
-      loading: p.loading && data == null, busy, refresh: retry,
-      stale: isStale({ hasData: data != null, error: f.error, lastOk: f.lastOk, intervalMs }, Date.now()),
+      loading: data == null && s.settled === 0, busy: s.sent > s.settled, refresh: () => refresh(path),
+      stale: isStale({ hasData: data != null, error: f.error, lastOk: f.lastOk, intervalMs }, now),
     };
   };
   const failed: Record<string, string> = {};
   const okAt: Record<string, number> = {};
-  for (const [path, f] of Object.entries(facts.current)) {
+  for (const path of ALL_PATHS) {
+    const f = routeFacts(route(path));
     if (f.error) failed[path] = f.error;
     if (f.lastOk != null) okAt[path] = f.lastOk;
   }
-  const f = fastBody;
+  const firstLoad = (paths: string[]) => paths.every((p) => shownOf(p, route(p).data) == null) && paths.some((p) => route(p).settled === 0);
+  const glob = route(GLOBAL_PATH).data as any;
   const value: Ctx = {
-    threads: { D1: threadsBody.D1?.thread ?? null, H4: threadsBody.H4?.thread ?? null, H1: threadsBody.H1?.thread ?? null },
-    news: f?.news ?? null, m5: f?.m5 ?? null,
+    threads: { D1: shownOf(threadPath("D1"), route(threadPath("D1")).data), H4: shownOf(threadPath("H4"), route(threadPath("H4")).data), H1: shownOf(threadPath("H1"), route(threadPath("H1")).data) },
+    news: shownOf(NEWS_PATH, route(NEWS_PATH).data), m5: shownOf(M5_PATH, route(M5_PATH).data),
     global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null, engine: glob?.engine ?? null, setups: Array.isArray(glob?.setups) ? glob.setups : [],
-    loading: (slow.loading && !Object.keys(threadsBody).length && !decisionBody) || (fast.loading && !f),
-    error: slow.error ?? fast.error,
-    failed, okAt, intervalOf, pollOf, busy, retry,
+    loading: firstLoad(SLOW_PATHS) || firstLoad(FAST_PATHS),
+    error: Object.values(failed)[0] ?? null,
+    failed, okAt, intervalOf, pollOf, busy: ALL_PATHS.some((p) => route(p).sent > route(p).settled), retry,
   };
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }

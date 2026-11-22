@@ -1,4 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { pushTime } from "./pollState";
+
+/**
+ * One topic's latest snapshot: its body and its own time (`at`: when the hub published it, ms; null when the message
+ * had none). Re-review of #520: the hub replays each topic's stored snapshot on every connect, so the time a snapshot
+ * reached the page says nothing about how new it is; a page compares `at` (pushApplies in lib/pollState.ts).
+ */
+export type Snapshot<T = any> = { data: T; at: number | null };
 
 /**
  * The push hub's snapshots of some topics (ADR-0015 phase 1, GET /api/stream on this origin, or Omega's
@@ -6,11 +14,12 @@ import { useEffect, useRef, useState } from "react";
  * the latest snapshot of each topic the hub holds as soon as the socket opens, then each new one as its cell
  * publishes it. The socket reconnects with a growing pause (up to a minute) and sends "ping" every 30 seconds,
  * which the hub answers without waking. `live` is true once every topic has delivered a snapshot on the open
- * socket: the page may then poll rarely.
+ * socket: the page may then poll rarely. `snap` holds each topic's latest snapshot with its own time (Snapshot), a
+ * new object per message, so a replay of the same body is still an arrival the page judges by its `at`.
  */
 export function usePushMany(topics: string[], path = "/api/stream") {
   const key = topics.join(",");
-  const [data, setData] = useState<Record<string, any>>({});
+  const [snap, setSnap] = useState<Record<string, Snapshot>>({});
   const [live, setLive] = useState(false);
   const stop = useRef(false);
 
@@ -36,7 +45,8 @@ export function usePushMany(topics: string[], path = "/api/stream") {
         try {
           const msg = JSON.parse(String(ev.data));
           if (msg?.type === "snapshot" && wanted.includes(msg.topic) && msg.data) {
-            setData((d) => ({ ...d, [msg.topic]: msg.data }));
+            const at = pushTime(msg.at, Date.now());
+            setSnap((d) => ({ ...d, [msg.topic]: { data: msg.data, at } }));
             seen.add(msg.topic);
             if (seen.size === wanted.length) setLive(true);
           }
@@ -54,11 +64,11 @@ export function usePushMany(topics: string[], path = "/api/stream") {
     return () => { stop.current = true; window.clearInterval(ping); window.clearTimeout(timer); try { ws?.close(); } catch { /* closed */ } };
   }, [key, path]);
 
-  return { data, live };
+  return { snap, live };
 }
 
-/** One topic's snapshots (the War Room's). */
+/** One topic's snapshots (the War Room's): the latest with its own time, or null before one. */
 export function usePush<T = unknown>(topic: string) {
-  const { data, live } = usePushMany([topic]);
-  return { data: (data[topic] ?? null) as T | null, live };
+  const { snap, live } = usePushMany([topic]);
+  return { snap: (snap[topic] ?? null) as Snapshot<T> | null, live };
 }
