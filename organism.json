@@ -166,6 +166,15 @@
           "voter": false
         },
         {
+          "id": "nexus-teacher",
+          "display_name": "Nexus Teacher",
+          "capabilities": [
+            "corrections.record"
+          ],
+          "tier_max": 1,
+          "voter": false
+        },
+        {
           "id": "hud-decision-matrix",
           "display_name": "Decision Matrix",
           "capabilities": [
