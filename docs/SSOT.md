@@ -1,6 +1,6 @@
 # SSOT — XAUUSD AI Trading Assistant (canonical, current state)
 
-This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-07. Change log: docs/CHANGELOG.md.
+This is the single source of truth for the system's topology, ownership and deployment. If any other document disagrees with this one, this one wins and the other document is historical. Last reconciled: 2026-11-22 (the README's document index and status lines; each section carries the date of its own owner decision). Change log: docs/CHANGELOG.md. `AGENTS.md` binds every agent on every machine: cloud sessions, local checkouts and the owner's trading VPS.
 
 ## 1. Production topology: exactly five Workers
 | Worker | Source | Deployed by (only on push to `main`) | Role |
