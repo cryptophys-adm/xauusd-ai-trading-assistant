@@ -42,7 +42,7 @@
 //|     manually on a chart profile when OMEGA_TAKE_STARTUP=false.   |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.21"
+#property version   "1.22"
 
 #include <Trade/Trade.mqh>
 
@@ -85,7 +85,7 @@ input bool   DynamicAtrStopEnabled  = true;  // Adaptive ATR-based SL+ and Trail
 input double AtrMultiplierTrigger   = 1.0;   // Break-even trigger multiplier of ATR (1.0 = 1x ATR)
 input double AtrMultiplierTrailing  = 1.5;   // Trailing distance multiplier of ATR (1.5 = 1.5x ATR)
 
-const string OMEGA_EXECUTOR_VERSION = "1.21"; // keep equal to #property version
+const string OMEGA_EXECUTOR_VERSION = "1.22"; // keep equal to #property version
 const string OMEGA_FOLDER    = "omega";
 const string STATE_TMP_PATH  = "omega/state.tmp";
 const string STATE_JSON_PATH = "omega/state.json";
@@ -719,7 +719,9 @@ void AppendResult(const string id, const bool ok, const ulong ticket, const stri
    if(h == INVALID_HANDLE) return;
    FileSeek(h, 0, SEEK_END);
    string ticketField = ticket > 0 ? StringFormat("%I64u", ticket) : "";
-   string errField = ok ? "" : CleanCsvField(errorMsg);
+   // 1.22: this EA's own deletions (ea:del:<ticket>) carry their reason (expired, max_life, dead_man) even when ok; every
+   // other ok result keeps an empty field, as before.
+   string errField = (!ok || StringFind(id, "ea:del:") == 0) ? CleanCsvField(errorMsg) : "";
    string line = "";
    if(fillPrice > 0.0)
       line = StringFormat("%s;%d;%s;%s;%I64d;%.2f;%.1f\n", id, ok ? 1 : 0, ticketField, errField, executedMs, fillPrice, slippagePts);

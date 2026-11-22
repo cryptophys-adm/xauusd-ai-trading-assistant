@@ -183,7 +183,7 @@ All fact names below pass the platform's prohibited filter `/trad(e|ing)\b|order
   archive, under the account_ref of the connection that stored it. With `CORPUS_ORACLE_MODE = "shadow"` in production
   that is up to 14 days.
 - **A deeper backfill needs the EA and the bridge (optional stage 2b).** The bridge sends only bars after the server's
-  cursor (`readCorpus(..., { afterMs: corpusCursorMs })`), so older bars cannot ride in `corpus.json`. EA 1.22 would
+  cursor (`readCorpus(..., { afterMs: corpusCursorMs })`), so older bars cannot ride in `corpus.json`. A later EA (1.23+) would
   write `omega/corpus_history.json` (pages of 1,440 bars before a `corpus_history_before_ms` the sync response names,
   from the terminal's own M1 history), and the bridge would send it as `corpus_history`. Without it the baseline reaches
   "sufficient" four weeks after the archive's first bar (§4.2).
@@ -453,7 +453,7 @@ floor).
 9. **A separate A8 reason** for liquidity (§6), so its skill and its mute are its own.
 10. **No raise above the anchor while the baseline is insufficient** (§4.2).
 11. **The rollback ships with each lens, not in the last PR** (§13): no live use without its own automatic floor.
-12. **A deeper archive needs EA 1.22 and the bridge** (§4.1). Without them the baseline is insufficient for its first
+12. **A deeper archive needs a later EA (1.23+) and the bridge** (§4.1). Without them the baseline is insufficient for its first
     weeks and says so.
 
 ## 13. Delivery: live from each PR, in stages (each reviewed by the orchestrator, then the owner)
@@ -473,7 +473,7 @@ floor).
      `liquidity_levels`, with `feedBasis` for the feed's scale.
    - The War Room 15m and 1H line (out of the quorum).
    - Lens B's sweep score (with the day-one replay) and its **automatic rollback**; `liquidity_archive_stale`.
-   - 2b, optional and independent: EA 1.22 and the bridge's `corpus_history` for a deeper archive. The owner installs
+   - 2b, optional and independent: a later EA (1.23+) and the bridge's `corpus_history` for a deeper archive. The owner installs
      the EA.
 3. **Lens B in the strategy and the Position Manager, live.**
    - The `liquidity_spread_spike` gate; the council's per-strategy `liquidity` evidence; the entry council's three
