@@ -1,5 +1,5 @@
 // HAIC H3f, minimal (platform docs/design/HAIC-H3.md §4, §7.2, §7.4): the correction.v1 contract against the shared
-// fixtures (copied verbatim from cryptophys-cloud-platform docs/contracts/correction-v1 at 62e5167), and the recorder
+// fixtures (copied verbatim from cryptophys-cloud-platform docs/contracts/correction-v1 at 72fcbe0), and the recorder
 // behind its off switch: the original stays here, the masked record goes to the kernel as nexus-teacher.
 import test from "node:test";
 import assert from "node:assert/strict";

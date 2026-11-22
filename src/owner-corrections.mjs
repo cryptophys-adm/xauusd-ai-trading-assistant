@@ -3,7 +3,7 @@
 // kernel agent nexus-teacher (capability corrections.record, tier 1, no seat; platform XAUUSD_CEILING, H3e).
 //
 // What this module is today: the contract (a port of control-plane-shared/src/correction.ts at platform main
-// 62e5167, checked against the shared fixtures in test/fixtures/correction-v1), the local store and the sender. The
+// 72fcbe0, checked against the shared fixtures in test/fixtures/correction-v1), the local store and the sender. The
 // switch OWNER_CORRECTIONS is off by default; nothing records a correction until the Nexus control and
 // POST /omega/api/correction land (the full H3f, later work).
 //
@@ -51,8 +51,15 @@ const ID = /^cor_[0-9a-f]{16}$/;
 const SUBJECT = /^(agent|model|seat):[A-Za-z0-9_.:-]{1,100}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const HEX64 = /^[0-9a-f]{64}$/;
-const PRICE_G = /(?:\d{1,3}(?:[.,\s_'’]\d{3})+(?:[.,]\d+)?|\d{3,}(?:[.,]\d+)?)/g;
-const PRICE = new RegExp(PRICE_G.source);
+/**
+ * Price-like numbers (platform correction.ts at 72fcbe0): 3+ digits, including grouped thousands, in any script's
+ * decimal digits (\p{Nd}); a letter O written for a zero (4O95, a round 4OOO: Latin, Cyrillic and Greek capital and
+ * small O) in a standalone token of 3+ digits-or-O with one O at least and either two digits or a leading digit and
+ * 4+ characters. Shorthand such as 95.50 or 4.1k is not masked (owner 2026-11-22). normalizeText has already folded
+ * full-width digits (NFKC) and dropped zero-width characters inside a number.
+ */
+const PRICE_G = /(?:(?<![\p{L}\p{Nd}])(?=[\p{Nd}OoОоΟο]*[OoОоΟο])(?=[OoОоΟο]*\p{Nd}[OoОоΟο]*\p{Nd}|\p{Nd}[\p{Nd}OoОоΟο]{3})[\p{Nd}OoОоΟο]{3,}(?:[.,][\p{Nd}OoОоΟο]+)?(?![\p{L}\p{Nd}])|\p{Nd}{1,3}(?:[.,\s_'’]\p{Nd}{3})+(?:[.,]\p{Nd}+)?|\p{Nd}{3,}(?:[.,]\p{Nd}+)?)/gu;
+const PRICE = new RegExp(PRICE_G.source, "u");
 const FORBIDDEN_KEYS = new Set(["params", "parameters", "values", "value", "change", "changes", "patch", "set", "weight_delta"]);
 const PRICE_KEY_PARTS = new Set(["price", "prices", "level", "levels", "size", "sizing", "entry", "entries", "stop", "order", "orders", "lot", "lots", "sl", "tp", "tp1", "tp2"]);
 const ALLOWED_KEYS = new Set([
@@ -92,8 +99,10 @@ export function redactText(text) {
 
 // ------------------------------------------------------------ the contract (platform correction.ts)
 const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-/** Trim and collapse every whitespace run; case is kept. */
-export const normalizeText = (s) => s.trim().replace(/\s+/g, " ");
+/** Zero-width and soft-hyphen characters, which can hide a number from the price rule (40\u200B95). */
+const INVISIBLE = /[\u00AD\u200B-\u200F\u2060-\u2064\uFEFF]/g;
+/** NFKC (full-width digits become ASCII), invisible characters dropped, whitespace runs collapsed, case kept. */
+export const normalizeText = (s) => s.normalize("NFKC").replace(INVISIBLE, "").trim().replace(/\s+/g, " ");
 
 /** Keys that name a parameter or a price, anywhere in a value. */
 export function forbiddenCorrectionKeys(value, path = "correction") {
@@ -226,7 +235,7 @@ export function validateCorrection(c) {
     else {
       if (c.text.length > CORRECTION_TEXT_MAX) errors.push("text_too_long");
       if (secretInText(c.text)) errors.push("text_carries_secret");
-      if (PRICE.test(c.text)) errors.push("text_carries_price");
+      if (PRICE.test(normalizeText(c.text))) errors.push("text_carries_price");
     }
   }
   if (!Array.isArray(c.evidence_refs) || c.evidence_refs.length > CORRECTION_REFS_MAX) errors.push("evidence_refs");
@@ -274,7 +283,7 @@ export function payloadLeaks(value, path = "") {
   if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => payloadLeaks(v, path ? `${path}.${k}` : k));
   if (typeof value !== "string") return [];
   if (secretInText(value)) return [path];
-  return !LEAK_EXEMPT.has(path) && PRICE.test(value) ? [path] : [];
+  return !LEAK_EXEMPT.has(path) && PRICE.test(normalizeText(value)) ? [path] : [];
 }
 
 // ------------------------------------------------------------ the local store and the sender
