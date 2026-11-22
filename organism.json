@@ -185,6 +185,18 @@
           ],
           "tier_max": 1,
           "voter": false
+        },
+        {
+          "id": "hud-mizan-oracle",
+          "display_name": "Mizan Oracle",
+          "capabilities": [
+            "signals.observe",
+            "reports.publish",
+            "memory.recall",
+            "memory.remember"
+          ],
+          "tier_max": 1,
+          "voter": false
         }
       ],
       "engines": [
