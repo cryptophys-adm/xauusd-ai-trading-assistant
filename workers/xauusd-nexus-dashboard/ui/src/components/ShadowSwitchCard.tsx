@@ -71,11 +71,11 @@ export default function ShadowSwitchCard() {
   const share = Math.min(1, spend?.share_of_budget ?? 0);
   // Only what the server reports: an answer without the switch's state shows "unknown", never OFF.
   const known = typeof state?.allowed === "boolean";
-  const tone = !known ? "slate" : !state?.allowed ? "red" : share >= 0.8 ? "amber" : "green";
+  const tone = !known ? "off" : !state?.allowed ? "fault" : share >= 0.8 ? "late" : "ok";
 
   return (
     <div className="glass p-4">
-      <div className="panel-title mb-2 flex items-center gap-2"><Power className="h-3 w-3 text-rose-300" />Shadow mode · kill switch</div>
+      <div className="panel-title mb-2 flex items-center gap-2"><Power className="h-3 w-3 text-fault" />Shadow mode · kill switch</div>
       {state ? (
         <div className="space-y-2 text-[11.5px]">
           <div className="flex items-center gap-2">
@@ -85,7 +85,7 @@ export default function ShadowSwitchCard() {
             </span>
           </div>
           <div className="text-slate-400">
-            Switch: <b className={!state.mode ? "text-slate-400" : on ? "text-emerald-300" : "text-rose-300"}>{!state.mode ? "—" : on ? "ON" : "OFF"}</b>
+            Switch: <b className={!state.mode ? "text-slate-400" : on ? "text-ok" : "text-off"}>{!state.mode ? "—" : on ? "ON" : "OFF"}</b>
             {state.mode_source !== "default" ? <span> · {state.mode_source === "breaker" ? "cost breaker" : "owner"}, {when(state.set_at)}{state.reason ? ` — ${state.reason}` : ""}</span> : <span> · default</span>}
           </div>
           <div>
@@ -94,7 +94,7 @@ export default function ShadowSwitchCard() {
               <span className="mono text-slate-200">{k(spend?.neurons)} / {k(state.budget_neurons_per_day)}</span>
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-sm bg-white/5">
-              <div className={`h-full ${share >= 1 ? "bg-rose-400" : share >= 0.8 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.round(share * 100)}%` }} />
+              <div className={`h-full ${share >= 1 ? "bg-fault-fill" : share >= 0.8 ? "bg-late-fill" : "bg-ok-fill"}`} style={{ width: `${Math.round(share * 100)}%` }} />
             </div>
             <div className="mt-1 text-[10.5px] text-slate-500">
               {spend ? `${k(spend.calls)} calls · about USD ${spend.usd_at_paid_rate.toFixed(2)} at the paid rate · the breaker turns shadow off past the budget` : "—"}
@@ -119,14 +119,14 @@ export default function ShadowSwitchCard() {
                   onChange={(e) => setReason(e.target.value)}
                 />
                 <div className="flex gap-2">
-                  <button className={`rounded-sm px-2 py-1 text-[11px] disabled:opacity-40 ${next === "off" ? "bg-rose-500/20 text-rose-200" : "bg-emerald-500/20 text-emerald-200"}`} disabled={busy || !reason.trim()} onClick={submit}>
+                  <button className={`rounded-sm px-2 py-1 text-[11px] disabled:opacity-40 ${next === "off" ? "bg-fault-fill/20 text-fault" : "bg-ok-fill/20 text-ok"}`} disabled={busy || !reason.trim()} onClick={submit}>
                     {busy ? "Saving…" : `Switch shadow ${next.toUpperCase()}`}
                   </button>
                   <button className="rounded-sm px-2 py-1 text-[11px] text-slate-400" onClick={() => { setEditing(false); setReason(""); }}>Cancel</button>
                 </div>
               </div>
             ) : (
-              <button className="rounded-sm border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-rose-400/40" onClick={() => setEditing(true)}>
+              <button className="rounded-sm border border-white/10 px-2 py-1 text-[11px] text-slate-200 hover:border-fault-fill/40" onClick={() => setEditing(true)}>
                 {on ? "Switch shadow OFF…" : "Switch shadow ON…"}
               </button>
             )
@@ -140,7 +140,7 @@ export default function ShadowSwitchCard() {
       ) : (
         <div className="text-[11.5px] text-slate-500">{error ? `Unavailable (${error})` : "—"}</div>
       )}
-      {state && error ? <div className="mt-1 text-[10.5px] text-rose-300">{error}</div> : null}
+      {state && error ? <div className="mt-1 text-[10.5px] text-fault">{error}</div> : null}
     </div>
   );
 }

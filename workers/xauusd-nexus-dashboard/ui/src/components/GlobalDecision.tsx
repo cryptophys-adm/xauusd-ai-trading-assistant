@@ -7,7 +7,7 @@ import { useMarket, leanLabel } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { candleWhen, pct, utc } from "../lib/format";
 import SetupLifecycle, { zoneAt } from "./SetupLifecycle";
-import { T, directionGlyph, type Tone } from "../lib/tokens";
+import { TEXT, directionGlyph, edgeTone, type Tone } from "../lib/tokens";
 
 /** The strategy's state as a status: ok, late (needs attention), fault, off. */
 const STATE_TEXT: Record<string, { label: string; tone: Tone }> = {
@@ -112,7 +112,7 @@ function ModelAdvice({ m }: { m: any }) {
         return (
           <div key={x.k} className="flex items-center gap-2 py-0.5">
             <span className="w-10 shrink-0 font-semibold text-fg">{x.k}</span>
-            <span className="mono w-12 shrink-0" style={{ color: d == null ? undefined : d > 0 ? T.bull : T.bear }}>{pctOf(x.p)}</span>
+            <span className={`mono w-12 shrink-0 ${TEXT[edgeTone(x.k === "Short" ? "short" : "long", d)]}`}>{pctOf(x.p)}</span>
             <span className="min-w-0 flex-1 text-fg-2">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
           </div>
         );
@@ -411,7 +411,7 @@ export default function GlobalDecision() {
                 ) : (
                   <>
                     <div className={`min-w-0 flex-1 ${r.stale ? "opacity-40" : ""}`}><DivergingBar value={r.lean} height={6} /></div>
-                    <span className="w-28 shrink-0 text-right text-[11px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
+                    <span className="w-36 shrink-0 whitespace-nowrap text-right text-[11px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
                   </>
                 )}
               </div>

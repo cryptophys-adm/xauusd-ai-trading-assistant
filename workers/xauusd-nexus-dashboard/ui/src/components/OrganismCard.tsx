@@ -49,7 +49,7 @@ export default function OrganismCard() {
   return (
     <Panel
       title="Engine status"
-      icon={<Activity className="h-3.5 w-3.5 text-emerald-400" />}
+      icon={<Activity className="h-3.5 w-3.5 text-ok" />}
     >
       {loading && !org ? (
         <Skeleton rows={4} />
@@ -59,7 +59,7 @@ export default function OrganismCard() {
         <div className="space-y-2.5">
           <div className="glass-inner flex items-center justify-between px-3 py-2">
             <div className="flex items-center gap-2">
-              <Dot tone={market === "open" ? "green" : "amber"} pulse={market === "open"} />
+              <Dot tone={market === "open" ? "ok" : "off"} pulse={market === "open"} />
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-400">Market</div>
                 <div className="mono text-xs font-semibold uppercase text-cyan-300">{market}</div>
@@ -74,14 +74,14 @@ export default function OrganismCard() {
           <div className="space-y-1.5 pt-0.5 text-[11px]">
             <Row icon={<HeartPulse className="h-3 w-3 text-cyan-400" />} label="Decision Engine"
               value={de?.enabled === true ? `on · last decision ${since(de.latest_decided_at)}` : de?.enabled === false ? "off" : "—"}
-              tone={de?.enabled ? "text-emerald-400" : "text-slate-400"} />
+              tone={de?.enabled ? "text-ok" : "text-off"} />
             <Row icon={<Radio className="h-3 w-3 text-amber-400" />} label="EA heartbeat"
               value={`${om?.ea_connected === true ? "fresh" : om?.ea_heartbeat_age_ms != null ? "stale" : "never seen"} · ${age(om?.ea_heartbeat_age_ms)}`}
-              tone={om?.ea_connected ? "text-emerald-400" : "text-amber-300"} />
+              tone={om?.ea_connected ? "text-ok" : "text-late"} />
             <Row icon={<Server className="h-3 w-3 text-purple-400" />} label="Bridge sync"
               value={`${om?.bridge_connected === true ? "fresh" : om?.bridge_sync_age_ms != null ? "stale" : "never seen"} · ${age(om?.bridge_sync_age_ms)}`}
-              tone={om?.bridge_connected ? "text-emerald-400" : "text-amber-300"} />
-            <Row icon={<Activity className="h-3 w-3 text-emerald-400" />} label="Omega engine"
+              tone={om?.bridge_connected ? "text-ok" : "text-late"} />
+            <Row icon={<Activity className="h-3 w-3 text-ok" />} label="Omega engine"
               value={om?.engine_enabled === true ? "on" : om?.engine_enabled === false ? "off" : "—"} />
             <Row icon={<Clock className="h-3 w-3 text-slate-400" />} label="Recent deals"
               value={org.deals?.recent_count != null ? `${org.deals.recent_count} (${org.deals.window ?? "recent"})` : "—"} />

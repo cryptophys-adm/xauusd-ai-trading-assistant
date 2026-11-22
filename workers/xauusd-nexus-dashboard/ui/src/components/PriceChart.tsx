@@ -8,10 +8,12 @@ import { useMarket } from "../lib/market";
 import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
-import { CANDLE, KWW, T, volumeColor } from "../lib/tokens";
+import { CANDLE, KWW, T, tagText, volumeColor } from "../lib/tokens";
 
 const ZONE_COLOR: Record<string, string> = { support: T.bullFill, resistance: T.bearFill, "at price": T.okFill };
 const ZONE_ALPHA: Record<string, number> = { strong: 0.16, medium: 0.1, weak: 0.06 };
+/** The progressive stop (SL+): no direction and not the KWW yellow, so its own sky blue (its colour before 2026-11-22). */
+const SL_PLUS = "#38bdf8";
 const fmt = (z: any) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
 
 const TFS = [["M5", "5m"], ["M15", "15m"], ["H1", "1H"], ["H4", "4H"], ["D1", "1D"]] as const;
@@ -60,6 +62,7 @@ export default function PriceChart() {
   const layerZonesRef = useRef<ZonesPrimitive | null>(null);
   const planLines = useRef<IPriceLine[]>([]);
   const layerLines = useRef<IPriceLine[]>([]);
+  const lastLine = useRef<IPriceLine | null>(null);
   const [bars, setBars] = useState<Bar[]>([]);
   const [plane, setPlane] = useState<any>(null);
   const [showZones, setShowZones] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartZones") !== "off"; } catch { return true; } });
@@ -154,8 +157,11 @@ export default function PriceChart() {
       },
       crosshair: { mode: 0 },
     });
+    // The last price is our own price line (in the load below), so its axis tag carries dark text on the green and red
+    // fills: the library's own tag is white there (2.3 to 1 on the bull fill).
     candles.current = c.addCandlestickSeries({
       ...CANDLE,
+      lastValueVisible: false, priceLineVisible: false,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     zonesRef.current = new ZonesPrimitive();
@@ -168,7 +174,7 @@ export default function PriceChart() {
     volume.current = c.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
     c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chart.current = c;
-    return () => { c.remove(); chart.current = null; zonesRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lines.current = {}; };
+    return () => { c.remove(); chart.current = null; zonesRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lastLine.current = null; lines.current = {}; };
   }, []);
 
   // The zones and the plan follow the Global Conclusion (refreshed every 60 s).
@@ -189,12 +195,12 @@ export default function PriceChart() {
     const p = showPlan && hasClearDecision ? strategy?.plan : null;
     if (p) {
       const line = (price: number | null | undefined, title: string, color: string, style: LineStyle) => {
-        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true }));
+        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, axisLabelTextColor: tagText(color) }));
       };
       line(p.entry, p.at_level ? "Entry" : "Entry (pullback)", T.okFill, LineStyle.Solid);
       line(p.stop, "Stop", T.bearFill, LineStyle.Dashed);
       if (p.progressive_stop != null) {
-        line(p.progressive_stop, "SL+", T.neutralFill, LineStyle.Dashed);
+        line(p.progressive_stop, "SL+", SL_PLUS, LineStyle.Dashed);
       }
       line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, T.bullFill, LineStyle.Dashed);
       line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, T.bullFill, LineStyle.Dotted);
@@ -219,6 +225,12 @@ export default function PriceChart() {
         }
         fit = false;
         const last = cs.at(-1), prev = cs.at(-2);
+        const series = candles.current;
+        if (series && lastLine.current) { series.removePriceLine(lastLine.current); lastLine.current = null; }
+        if (series && last) {
+          const color = last.close >= last.open ? T.bullFill : T.bearFill;
+          lastLine.current = series.createPriceLine({ price: last.close, title: "", color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, axisLabelTextColor: tagText(color) });
+        }
         setHead({ last: last?.close, change: last && prev ? last.close - prev.close : undefined, pct: last && prev ? ((last.close - prev.close) / prev.close) * 100 : undefined, basis: `${d.timeframe} · ${d.basis}`, closed: d.latest_close_time });
       } catch (e) { setHead({ error: e instanceof Error ? e.message : String(e) }); }
     };
@@ -265,7 +277,7 @@ export default function PriceChart() {
     const zones: ChartZone[] = [];
     // Each level is named on the price axis; the FVG targets (up to six) stay unlabelled to keep the axis readable.
     const line = (price: unknown, title: string, color: string, style = LineStyle.Dashed, axis = true) => {
-      if (typeof price === "number" && Number.isFinite(price)) layerLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: axis }));
+      if (typeof price === "number" && Number.isFinite(price)) layerLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: axis, axisLabelTextColor: tagText(color) }));
     };
     const p = plane;
     if (p) {

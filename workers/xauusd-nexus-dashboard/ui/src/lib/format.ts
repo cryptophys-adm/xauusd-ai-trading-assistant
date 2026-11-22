@@ -34,3 +34,21 @@ export function candleWhen(key?: string | null): string {
   const ms = Number(String(key ?? "").split(":").pop());
   return Number.isFinite(ms) && ms > 0 ? utc(new Date(ms).toISOString()) : String(key ?? "—");
 }
+
+/** Trading and system acronyms that stay in capitals in a label made from a key (codes as written). */
+const ACRONYMS = new Set(["atr", "mfe", "mae", "sl", "tp", "tv", "ev", "r", "pf", "dd", "ema", "vwap", "poc", "vah", "val", "kww", "utc", "ea", "id"]);
+
+/**
+ * A snake_case key as a sentence-case label: "mfe_r" → "MFE R", "entry_shift_atr" → "Entry shift ATR",
+ * "tp_moves" → "TP moves". Acronyms (also with a number: "tp1", "ema114") and timeframes ("h1", "m15") stay in
+ * capitals, since .tbl th, .label, .chip and .eyebrow no longer upper-case their text.
+ */
+export function humanKey(k: string): string {
+  const words = String(k).replace(/_/g, " ").split(" ").map((w) => {
+    const m = /^([a-z]+)(\d*)$/i.exec(w);
+    if (!m) return w;
+    const head = m[1].toLowerCase();
+    return ACRONYMS.has(head) || (m[2] && /^[mhdw]$/.test(head)) ? w.toUpperCase() : w;
+  });
+  return words.join(" ").replace(/^./, (c) => c.toUpperCase());
+}

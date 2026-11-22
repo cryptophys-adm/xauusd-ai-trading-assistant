@@ -107,7 +107,7 @@ function RegimeCard({ levels, loading, tab }: { levels: any; loading: boolean; t
   const text = regimeText(axes);
   return (
     <Panel title={`Regime · ${chartName(tab)}`} icon={<Radar className="h-3.5 w-3.5 text-cyan-300" />} hint="Hurst, efficiency, z-score, volume, cycles and entropy, each scaled 0–100."
-      right={levels?.regime?.chaos ? <Badge tone="red">chaos</Badge> : levels ? <Badge tone="slate">uncalibrated</Badge> : null}>
+      right={levels?.regime?.chaos ? <Badge tone="fault">chaos</Badge> : levels ? <Badge tone="slate">uncalibrated</Badge> : null}>
       {loading ? <Skeleton rows={4} /> : !axes.length || axes.every((a: any) => a.value == null) ? <p className="text-[12px] text-slate-500">No regime data yet.</p> : (
         <>
           <div className="flex justify-center"><RegimeRadar axes={axes} color={levels.regime.chaos ? C.bear : C.cyan} /></div>
@@ -121,7 +121,7 @@ function RegimeCard({ levels, loading, tab }: { levels: any; loading: boolean; t
 function ConsensusCard({ ladder }: { ladder: ReturnType<typeof useLadder> }) {
   const rows = ladder.filter((r) => Object.keys(r.mix).length);
   return (
-    <Panel title="Agent consensus" icon={<Users className="h-3.5 w-3.5 text-emerald-300" />}>
+    <Panel title="Agent consensus" icon={<Users className="h-3.5 w-3.5 text-ok" />}>
       {!rows.length ? <p className="text-[12px] text-slate-500">No room open yet.</p> : (
         <div className="space-y-2">
           {rows.map((r) => {
@@ -211,7 +211,7 @@ function SessionClock() {
   const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "short", year: "numeric" }).format(now);
   const time = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
   return (
-    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />} hint="Session hours in New York time." right={<Badge tone={open ? "green" : "red"}>{open ? "market open" : "market closed"}</Badge>}>
+    <Panel title="Session clock" icon={<Clock3 className="h-3.5 w-3.5 text-cyan-300" />} hint="Session hours in New York time." right={<Badge tone={open ? "ok" : "off"}>{open ? "market open" : "market closed"}</Badge>}>
       <div className="mb-2 flex items-baseline justify-between text-[11px]">
         <span className="text-slate-200">{day}</span>
         <span className="mono text-slate-400">{time} UTC</span>
@@ -300,7 +300,7 @@ export default function AssistantPanel({ className, hideGlobalDecision }: { clas
       <div className="space-y-3">
         {/* Section 1: Decision & Plan */}
         <div className="space-y-3">
-          <SectionToggle title="Decision & Plan" count={hideGlobalDecision ? 1 : 2} open={openSections.decision} onToggle={() => toggle("decision")} />
+          <SectionToggle title="Decision & plan" count={hideGlobalDecision ? 1 : 2} open={openSections.decision} onToggle={() => toggle("decision")} />
           {openSections.decision && (
             <div className="space-y-4">
               {!hideGlobalDecision && <GlobalDecision />}
@@ -311,7 +311,7 @@ export default function AssistantPanel({ className, hideGlobalDecision }: { clas
 
         {/* Section 2: Market Structure & Regime */}
         <div className="space-y-3">
-          <SectionToggle title="Structure & Regime" count={3} open={openSections.structure} onToggle={() => toggle("structure")} />
+          <SectionToggle title="Structure & regime" count={3} open={openSections.structure} onToggle={() => toggle("structure")} />
           {openSections.structure && (
             <div className="space-y-4">
               <SentimentCard />
@@ -323,7 +323,7 @@ export default function AssistantPanel({ className, hideGlobalDecision }: { clas
 
         {/* Section 3: Macro Context & Sessions */}
         <div className="space-y-3">
-          <SectionToggle title="Macro & Sessions" count={3} open={openSections.macro} onToggle={() => toggle("macro")} />
+          <SectionToggle title="Macro & sessions" count={3} open={openSections.macro} onToggle={() => toggle("macro")} />
           {openSections.macro && (
             <div className="space-y-4">
               <ConsensusCard ladder={ladder} />

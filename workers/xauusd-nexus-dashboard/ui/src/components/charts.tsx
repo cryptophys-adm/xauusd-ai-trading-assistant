@@ -90,7 +90,7 @@ export function DivergingBar({ value, max = 1, height = 8 }: { value: number | n
       <div className="absolute inset-y-0 left-1/2 w-px bg-white/25" />
       {value != null && (
         <motion.div className="absolute inset-y-0 rounded-full" initial={{ width: 0 }} animate={{ width: `${w}%` }} transition={{ duration: 0.6, ease: "easeOut" }}
-          style={{ [v >= 0 ? "left" : "right"]: "50%", background: leanFill(value) }} />
+          style={{ [v >= 0 ? "left" : "right"]: "50%", background: leanFill(v) }} />
       )}
     </div>
   );

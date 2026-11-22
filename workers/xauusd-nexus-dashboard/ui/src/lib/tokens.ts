@@ -37,6 +37,25 @@ export const CANDLE = {
   borderUpColor: T.bullFill, borderDownColor: T.bearFill,
   wickUpColor: T.bullFill, wickDownColor: T.bearFill,
 } as const;
+/** The WCAG contrast ratio of two "#rrggbb" colours. */
+export function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    const [r, g, bl] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+      const s = c / 255;
+      return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+/**
+ * The text colour of a price-axis tag on a "#rrggbb" fill: the ground (#05070c) or white, whichever reads better.
+ * Dark on the green, amber, red and cyan fills (8.8, 12.1, 5.4 and 11.2 to 1); the chart library's own pick is white
+ * there (2.3 to 1 on the bull fill).
+ */
+export const tagText = (fill: string): string => (contrast(T.ground, fill) >= contrast("#ffffff", fill) ? T.ground : "#ffffff");
 /** A volume bar in the candle's colour, at `alpha`. */
 export const volumeColor = (up: boolean, alpha = 0.35) => rgba(up ? T.bullFill : T.bearFill, alpha);
 /** The KWW band's own hue (yellow): its mean, its ±1σ and its ±1.618σ edges, which are no direction. */
@@ -89,4 +108,15 @@ export function directionGlyph(v?: string | null): string {
   if (BEAR.has(v)) return "▼";
   if (v === "NEUTRAL" || v === "neutral") return "·";
   return "";
+}
+
+/**
+ * The tone of a model's edge over its base rate on one side. On the Long row a positive edge is bullish (green); on
+ * the Short row a positive edge favours the short, so it is bearish (red), and a negative edge there is green. No
+ * edge (null or 0) is the text colour.
+ */
+export function edgeTone(side: "long" | "short", d: number | null | undefined): Tone {
+  if (d == null || !Number.isFinite(d) || d === 0) return "plain";
+  const favoured = d > 0;
+  return side === "long" ? (favoured ? "bull" : "bear") : (favoured ? "bear" : "bull");
 }

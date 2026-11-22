@@ -17,7 +17,7 @@ function Agent({ name, stance, bias, cal, ok = true }: { name: string; stance?: 
           <span className="truncate text-[12px] font-semibold text-slate-200">{name}</span>
           {ok && stance ? <span className="flex items-center gap-1.5">{bias && <BiasTag bias={bias} />}<Stance value={stance} /></span> : <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />}
         </div>
-        {cal && <div className={`mt-0.5 truncate text-[10px] ${verified ? "text-emerald-300/80" : "text-slate-500"}`}>{cal}</div>}
+        {cal && <div className={`mt-0.5 truncate text-[10px] ${verified ? "text-ok" : "text-slate-500"}`}>{cal}</div>}
       </div>
     </div>
   );
