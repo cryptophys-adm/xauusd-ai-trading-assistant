@@ -228,8 +228,8 @@ test("AS11 executorFrom keeps the 1.15 fields, checked, and drops anything malfo
 });
 
 test("AS12 OmegaExecutor 1.15 reports the spec and is the last gate: it refuses with a reason, never resizes, never moves a stop", () => {
-  assert.match(ea, /#property version\s+"1\.21"/);
-  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.21";'));
+  assert.match(ea, /#property version\s+"1\.22"/);
+  assert.ok(ea.includes('const string OMEGA_EXECUTOR_VERSION = "1.22";'));
   // The spec in state.json.
   for (const field of ["leverage", "margin_mode", "margin_free", "login_hash", "freeze_level_points", "trade_mode", "margin_per_lot"]) {
     assert.ok(ea.includes(`\\"${field}\\":`), field);
