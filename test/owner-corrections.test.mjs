@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import {
   buildCorrection, validateCorrection, correctionContentHash, correctionDedupHash, recordPayload, recordOwnerCorrection, sendOwnerCorrections,
-  resetOwnerCorrectionsSchemaForTests, correctionsEnabled, NEXUS_TEACHER_ID, CORRECTIONS_CAPABILITY, CORRECTIONS_MAX_ATTEMPTS
+  resetOwnerCorrectionsSchemaForTests, correctionsEnabled, payloadLeaks, NEXUS_TEACHER_ID, CORRECTIONS_CAPABILITY, CORRECTIONS_MAX_ATTEMPTS, CORRECTIONS_BACKOFF_MS
 } from "../src/owner-corrections.mjs";
 
 const fixture = (p) => JSON.parse(readFileSync(new URL(`./fixtures/correction-v1/${p}`, import.meta.url), "utf8"));
@@ -88,39 +88,70 @@ test("OC4 the switch is off by default: nothing is recorded and nothing is sent"
   assert.deepEqual(await sendOwnerCorrections(env, { now: NOW }), { status: "disabled" });
 });
 
-test("OC5 on: the original stays local, the masked record goes as nexus-teacher; a failure is retried, a denial is final", async () => {
+test("OC5 on: the original stays local, the masked record goes as nexus-teacher; a thrown error or timeout is retried, the kernel's failed is final", async () => {
   resetOwnerCorrectionsSchemaForTests();
   const calls = [];
-  let answer = { outcome: "failed", reason: "timeout" };
-  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async (agent, capability, input) => { calls.push({ agent, capability, input }); return answer; } } };
+  let answer = () => { throw new Error("rpc_failed"); };
+  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async (agent, capability, input) => { calls.push({ agent, capability, input }); return answer(); } } };
   const rec = await recordOwnerCorrection(env, INPUT, { actor: "owner:owner@example.com", owner: true, now: NOW });
   assert.equal(rec.ok, true);
   assert.deepEqual(rec.redactions, ["price"]);
   const row = env.DB.raw.prepare("SELECT original_json, record_json, status FROM owner_corrections").get();
   assert.match(row.original_json, /4100/, "the original, prices included, stays in xauusd");
   assert.doesNotMatch(row.record_json, /4100/);
-  assert.equal(row.status, "pending");
-  // A transport failure: retried by the next sweep.
-  assert.deepEqual(await sendOwnerCorrections(env, { now: NOW }), { status: "ok", sent: 0, denied: 0, failed: 1, pending: 1 });
+  // A transport failure (a thrown error): kept for the next sweep, and the sweep stops there.
+  assert.deepEqual(await sendOwnerCorrections(env, { now: NOW }), { status: "ok", sent: 0, rejected: 0, invalid: 0, failed: 1, stopped: "transport", pending: 1 });
   assert.deepEqual([calls[0].agent, calls[0].capability], [NEXUS_TEACHER_ID, CORRECTIONS_CAPABILITY]);
-  assert.equal(calls[0].input.side, "nexus");
-  assert.equal(calls[0].input.attested_by, "xauusd_nexus_access");
-  assert.equal(calls[0].input.weight, 3);
+  assert.deepEqual([calls[0].input.side, calls[0].input.attested_by, calls[0].input.weight, calls[0].input.supersedes], ["nexus", "xauusd_nexus_access", 3, null]);
   assert.doesNotMatch(JSON.stringify(calls[0].input), /4100|correction_id|sha256/);
-  answer = { outcome: "succeeded", result: { correction_id: "cor_1234567890abcdef", deduplicated: false, redactions: ["price"] } };
+  // A timeout is a transport failure too.
+  answer = () => new Promise(() => {});
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + 1, timeoutMs: 5 })).stopped, "transport");
+  answer = () => ({ outcome: "succeeded", result: { correction_id: "cor_1234567890abcdef", deduplicated: false, redactions: ["price"] } });
   assert.equal((await sendOwnerCorrections(env, { now: NOW + 60_000 })).sent, 1);
   assert.deepEqual({ ...env.DB.raw.prepare("SELECT status, platform_id FROM owner_corrections").get() }, { status: "sent", platform_id: "cor_1234567890abcdef" });
-  assert.equal((await sendOwnerCorrections(env, { now: NOW + 120_000 })).pending, 0, "a sent record is not sent again");
-  // A denial is final.
-  await recordOwnerCorrection(env, { ...INPUT, rating: "up", category: "good_call", text: null }, { actor: "owner:owner@example.com", owner: true, now: NOW + 1 });
-  answer = { outcome: "denied", reason: "capability_not_granted" };
-  assert.equal((await sendOwnerCorrections(env, { now: NOW + 180_000 })).denied, 1);
-  assert.equal((await sendOwnerCorrections(env, { now: NOW + 240_000 })).pending, 0);
-  // A record that keeps failing stops after CORRECTIONS_MAX_ATTEMPTS.
-  await recordOwnerCorrection(env, { ...INPUT, text: "again" }, { actor: "owner:owner@example.com", owner: true, now: NOW + 2 });
-  answer = { outcome: "failed", reason: "timeout" };
+  // The kernel's own failed is final (never retried, it would count toward a suspension).
+  await recordOwnerCorrection(env, { ...INPUT, text: "second" }, { actor: "owner:owner@example.com", owner: true, now: NOW + 2 });
+  answer = () => ({ outcome: "failed", reason: "invalid_correction" });
+  const r = await sendOwnerCorrections(env, { now: NOW + 120_000 });
+  assert.deepEqual([r.rejected, r.pending], [1, 0]);
+  const before = calls.length;
+  await sendOwnerCorrections(env, { now: NOW + 180_000 });
+  assert.equal(calls.length, before, "a rejected record is never sent again");
+  // A record that keeps failing in transport stops after CORRECTIONS_MAX_ATTEMPTS.
+  await recordOwnerCorrection(env, { ...INPUT, text: "again" }, { actor: "owner:owner@example.com", owner: true, now: NOW + 3 });
+  answer = () => { throw new Error("rpc_failed"); };
   for (let i = 0; i < CORRECTIONS_MAX_ATTEMPTS; i++) await sendOwnerCorrections(env, { now: NOW + 300_000 + i });
   assert.equal(env.DB.raw.prepare("SELECT status FROM owner_corrections WHERE original_json LIKE '%again%'").get().status, "failed");
-  // A non-owner actor's record weighs 1; a structurally empty one is refused.
   assert.equal((await recordOwnerCorrection(env, { source: "nexus_card", target: INPUT.target }, { actor: "nexus:viewer@example.com", now: NOW })).error, "empty");
+});
+
+test("OC6 a denial stops the sweep and backs off with every record still pending; one whoami decides after the wait", async () => {
+  resetOwnerCorrectionsSchemaForTests();
+  let calls = 0, status = "suspended";
+  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => { calls += 1; return { outcome: "denied", reason: "failed: agent_enabled" }; }, whoami: async () => ({ status }) } };
+  for (let i = 0; i < 5; i++) await recordOwnerCorrection(env, { ...INPUT, text: `note ${"abcde"[i]}` }, { actor: "owner:owner@example.com", owner: true, now: NOW + i });
+  const r = await sendOwnerCorrections(env, { now: NOW });
+  assert.deepEqual([r.stopped, r.pending, calls], ["denied", 5, 1], "one denial, nothing lost");
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + 60_000 })).status, "backoff");
+  assert.equal(calls, 1);
+  assert.equal((await sendOwnerCorrections(env, { now: NOW + CORRECTIONS_BACKOFF_MS })).status, "backoff", "whoami says not enabled: wait again");
+  status = "enabled";
+  env.AGENTS.syscall = async () => { calls += 1; return { outcome: "succeeded", result: { correction_id: "cor_00000000000000ff" } }; };
+  const ok = await sendOwnerCorrections(env, { now: NOW + 3 * CORRECTIONS_BACKOFF_MS });
+  assert.deepEqual([ok.sent, ok.pending], [5, 0]);
+});
+
+test("OC7 nothing that leaves carries a price or a secret: the raw category is masked, the original is redacted locally, a leak is never sent", async () => {
+  const ctx = { actor: "owner:owner@example.com", owner: true, attested_by: "xauusd_nexus_access", now: "2026-11-22T09:00:00Z", correction_id: "cor_00000000000000bb" };
+  const r = await buildCorrection({ side: "nexus", source: "nexus_card", category: "SL at 4095.5 too tight", target: INPUT.target }, ctx);
+  assert.equal(r.correction.category, "other");
+  assert.equal(r.correction.category_raw, "SL at [level] too tight");
+  assert.deepEqual(r.correction.redactions, ["price"]);
+  assert.deepEqual(payloadLeaks(recordPayload(r.correction)), []);
+  assert.deepEqual(payloadLeaks({ text: "the 4,095 level", evidence_refs: ["ev:xauusd/card/d:15:1795211100000:0"], target: { ref: "ev:xauusd/card/d:15:1795211100000:0" } }), ["text"]);
+  resetOwnerCorrectionsSchemaForTests();
+  const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => ({ outcome: "succeeded", result: {} }) } };
+  await recordOwnerCorrection(env, { ...INPUT, text: "Bearer abcdefghijklmnopqrstuvwxyz0123 leaked" }, { actor: "owner:owner@example.com", owner: true, now: NOW });
+  assert.doesNotMatch(env.DB.raw.prepare("SELECT original_json FROM owner_corrections").get().original_json, /abcdefghijklmnopqrstuvwxyz0123/, "a secret is redacted in the local copy too");
 });

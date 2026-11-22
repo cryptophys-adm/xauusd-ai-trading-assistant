@@ -3380,7 +3380,7 @@ export default {
         // a failure waits for the next sweep, a denial is final. Off unless OWNER_CORRECTIONS is "on" (no D1 read then).
         try {
           const corr = await sendOwnerCorrections(env);
-          if (corr.status === "ok" && (Number(corr.sent) || Number(corr.denied) || Number(corr.failed))) console.log("owner_corrections", JSON.stringify(corr));
+          if (corr.status !== "disabled" && (corr.status !== "ok" || Number(corr.sent) || Number(corr.rejected) || Number(corr.invalid) || corr.stopped)) console.log("owner_corrections", JSON.stringify(corr));
         } catch (e) { console.error("owner_corrections_failed", e instanceof Error ? e.message : String(e)); }
         // Aether A5: push the decision cards whose content changed to cryptophys-aether, once an
         // hour (first sweep after the H1 close). Never waits on Aether; a no-op without the binding.

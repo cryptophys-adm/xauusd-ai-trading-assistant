@@ -46,6 +46,8 @@ test("D2. the agents are exactly those that report to the platform kernel, withi
     assert.ok(a.tier_max <= 1, a.id);
     assert.ok(a.capabilities.every((c) => CEILING.has(c) || (AGENT_EXTRA[a.id] ?? []).includes(c)), `${a.id}: ${a.capabilities}`);
   }
+  // The platform's per-agent ceiling (XAUUSD_CEILING, H3e): nexus-teacher holds corrections.record and nothing else.
+  assert.deepEqual(ai.agents.find((a) => a.id === NEXUS_TEACHER_ID).capabilities, ["corrections.record"]);
   for (const o of dna.organs.filter((x) => x !== ai)) assert.deepEqual(o.agents, [], o.service);
   assert.ok(read("src/platform-reports.mjs").includes('"xauusd-reasoner"') && read("src/platform-reports.mjs").includes('"xauusd-moderator"'));
 });
