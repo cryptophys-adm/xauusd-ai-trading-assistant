@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CLOCK_SLACK_MS, DATE_SLACK_MS, OFFSET_MAX_MS, OFFSET_SAMPLES, PLAN_HIDE_MS, PLAN_TICK_MS, PUSH_SLACK_MS, RETRY_JOIN_MS, STALE_TICK_MS, ageBase, cadenceOf, clockJump, dueReads, emptyRoute, firstPending, isChecking, isReplay, isStale, joinsInFlight, markKey, okLine, pageServer, planMark, pollPhase, pushApplies, pushShown, pushTime, pushWins, recoveryReads, replayLocal, retryEvery, routeFacts, routePushed, routeSent, routeSettled, serverClock, shortAge, shownFacts, shownSide, singleFlight, staleAt, staleChanged, staleTitle, staleWake, steadyClock, takePush, turnedLive, utcClock, wallOf, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
+import { CHECKING_MS, CLOCK_SLACK_MS, DATE_SLACK_MS, OFFSET_MAX_MS, OFFSET_SAMPLES, PLAN_HIDE_MS, PLAN_TICK_MS, PUSH_SLACK_MS, PUSH_STEADY_MS, RETRY_JOIN_MS, STALE_TICK_MS, ageBase, cadenceOf, cadenceTimer, checkingUntil, checkingWithin, clockJump, dueReads, emptyRoute, firstPending, isChecking, isReplay, isStale, joinsInFlight, markKey, okLine, pageServer, planMark, pollPhase, pushApplies, pushShown, pushTime, pushWins, reconnectBackoff, recoveryDue, recoveryGate, recoveryReads, replayLocal, retryEvery, routeCheckingUntil, routeFacts, routePushed, routeSent, routeSettled, serverClock, shortAge, showsTag, shownFacts, shownSide, singleFlight, staleAt, staleChanged, staleTitle, staleWake, steadyClock, takePush, turnedLive, utcClock, wallOf, withPush } from "../workers/xauusd-nexus-dashboard/ui/src/lib/pollState.ts";
 import { overviewBadge } from "../workers/xauusd-nexus-dashboard/ui/src/lib/healthBadge.ts";
 import { ApiError, CHART_READ, errorText, get, getDated, sameOrigin } from "../workers/xauusd-nexus-dashboard/ui/src/lib/api.ts";
 
@@ -82,7 +82,7 @@ test("PS6 usePoll keeps its contract and adds lastOk, lastFail, failures and sta
   assert.match(s, /export function usePoll<T>\(load: \(\) => Promise<T>, intervalMs = 0, deps: unknown\[\] = \[\], errorMs = intervalMs\)/, "the interval stays apart from the deps (fifth review: and the cadence while errored)");
   assert.match(s, /if \(!hasData\.current\) setLoading\(true\);/, "the skeleton only on the first load");
   assert.match(s, /document\.visibilityState === "visible"/, "visible-only refresh");
-  assert.match(s, /return \{ data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs: every, busy, sentSeq, failSeq, nudge \};/, "fifth review: the cadence in force, and nudge");
+  assert.match(s, /return \{ data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs: every, busy, sentSeq, failSeq, nudge, firstSentAt \};/, "fifth review: the cadence in force, and nudge; follow-up: the first send");
   // Third review of #520: ages on the steady local clock (localNow), never Date.now().
   assert.match(s, /isStale\(\{ hasData: present, error, lastOk, intervalMs: every \}, localNow\(\)\)/, "one stale rule, from lib/pollState.ts");
   assert.doesNotMatch(s, /Date\.now\(\)/, "no wall-clock time in usePoll");
@@ -302,7 +302,7 @@ test("PS20 MUST 1: the hub's replay of an old snapshot never clears a live REST 
   // The push keeps the hub's `at` and its own arrival (third review: the local sequence and the steady clock).
   const p = src("lib/push.ts");
   assert.match(p, /const arrival: PushArrival = \{ seq: nextSeq\(\), local: localNow\(\), at: pushTime\(msg\.at\), replay: isReplay\(msg\.replay, !seen\.has\(msg\.topic\)\) \};\n\s+setSnap\(\(d\) => \(\{ \.\.\.d, \[msg\.topic\]: \{ data: msg\.data, \.\.\.arrival \} \}\)\);/);
-  assert.match(p, /ws\.onopen = \(\) => \{\n\s+retry = 1000;\n\s+seen = new Set\(\);/, "without the hub's flag, a replay is the first snapshot of a topic on each socket (fifth review: isReplay)");
+  assert.match(p, /ws\.onopen = \(\) => \{\n\s+backoff\.opened\(localNow\(\)\);\n\s+seen = new Set\(\);/, "without the hub's flag, a replay is the first snapshot of a topic on each socket (fifth review: isReplay)");
   assert.equal(pushTime("2026-11-22T13:00:00.000Z"), Date.parse("2026-11-22T13:00:00Z"));
   assert.equal(pushTime(null), null);
   assert.equal(pushTime("not a date"), null);
@@ -386,7 +386,7 @@ test("PS21 SHOULD 2: each route applies its own answer as it resolves; a hung si
   assert.doesNotMatch(mk, /Promise\.all\(\[\n?\s*\.\.\.TF_CHARTS\.map/, "no batch that waits on the slowest read");
   assert.match(mk, /useSchedule\(plan\(SLOW_PATHS\), \(due\) => \{ for \(const p of due\) void read\(p\); \}, cadenceKey\(SLOW_PATHS\), \(\) => \{ for \(const p of SLOW_PATHS\) if \(!inFlight\(p\)\) void read\(p\); \}\);/, "fifth review: each path due on its own cadence");
   assert.match(mk, /busy: s\.sent > s\.settled, refresh: \(\) => refresh\(path\)/, "busy and refresh are the path's own");
-  assert.match(mk, /const id = nextSeq\(\);\n\s+routes\.current\[path\] = routeSent\(route\(path\), id\);/, "a read's id is its send on the page's one order");
+  assert.match(mk, /const id = nextSeq\(\);\n\s+const at = localNow\(\);\n\s+routes\.current\[path\] = routeSent\(route\(path\), id, at\);/, "a read's id is its send on the page's one order");
   assert.match(src("lib/usePoll.ts"), /export function useSchedule\(plan: \(\) => Cadence\[\], run: \(keys: string\[\]\) => void, cadenceKey: string, onJump: \(\) => void\)/);
 });
 test("PS22 SHOULD 3: the chart's plan lines and zones from a stale decision are dimmed and labelled, then dropped", () => {
@@ -485,12 +485,12 @@ test("PS25 (a) a push, then a failed read: the data keeps the push's age, and th
   // On load (fourth review: the third review's claim that this replay clears the 502 is gone): the read sent at mount,
   // the hub's 1-minute-old replay, then that read answers 502 with its Date. The replay shows the data, aged 1m, and
   // the card stays in error: a replay never clears an error, whatever its age.
-  let l = routeSent(emptyRoute, 1);
+  let l = routeSent(emptyRoute, 1, now - 3_000);
   l = routePushed(l, { engine: { stance: "SELL" } }, { seq: 2, local: now - 2_000, at: H - MIN, replay: true });
   assert.equal(l.data.engine.stance, "SELL", "the replay shows the data");
   // Fifth review: while the route's own first read is in flight and no Date is known, it is checking: never live,
   // no stale chip, the plan dimmed (it used to read stale on almost every normal reload).
-  const lc = { hasData: true, ...routeFacts(l, null), intervalMs: 60_000 };
+  const lc = { hasData: true, ...routeFacts(l, null, now - 2_000), intervalMs: 60_000 };
   assert.deepEqual([isStale(lc, now - 2_000), pollPhase({ ...lc, loading: false }, now - 2_000)], [false, "checking"], "before any Date: checking, never live");
   l = routeSettled(l, 1, { ok: false, error: "/api/conclusion/global 502", at: now, date: H });
   const lf = { hasData: true, ...routeFacts(l, OFF), intervalMs: 60_000 };
@@ -622,8 +622,8 @@ test("PS30 the 15m room: a read sent before a newer push never overwrites it (th
   assert.match(wr, /shownFacts\(\{ error: war\.error, lastOk: war\.lastOk, lastFail: war\.lastFail, failSeq: war\.failSeq, failures: war\.failures \}, slots\.push, shown\.push, pageServer\.offset\(\), firstPending\)/);
   // Fifth review (nit 3): the market's routes age a replay through the same offset, in the stale verdict and the poll.
   const mk = src("lib/market.tsx");
-  assert.match(mk, /const f = routeFacts\(route\(path\), pageServer\.offset\(\)\);\n\s+return isStale\(/, "market.tsx staleOf: routeFacts(…, pageServer.offset())");
-  assert.match(mk, /const s = route\(path\);\n\s+const f = routeFacts\(s, pageServer\.offset\(\)\);/, "market.tsx pollOf: routeFacts(…, pageServer.offset())");
+  assert.match(mk, /const f = routeFacts\(route\(path\), pageServer\.offset\(\), t\);\n\s+return isStale\(/, "market.tsx staleOf: routeFacts(…, pageServer.offset(), t)");
+  assert.match(mk, /const s = route\(path\);\n\s+const f = routeFacts\(s, pageServer\.offset\(\), now\);/, "market.tsx pollOf: routeFacts(…, pageServer.offset(), now)");
   const up = src("lib/usePoll.ts");
   assert.match(up, /const id = nextSeq\(\);\n\s+seq\.current = id;/, "usePoll's reads take the page's one order at their send");
   assert.match(up, /setSentSeq\(id\);/);
@@ -649,7 +649,7 @@ function outageTab({ load, skew = 0, lat = 300, replayFirst = true, every = 60_0
   const replay = () => { s = routePushed(s, { engine: { stance: "BUY" }, setups: [{ phase: "armed" }] }, { seq: ++seq, local: L(load + 150), at: hubAt, replay: true }); };
   const failRead = (sent) => {
     const id = ++seq;
-    s = routeSent(s, id);
+    s = routeSent(s, id, L(sent));
     return () => { const date = Math.floor((sent + lat / 2) / 1000) * 1000; clock.note(date, L(sent + lat)); s = routeSettled(s, id, { ok: false, error: E502, at: L(sent + lat), date }); };
   };
   const mount = failRead(load);
@@ -657,7 +657,7 @@ function outageTab({ load, skew = 0, lat = 300, replayFirst = true, every = 60_0
   return {
     at(t) {
       for (let sent = load + every; sent + lat <= t; sent += every) if (sent > (this.last ?? load)) { failRead(sent)(); this.last = sent; }
-      const f = { hasData: s.data != null, ...routeFacts(s, clock.offset()), intervalMs: 300_000 };
+      const f = { hasData: s.data != null, ...routeFacts(s, clock.offset(), L(t)), intervalMs: 300_000 };
       return { f, now: L(t), state: s, phase: pollPhase({ ...f, loading: false }, L(t)), plan: planMark(f, L(t)) };
     },
   };
@@ -667,14 +667,14 @@ test("PS31 (a)(b) a load during an outage with a 3-hour-old replay: error/stale 
   // Before any read brought a Date the replay is of unknown age. Fifth review: while the route's own first read is in
   // flight it is checking (never live, no stale chip, the plan dimmed); once that read fails without a Date, stale
   // and the plan hidden.
-  let s = routeSent(emptyRoute, 1);
+  let s = routeSent(emptyRoute, 1, T("15:05") - 150);
   s = routePushed(s, { engine: { stance: "BUY" } }, { seq: 2, local: T("15:05"), at: T("12:05"), replay: true });
-  const checking = { hasData: true, ...routeFacts(s, null), intervalMs: 60_000 };
+  const checking = { hasData: true, ...routeFacts(s, null, T("15:05")), intervalMs: 60_000 };
   assert.deepEqual([checking.replayed, checking.replayAt, checking.checking, ageBase(checking)], [true, null, true, null]);
   assert.equal(pollPhase({ ...checking, loading: false }, T("15:05")), "checking", "never live before the read settles");
   assert.deepEqual(planMark(checking, T("15:05")), { show: true, dim: true, suffix: " · checking", note: null });
   s = routeSettled(s, 1, { ok: false, error: "/api/conclusion/global net", at: T("15:05") + 400, date: null });
-  const unknown = { hasData: true, ...routeFacts(s, null), intervalMs: 60_000 };
+  const unknown = { hasData: true, ...routeFacts(s, null, T("15:05") + 500), intervalMs: 60_000 };
   assert.deepEqual([unknown.replayed, unknown.replayAt, unknown.checking, ageBase(unknown)], [true, null, undefined, null]);
   assert.equal(pollPhase({ ...unknown, loading: false }, T("15:05") + 500), "stale", "the read failed without a Date: stale");
   assert.deepEqual(planMark(unknown, T("15:05") + 500), { show: false, dim: true, suffix: "", note: "plan hidden: decision stale" });
@@ -829,6 +829,9 @@ test("PS35 (b) the server clock: the reads' Date, same-origin and no-store only;
       seen.push([path, init.cache]);
       const headers = { "content-type": "application/json" };
       if (!String(path).includes("nodate")) headers.date = "Sun, 22 Nov 2026 14:20:07 GMT";
+      // Follow-up of #520 (M5c): the chart read's Date is the latest of all (an hour ahead of this machine), so a note
+      // of it, by any name, would be the least (local − Date) and move the offset.
+      if (String(path).startsWith("/api/ohlcv")) headers.date = new Date(Date.now() + 3_600_000).toUTCString();
       return new Response(path.includes("fail") ? "{}" : JSON.stringify({ ok: 1 }), { status: path.includes("fail") ? 502 : 200, headers });
     };
     assert.deepEqual(await getDated("/api/conclusion/global"), { data: { ok: 1 }, date: Date.parse("2026-11-22T14:20:07Z") });
@@ -844,10 +847,15 @@ test("PS35 (b) the server clock: the reads' Date, same-origin and no-store only;
     const offset = pageServer.offset();
     assert.equal(await get("/api/ohlcv?timeframe=H1&limit=10", CHART_READ).then(() => "ok"), "ok");
     assert.equal(pageServer.offset(), offset, "a CHART_READ never notes its Date");
+    assert.equal(await get("/api/ohlcv?timeframe=H4&limit=10").then(() => "ok"), "ok");
+    assert.equal(pageServer.offset(), offset, "nor a cached route's default read");
   } finally {
     globalThis.fetch = real;
   }
-  assert.deepEqual(seen.map((x) => x[1]), ["no-store", "no-store", "no-store", "default"], "dated reads always no-store; no cross-origin request was sent");
+  assert.deepEqual(seen.map((x) => x[1]), ["no-store", "no-store", "no-store", "default", "default"], "dated reads always no-store; no cross-origin request was sent");
+  // M5c: api.ts notes no Date itself, under any name (it imports nothing: the server clock is usePoll.ts readDated's).
+  assert.doesNotMatch(src("lib/api.ts"), /\.note\(/, "api.ts calls no .note(");
+  assert.doesNotMatch(src("lib/api.ts"), /^\s*import\b/m, "api.ts imports nothing");
   assert.deepEqual(["/api/conclusion/global", "/api/war-room/latest", "/api/threads/timeframe?chart=H1", "/api/x?q=a%09b"].map(sameOrigin), [true, true, true, true]);
   assert.equal(typeof location, "undefined", "under node the safe base resolves the paths");
   assert.match(src("lib/api.ts"), /return new URL\(path, here\)\.origin === new URL\(here\)\.origin;/);
@@ -887,17 +895,20 @@ test("PS35 (b) the server clock: the reads' Date, same-origin and no-store only;
  * is the cadence in force at t, `answer(t)` what a read sent at t brings ("ok" or "502"; it settles at once). Returns
  * the send times and, per second, whether the route is errored.
  */
-function scheduleRun({ until, cadence, answer, kicks = () => false }) {
+function scheduleRun({ until, cadence, answer, kicks = () => false, fastMs = 60_000 }) {
   let lastSend = null, errored = false;
-  const sends = [], erroredAt = [];
+  const sends = [], erroredAt = [], recoveries = [];
+  const gate = recoveryGate();
   const send = (t) => { lastSend = t; sends.push(t); errored = answer(t) !== "ok"; };
   send(0); // the mount read
   for (let t = 1_000; t <= until; t += 1_000) {
-    if (kicks(t) && errored) send(t); // recoveryReads: the push turned live, or a replay arrived
+    // A recovery read (the push turned live, or a replay arrived); follow-up of #520: at most one per fast cadence,
+    // spaced from the last recovery read (recoveryGate), so it still goes at once after the regular reads.
+    if (kicks(t) && gate.take(["r"], () => errored, () => false, fastMs, t).length) { recoveries.push(t); send(t); }
     else if (dueReads([{ key: "r", lastSend, every: cadence(t, errored) }], t).due.length) send(t);
     erroredAt.push([t, errored]);
   }
-  return { sends, erroredAt };
+  return { sends, erroredAt, recoveries };
 }
 
 test("PS36 should_fix (a): an errored route stays on the fast cadence; it reads once when the push turns live or a replay arrives", () => {
@@ -912,34 +923,53 @@ test("PS36 should_fix (a): an errored route stays on the fast cadence; it reads 
   assert.deepEqual(run.sends.slice(0, 4), [0, 300_000, 360_000, 660_000], "fast while errored, the fallback cadence again once good");
   const recovered = run.erroredAt.find(([t, e]) => t > 300_000 && !e)[0];
   assert.ok(recovered - back <= 60_000, `recovered ${(recovered - back) / 1000}s after the server is back (within the fast cadence)`);
-  // The same, with the hub's replay on a reconnect at 5:20: the errored route reads at once.
+  // The same, with the hub's replay on a reconnect at 5:20: the errored route reads at once (20 s after its failed
+  // 5:00 read: follow-up of #520, the spacing is from the last RECOVERY read, never from the last send).
   const kicked = scheduleRun({ until: 900_000, cadence: (t, e) => cadenceOf(e, 300_000, 60_000), answer: (t) => (t >= 300_000 && t < back ? "502" : "ok"), kicks: (t) => t === 320_000 });
-  assert.deepEqual(kicked.sends.slice(0, 3), [0, 300_000, 320_000], "the replay's read at 5:20");
-  // An offline start: every read "net" until the Wi-Fi is back at 2:03, when the socket connects and turns live.
+  assert.deepEqual(kicked.sends.slice(0, 3), [0, 300_000, 320_000], "the replay's read at 5:20, at once");
+  assert.equal(kicked.erroredAt.find(([t]) => t === 320_000)[1], false, "recovered at once");
+  // A replay every second while the 502 lasts: at most one recovery read per fast cadence, on top of the regular reads.
+  const spaced = scheduleRun({ until: 900_000, cadence: (t, e) => cadenceOf(e, 300_000, 60_000), answer: (t) => (t >= 300_000 && t < 400_000 ? "502" : "ok"), kicks: (t) => t % 1_000 === 0 });
+  const rgaps = spaced.recoveries.slice(1).map((t, i) => t - spaced.recoveries[i]);
+  assert.ok(spaced.recoveries.length >= 1 && rgaps.every((g) => g >= 60_000), `recovery reads at ${spaced.recoveries.map((t) => t / 1000)}s: one per fast cadence`);
+  for (const t of spaced.sends) assert.ok(spaced.sends.filter((u) => u > t - 60_000 && u <= t).length <= 2, `at most a regular and a recovery read per fast cadence (at ${t / 1000}s)`);
+  // An offline start: every read "net" until the Wi-Fi is back at 2:03, when the socket connects and turns live: a
+  // read that second (3 s after the failed 2:00 read), live at once.
   const online = 123_000;
   const offline = scheduleRun({ until: 400_000, cadence: (t, e) => cadenceOf(e, t >= online ? 300_000 : 60_000, 60_000), answer: (t) => (t < online ? "net" : "ok"), kicks: (t) => t === online });
   assert.ok(offline.sends.includes(online), "a read the second the push turns live");
   assert.equal(offline.erroredAt.find(([t]) => t === online)[1], false, "live at once, not 5 minutes later");
+  // The gate: spaced from its own last recovery read, per route; nothing recorded for a route it does not read.
+  const g = recoveryGate();
+  assert.deepEqual(g.take(["a", "b"], () => true, (k) => k === "b", 60_000, 0), ["a"], "b in flight: not read, not recorded");
+  assert.deepEqual(g.take(["a", "b"], () => true, () => false, 60_000, 30_000), ["b"], "a 30 s after its recovery read: no; b: yes");
+  assert.deepEqual(g.take(["a", "b"], () => true, () => false, 60_000, 60_000), ["a"]);
+  assert.deepEqual(g.take(["c"], () => false, () => false, 60_000, 60_000), [], "not errored: never");
 
   // Which routes read: the errored ones, never one in flight (single-flight).
   assert.deepEqual([turnedLive(false, true), turnedLive(true, true), turnedLive(true, false), turnedLive(false, false)], [true, false, false, false]);
   const err = new Set(["/api/conclusion/global", "/api/threads/timeframe?chart=D1", "/api/news/daily"]);
   const flying = new Set(["/api/threads/timeframe?chart=D1"]);
-  assert.deepEqual(recoveryReads(["/api/conclusion/global", "/api/threads/timeframe?chart=D1", "/api/threads/timeframe?chart=H1", "/api/news/daily"], (p) => err.has(p), (p) => flying.has(p)), ["/api/conclusion/global", "/api/news/daily"]);
+  assert.deepEqual(recoveryReads(["/api/conclusion/global", "/api/threads/timeframe?chart=D1", "/api/threads/timeframe?chart=H1", "/api/news/daily"], (p) => err.has(p), (p) => flying.has(p), () => null, 60_000, now), ["/api/conclusion/global", "/api/news/daily"]);
 
   const mk = src("lib/market.tsx");
   assert.match(mk, /const intervalOf = \(path: string\) => cadenceOf\(route\(path\)\.error != null, FAST_PATHS\.includes\(path\) \? POLL_MS : slowMs, POLL_MS\);/, "market: 60 s while errored");
-  assert.match(mk, /if \(threadsSnap\.replay\) for \(const p of recoveryReads\(TF_CHARTS\.map\(threadPath\), errored, inFlight\)\) void read\(p\);/, "a rooms replay reads the errored rooms");
-  assert.match(mk, /if \(decisionSnap\.replay\) for \(const p of recoveryReads\(\[GLOBAL_PATH\], errored, inFlight\)\) void read\(p\);/, "a decision replay reads an errored decision");
-  assert.match(mk, /if \(turnedLive\(wasLive\.current, push\.live\)\) for \(const p of recoveryReads\(ALL_PATHS, errored, inFlight\)\) void read\(p\);\n\s+wasLive\.current = push\.live;/, "push turning live reads every errored route");
+  // Follow-up of #520: the providers space recovery reads by their own gate (the last recovery read), never the last send.
+  assert.match(mk, /const gate = useRef\(recoveryGate\(\)\);\n\s+const recover = \(paths: readonly string\[\]\) => \{\n\s+for \(const p of gate\.current\.take\(paths, errored, inFlight, POLL_MS, localNow\(\)\)\) void read\(p\);/, "recover: errored, not in flight, a fast cadence after the last recovery read");
+  assert.match(mk, /if \(threadsSnap\.replay\) recover\(TF_CHARTS\.map\(threadPath\)\);/, "a rooms replay reads the errored rooms");
+  assert.match(mk, /if \(decisionSnap\.replay\) recover\(\[GLOBAL_PATH\]\);/, "a decision replay reads an errored decision");
+  assert.match(mk, /if \(turnedLive\(wasLive\.current, push\.live\)\) recover\(ALL_PATHS\);\n\s+wasLive\.current = push\.live;/, "push turning live reads every errored route");
+  assert.doesNotMatch(mk, /recoveryReads\(|recoveryDue\(/, "no recovery spaced at the call site (e.g. from sentAt)");
   const wr = src("lib/warroom.tsx");
   assert.match(wr, /usePoll\(\(\) => readDated\(WAR_ROOM_PATH\), push\.live \? POLL_LIVE_MS : POLL_MS, \[\], POLL_MS\);/, "the 15m room: 10 s while errored");
   assert.match(wr, /if \(snap\.replay\) recover\.current\(\);/);
   assert.match(wr, /if \(turnedLive\(wasLive\.current, push\.live\)\) recover\.current\(\);/);
-  assert.match(wr, /if \(recoveryReads\(\[WAR_ROOM_PATH\], \(\) => war\.error != null, \(\) => !!war\.busy\)\.length\) war\.nudge\(\);/);
+  assert.match(wr, /recover\.current = \(\) => \{ if \(war\.error != null\) war\.nudge\(\); \};/, "the 15m room: nudge (single-flight, spaced)");
   const up = src("lib/usePoll.ts");
   assert.match(up, /const every = cadenceOf\(error != null, intervalMs, errorMs\);/);
-  assert.match(up, /const nudge = useCallback\(\(\) => \{ if \(!flight\.current\.busy\) void start\(\); \}, \[start\]\);/, "nudge is single-flight");
+  assert.match(up, /const gate = useRef\(recoveryGate\(\)\);/);
+  assert.match(up, /const nudge = useCallback\(\(\) => \{ if \(gate\.current\.take\(\["read"\], \(\) => true, \(\) => flight\.current\.busy, fastMs\.current, localNow\(\)\)\.length\) void start\(\); \}, \[start\]\);/, "nudge is single-flight and spaced from its own last read");
+  assert.doesNotMatch(up, /recoveryDue\(lastSend/, "never spaced from the last send");
 });
 
 test("PS37 should_fix (b): a cadence change keeps the phase (max(now, lastSend + new interval)); a socket flapping every 1–4 min still gets its fallback reads", () => {
@@ -973,42 +1003,54 @@ test("PS37 should_fix (b): a cadence change keeps the phase (max(now, lastSend +
   assert.equal(old, 0, "the restarted interval: no fallback read in 3 hours");
 
   const up = src("lib/usePoll.ts");
-  assert.match(up, /const r = dueReads\(plan\(\), localNow\(\), document\.visibilityState === "visible"\);\n\s+if \(r\.due\.length\) void start\(\);\n\s+if \(r\.waitMs != null\) arm\(r\.waitMs\);/, "usePoll: a timeout chain on dueReads");
-  assert.match(up, /lastSend\.current = localNow\(\);/, "every read is the send the phase counts from");
+  // Follow-up of #520: the chain is pollState.ts cadenceTimer (PS49 runs it on fake timers); the hooks sync it.
+  const ps = src("lib/pollState.ts");
+  assert.match(ps, /const r = dueReads\(o\.plan\(\), now\(\), visible\(\)\);\n\s+if \(r\.due\.length\) o\.run\(r\.due\);\n(\s+\/\/[^\n]*\n)?\s+if \(r\.waitMs != null && id == null\) arm\(r\.waitMs\);/, "a timeout chain on dueReads");
+  assert.match(up, /sched\.current = cadenceTimer\(\{ plan: \(\): Cadence\[\] => \[\{ key: "read", lastSend: lastSend\.current, every: cadence\.current \}\], run: \(\) => \{ void startRef\.current\(\); \} \}\);/, "usePoll: its one read on the chain");
+  assert.match(up, /const at = localNow\(\);\n\s+lastSend\.current = at;/, "every read is the send the phase counts from");
   assert.doesNotMatch(up.slice(up.indexOf("export function usePoll"), up.indexOf("export function useSchedule")), /setInterval\(\(\) => \{ if \(document\.visibilityState === "visible"\) void start\(\); \}, intervalMs\)/, "no interval restarted with the cadence");
-  assert.match(up, /const r = dueReads\(planRef\.current\(\), localNow\(\), document\.visibilityState === "visible"\);\n\s+if \(r\.due\.length\) runRef\.current\(r\.due\);/, "useSchedule too");
-  assert.match(src("lib/market.tsx"), /sentAt\.current\[path\] = localNow\(\);/, "market: each path's last send");
+  assert.match(up, /sched\.current = cadenceTimer\(\{ plan: \(\) => planRef\.current\(\), run: \(keys\) => runRef\.current\(keys\) \}\);/, "useSchedule too");
+  assert.match(src("lib/market.tsx"), /routes\.current\[path\] = routeSent\(route\(path\), id, at\);\n\s+sentAt\.current\[path\] = at;/, "market: each path's last send");
 });
 
 test("PS38 nit 1: a replay that lands before the first dated read settles is \"checking\": no stale chip, the plan dimmed, then live", () => {
   const OFF = 3 * MIN;
-  let s = routeSent(emptyRoute, 1);
-  assert.equal(firstPending(s), true);
+  let s = routeSent(emptyRoute, 1, T("12:04") + OFF - 200);
+  assert.equal(firstPending(s, T("12:04") + OFF), true);
   s = routePushed(s, { engine: { stance: "SELL" } }, { seq: 2, local: T("12:04") + OFF, at: T("12:00"), replay: true });
-  const f = { hasData: true, ...routeFacts(s, null), intervalMs: 300_000 };
+  const f = { hasData: true, ...routeFacts(s, null, T("12:04") + OFF), intervalMs: 300_000 };
   assert.deepEqual([f.checking, isChecking(f), isStale(f, T("12:04") + OFF), pollPhase({ ...f, loading: false }, T("12:04") + OFF)], [true, true, false, "checking"]);
   assert.deepEqual(planMark(f, T("12:04") + OFF), { show: true, dim: true, suffix: " · checking", note: null }, "dimmed, not dropped");
   assert.equal(staleAt(f), null);
   // The read settles with its Date: the read's data, live, at full strength.
   const good = routeSettled(s, 1, { ok: true, data: { engine: { stance: "SELL", fresh: true } }, at: T("12:04") + OFF + 300, date: T("12:04") });
   const g = { hasData: true, ...routeFacts(good, OFF), intervalMs: 300_000 };
-  assert.deepEqual([firstPending(good), g.checking, pollPhase({ ...g, loading: false }, T("12:05") + OFF), planMark(g, T("12:05") + OFF).dim], [false, undefined, "live", false]);
+  assert.deepEqual([firstPending(good, T("12:04") + OFF + 300), g.checking, pollPhase({ ...g, loading: false }, T("12:05") + OFF), planMark(g, T("12:05") + OFF).dim], [false, undefined, "live", false]);
   // A read in flight with the Date already known (another route answered): aged at once, never checking.
-  const known = { hasData: true, ...routeFacts(s, OFF), intervalMs: 300_000 };
+  const known = { hasData: true, ...routeFacts(s, OFF, T("12:04") + OFF), intervalMs: 300_000 };
   assert.deepEqual([known.checking, known.replayAt, pollPhase({ ...known, loading: false }, T("12:04") + OFF)], [undefined, T("12:00") + OFF, "live"]);
   // The outage case is unchanged: a failed read (with its Date), then a 3 h replay: stale and hidden.
-  let o = routeSettled(routeSent(emptyRoute, 1), 1, { ok: false, error: E502, at: T("15:05") + OFF, date: T("15:05") });
+  let o = routeSettled(routeSent(emptyRoute, 1, T("15:05") + OFF - 300), 1, { ok: false, error: E502, at: T("15:05") + OFF, date: T("15:05") });
   o = routePushed(o, { engine: { stance: "BUY" } }, { seq: 2, local: T("15:05") + OFF + 100, at: T("12:05"), replay: true });
   const of = { hasData: true, ...routeFacts(o, OFF), intervalMs: 300_000 };
   assert.deepEqual([of.checking, pollPhase({ ...of, loading: false }, T("15:06") + OFF), planMark(of, T("15:06") + OFF).note], [undefined, "stale", "plan hidden: decision stale 3h"]);
   // A later read in flight (not the first) never makes it checking.
-  assert.equal(routeFacts(routeSent(o, 3), null).checking, undefined);
+  assert.equal(routeFacts(routeSent(o, 3, T("15:06") + OFF), null, T("15:06") + OFF).checking, undefined);
   // The 15m room: the same through shownFacts' firstPending.
   const slots = takePush({ pushed: null, push: null, pushAt: null }, null, { room: { id: "r" } }, { seq: 2, local: 1, at: T("12:00"), replay: true });
   assert.equal(shownFacts({ error: null, lastOk: null, lastFail: null, failSeq: null, failures: 0 }, null, slots.pushed, null, true).checking, true);
   assert.equal(shownFacts({ error: null, lastOk: null, lastFail: null, failSeq: null, failures: 0 }, null, slots.pushed, null, false).checking, undefined);
-  assert.match(src("lib/warroom.tsx"), /const firstPending = war\.loading && war\.lastOk == null && war\.lastFail == null;/);
+  assert.match(src("lib/warroom.tsx"), /const firstPending = war\.loading && war\.lastOk == null && war\.lastFail == null && checkingWithin\(war\.firstSentAt, now\);/);
   const u = src("components/ui.tsx");
+  // Follow-up of #520 (D9): the Panel's and the PollStrip's tag conditions are one rule (showsTag), "checking" included.
+  const phases = ["loading", "error", "stale", "checking", "live", "idle", null];
+  assert.deepEqual(phases.map((p) => showsTag(p, false)), [false, true, true, true, false, false, false], "a Panel: stale, error and checking");
+  assert.deepEqual(phases.map((p) => showsTag(p, true)), [false, true, true, true, true, false, false], "a Panel with `live`: its time too");
+  assert.deepEqual(phases.map((p) => showsTag(p, false, false)), [false, false, true, true, false, false, false], "a PollStrip: no error tag (its page shows the error box)");
+  assert.deepEqual(phases.map((p) => showsTag(p, true, false)), [false, false, true, true, true, false, false]);
+  assert.match(u, /const tag = poll && phase && showsTag\(phase, live\)\n\s+\? <PollTag poll=\{poll\} phase=\{phase\}/, "the Panel's tag: showsTag");
+  assert.match(u, /const phase = phaseOf\(poll\);\n\s+if \(!showsTag\(phase, live, false\)\) return null;\n\s+return \(\n\s+<div className=\{clsx\("mb-2", className\)\}>/, "the PollStrip's tag: showsTag without error");
+  assert.equal((u.match(/phase === "checking"/g) ?? []).length, 1, "the only other \"checking\" test in ui.tsx is PollTag's own");
   assert.match(u, /if \(phase === "checking"\) \{\n[^\n]*\n\s+return <span [^>]*><Dot tone="plain" \/>checking<\/span>;/, "a muted \"checking\", not the amber stale chip");
   assert.match(u, /replayed: poll\.replayed, replayAt: poll\.replayAt, checking: poll\.checking \}, localNow\(\)\);/);
   assert.match(src("lib/market.tsx"), /checking: f\.checking \?\? false,/);
@@ -1128,4 +1170,212 @@ test("PS45 nit 10 and the offset note: the known limit of (c) and the offset err
   assert.match(line, /more than 1 s after reading its data can beat a newer replay/);
   assert.match(line, /errs younger/);
   assert.doesNotMatch(log, /errs older/i);
+});
+
+// Follow-up of #520 (round 6): recovery reads spaced by the fast cadence (from the last recovery read); a push backoff that survives a socket that
+// opens, replays and closes; "checking" bounded by CHECKING_MS; the read schedule's re-arm pinned on fake timers.
+
+/**
+ * A hub that accepts the socket, replays both topics and closes it 10 ms later, with the AI Worker answering 502 in
+ * 30 ms, as lib/market.tsx (the rooms and the decision carried by the replays, news and the 5m context not) and the
+ * 15m room (its own socket, in step) run it. `old`: the client before this follow-up (the backoff reset on every
+ * open, recovery reads not spaced). Recovery reads go through recoveryGate, as market.tsx and usePoll's nudge. Returns every send ([key, t, why]) and the reconnect pauses.
+ */
+function openReplayClose({ until, old = false }) {
+  const rooms = ["D1", "H4", "H1"].map((c) => `/api/threads/timeframe?chart=${c}`);
+  const slow = [...rooms, "/api/conclusion/global"], quick = ["/api/news/daily", "/api/m5-context"], war = "/api/war-room/latest";
+  const all = [...slow, ...quick, war];
+  const fast = (k) => (k === war ? 10_000 : 60_000);
+  const sent = {}, settles = {}, errored = {}, sends = [], pauses = [];
+  const read = (k, t, why) => { sent[k] = t; settles[k] = t + 30; sends.push([k, t, why]); };
+  const inFlight = (k, t) => settles[k] != null && settles[k] > t;
+  const backoff = reconnectBackoff();
+  const gate = recoveryGate();
+  let retry = 1000, openAt = 0, live = false;
+  const recover = (keys, t) => {
+    const go = old ? keys.filter((k) => errored[k] && !inFlight(k, t)) : keys.filter((k) => gate.take([k], (x) => !!errored[x], (x) => inFlight(x, t), fast(k), t).length);
+    for (const k of go) read(k, t, "recovery");
+  };
+  for (const k of all) read(k, 0, "mount");
+  for (let t = 0; t <= until; t++) {
+    for (const k of all) if (settles[k] === t) errored[k] = true;
+    // The schedule: each key due at max(now, last send + its cadence) (useSchedule, usePoll: dueReads).
+    const plan = all.map((k) => ({ key: k, lastSend: sent[k] ?? null, every: cadenceOf(!!errored[k], k === war ? (live ? 300_000 : 10_000) : quick.includes(k) ? 60_000 : live ? 300_000 : 60_000, fast(k)) }));
+    for (const k of dueReads(plan, t).due) read(k, t, "schedule");
+    if (t === openAt) { backoff.opened(t); if (old) retry = 1000; }
+    if (t === openAt + 5) {
+      // The replays (both topics, and the 15m room's), then the push turns live: recover the carried, then all.
+      recover(rooms, t); recover(["/api/conclusion/global"], t); recover([war], t); recover(all.filter((k) => k !== war), t);
+      live = true;
+    }
+    if (t === openAt + 10) {
+      live = false;
+      const pause = old ? retry : backoff.closed(t);
+      if (old) retry = Math.min(60_000, retry * 2);
+      pauses.push(pause);
+      openAt = t + pause;
+    }
+  }
+  return { sends, pauses, all, fast };
+}
+
+test("PS46 round 6 nit 1: a hub that opens, replays and closes with a fast 502: at most one recovery read per fast cadence per route, and the backoff grows", () => {
+  // (a) A recovery read only a fast cadence after the route's last recovery read.
+  assert.deepEqual([recoveryDue(null, 60_000, 0), recoveryDue(0, 60_000, 59_999), recoveryDue(0, 60_000, 60_000)], [true, false, true]);
+  const lastRecovery = { a: now - 61_000, b: now - 5_000, c: null };
+  assert.deepEqual(recoveryReads(["a", "b", "c", "d"], (k) => k !== "d", () => false, (k) => lastRecovery[k] ?? null, 60_000, now), ["a", "c"], "b's recovery read was 5 s ago; d is not errored");
+  assert.deepEqual(recoveryReads(["a"], () => true, () => true, () => null, 60_000, now), [], "never beside its read in flight");
+
+  // (b) The reconnect pause: reset only by a socket open PUSH_STEADY_MS or a live snapshot, never by the open itself.
+  assert.equal(PUSH_STEADY_MS, 5_000);
+  const b = reconnectBackoff();
+  const pauses = [];
+  for (let i = 0, t = 0; i < 9; i++) { b.opened(t); t += 10; pauses.push(b.closed(t)); t += pauses.at(-1); }
+  assert.deepEqual(pauses, [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000], "open, replay, close: 1 s, 2 s, 4 s … 60 s");
+  b.opened(0); assert.equal(b.closed(4_999), 60_000, "open 4.999 s: still backing off");
+  b.opened(0); assert.equal(b.closed(5_000), 1_000, "open 5 s: the hub serves; retry soon");
+  for (let i = 0; i < 4; i++) b.closed(0);
+  b.opened(0); b.live(); assert.equal(b.closed(10), 1_000, "a live (non-replay) snapshot resets it, however short the socket");
+  assert.equal(reconnectBackoff().closed(0), 1_000, "a socket that never opened: the first pause");
+
+  // The loop, 60 s and 10 min, against the client before this follow-up.
+  for (const until of [60_000, 600_000]) {
+    const now6 = openReplayClose({ until }), was = openReplayClose({ until, old: true });
+    const rate = (r) => r.sends.length / (until / 1000);
+    for (const k of now6.all) {
+      const rec = now6.sends.filter(([x, , why]) => x === k && why === "recovery").map(([, t]) => t);
+      const rgaps = rec.slice(1).map((t, i) => t - rec[i]);
+      assert.ok(rgaps.every((g) => g >= now6.fast(k)), `${k}: at most one recovery read per fast cadence (${rec.map((t) => t / 1000)}s)`);
+      const reg = now6.sends.filter(([x, , why]) => x === k && why !== "recovery").map(([, t]) => t);
+      const all = now6.sends.filter(([x]) => x === k).map(([, t]) => t);
+      for (const t of reg) assert.ok(all.filter((u) => u > t - now6.fast(k) && u <= t).length <= 2, `${k}: the regular read plus at most one recovery read per fast cadence (at ${t / 1000}s)`);
+    }
+    const p = now6.pauses;
+    assert.ok(p.every((x, i) => i === 0 || x === 60_000 || x === 2 * p[i - 1]), `the pause doubles to 60 s: ${p.slice(0, 8).map((x) => x / 1000)}s`);
+    assert.ok(was.pauses.every((x) => x === 1_000), "before: a reconnect every second");
+    assert.ok(rate(was) > 5, `before: ${rate(was).toFixed(2)} requests/s over ${until / 1000} s`);
+    assert.ok(rate(now6) < 0.75, `now: ${rate(now6).toFixed(2)} requests/s over ${until / 1000} s (well under 1/s)`);
+  }
+
+  const ps = src("lib/push.ts");
+  assert.match(ps, /const backoff = reconnectBackoff\(\);/);
+  assert.match(ps, /ws\.onopen = \(\) => \{\n\s+backoff\.opened\(localNow\(\)\);/, "the open itself resets nothing");
+  assert.match(ps, /if \(!arrival\.replay\) backoff\.live\(\);/, "a live snapshot resets the pause");
+  assert.match(ps, /timer = window\.setTimeout\(open, backoff\.closed\(localNow\(\)\)\);/);
+  assert.doesNotMatch(ps, /retry = 1000|let retry\b/, "no reset on open left");
+});
+
+test("PS47 round 6 nit 2: \"checking\" expires to stale with the plan hidden after CHECKING_MS while the first read hangs", () => {
+  assert.equal(CHECKING_MS, 10_000);
+  // A reload: the mount read is sent at 15:05 and hangs; the hub's 3-hour-old replay lands 150 ms later; no Date known.
+  const t0 = T("15:05");
+  let s = routeSent(emptyRoute, 1, t0);
+  s = routePushed(s, { engine: { stance: "BUY" } }, { seq: 2, local: t0 + 150, at: T("12:05"), replay: true });
+  const at = (t, r = s) => { const f = { hasData: true, ...routeFacts(r, null, t), intervalMs: 300_000 }; return [f.checking ?? false, pollPhase({ ...f, loading: false }, t), planMark(f, t)]; };
+  assert.deepEqual(at(t0 + 5_000), [true, "checking", { show: true, dim: true, suffix: " · checking", note: null }], "checking while the read is young");
+  assert.deepEqual(at(t0 + CHECKING_MS - 1)[1], "checking");
+  assert.deepEqual(at(t0 + CHECKING_MS), [false, "stale", { show: false, dim: true, suffix: "", note: "plan hidden: decision stale" }], "then the unknown-age rule: stale, the plan hidden");
+  assert.deepEqual(at(t0 + 3 * 3_600_000)[1], "stale", "and for as long as the hang lasts");
+  // The render that turns it (useWakeAt): at the end of the checking; none once it is over or the read settled.
+  assert.deepEqual([routeCheckingUntil(s, t0 + 5_000), routeCheckingUntil(s, t0 + CHECKING_MS), routeCheckingUntil(routeSettled(s, 1, { ok: false, error: E502, at: t0 + 1_000 }), t0 + 2_000)], [t0 + CHECKING_MS, null, null]);
+  // A later send (Retry now during the hang) never extends it: the bound is the first send's.
+  const retried = routeSent(s, 3, t0 + 8_000);
+  assert.deepEqual([retried.firstSent, at(t0 + CHECKING_MS, retried)[1]], [t0, "stale"]);
+  assert.equal(firstPending(routeSent(emptyRoute, 1, Number.NaN), t0), false, "no send time: never checking");
+  // The 15m room: the same bound on usePoll's first send.
+  assert.deepEqual([checkingWithin(t0, t0), checkingWithin(t0, t0 + CHECKING_MS - 1), checkingWithin(t0, t0 + CHECKING_MS), checkingWithin(null, t0), checkingWithin(t0, t0 - 1)], [true, true, false, false, false]);
+  assert.deepEqual([checkingUntil(t0), checkingUntil(null)], [t0 + CHECKING_MS, null]);
+
+  const mk = src("lib/market.tsx");
+  assert.match(mk, /const checkingEnds = ALL_PATHS\.map\(\(p\) => routeCheckingUntil\(route\(p\), now\)\)\.filter\(\(t\): t is number => t != null\);\n\s+useWakeAt\(checkingEnds\.length \? Math\.min\(\.\.\.checkingEnds\) : null, bump\);/, "market: one render at the end of a checking");
+  const wr = src("lib/warroom.tsx");
+  assert.match(wr, /useWakeAt\(firstPending \? checkingUntil\(war\.firstSentAt\) : null, rerender\);/, "the 15m room too");
+  const up = src("lib/usePoll.ts");
+  assert.match(up, /setFirstSentAt\(\(v\) => v \?\? at\);/, "usePoll keeps its first send");
+  assert.match(up, /setSentSeq\(null\); setFailSeq\(null\); setFirstSentAt\(null\); \}/, "a deps change starts it again");
+  assert.match(up, /const w = staleWake\(at, localNow\(\)\);\n\s+if \(w\.rearmMs != null\) arm\(w\.rearmMs\);\n\s+else if \(w\.render\) wakeRef\.current\(\);/, "useWakeAt: armed again when it fires early");
+});
+
+/** Fake timers for cadenceTimer: `run(until)` fires every timer due by then, in time order. */
+function fakeTimers() {
+  let t = 0, n = 0;
+  const q = new Map();
+  return {
+    now: () => t,
+    timers: { set: (fn, ms) => { q.set(++n, { at: t + ms, fn }); return n; }, clear: (id) => { q.delete(id); } },
+    run(until) {
+      for (;;) {
+        let next = null;
+        for (const [id, v] of q) if (v.at <= until && (next == null || v.at < next[1].at)) next = [id, v];
+        if (next == null) break;
+        q.delete(next[0]);
+        t = next[1].at;
+        next[1].fn();
+      }
+      t = until;
+    },
+    get armed() { return q.size; },
+  };
+}
+
+/**
+ * usePoll's schedule on fake timers: its one read on cadenceTimer, synced after every render with the cadence in force
+ * (cadenceOf: `fastMs` while errored, else `interval(t)`); a read settles `lat` ms after its send with `answer(t)`.
+ */
+function pollOnTimers({ interval, fastMs, answer, lat = 300 }) {
+  const ft = fakeTimers();
+  let lastSend = null, error = false;
+  const sends = [];
+  const every = () => cadenceOf(error, interval(ft.now()), fastMs);
+  const sched = cadenceTimer({ plan: () => [{ key: "read", lastSend, every: every() }], run: () => send(), now: ft.now, visible: () => true, timers: ft.timers });
+  const render = () => sched.sync(every()); // the hook's effect after every render
+  const send = () => {
+    const t = ft.now();
+    lastSend = t; sends.push(t);
+    ft.timers.set(() => { error = answer(t) !== "ok"; render(); }, lat);
+  };
+  send(); render(); // the mount read, then the first render's sync
+  return { ft, sends, render };
+}
+
+test("PS48 round 6 nit 3 (C3, C9): the read schedule's re-arm on fake timers: an errored read reads again a fast cadence later; a 5 s socket close inside a 300 s cadence still reads", () => {
+  // An errored read at T (the 5-minute fallback with the push live, the 15m room's fast 10 s): the next read at T + 10 s.
+  const T5 = 300_000;
+  const a = pollOnTimers({ interval: () => 300_000, fastMs: 10_000, answer: (t) => (t === T5 ? "502" : "ok") });
+  a.ft.run(1_000_000);
+  assert.deepEqual(a.sends.slice(0, 4), [0, T5, T5 + 10_000, T5 + 10_000 + 300_000], "502 at 5:00, read again at 5:10, then the fallback again");
+  assert.equal(a.ft.armed, 1, "one timer armed, never a second chain");
+
+  // The socket closes for 5 s at 4:10 (the cadence 10 s), then reopens (300 s again): the read the close made due
+  // goes at once, and the next one keeps the phase (a re-arm with the cadence, not at once, would read at 9:15).
+  const b = pollOnTimers({ interval: (t) => (t >= 250_000 && t < 255_000 ? 10_000 : 300_000), fastMs: 10_000, answer: () => "ok" });
+  b.ft.run(250_000); b.render(); // the push drops: a render with the new cadence
+  b.ft.run(255_000); b.render(); // the push is back
+  b.ft.run(1_000_000);
+  assert.ok(b.sends.some((t) => t > 0 && t <= 300_000), `a read within the 300 s cadence: ${b.sends.map((t) => t / 1000)}s`);
+  assert.deepEqual(b.sends.slice(0, 3), [0, 250_000, 550_000]);
+  const gaps = b.sends.slice(1).map((t, i) => t - b.sends[i]);
+  assert.ok(Math.max(...gaps) <= 300_000, "no gap past the cadence");
+
+  // sync: the same cadence changes nothing (no restart per render); a new one restarts with a check at once.
+  const ft = fakeTimers();
+  let sets = 0;
+  const counted = { set: (fn, ms) => { sets++; return ft.timers.set(fn, ms); }, clear: ft.timers.clear };
+  const c = cadenceTimer({ plan: () => [{ key: "r", lastSend: 0, every: 60_000 }], run: () => {}, now: ft.now, visible: () => true, timers: counted });
+  c.sync(60_000); c.sync(60_000); c.sync(60_000);
+  assert.equal(sets, 1, "three renders, one timer");
+  c.sync(10_000);
+  assert.deepEqual([sets, ft.armed], [2, 1], "a cadence change: the old timer cleared, one new");
+  c.stop();
+  assert.equal(ft.armed, 0, "stop: none left");
+  c.sync(10_000);
+  assert.equal(ft.armed, 1, "a remount syncs again");
+
+  // The hooks: synced after every render (no deps to forget), stopped on unmount.
+  const up = src("lib/usePoll.ts");
+  assert.match(up, /useEffect\(\(\) => \{ sched\.current\?\.sync\(every\); \}\);\n\s+useEffect\(\(\) => \(\) => sched\.current\?\.stop\(\), \[\]\);/, "usePoll: sync(every) after every render");
+  assert.match(up, /useEffect\(\(\) => \{ sched\.current\?\.sync\(cadenceKey\); \}\);\n\s+useEffect\(\(\) => \(\) => sched\.current\?\.stop\(\), \[\]\);/, "useSchedule: sync(cadenceKey) after every render");
+  assert.match(up, /const cadence = useRef\(every\);\n\s+cadence\.current = every;/, "the plan reads the cadence in force");
+  const ps = src("lib/pollState.ts");
+  assert.match(ps, /sync\(k: unknown\): void \{\n\s+if \(synced && Object\.is\(k, key\)\) return;\n\s+synced = true; key = k;\n\s+clear\(\);\n(\s+\/\/[^\n]*\n)?\s+arm\(0\);/, "a change restarts the chain with a check at once");
 });

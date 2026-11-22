@@ -19,6 +19,9 @@
  * "checking" (no stale chip, the plan dimmed); a route whose last read failed reads on the fast cadence, and once
  * when the push turns live or a replay arrives for it (cadenceOf, dueReads, recoveryReads); a cadence change keeps
  * the phase (the next read at max(now, last send + interval)).
+ * Follow-up of #520 (round 6): a route's recovery reads are spaced by its fast cadence (recoveryGate), the push's
+ * reconnect backoff survives a socket that opens, replays and closes (reconnectBackoff), "checking" lasts at most
+ * CHECKING_MS from the first send (checkingWithin), and the read schedule is one pure timer chain (cadenceTimer).
  */
 export type PollFacts = {
   hasData: boolean;
@@ -41,7 +44,8 @@ export type PollFacts = {
   /**
    * The route's own first read is in flight and no Date is known yet (fifth review of #520): a replay on screen of
    * unknown age is "checking" (no stale chip, the plan dimmed, not dropped) until that read settles; stale (and the
-   * plan hidden) only if it fails without a Date or brings none.
+   * plan hidden) only if it fails without a Date or brings none. Follow-up of #520: only within CHECKING_MS of the
+   * first read's send (checkingWithin); a read that hangs longer leaves the unknown-age rule (stale, the plan hidden).
    */
   checking?: boolean;
 };
@@ -68,6 +72,23 @@ export type PollPhase = "loading" | "error" | "stale" | "checking" | "live" | "i
  */
 export function isChecking(f: Pick<PollFacts, "error"> & AgeFacts): boolean {
   return !!f.checking && !!f.replayed && f.error == null && ageBase(f) == null;
+}
+
+/**
+ * How long a first read in flight keeps a replay of unknown age "checking" (ms; follow-up of #520): past it, with every
+ * dated read hung, the unknown-age rule applies (stale, the plan hidden), so a reload never keeps a 3-hour-old
+ * replay's plan drawn, dimmed as "checking", for as long as the hang lasts.
+ */
+export const CHECKING_MS = 10_000;
+
+/** Whether a first read sent at `firstSent` (localNow) may still be checking at `now`: within CHECKING_MS of its send. */
+export function checkingWithin(firstSent: number | null | undefined, now: number): boolean {
+  return firstSent != null && now >= firstSent && now - firstSent < CHECKING_MS;
+}
+
+/** When the checking of a first read sent at `firstSent` runs out (ms, localNow), for a timer; null with no send. */
+export function checkingUntil(firstSent: number | null | undefined): number | null {
+  return firstSent == null ? null : firstSent + CHECKING_MS;
 }
 
 /**
@@ -459,6 +480,8 @@ export function shownFacts<F extends ReadFacts>(f: F, live: PushMark | null, sho
  * - `failSeq`: the send of the last failed read.
  * - `sent`, `settled`: the newest read sent and the newest settled (their sequence numbers). A read that settles after
  *   a newer one has is dropped; `sent > settled` is the route's own read in flight.
+ * - `firstSent`: when the route's first read was sent (localNow; null before one), for the bound of "checking"
+ *   (follow-up of #520: checkingWithin).
  */
 export type RouteState = PushSlots & {
   data: unknown;
@@ -471,18 +494,19 @@ export type RouteState = PushSlots & {
   failures: number;
   sent: number;
   settled: number;
+  firstSent: number | null;
 };
 
-export const emptyRoute: RouteState = { data: null, dataSeq: null, read: null, pushed: null, push: null, pushAt: null, lastOk: null, lastFail: null, failSeq: null, error: null, failures: 0, sent: 0, settled: 0 };
+export const emptyRoute: RouteState = { data: null, dataSeq: null, read: null, pushed: null, push: null, pushAt: null, lastOk: null, lastFail: null, failSeq: null, error: null, failures: 0, sent: 0, settled: 0, firstSent: null };
 
 const withShown = (s: RouteState): RouteState => {
   const v = shownSide(s.read, s.pushed);
   return { ...s, data: v.data, dataSeq: v.seq };
 };
 
-/** A read of the route is sent, at `seq` (nextSeq): its id. */
-export function routeSent(s: RouteState, seq: number): RouteState {
-  return { ...s, sent: Math.max(s.sent, seq) };
+/** A read of the route is sent, at `seq` (nextSeq): its id; `at` is the send's local time (localNow), kept for the first send. */
+export function routeSent(s: RouteState, seq: number, at: number): RouteState {
+  return { ...s, sent: Math.max(s.sent, seq), firstSent: s.firstSent ?? (Number.isFinite(at) ? at : null) };
 }
 
 /**
@@ -510,16 +534,24 @@ export function routePushed(s: RouteState, data: unknown, p: PushArrival): Route
   return next == null ? s : withShown({ ...s, ...next });
 }
 
-/** The route's own first read is in flight: sent, and none of its reads has settled (fifth review of #520). */
-export const firstPending = (s: Pick<RouteState, "sent" | "settled">): boolean => s.sent > 0 && s.settled === 0;
+/**
+ * The route's own first read is in flight: sent, and none of its reads has settled (fifth review of #520), within
+ * CHECKING_MS of that send (follow-up of #520: checkingWithin; a hung first read stops being "pending" then).
+ */
+export const firstPending = (s: Pick<RouteState, "sent" | "settled" | "firstSent">, now: number): boolean => s.sent > 0 && s.settled === 0 && checkingWithin(s.firstSent, now);
+
+/** When the route's checking runs out (ms, localNow), while its first read is pending (firstPending); else null. */
+export function routeCheckingUntil(s: Pick<RouteState, "sent" | "settled" | "firstSent">, now: number): number | null {
+  return firstPending(s, now) ? checkingUntil(s.firstSent) : null;
+}
 
 /**
- * The route's facts as a poll shows them (shownFacts): its own reads with the last live push, and a replay on screen
- * aged through `offset` (pageServer.offset(): the server-to-local offset; null: unknown age), checking while its
- * first read is in flight (firstPending).
+ * The route's facts as a poll shows them at `now` (shownFacts): its own reads with the last live push, and a replay
+ * on screen aged through `offset` (pageServer.offset(): the server-to-local offset; null: unknown age), checking while
+ * its first read is in flight and younger than CHECKING_MS (firstPending).
  */
-export function routeFacts(s: RouteState, offset: number | null = null): ReadFacts & Partial<Pick<PollFacts, "replayed" | "replayAt" | "checking">> {
-  return shownFacts({ error: s.error, lastOk: s.lastOk, lastFail: s.lastFail, failSeq: s.failSeq, failures: s.failures }, s.push, shownSide(s.read, s.pushed).push, offset, firstPending(s));
+export function routeFacts(s: RouteState, offset: number | null = null, now: number = localNow()): ReadFacts & Partial<Pick<PollFacts, "replayed" | "replayAt" | "checking">> {
+  return shownFacts({ error: s.error, lastOk: s.lastOk, lastFail: s.lastFail, failSeq: s.failSeq, failures: s.failures }, s.push, shownSide(s.read, s.pushed).push, offset, firstPending(s, now));
 }
 
 /** How long a stale decision's plan lines stay on the chart, dimmed and labelled, before they are dropped (ms). */
@@ -587,12 +619,118 @@ export function dueReads(routes: Cadence[], now: number, visible = true): { due:
 export const turnedLive = (was: boolean, live: boolean): boolean => live && !was;
 
 /**
- * The routes to read once at once (fifth review of #520): of `routes` (every route when the push turns live, the
- * routes a replay carries when one arrives), those whose last read failed and whose read is not in flight
- * (single-flight). The hub answering means the network is back, so an errored route need not wait its cadence.
+ * Whether a recovery read may be sent now (follow-up of #520): the route's last RECOVERY read (localNow; null before
+ * one) is at least its fast cadence (`fastMs`, the cadence while errored: cadenceOf) ago. Spaced from the last
+ * recovery read, not the last send, so the push turning live after an offline start or a transient 502 still reads
+ * at once; a hub that accepts the socket, replays and closes it, with the AI Worker answering 502 fast, used to get
+ * one read per errored route per reconnect (about 7 requests/s per tab) and now gets at most one recovery read per
+ * fast cadence per route on top of the regular reads.
  */
-export function recoveryReads(routes: readonly string[], errored: (key: string) => boolean, inFlight: (key: string) => boolean): string[] {
-  return routes.filter((k) => errored(k) && !inFlight(k));
+export function recoveryDue(lastRecovery: number | null, fastMs: number, now: number): boolean {
+  return lastRecovery == null || now - lastRecovery >= fastMs;
+}
+
+/**
+ * The routes to read once at once (fifth review of #520): of `routes` (every route when the push turns live, the
+ * routes a replay carries when one arrives), those whose last read failed, whose read is not in flight
+ * (single-flight) and whose last recovery read is at least the fast cadence ago (follow-up of #520: recoveryDue).
+ * The hub answering means the network is back, so an errored route need not wait its cadence.
+ */
+export function recoveryReads(routes: readonly string[], errored: (key: string) => boolean, inFlight: (key: string) => boolean, lastRecovery: (key: string) => number | null, fastMs: number, now: number): string[] {
+  return routes.filter((k) => errored(k) && !inFlight(k) && recoveryDue(lastRecovery(k), fastMs, now));
+}
+
+/**
+ * The recovery reads of a provider or a poll (follow-up of #520): `take` returns the routes to read now
+ * (recoveryReads) and records each as that route's last recovery read, so the spacing is kept here, never at the
+ * call site. One gate per provider (lib/market.tsx) or poll (usePoll's nudge), for its whole life.
+ */
+export function recoveryGate() {
+  const last: Record<string, number> = {};
+  return {
+    take(routes: readonly string[], errored: (key: string) => boolean, inFlight: (key: string) => boolean, fastMs: number, now: number): string[] {
+      const go = recoveryReads(routes, errored, inFlight, (k) => last[k] ?? null, fastMs, now);
+      for (const k of go) last[k] = now;
+      return go;
+    },
+  };
+}
+
+/** Timers as cadenceTimer uses them (the page's setTimeout; a fake in the tests). */
+export type Timers = { set: (fn: () => void, ms: number) => unknown; clear: (id: unknown) => void };
+
+const pageTimers: Timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>) };
+const pageVisible = (): boolean => typeof document === "undefined" || document.visibilityState === "visible";
+
+/**
+ * The read schedule of a poll (usePoll) or a provider (useSchedule) as one timer chain (follow-up of #520), pure so the
+ * tests run it on fake timers. Each timer checks dueReads on `plan()` (each route due at max(now, its last send + its
+ * cadence)), runs the due keys, and arms the next check. `sync(key)` (called after every render with the cadences in
+ * force, e.g. the poll's cadence) restarts the chain with a check at once when the key changed, so a read overdue on
+ * the new cadence goes now and the next one is at its last send + the new cadence; the same key changes nothing.
+ * `stop()` ends it (unmount).
+ */
+export function cadenceTimer(o: { plan: () => Cadence[]; run: (keys: string[]) => void; now?: () => number; visible?: () => boolean; timers?: Timers }) {
+  const now = o.now ?? localNow, visible = o.visible ?? pageVisible, timers = o.timers ?? pageTimers;
+  let id: unknown = null;
+  let key: unknown;
+  let synced = false;
+  const clear = () => { if (id != null) timers.clear(id); id = null; };
+  const arm = (ms: number) => {
+    id = timers.set(() => {
+      id = null;
+      const r = dueReads(o.plan(), now(), visible());
+      if (r.due.length) o.run(r.due);
+      // A run that changed the cadence and synced has armed the chain already.
+      if (r.waitMs != null && id == null) arm(r.waitMs);
+    }, Math.max(0, ms));
+  };
+  return {
+    sync(k: unknown): void {
+      if (synced && Object.is(k, key)) return;
+      synced = true; key = k;
+      clear();
+      // Checked at once: a read overdue on the new cadence (last send + cadence already past) is sent now.
+      arm(0);
+    },
+    stop(): void { clear(); synced = false; key = undefined; },
+  };
+}
+
+/**
+ * The push socket's reconnect pause (follow-up of #520): it doubles from `minMs` up to `maxMs` on each close, and is
+ * reset only once a socket has stayed open PUSH_STEADY_MS (`steadyMs`) or delivered a live (non-replay) snapshot. It
+ * used to reset on every open, so a hub that accepts the socket, replays and closes it was reconnected every second;
+ * such a socket now keeps backing off (1 s, 2 s, 4 s … 60 s). Pure: give it the times.
+ */
+export const PUSH_STEADY_MS = 5_000;
+
+export function reconnectBackoff(minMs = 1_000, maxMs = 60_000, steadyMs = PUSH_STEADY_MS) {
+  let next = minMs;
+  let openedAt: number | null = null;
+  return {
+    /** The socket opened at `at` (localNow). */
+    opened(at: number): void { openedAt = at; },
+    /** A live (non-replay) snapshot arrived: the hub publishes on this socket, so the next close retries soon. */
+    live(): void { next = minMs; },
+    /** The socket closed (or never opened) at `at`: the pause before the next try (ms). */
+    closed(at: number): number {
+      if (openedAt != null && at - openedAt >= steadyMs) next = minMs;
+      openedAt = null;
+      const wait = next;
+      next = Math.min(maxMs, next * 2);
+      return wait;
+    },
+  };
+}
+
+/**
+ * Which phases show a poll's header tag (follow-up of #520): a Panel's stale, error and checking, and live only when
+ * the panel asks for its time (`live`); a PollStrip (`withError` false: its page shows the error box itself) the same
+ * without error.
+ */
+export function showsTag(phase: PollPhase | null, live: boolean, withError = true): boolean {
+  return phase === "stale" || phase === "checking" || (withError && phase === "error") || (live && phase === "live");
 }
 
 /**

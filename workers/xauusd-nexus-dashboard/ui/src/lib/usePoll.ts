@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ApiError, errorText, getDated, type Dated } from "./api";
-import { STALE_TICK_MS, cadenceOf, clockJump, dueReads, isStale, localNow, nextSeq, pageServer, singleFlight, staleAt, staleChanged, staleWake, type Cadence } from "./pollState";
+import { STALE_TICK_MS, cadenceOf, cadenceTimer, clockJump, isStale, localNow, nextSeq, pageServer, recoveryGate, singleFlight, staleAt, staleChanged, staleWake, type Cadence } from "./pollState";
 
 /**
  * A poll or retry read of a same-origin /api/* path with its `Date` (fourth review of #520): no-store (api.ts
@@ -47,6 +47,15 @@ export function readDated<T = any>(path: string): Promise<Dated<T>> {
  * - `nudge()` reads once unless a read is in flight (single-flight): the War Room calls it for an errored read when
  *   the push turns live or a replay arrives.
  * - The clock-jump detector lives as long as the poll (a ref), never re-created with the interval.
+ *
+ * Follow-up of #520 (round 6):
+ * - `nudge()` also waits for the fast cadence: it reads only when its own last read (the last nudge that read) is at
+ *   least the errored cadence ago (recoveryGate), so the push turning live still reads at once, and a hub that opens,
+ *   replays and closes the socket every second adds at most one read per fast cadence.
+ * - The schedule is one pure timer chain (pollState.ts cadenceTimer): an effect after every render syncs it with the
+ *   cadence in force, which restarts it (a check at once) only when that cadence changed.
+ * - `firstSentAt`: when the first read since mount or the last deps change was sent (localNow), for the War Room's
+ *   bound of "checking" (CHECKING_MS).
  */
 export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown[] = [], errorMs = intervalMs) {
   const [data, setData] = useState<T | null>(null);
@@ -58,6 +67,7 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const [failures, setFailures] = useState(0);
   const [sentSeq, setSentSeq] = useState<number | null>(null);
   const [failSeq, setFailSeq] = useState<number | null>(null);
+  const [firstSentAt, setFirstSentAt] = useState<number | null>(null);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -74,7 +84,9 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const read = useCallback(async () => {
     const id = nextSeq();
     seq.current = id;
-    lastSend.current = localNow();
+    const at = localNow();
+    lastSend.current = at;
+    setFirstSentAt((v) => v ?? at);
     if (!hasData.current) setLoading(true);
     pending.current += 1;
     setBusy(true);
@@ -93,12 +105,19 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const start = useCallback(() => flight.current.start(read), [read]);
   /** Retry now: joins a read in flight younger than RETRY_JOIN_MS (a double click starts one read), else reads. */
   const refresh = useCallback(() => flight.current.retry(read), [read]);
-  /** One read now unless one is in flight (single-flight): an errored read when the push turns live. */
-  const nudge = useCallback(() => { if (!flight.current.busy) void start(); }, [start]);
+  // The errored cadence (the fast one) and the nudges' own reads, for nudge's spacing.
+  const fastMs = useRef(cadenceOf(true, intervalMs, errorMs));
+  fastMs.current = cadenceOf(true, intervalMs, errorMs);
+  const gate = useRef(recoveryGate());
+  /**
+   * One read now unless one is in flight (single-flight) or the last nudge that read is younger than the fast cadence
+   * (recoveryGate): an errored read when the push turns live or a replay arrives.
+   */
+  const nudge = useCallback(() => { if (gate.current.take(["read"], () => true, () => flight.current.busy, fastMs.current, localNow()).length) void start(); }, [start]);
 
   // The data: loaded on mount, and again (from empty) when the deps change.
   useEffect(() => {
-    if (mounted.current) { hasData.current = false; setData(null); setError(null); setLastOk(null); setLastFail(null); setFailures(0); setSentSeq(null); setFailSeq(null); }
+    if (mounted.current) { hasData.current = false; setData(null); setError(null); setLastOk(null); setLastFail(null); setFailures(0); setSentSeq(null); setFailSeq(null); setFirstSentAt(null); }
     mounted.current = true;
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,29 +131,28 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const shown = useRef({ stale, facts: { hasData: present, error, lastOk, intervalMs: every } });
   shown.current = { stale, facts: { hasData: present, error, lastOk, intervalMs: every } };
 
-  // The refresh: due at max(now, last send + cadence) while visible (dueReads: a cadence change keeps the phase), and
-  // on becoming visible (the stale verdict first: after a sleep the old data must not read as live while the refresh
-  // is in flight).
+  // The refresh: due at max(now, last send + cadence) while visible (dueReads: a cadence change keeps the phase), one
+  // timer chain (cadenceTimer) synced after every render with the cadence in force: a change restarts it with a
+  // check at once, the same cadence changes nothing.
+  const cadence = useRef(every);
+  cadence.current = every;
+  const startRef = useRef(start);
+  startRef.current = start;
+  const sched = useRef<ReturnType<typeof cadenceTimer> | null>(null);
+  if (sched.current == null) sched.current = cadenceTimer({ plan: (): Cadence[] => [{ key: "read", lastSend: lastSend.current, every: cadence.current }], run: () => { void startRef.current(); } });
+  useEffect(() => { sched.current?.sync(every); });
+  useEffect(() => () => sched.current?.stop(), []);
+  // On becoming visible: the stale verdict first (after a sleep the old data must not read as live while the refresh
+  // is in flight), then a read.
   useEffect(() => {
     if (!every) return;
-    let t = 0;
-    const plan = (): Cadence[] => [{ key: "read", lastSend: lastSend.current, every }];
-    const arm = (ms: number) => {
-      t = window.setTimeout(() => {
-        const r = dueReads(plan(), localNow(), document.visibilityState === "visible");
-        if (r.due.length) void start();
-        if (r.waitMs != null) arm(r.waitMs);
-      }, Math.max(0, ms));
-    };
-    // Checked at once: a read overdue on the new cadence (last send + cadence already past) is sent now.
-    arm(0);
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       if (staleChanged(shown.current.stale, shown.current.facts, localNow())) rerender();
       void start();
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { window.clearTimeout(t); document.removeEventListener("visibilitychange", onVisible); };
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [every, start]);
 
   // A forward clock jump schedules no read: read once now, unless one is in flight (it brings the answer). The
@@ -170,7 +188,29 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
     return () => window.clearTimeout(t);
   }, [lastOk, every]);
 
-  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs: every, busy, sentSeq, failSeq, nudge };
+  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs: every, busy, sentSeq, failSeq, nudge, firstSentAt };
+}
+
+/**
+ * One render at `at` (ms, localNow; follow-up of #520): the end of a "checking" (CHECKING_MS), which no read marks when
+ * every read hangs. A timer that fires early (timers count awake time) is armed again for what is left (staleWake).
+ */
+export function useWakeAt(at: number | null, wake: () => void) {
+  const wakeRef = useRef(wake);
+  wakeRef.current = wake;
+  useEffect(() => {
+    if (at == null) return;
+    let t = 0;
+    const arm = (ms: number) => {
+      t = window.setTimeout(() => {
+        const w = staleWake(at, localNow());
+        if (w.rearmMs != null) arm(w.rearmMs);
+        else if (w.render) wakeRef.current();
+      }, Math.max(0, ms));
+    };
+    arm(at - localNow());
+    return () => window.clearTimeout(t);
+  }, [at]);
 }
 
 /**
@@ -200,21 +240,18 @@ export function useSchedule(plan: () => Cadence[], run: (keys: string[]) => void
     }, STALE_TICK_MS);
     return () => window.clearInterval(t);
   }, []);
+  // One timer chain (cadenceTimer), synced after every render with the cadences in force: a change restarts it with a
+  // check at once (a route overdue on its new cadence is read now).
+  const sched = useRef<ReturnType<typeof cadenceTimer> | null>(null);
+  if (sched.current == null) sched.current = cadenceTimer({ plan: () => planRef.current(), run: (keys) => runRef.current(keys) });
+  useEffect(() => { sched.current?.sync(cadenceKey); });
+  useEffect(() => () => sched.current?.stop(), []);
   useEffect(() => {
-    let t = 0;
-    const arm = (ms: number) => {
-      t = window.setTimeout(() => {
-        const r = dueReads(planRef.current(), localNow(), document.visibilityState === "visible");
-        if (r.due.length) runRef.current(r.due);
-        if (r.waitMs != null) arm(r.waitMs);
-      }, Math.max(0, ms));
-    };
-    // Checked at once: a route overdue on its new cadence is read now.
-    arm(0);
     const onVisible = () => { if (document.visibilityState === "visible") runRef.current(all()); };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { window.clearTimeout(t); document.removeEventListener("visibilitychange", onVisible); };
-  }, [cadenceKey]);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }
 
 /** What a panel needs of a poll to show its state (components/ui.tsx Panel, PollBody, PollError). */

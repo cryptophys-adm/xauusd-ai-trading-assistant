@@ -4,7 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { CHIP, FILL, T, type Tone } from "../lib/tokens";
 import type { Poll } from "../lib/usePoll";
-import { ageBase, localClock, localNow, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, wallOf, type PollPhase } from "../lib/pollState";
+import { ageBase, localClock, localNow, okLine, pollPhase, retryEvery, shortAge, showsTag, staleTitle, utcClock, wallOf, type PollPhase } from "../lib/pollState";
 
 /**
  * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
@@ -37,7 +37,7 @@ export function Panel({ title, icon, right, hint, children, className, poll, liv
   // `staleOpen`: the stale detail (what failed, the last good read) starts open, for a panel traded from.
   const [open, setOpen] = useState(staleOpen);
   const phase = poll ? phaseOf(poll) : null;
-  const tag = poll && phase && (phase === "stale" || phase === "error" || phase === "checking" || (live && phase === "live"))
+  const tag = poll && phase && showsTag(phase, live)
     ? <PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry={pollRetry} />
     : null;
   return (
@@ -189,7 +189,7 @@ export function ErrorLine({ error }: { error: string }) {
 export function PollStrip({ poll, live = false, className }: { poll: Poll; live?: boolean; className?: string }) {
   const [open, setOpen] = useState(false);
   const phase = phaseOf(poll);
-  if (!(phase === "stale" || phase === "checking" || (live && phase === "live"))) return null;
+  if (!showsTag(phase, live, false)) return null;
   return (
     <div className={clsx("mb-2", className)}>
       <div className="flex flex-wrap items-center justify-end gap-2"><PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry /></div>
