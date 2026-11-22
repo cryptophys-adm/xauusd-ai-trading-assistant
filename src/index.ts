@@ -213,6 +213,7 @@ import { readGbm, gbmStatus } from "./model-gbm.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, setTradingMode } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
+import { sendOwnerCorrections } from "./owner-corrections.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
 import { applyRoomTuning, readRoomTuning, roomTuningMessage, roomTuningReport } from "./room-tuning.mjs";
 import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
@@ -3375,6 +3376,13 @@ export default {
           const compliance = await runComplianceChecks(env);
           if (compliance.status === "ok" && Number(compliance.violations)) console.log("compliance_checks", JSON.stringify(compliance));
         } catch (e) { console.error("compliance_checks_failed", e instanceof Error ? e.message : String(e)); }
+        // HAIC H3f (platform docs/design/HAIC-H3.md §7.2): the owner's corrections, sent as nexus-teacher every sweep;
+        // a transport failure waits for the next sweep, the kernel's failed is final and stops the sweep, a denial backs off
+        // an hour. Off unless OWNER_CORRECTIONS is "on" (no D1 read then).
+        try {
+          const corr = await sendOwnerCorrections(env);
+          if (corr.status !== "disabled" && (corr.status !== "ok" || Number(corr.sent) || Number(corr.rejected) || Number(corr.invalid) || corr.stopped)) console.log("owner_corrections", JSON.stringify(corr));
+        } catch (e) { console.error("owner_corrections_failed", e instanceof Error ? e.message : String(e)); }
         // Aether A5: push the decision cards whose content changed to cryptophys-aether, once an
         // hour (first sweep after the H1 close). Never waits on Aether; a no-op without the binding.
         if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) {

@@ -1,0 +1,14 @@
+export const NEXUS_TEACHER_ID: string;
+export const CORRECTIONS_CAPABILITY: string;
+export const CORRECTIONS_SEND_PER_SWEEP: number;
+export const CORRECTIONS_MAX_ATTEMPTS: number;
+export const CORRECTIONS_CALL_TIMEOUT_MS: number;
+export const CORRECTIONS_BACKOFF_MS: number;
+export const CORRECTIONS_STRIKES_PER_HOUR: number;
+export function payloadLeaks(value: unknown, path?: string): string[];
+export function correctionsEnabled(env: unknown): boolean;
+export function buildCorrection(input: unknown, ctx: { actor: string; owner: boolean; attested_by: string; now: string; correction_id: string }): Promise<{ ok: true; correction: Record<string, unknown> } | { ok: false; error: string }>;
+export function validateCorrection(c: unknown): string[];
+export function recordPayload(c: Record<string, unknown>): Record<string, unknown>;
+export function recordOwnerCorrection(env: unknown, input: unknown, options?: { actor?: string; owner?: boolean; now?: number }): Promise<{ ok: boolean; error?: string; correction_id?: string; redactions?: string[] }>;
+export function sendOwnerCorrections(env: unknown, options?: { now?: number; limit?: number; timeoutMs?: number }): Promise<{ status: string; sent?: number; rejected?: number; invalid?: number; failed?: number; stopped?: string | null; pending?: number; until?: string }>;
