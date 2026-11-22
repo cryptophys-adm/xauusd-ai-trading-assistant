@@ -1,8 +1,9 @@
 // Omega page: polls ./api/overview, sets the EA control, and runs the broker engine's settings and
 // connection. Every value is written with textContent (never as HTML); scripts are same-origin files
 // only (CSP script-src 'self'); every URL is relative so the page works at omega.cryptophys.work/ and
-// at nexus.cryptophys.work/omega/.
+// at nexus.cryptophys.work/omega/. The only absolute URLs are two plain links to Nexus in index.html.
 import { buildEnvelope } from "./omega-crypto.js";
+import { clockParts, eaCell, omegaCell, readStatus, withOverview } from "./omega-status.js";
 
 const POLL_MS = 15_000;
 let viewer = { can_control: false };
@@ -28,7 +29,6 @@ const ago = (ms) => {
   const m = Math.round(ms / 60000);
   return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
 };
-const chip = (text, cls) => el("span", { class: `chip ${cls}` }, el("span", { class: "dot" }), text);
 const kv = (pairs) => el("dl", { class: "kv" }, pairs.flatMap(([k, v, cls]) => [el("dt", {}, k), el("dd", { class: cls || "" }, v)]));
 function table(headers, rows, empty) {
   if (!rows.length) return el("p", { class: "dim" }, empty);
@@ -41,13 +41,11 @@ function render(o) {
   viewer = o.viewer || viewer;
   const cur = hb?.currency || "";
 
-  document.getElementById("chips").replaceChildren(...[
-    chip(ea.connected ? "EA connected" : "EA offline", ea.connected ? "ok" : "bad"),
-    chip(hb?.mode ? `${hb.mode} account` : "account unknown", hb?.mode === "live" ? "warn" : "info"),
-    chip(`control: ${c.mode || "active"}`, c.mode === "killed" ? "bad" : c.mode === "paused" ? "warn" : "ok"),
-    s.kill ? chip(`kill (${s.kill_source || "server"})`, "bad") : null,
-    s.blackout ? chip("event blackout", "warn") : null
-  ].filter(Boolean));
+  lastEa = ea;
+  renderStrip();
+  const bo = document.getElementById("blackout");
+  bo.hidden = !s.blackout;
+  bo.title = s.blackout ? s.blackout_reason || "Event blackout" : "";
   document.getElementById("who").textContent = viewer.subject ? `${viewer.subject}${viewer.can_control ? "" : " · read only"}` : "";
 
   fill("signal",
@@ -101,8 +99,38 @@ function render(o) {
     "No control change yet."));
 
   renderBroker(o.broker || null);
-  document.getElementById("updated").textContent = new Date().toISOString().slice(11, 19) + " UTC";
 }
+
+// ---------------------------------------------------------------- status strip (same codes as the Nexus header)
+
+let lastStatus = null;   // the Omega cell's read (./api/status), null when unreadable
+let lastOverview = null; // the last overview read, to fill what an older status lacks
+let lastEa = null;       // the overview's ea block
+const TONE = { ok: "t-ok", late: "t-late", fault: "t-fault", off: "t-off" };
+function cell(label, code, detail, tone, title, filled = true, extra = null) {
+  return el("span", { class: `cell ${TONE[tone]}`, title },
+    el("span", { class: "k" }, label), el("span", { class: `sdot${filled ? "" : " hollow"}`, "aria-hidden": "true" }),
+    el("span", { class: "code" }, code), detail ? el("span", { class: "v" }, detail) : null, extra);
+}
+function clockCell() {
+  const t = clockParts(new Date());
+  return el("span", { class: "cell clock", id: "clock", title: `${t.utc} UTC, ${t.local} ${t.zone}` },
+      el("span", { class: "now long" }, t.utc), el("span", { class: "now short" }, `${t.utcShort}Z`), el("span", { class: "k long" }, "UTC"),
+      el("span", { class: "v" }, t.local), el("span", { class: "k long" }, t.zone));
+}
+function tick() { const c = document.getElementById("clock"); if (c) c.replaceWith(clockCell()); else renderStrip(); }
+function renderStrip() {
+  const o = omegaCell(withOverview(lastStatus, lastOverview));
+  const ea = eaCell(lastEa);
+  document.getElementById("status").replaceChildren(
+    cell(el("span", {}, el("span", { class: "long" }, "Omega"), el("span", { class: "short" }, "Ω")), o.code,
+      o.positions != null ? el("span", {}, String(o.positions), el("span", { class: "long" }, " pos")) : null, o.tone, o.title, o.filled,
+      o.broker ? el("span", { class: "v dimmer" }, o.broker) : null),
+    cell("EA", ea.detail ?? "—", null, ea.tone, ea.title),
+    clockCell()
+  );
+}
+
 
 // ---------------------------------------------------------------- broker engine
 
@@ -237,14 +265,32 @@ async function saveEngine(extra = {}) {
   await load();
 }
 
+let lastGood = 0;
+async function readJson(path) {
+  const r = await fetch(path, { headers: { accept: "application/json" }, credentials: "same-origin" });
+  if (!r.ok) throw new Error(`${path.slice(1)} ${r.status}`);
+  return r.json();
+}
 async function load() {
-  try {
-    const r = await fetch("./api/overview", { headers: { accept: "application/json" }, credentials: "same-origin" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    render(await r.json());
-  } catch (e) {
-    document.getElementById("updated").textContent = `error (${e.message})`;
+  const [overview, status] = await Promise.allSettled([readJson("./api/overview"), readJson("./api/status")]);
+  lastStatus = status.status === "fulfilled" ? readStatus(status.value) : null;
+  const banner = document.getElementById("load-error");
+  if (overview.status === "fulfilled") {
+    lastOverview = overview.value;
+    render(overview.value);
+    lastGood = Date.now();
+    banner.hidden = true;
+    document.getElementById("updated").textContent = clockParts(new Date(lastGood)).utc + " UTC";
+  } else {
+    // A failed read says so: the first one never leaves "Loading…" alone, a later one marks the data as stale.
+    const why = overview.reason instanceof Error ? overview.reason.message : String(overview.reason);
+    const since = lastGood ? ` · last good ${clockParts(new Date(lastGood)).utc} UTC` : "";
+    document.getElementById("load-error-text").textContent = `${why} · retry ${POLL_MS / 1000}s${since}`;
+    banner.hidden = false;
+    if (!lastGood) for (const name of ["signal", "control", "ea"]) fill(name, el("p", { class: "bad" }, `Not loaded: ${why}`));
+    document.getElementById("updated").textContent = lastGood ? `${clockParts(new Date(lastGood)).utc} UTC · stale` : "never";
   }
+  renderStrip();
 }
 
 async function setControl(mode, confirm) {
@@ -299,6 +345,34 @@ document.addEventListener("DOMContentLoaded", () => {
     saveEngine({ live_armed: true, confirm: "LIVE" });
   });
   document.getElementById("e-disarm").addEventListener("click", () => saveEngine({ live_armed: false }));
+  document.getElementById("retry").addEventListener("click", () => load());
+
+  // The section menu: a drawer on phones; a link closes it.
+  const nav = document.getElementById("side-nav");
+  const toggle = document.getElementById("nav-toggle");
+  const header = document.querySelector("header.top");
+  const setOpen = (open) => { nav.style.top = `${header.getBoundingClientRect().bottom}px`; nav.classList.toggle("open", open); toggle.setAttribute("aria-expanded", String(open)); toggle.setAttribute("aria-label", open ? "Close the section menu" : "Open the section menu"); };
+  toggle.addEventListener("click", () => setOpen(!nav.classList.contains("open")));
+  for (const a of nav.querySelectorAll("a")) a.addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && nav.classList.contains("open")) { setOpen(false); toggle.focus(); } });
+
+  // The section in view is the current menu item.
+  const items = new Map([...nav.querySelectorAll('a[href^="#"]')].map((a) => [a.getAttribute("href").slice(1), a]));
+  if ("IntersectionObserver" in window) {
+    const spy = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        for (const a of items.values()) a.removeAttribute("aria-current");
+        items.get(en.target.id)?.setAttribute("aria-current", "true");
+      }
+    }, { rootMargin: "-20% 0px -70% 0px" });
+    for (const id of items.keys()) { const t = document.getElementById(id); if (t) spy.observe(t); }
+  }
+
+  // Read now, then every POLL_MS while the tab is visible, and at once when it becomes visible again.
+  renderStrip();
   load();
-  setInterval(load, POLL_MS);
+  setInterval(() => { if (document.visibilityState === "visible") load(); }, POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load(); });
+  setInterval(tick, 1000);
 });
