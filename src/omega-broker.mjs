@@ -1511,6 +1511,8 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
   const b = await env.DB.prepare("SELECT state, synced_ms FROM omega_bridge WHERE id = 1").first();
   const st = parse(b?.state);
   const fresh = Number.isFinite(st?.received_ms) && now - Number(st.received_ms) < 60_000;
+  const control = await readControl(env);
+  const killedByEnv = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   return {
     connected: Boolean(st?.connected === true && connection.status === "stored" && fresh),
     armed: settings.settings?.enabled === true,
@@ -1518,7 +1520,16 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
     // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY): the pages' label, never the server.
     broker: connection.status === "stored" ? (st?.account?.company ?? null) : null,
     positions: Array.isArray(st?.positions) ? st.positions.length : 0,
-    synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null
+    synced_age_ms: b?.synced_ms ? now - Number(b.synced_ms) : null,
+    // The real execution state for the Nexus header (owner 2026-11-22, frontend session: "Ya status sebenarnya"). Read
+    // only, no secret: the typed LIVE arm, the EA control as the engine reads it (EA_SIGNALS_ENABLED "false" is a
+    // kill), the fail-closed stop's short reason, the account's trade mode and the engine's environment switch.
+    live_armed: settings.settings?.live_armed === true,
+    control_mode: killedByEnv ? "killed" : control.mode,
+    control_reason: killedByEnv ? "env_kill_switch" : (control.reason ? String(control.reason).slice(0, 60) : null),
+    limit_fault: settings.limit_fault ? { why: typeof settings.limit_fault.why === "string" ? settings.limit_fault.why : "limit_fault" } : null,
+    account_mode: ["demo", "real", "contest"].includes(st?.account?.trade_mode) ? st.account.trade_mode : null,
+    engine_enabled: engineEnvEnabled(env)
   };
 }
 

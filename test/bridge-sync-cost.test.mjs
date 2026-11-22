@@ -130,6 +130,14 @@ test("UI audit DEF-10: the badge's light status reads one bridge row and the set
   assert.equal(s.positions, 1);
   assert.ok(!env.DB.log.some((q) => /ea_deals|omega_intents|omega_events/.test(q)), env.DB.log.join("\n"));
   assert.equal((await brokerStatus(env, { now: T0 + 120_000 })).connected, false, "a state older than a minute is not connected");
+  // The header's real execution state (owner 2026-11-22: "Ya status sebenarnya"): read only, no secret.
+  assert.deepEqual([s.live_armed, s.control_mode, s.control_reason, s.limit_fault, s.engine_enabled], [false, "active", null, null, true]);
+  assert.ok(["demo", "real", "contest", null].includes(s.account_mode));
+  assert.equal((await brokerStatus({ ...env, EA_SIGNALS_ENABLED: "false" }, { now: T0 + 10_000 })).control_mode, "killed", "the env kill switch reads as killed, as the engine treats it");
+  await env.SIGNAL_CACHE.put("ea:control", JSON.stringify({ mode: "paused", reason: "owner pause", actor: "owner", at: T0 }));
+  const paused = await brokerStatus(env, { now: T0 + 10_000 });
+  assert.deepEqual([paused.control_mode, paused.control_reason], ["paused", "owner pause"]);
+  assert.deepEqual(Object.keys(paused).sort(), ["account_mode", "armed", "broker", "connected", "control_mode", "control_reason", "engine_enabled", "limit_fault", "live_armed", "positions", "server", "synced_age_ms"], "existing fields unchanged, the new ones added");
 });
 
 test("the light sync (owner 2026-11-19, step 1): idle syncs reuse the last full plan for 5 s; any position, result or change plans in full", async () => {
