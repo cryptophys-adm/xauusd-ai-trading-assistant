@@ -22,14 +22,14 @@ function Lens({ title, lens, on, extra }: { title: string; lens: any; on: boolea
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[12.5px] font-semibold text-slate-100">{title}</span>
         <span className="flex gap-1.5">
-          <Badge tone={on ? "green" : "red"}>{on ? "on" : "switched off"}</Badge>
-          {lens?.floored ? <Badge tone="amber">at floor</Badge> : null}
+          <Badge tone={on ? "ok" : "off"}>{on ? "on" : "switched off"}</Badge>
+          {lens?.floored ? <Badge tone="late">at floor</Badge> : null}
         </span>
       </div>
       <div className="grid grid-cols-4 gap-2 text-[11px]">
         {MODES.map((m) => (
           <div key={m}>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">{m}</div>
+            <div className="text-[11px] font-medium text-muted">{m[0].toUpperCase() + m.slice(1)}</div>
             <div className="mono text-[13px] font-semibold text-slate-200">{num(lens?.weights?.[m]?.weight) ? lens.weights[m].weight.toFixed(2) : "—"}</div>
             <div className="text-[10px] text-slate-500">{SOURCE[lens?.weights?.[m]?.source] ?? lens?.weights?.[m]?.source ?? "—"}</div>
           </div>
@@ -55,12 +55,12 @@ export function LensPanel() {
           <Lens title="Lens A · Positioning (CFTC)" lens={d.positioning} on={d.switches?.positioning_enabled !== false}
             extra={<>
               Report {d.positioning?.cot?.as_of ?? "none yet"}{num(d.positioning?.cot?.age_days) ? ` (${Math.round(d.positioning.cot.age_days)} days old)` : ""} · {d.positioning?.cot?.series ?? "—"}
-              {d.positioning?.cot?.stale ? <span className="ml-1 text-amber-300">stale</span> : <span className="ml-1 text-emerald-300">fresh</span>}
+              {d.positioning?.cot?.stale ? <span className="ml-1 text-late">stale</span> : <span className="ml-1 text-ok">fresh</span>}
               {d.positioning?.facts ? <> · {String(d.positioning.facts.crowding).replace("_", " ")}, divergence {String(d.positioning.facts.divergence).replace(/_/g, " ")}</> : null}
             </>} />
           <Lens title="Lens B · Liquidity (broker M1)" lens={d.liquidity} on={d.switches?.liquidity_enabled !== false}
             extra={<>
-              Baseline: <span className={d.liquidity?.baseline === "sufficient" ? "text-emerald-300" : "text-amber-300"}>{d.liquidity?.baseline ?? "—"}</span> ({d.liquidity?.baseline_weeks ?? 0} of 4 weeks){d.liquidity?.updated_at ? ` · updated ${ago(d.liquidity.updated_at)}` : ""}
+              Baseline: <span className={d.liquidity?.baseline === "sufficient" ? "text-ok" : "text-late"}>{d.liquidity?.baseline ?? "—"}</span> ({d.liquidity?.baseline_weeks ?? 0} of 4 weeks){d.liquidity?.updated_at ? ` · updated ${ago(d.liquidity.updated_at)}` : ""}
               {d.liquidity?.line ? <div className="mt-1 text-slate-500">{d.liquidity.line}</div> : null}
             </>} />
         </div>

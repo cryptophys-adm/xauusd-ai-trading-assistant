@@ -74,9 +74,9 @@ export default function SetupLifecycle({ setup: s, levels }: { setup: any; level
       </div>
       <div className="mono mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10.5px] text-slate-300 sm:grid-cols-4">
         <span>entry <b className="text-fg">{px(s.locked?.entry)}</b>{zone ? <span className="text-muted"> ({px(zone.low)}–{px(zone.high)})</span> : null}</span>
-        <span>stop <b className="text-bear">{px(s.locked?.stop)}</b></span>
-        <span>TP1 <b className="text-bull">{px(s.locked?.tp1)}</b></span>
-        <span>TP2 <b className="text-bull">{px(s.locked?.tp2)}</b></span>
+        <span>stop <b className={s.locked?.stop == null ? "text-muted" : "text-bear"}>{px(s.locked?.stop)}</b></span>
+        <span>TP1 <b className={s.locked?.tp1 == null ? "text-muted" : "text-bull"}>{px(s.locked?.tp1)}</b></span>
+        <span>TP2 <b className={s.locked?.tp2 == null ? "text-muted" : "text-bull"}>{px(s.locked?.tp2)}</b></span>
       </div>
       <div className="mt-2 flex items-start gap-1" role="list" aria-label="Setup lifecycle">
         <Step label="Signal" at={st.signal} state="done" />

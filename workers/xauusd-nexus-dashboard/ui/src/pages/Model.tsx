@@ -33,10 +33,10 @@ function Pipeline({ dataset, baseline, gbm, live, failed }: { dataset: any; base
   const learnFailed = failed.baseline ?? failed.gbm;
   const part = (name: string, model: any, err: string | null) => (err ? `${name} error` : model?.model_id ? `${name} ok` : `no ${name}`);
   const steps: { icon: JSX.Element; title: string; text: string; state: string; tone: BadgeTone; error?: string | null }[] = [
-    { icon: <Database className="h-4 w-4" />, title: "Record", text: "Each 15m decision is saved with its features and labeled in R.", ...(failed.dataset ? { state: "—", tone: "fault", error: failed.dataset } : { state: `${labeled} labeled`, tone: labeled ? "green" : "slate" }) },
-    { icon: <Brain className="h-4 w-4" />, title: "Learn", text: "Hourly baseline and daily LightGBM learn which setups hit target.", state: `${part("baseline", baseline, failed.baseline)} · ${part("gbm", gbm, failed.gbm)}`, tone: learnFailed ? "fault" : baseline?.model_id || gbm?.model_id ? "green" : "slate", error: [failed.baseline, failed.gbm].filter(Boolean).join(" · ") || null },
-    { icon: <ShieldCheck className="h-4 w-4" />, title: "Validate", text: "Scored on unseen live decisions; must beat the base rate.", ...(failed.baseline ? { state: "—", tone: "fault", error: failed.baseline } : { state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "green" : "amber" }) },
-    { icon: <Lightbulb className="h-4 w-4" />, title: "Apply", text: "Passing models advise the council; proven notes go live.", ...(failed.baseline || failed.tuning ? { state: "—", tone: "fault", error: [failed.baseline, failed.tuning].filter(Boolean).join(" · ") } : { state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "cyan" : "slate" }) }
+    { icon: <Database className="h-4 w-4" />, title: "Record", text: "Each 15m decision is saved with its features and labeled in R.", ...(failed.dataset ? { state: "—", tone: "fault", error: failed.dataset } : { state: `${labeled} labeled`, tone: labeled ? "ok" : "off" }) },
+    { icon: <Brain className="h-4 w-4" />, title: "Learn", text: "Hourly baseline and daily LightGBM learn which setups hit target.", state: `${part("baseline", baseline, failed.baseline)} · ${part("gbm", gbm, failed.gbm)}`, tone: learnFailed ? "fault" : baseline?.model_id || gbm?.model_id ? "ok" : "off", error: [failed.baseline, failed.gbm].filter(Boolean).join(" · ") || null },
+    { icon: <ShieldCheck className="h-4 w-4" />, title: "Validate", text: "Scored on unseen live decisions; must beat the base rate.", ...(failed.baseline ? { state: "—", tone: "fault", error: failed.baseline } : { state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "ok" : "late" }) },
+    { icon: <Lightbulb className="h-4 w-4" />, title: "Apply", text: "Passing models advise the council; proven notes go live.", ...(failed.baseline || failed.tuning ? { state: "—", tone: "fault", error: [failed.baseline, failed.tuning].filter(Boolean).join(" · ") } : { state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "ok" : "off" }) }
   ];
   return (
     <div className="grid gap-2 md:grid-cols-4">
@@ -159,8 +159,8 @@ function Gate({ b }: { b: any }) {
   const pr = b?.promotion, g = b?.gate;
   const on = pr?.status === "promoted";
   return (
-    <div className={`glass-inner mb-3 flex flex-wrap items-start gap-3 p-3 ${on ? "border-emerald-400/30" : ""}`}>
-      <Badge tone={on ? "green" : "amber"}>{on ? `CONNECTED · ${pr.set}` : "NOT CONNECTED"}</Badge>
+    <div className={`glass-inner mb-3 flex flex-wrap items-start gap-3 p-3 ${on ? "border-ok-fill/30" : ""}`}>
+      <Badge tone={on ? "ok" : "late"}>{on ? `CONNECTED · ${pr.set}` : "NOT CONNECTED"}</Badge>
       <div className="min-w-0 flex-1 text-[11px] text-slate-300">
         <div className="flex items-center gap-1.5">{on ? `Advising the council since ${utc(pr.since)}` : "Shadow only"}{g && <Hint text={`Gate: both sides, ≥ ${g.min_n} unseen decisions, p < ${g.alpha}, AUC ≥ ${g.min_auc}.`} />}</div>
         {pr?.reason && <div className="mt-1 text-[10.5px] text-slate-500">{pr.reason}</div>}
@@ -182,7 +182,7 @@ function LearnedLive({ l }: { l: any }) {
                 <tr key={`${n.item_id}@${n.version}`}>
                   <td className="mono text-[11px] text-slate-200">{n.item_id} v{n.version}</td>
                   <td className="text-[11px]">{(n.agents ?? []).join(", ") || "—"} · {n.chart === "15" ? "15m" : n.chart === "60" ? "1H" : n.chart ?? "—"}</td>
-                  <td>{n.status === "live" ? <Badge tone="green">live</Badge> : <Badge tone="slate">retired</Badge>}{n.status !== "live" && n.reason && <div className="mt-0.5 text-[10px] text-slate-500">{n.reason}</div>}</td>
+                  <td>{n.status === "live" ? <Badge tone="ok">live</Badge> : <Badge tone="off">retired</Badge>}{n.status !== "live" && n.reason && <div className="mt-0.5 text-[10px] text-slate-500">{n.reason}</div>}</td>
                   <td className="whitespace-nowrap text-[11px] text-slate-400">{n.status === "live" ? ago(n.promoted_at) : `${ago(n.promoted_at)} → ${ago(n.retired_at)}`}</td>
                   <td className="max-w-[420px] text-[11px] text-slate-400">{n.text ?? "—"}</td>
                 </tr>
@@ -237,7 +237,7 @@ export default function Model() {
 
       <Panel title="Decision model" icon={<Trees className="h-3.5 w-3.5 text-violet-300" />} hint="LightGBM, trained daily at 04:17 UTC. Shadow only until it passes the gate."
         poll={gbm} live
-        right={g ? <div className="flex gap-1.5"><Badge tone="slate">{g.model_id} · {g.rows} rows · {g.features} features · trained {ago(g.trained_at)}</Badge><Badge tone="amber">SHADOW</Badge></div> : null}>
+        right={g ? <div className="flex gap-1.5"><Badge tone="slate">{g.model_id} · {g.rows} rows · {g.features} features · trained {ago(g.trained_at)}</Badge><Badge tone="shadow">SHADOW</Badge></div> : null}>
         <PollBody poll={gbm} skeleton={4} empty={!g && <Empty when="Trained daily at 04:17 UTC from the labeled dataset.">No decision model yet</Empty>}>
           {() => <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />}
         </PollBody>
@@ -246,7 +246,7 @@ export default function Model() {
       <Panel title="Live knowledge notes" icon={<BookOpen className="h-3.5 w-3.5 text-cyan-300" />}
         hint={`Shadow-tested notes go live when better than active${l?.rules ? `; retired if worse live (p < ${l.rules.alpha}, ${l.rules.min_decided} calls)` : ""}.`}
         poll={tuning} live
-        right={l ? <Badge tone={l.mode === "on" ? "green" : "slate"}>mode {l.mode ?? "—"}</Badge> : null}>
+        right={l ? <Badge tone={l.mode === "on" ? "ok" : "off"}>mode {l.mode ?? "—"}</Badge> : null}>
         <PollBody poll={tuning} skeleton={3}>{() => <LearnedLive l={l} />}</PollBody>
       </Panel>
     </div>

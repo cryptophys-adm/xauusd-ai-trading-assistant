@@ -79,6 +79,9 @@ function Guardrails({ side, g, rules }: { side: string; g: any; rules?: any }) {
   );
 }
 
+/** A witness's lean as its row shows it: "slightly bullish +22". The row cuts it to w-32; the title holds it whole. */
+const leanText = (lean: number | null | undefined) => `${leanLabel(lean)}${lean != null ? ` ${lean > 0 ? "+" : ""}${Math.round(lean * 100)}` : ""}`;
+
 /**
  * What the self-trained model told the council on this decision (owner 2026-11-13: "pastikan semua ada
  * visualisasi"): its long and short chance of reaching the target first against the base rates, and its
@@ -87,6 +90,8 @@ function Guardrails({ side, g, rules }: { side: string; g: any; rules?: any }) {
 function ModelAdvice({ m }: { m: any }) {
   const pctOf = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? `${Math.round(x * 100)}%` : "—");
   const edge = (p: unknown, base: unknown) => (typeof p === "number" && typeof base === "number" ? p - base : null);
+  // Whole points, signed by the rounded value (as edgeTone): +14, -3, 0 (never "+0" or "-0").
+  const pts = (d: number) => { const n = Math.round(d * 100); return n > 0 ? `+${n}` : n < 0 ? `${n}` : "0"; };
   if (!m) {
     return (
       <div className="glass-inner mt-3 flex items-center gap-2 px-3 py-1.5 text-[11px] text-fg-2">
@@ -113,7 +118,7 @@ function ModelAdvice({ m }: { m: any }) {
           <div key={x.k} className="flex items-center gap-2 py-0.5">
             <span className="w-10 shrink-0 font-semibold text-fg">{x.k}</span>
             <span className={`mono w-12 shrink-0 ${TEXT[edgeTone(x.k === "Short" ? "short" : "long", d)]}`}>{pctOf(x.p)}</span>
-            <span className="min-w-0 flex-1 text-fg-2">vs base {pctOf(x.base)}{d != null ? ` (${d > 0 ? "+" : ""}${Math.round(d * 100)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
+            <span className="min-w-0 flex-1 text-fg-2">vs base {pctOf(x.base)}{d != null ? ` (${pts(d)} pts)` : ""}{x.rec?.decisions != null ? ` · n ${x.rec.decisions} · skill ${x.rec.skill ?? "—"} · AUC ${x.rec.auc ?? "—"}` : ""}</span>
           </div>
         );
       })}
@@ -417,7 +422,7 @@ export default function GlobalDecision() {
                 ) : (
                   <>
                     <div className={`min-w-0 flex-1 ${r.stale ? "opacity-40" : ""}`}><DivergingBar value={r.lean} height={6} /></div>
-                    <span className="w-36 shrink-0 whitespace-nowrap text-right text-[11px]" style={{ color: leanColor(r.lean) }}>{leanLabel(r.lean)}{r.lean != null ? ` ${r.lean > 0 ? "+" : ""}${Math.round(r.lean * 100)}` : ""}</span>
+                    <span className="w-32 shrink-0 truncate text-right text-[11px]" style={{ color: leanColor(r.lean) }} title={leanText(r.lean)}>{leanText(r.lean)}</span>
                   </>
                 )}
               </div>

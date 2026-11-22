@@ -57,8 +57,9 @@
   .panel-title { @apply text-[13px] font-semibold text-fg; }
   .chip { @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium; }
   .btn { @apply inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/4 px-3 py-2 text-[12px] font-semibold text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40; }
-  .btn-danger { @apply border-rose-400/30 bg-rose-400/10 text-rose-200 hover:border-rose-400/60 hover:bg-rose-400/20; }
-  .btn-approve { @apply border-emerald-400/30 bg-emerald-400/10 text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-400/20; }
+  /* A destructive action is the fault red; an approve or confirm action is ok cyan (green is for a buy only). */
+  .btn-danger { @apply border-fault-fill/30 bg-fault-fill/10 text-fault hover:border-fault-fill/60 hover:bg-fault-fill/20; }
+  .btn-approve { @apply border-ok-fill/30 bg-ok-fill/10 text-ok hover:border-ok-fill/60 hover:bg-ok-fill/20; }
   .field { @apply w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-[13px] text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/50 focus:outline-hidden; }
   .label { @apply mb-1 block text-[11px] font-medium text-muted; }
   .table-wrap { @apply overflow-x-auto; }

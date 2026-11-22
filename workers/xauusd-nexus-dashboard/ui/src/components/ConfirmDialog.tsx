@@ -7,18 +7,23 @@ export interface ConfirmOptions {
   body?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
-  tone?: "cyan" | "emerald" | "amber" | "rose";
+  /**
+   * The confirm button's meaning, in the status tones (mockup "Nexus colours and text"): ok (cyan) to approve or
+   * accept, late (amber) for a step to think twice about, fault (red) for a destructive one. Green is for a buy or
+   * a bullish action only, and no dialog asks for one.
+   */
+  tone?: "ok" | "late" | "fault";
 }
 
+/** Border, glow, icon and button per tone: the tokens' fills (#22d3ee, #fbbf24, #ef4444) and text colours. */
 const TONES = {
-  cyan: { border: "border-cyan-400/40", glow: "shadow-[0_0_60px_rgba(34,211,238,0.18)]", icon: "border-cyan-400/40 bg-cyan-400/10 text-cyan-300", button: "bg-cyan-500/20 text-cyan-100 ring-cyan-400/50 hover:bg-cyan-500/30" },
-  emerald: { border: "border-emerald-400/40", glow: "shadow-[0_0_60px_rgba(52,211,153,0.18)]", icon: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300", button: "bg-emerald-500/20 text-emerald-100 ring-emerald-400/50 hover:bg-emerald-500/30" },
-  amber: { border: "border-amber-400/40", glow: "shadow-[0_0_60px_rgba(251,191,36,0.18)]", icon: "border-amber-400/40 bg-amber-400/10 text-amber-300", button: "bg-amber-500/20 text-amber-100 ring-amber-400/50 hover:bg-amber-500/30" },
-  rose: { border: "border-rose-500/40", glow: "shadow-[0_0_60px_rgba(244,63,94,0.22)]", icon: "border-rose-500/40 bg-rose-500/10 text-rose-300", button: "bg-rose-500/20 text-rose-100 ring-rose-400/50 hover:bg-rose-500/30" }
+  ok: { border: "border-ok-fill/40", glow: "shadow-[0_0_60px_rgba(34,211,238,0.18)]", icon: "border-ok-fill/40 bg-ok-fill/10 text-ok", button: "bg-ok-fill/20 text-ok ring-ok-fill/50 hover:bg-ok-fill/30" },
+  late: { border: "border-late-fill/40", glow: "shadow-[0_0_60px_rgba(251,191,36,0.18)]", icon: "border-late-fill/40 bg-late-fill/10 text-late", button: "bg-late-fill/20 text-late ring-late-fill/50 hover:bg-late-fill/30" },
+  fault: { border: "border-fault-fill/40", glow: "shadow-[0_0_60px_rgba(239,68,68,0.22)]", icon: "border-fault-fill/40 bg-fault-fill/10 text-fault", button: "bg-fault-fill/20 text-fault ring-fault-fill/50 hover:bg-fault-fill/30" }
 } as const;
 
 function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (ok: boolean) => void }) {
-  const t = TONES[options.tone ?? "cyan"];
+  const t = TONES[options.tone ?? "ok"];
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     confirmRef.current?.focus();
@@ -26,15 +31,15 @@ function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onDone]);
-  const Icon = options.tone === "rose" || options.tone === "amber" ? AlertTriangle : CheckCircle2;
+  const Icon = options.tone === "fault" || options.tone === "late" ? AlertTriangle : CheckCircle2;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" onClick={() => onDone(false)}>
       <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}
-        className={`relative w-full max-w-md rounded-2xl border ${t.border} bg-linear-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 ring-1 ring-white/10 ${t.glow}`}>
+        className={`relative w-full max-w-md rounded-2xl border ${t.border} bg-linear-to-b from-panel to-ground p-5 ring-1 ring-white/10 ${t.glow}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${t.icon}`}><Icon className="h-5 w-5" /></div>
-            <h3 id="confirm-title" className="text-[15px] font-bold tracking-wide text-white">{options.title}</h3>
+            <h3 id="confirm-title" className="text-[15px] font-bold text-fg">{options.title}</h3>
           </div>
           <button type="button" onClick={() => onDone(false)} title="Cancel" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button>
         </div>

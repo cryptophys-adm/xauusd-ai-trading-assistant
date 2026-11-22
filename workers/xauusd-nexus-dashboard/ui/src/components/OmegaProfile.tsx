@@ -36,7 +36,8 @@ const usd = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) 
 type Seat = { verdict?: string; reason?: string } | null;
 type CouncilReview = { id: string; kind: string; from: string; to: string; trigger: string; verdict: string; reason?: string; seats?: Record<string, Seat> | null; at_ms: number };
 const SEAT_LABEL: Record<string, string> = { risk: "Risk", strategy: "Strategy", trade_management: "Trade mgmt" };
-const VERDICT_TONE: Record<string, string> = { approve: "text-emerald-300", reject: "text-rose-300", failed: "text-amber-200", skipped: "text-slate-500" };
+// A council verdict is a status, not a direction: approve ok, reject (or veto) fault, a failed review late, skipped grey.
+const VERDICT_TONE: Record<string, string> = { approve: "text-ok", reject: "text-fault", failed: "text-late", skipped: "text-off" };
 const hhmm = (ms: number) => new Date(ms).toISOString().slice(5, 16).replace("T", " ");
 type Draft = { profile: string; ceiling: string; agent_mode: string };
 
@@ -96,10 +97,10 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     setBusy(true);
     try {
       for (const s of profileSteps(saved, draft)) await post({ account_ref: account.account_ref, ...s });
-      setMsg({ tone: "text-emerald-300", text: `Updated: ${summary}.` });
+      setMsg({ tone: "text-ok", text: `Updated: ${summary}.` });
       setDirty(false);
     } catch (e: any) {
-      setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
+      setMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -110,9 +111,9 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     setBusy(true);
     try {
       await post({ account_ref: account.account_ref, action });
-      setMsg({ tone: "text-emerald-300", text: action === "accept" ? "Proposal accepted." : "Proposal declined." });
+      setMsg({ tone: "text-ok", text: action === "accept" ? "Proposal accepted." : "Proposal declined." });
     } catch (e: any) {
-      setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
+      setMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     } finally {
       setBusy(false);
     }
@@ -125,9 +126,9 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
     setBusy(true);
     try {
       await post({ account_ref: account.account_ref, action });
-      setMsg({ tone: "text-emerald-300", text: action === "reset_override" ? "Baseline reset and today's daily loss stop lifted (audited)." : "Baseline reset." });
+      setMsg({ tone: "text-ok", text: action === "reset_override" ? "Baseline reset and today's daily loss stop lifted (audited)." : "Baseline reset." });
     } catch (e: any) {
-      setMsg({ tone: "text-rose-300", text: `Refused: ${e?.message || "failed"}` });
+      setMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     } finally {
       setBusy(false);
       setResetting(false);
@@ -144,7 +145,7 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
       {/* Which account these controls change (owner 2026-11-19): USD or cent, its gold symbol, connected or not. */}
       <div id="omega-account-identity" className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
         <span className="font-semibold text-slate-100">{account.identity?.label ?? "Account"}</span>
-        <span className={account.connected ? "text-emerald-300" : "text-rose-300"}>{account.connected ? "connected" : "not connected"}</span>
+        <span className={account.connected ? "text-ok" : "text-off"}>{account.connected ? "connected" : "not connected"}</span>
       </div>
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
         <label className="text-slate-500" htmlFor="omega-profile">Profile</label>
@@ -169,7 +170,7 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <button id="omega-profile-update" className="btn border-emerald-400/30 bg-emerald-400/10 text-emerald-200 disabled:opacity-40" disabled={busy || !summary} onClick={() => setConfirming(true)}>Update</button>
+          <button id="omega-profile-update" className="btn btn-approve disabled:opacity-40" disabled={busy || !summary} onClick={() => setConfirming(true)}>Update</button>
           {dirty && summary ? <button className="btn" disabled={busy} onClick={() => { setDraft(saved); setDirty(false); }}>Reset</button> : null}
           {blocked ? <span className="text-[11px] text-amber-200" title="The agent's own upgrades wait; you may still change the profile (with a warning).">{account.upgrade_block_reason === "kill_switch" ? "Kill switch today" : "Daily loss limit hit today"}: no auto upgrade before {new Date(blocked).toISOString().slice(11, 16)} UTC</span> : null}
         </div>
@@ -181,7 +182,7 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
             {pending.council?.verdict ? <span className={VERDICT_TONE[pending.council.verdict] ?? "text-slate-300"} title={pending.council.reason ?? ""}> · council {pending.council.verdict}</span> : null}
             {pending.expires_ms ? <span className="text-slate-500"> · until {new Date(pending.expires_ms).toISOString().slice(5, 16).replace("T", " ")} UTC</span> : null}
           </span>
-          <button className="btn border-emerald-400/30 text-emerald-300" disabled={busy} onClick={() => proposal("accept")}>Accept</button>
+          <button className="btn btn-approve" disabled={busy} onClick={() => proposal("accept")}>Accept</button>
           <button className="btn" disabled={busy} onClick={() => proposal("decline")}>Decline</button>
         </div>
       ) : null}
@@ -200,7 +201,7 @@ export default function OmegaProfile({ account, onChanged }: { account: Account;
               <span className="text-slate-300">{LABEL[r.from] ?? r.from} → {LABEL[r.to] ?? r.to}</span>
               <span className={VERDICT_TONE[r.verdict] ?? "text-slate-300"}>{r.kind === "downgrade" && r.verdict === "reject" ? "veto" : r.verdict}</span>
               {Object.entries(r.seats ?? {}).map(([k, v]) => (
-                <span key={k} className={v?.verdict === "approve" ? "text-emerald-300/80" : v?.verdict === "reject" ? "text-rose-300/80" : "text-slate-500"} title={v?.reason ?? "no answer"}>{SEAT_LABEL[k] ?? k} {v?.verdict === "approve" ? "✓" : v?.verdict === "reject" ? "✗" : "–"}</span>
+                <span key={k} className={v?.verdict === "approve" ? "text-ok/80" : v?.verdict === "reject" ? "text-fault/80" : "text-slate-500"} title={v?.reason ?? "no answer"}>{SEAT_LABEL[k] ?? k} {v?.verdict === "approve" ? "✓" : v?.verdict === "reject" ? "✗" : "–"}</span>
               ))}
             </div>
           ))}

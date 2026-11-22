@@ -355,7 +355,7 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
                 <td>{cell(b?.tp1)}</td>
                 <td>{cell(b?.tp2)}</td>
                 <td>{cell(o)}</td>
-                <td className="mono text-bear">{o?.trades ? (o.max_drawdown_r ? `−${o.max_drawdown_r}R` : "0R") : "—"}</td>
+                <td className={`mono ${o?.trades ? "text-bear" : "text-muted"}`}>{o?.trades ? (o.max_drawdown_r ? `−${o.max_drawdown_r}R` : "0R") : "—"}</td>
                 <td className="mono">
                   {pr?.trades ? (
                     <>
@@ -587,7 +587,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
   if (!omega) {
     return (
-      <Panel title="Omega Execution" icon={<Cpu className="h-4 w-4 text-cyan-400" />}>
+      <Panel title="Omega execution" icon={<Cpu className="h-4 w-4 text-cyan-400" />}>
         <Empty>No terminal data.</Empty>
       </Panel>
     );
@@ -622,7 +622,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* Execution KPI header: advisory only, never money (owner 2026-11-12: Financial Management is its own module) */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Kpi
-          label="Avg Slippage"
+          label="Avg slippage"
           value={dynamicAvgSlippage != null ? `${dynamicAvgSlippage} pts` : "—"}
           sub={`Max: ${tca.max_slippage_points ?? "—"} pts · ${completedIntents.length} fills`}
           icon={<Sliders className="h-3.5 w-3.5 text-cyan-400" />}
@@ -634,7 +634,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
           icon={<Zap className="h-3.5 w-3.5 text-violet-400" />}
         />
         <Kpi
-          label="Fill Quality"
+          label="Fill quality"
           value={tca.quality || (dynamicAvgSlippage != null ? (dynamicAvgSlippage <= 5 ? "PRIME" : "ACCEPTABLE") : "—")}
           sub={`${tca.samples_count ?? 0} fills`}
           color={tca.quality === "PRIME" ? T.ok : T.late}
@@ -645,7 +645,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
       {/* SOR & Volatility Telemetry Panel */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Panel
-          title="Order Route"
+          title="Order route"
           icon={<Compass className="h-3.5 w-3.5 text-cyan-400" />}
           right={<Badge tone={route.status === "trading" ? "ok" : "late"}>{route.status || "—"}</Badge>}
         >
@@ -664,13 +664,13 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
             </div>
             <div>
               <span className="text-[11px] text-muted">Terminal</span>
-              <p className="mono font-semibold text-cyan-400">{br.terminal_connected === true ? "connected" : br.terminal_connected === false ? "not connected" : "—"}</p>
+              <p className={`mono font-semibold ${br.terminal_connected === true ? "text-ok" : "text-off"}`}>{br.terminal_connected === true ? "connected" : br.terminal_connected === false ? "not connected" : "—"}</p>
             </div>
           </div>
         </Panel>
 
         <Panel
-          title="Volatility & Sizing"
+          title="Volatility & sizing"
           icon={<BarChart3 className="h-3.5 w-3.5 text-amber-400" />}
           right={<Badge tone="cyan">{vol.regime || "NORMAL"} REGIME</Badge>}
         >
@@ -697,7 +697,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Open Positions in Broker MT5 */}
       <Panel
-        title={`Open Positions${br.broker ? ` · ${br.broker}` : ""} (${positions.length})`}
+        title={`Open positions${br.broker ? ` · ${br.broker}` : ""} (${positions.length})`}
         icon={<Activity className="h-3.5 w-3.5 text-ok" />}
         right={
           <div className="flex items-center gap-2">
@@ -800,7 +800,7 @@ function OmegaExecutionPanel({ omega }: { omega: any }) {
 
       {/* Recent Completed Intents */}
       <Panel
-        title={`Recent Intents (${intents.slice(0, 10).length})`}
+        title={`Recent intents (${intents.slice(0, 10).length})`}
         icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
       >
         {!intents.length ? (
@@ -969,7 +969,7 @@ function DisparityKnowledgePanel({
           icon={<BrainCircuit className="h-3.5 w-3.5 text-ok" />}
         />
         <Kpi
-          label="Avg Slippage"
+          label="Avg slippage"
           value={dynamicAvgSlippage != null ? `±${dynamicAvgSlippage} pts` : "—"}
           sub={dynamicMaxSlippage != null ? `Max ${dynamicMaxSlippage} pts · ${slippagesList.length} fills` : "No fills yet"}
           color={dynamicAvgSlippage == null ? undefined : dynamicAvgSlippage <= 5 ? T.ok : T.fault}
@@ -992,7 +992,7 @@ function DisparityKnowledgePanel({
 
       {/* Dynamic Disparity Comparison Matrix */}
       <Panel
-        title="Signal vs Fill"
+        title="Signal vs fill"
         icon={<Gauge className="h-3.5 w-3.5 text-cyan-400" />}
         hint="Plan entry, timing and SL+ against Omega's fills on the MT5 terminal."
       >
@@ -1280,8 +1280,8 @@ function MakerTakerPanel({ byMode }: { byMode: any }) {
                   )}
                 </td>
                 <td className="mono">{p?.mean_dr == null ? "—" : r(p.mean_dr)}</td>
-                <td className="mono text-bull">{p?.n ? p.maker_better : "—"}</td>
-                <td className="mono text-bear">{p?.n ? p.taker_better : "—"}</td>
+                <td className={`mono ${p?.n ? "text-bull" : "text-muted"}`}>{p?.n ? p.maker_better : "—"}</td>
+                <td className={`mono ${p?.n ? "text-bear" : "text-muted"}`}>{p?.n ? p.taker_better : "—"}</td>
                 <td className="text-[11px] text-slate-400">
                   {Object.entries(lim?.missed_by ?? {})
                     .map(([k, v]) => `${k.replace(/_/g, " ")} (${v})`)
@@ -1371,14 +1371,14 @@ export default function Performance() {
               className={toggle(viewMode === "omega_broker")}
               onClick={() => setViewMode("omega_broker")}
             >
-              Omega Execution
+              Omega execution
             </button>
             <button
               type="button"
               className={toggle(viewMode === "disparity_knowledge")}
               onClick={() => setViewMode("disparity_knowledge")}
             >
-              Signal vs Fill
+              Signal vs fill
             </button>
           </div>
 
@@ -1475,13 +1475,13 @@ export default function Performance() {
               {/* KPI Cards */}
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <Kpi
-                  label="Closed Trades"
+                  label="Closed trades"
                   value={String(perf?.trades ?? 0)}
                   sub={policy === "omega4" ? `${block.omega4?.decisions ?? 0} decisions · ${block.omega4?.open ?? 0} open · ${block.omega4?.pending ?? 0} pending` : `${block.signals} signals · ${block.open} open · ${block.pending} pending`}
                   icon={<Activity className="h-3.5 w-3.5 text-cyan-400" />}
                 />
                 <Kpi
-                  label="Win Rate"
+                  label="Win rate"
                   value={pct(perf?.win_rate)}
                   sub={`${perf?.wins ?? 0} wins / ${perf?.losses ?? 0} losses`}
                   color={(perf?.win_rate ?? 0) >= 0.5 ? C.bull : C.wait}
@@ -1513,7 +1513,7 @@ export default function Performance() {
                   icon={<BarChart3 className="h-3.5 w-3.5 text-violet-400" />}
                 />
                 <Kpi
-                  label="Max Drawdown"
+                  label="Max drawdown"
                   value={perf?.max_drawdown_r ? `−${perf.max_drawdown_r}R` : "0.00R"}
                   sub={`fill rate ${pct(block.fill_rate)}`}
                   color={C.bear}
@@ -1523,7 +1523,7 @@ export default function Performance() {
 
               {/* The plan's targets and the Omega policy per trading mode */}
               <Panel
-                title="By Trading Mode"
+                title="By trading mode"
                 icon={<Layers className="h-3.5 w-3.5 text-cyan-400" />}
                 hint={`Omega: ${l?.rules?.omega?.entry ?? "market entry on the bar after the decision"}; ${l?.rules?.omega?.management ?? "key-level management"}; gates: ${l?.rules?.omega?.gates ?? "the day's loss limit"}. Approximations: ${l?.rules?.omega?.approximations ?? "feed bars"}.`}
               >
@@ -1532,7 +1532,7 @@ export default function Performance() {
 
               {/* v4 against the live account (src/ledger-omega4.mjs omegaParity) */}
               <Panel
-                title="Omega v4 Parity with Live"
+                title="Omega v4 parity with live"
                 icon={<Scale className="h-3.5 w-3.5 text-cyan-400" />}
                 hint={l?.rules?.omega4?.parity ?? "v4 against the live account's real Omega trades"}
               >
@@ -1598,7 +1598,7 @@ export default function Performance() {
 
               {/* The decisions the no-stacking rule held back (owner 2026-11-13: "pastikan semua ada visualisasi") */}
               <Panel
-                title={`Held Back (${l?.held?.count ?? 0})`}
+                title={`Held back (${l?.held?.count ?? 0})`}
                 icon={<Layers className="h-3.5 w-3.5 text-amber-300" />}
                 hint="No stacking: a same-side signal waits while an earlier one is unfilled or unprotected. Not counted in results."
               >
