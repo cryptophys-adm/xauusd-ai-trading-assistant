@@ -14,6 +14,9 @@ export const PATTERN_FAMILIES: Readonly<Record<string, Readonly<Record<string, a
 export function suspendedPatterns(records: unknown): Array<{ id: string; agent: string; setups: number; mean_r: number }>;
 export function suspendedAgents(records: unknown): Array<{ id: string; setups: number; mean_r: number }>;
 export function agentStatuses(env: unknown, options?: { records?: unknown }): Record<string, string>;
+export function variantName(agentId: string, key: string): string | null;
+export function agentRoster(env: unknown): Record<string, { status: string; version: number }>;
+export function rosterLines(before: Record<string, { status: string; version: number }> | null, now: Record<string, { status: string; version: number }>): string[];
 export function syncAgentBreaker(env: unknown, records: unknown, options?: { send?: ((text: string) => Promise<unknown>) | null; now?: number }): Promise<Record<string, any>>;
 export function agentContext(input?: Record<string, any>): Record<string, any>;
 export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
