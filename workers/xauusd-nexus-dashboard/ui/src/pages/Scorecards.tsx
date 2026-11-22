@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Trophy, TrendingUp, ShieldAlert, Award, Activity, BarChart2, CheckCircle2 } from "lucide-react";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -175,7 +175,9 @@ function AgentTable({ rows }: { rows: any[] }) {
  * only, never from model text.
  */
 export default function Scorecards() {
-  const { data, loading, error } = usePoll(() => get("/api/scorecards?days=30"), 300_000);
+  const poll = usePoll(() => get("/api/scorecards?days=30"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const [activeTab, setActiveTab] = useState<"all" | "1H" | "15m" | "indicators">("all");
   const d = data as any;
   const rooms = d?.reputation?.rooms ?? {};
@@ -250,10 +252,10 @@ export default function Scorecards() {
         </div>
       </div>
 
-      {loading && !d ? (
+      {phase === "error" ? (
+        <Panel><PollError poll={poll} /></Panel>
+      ) : phase === "loading" ? (
         <Panel><Skeleton rows={6} /></Panel>
-      ) : error && !d ? (
-        <Panel><p className="text-[12px] text-rose-300">Scorecards unavailable: {error}</p></Panel>
       ) : (
         <>
           {/* Visual Graph: Leaderboard Bar Charts */}

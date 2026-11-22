@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { get } from "./api";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { errorText, get } from "./api";
 import { usePoll } from "./usePoll";
 import { usePushMany } from "./push";
 
@@ -25,8 +25,23 @@ type Ctx = {
   setups: any[];
   loading: boolean;
   error: string | null;
+  /**
+   * The reads that failed on their latest try, by path (e.g. "/api/news/daily" → "/api/news/daily 502"): each read
+   * keeps its own catch, so one failure never blanks the others, and a tab can tell a failed read from an empty one.
+   */
+  failed: Record<string, string>;
+  /** The last good answer of each read, by path (ms, the browser clock). */
+  okAt: Record<string, number>;
+  /** The retry cadence of the read at a path (ms). */
+  intervalOf: (path: string) => number;
+  /** Read everything again now. */
+  retry: () => void;
 };
-const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, strategy: null, engine: null, setups: [], loading: true, error: null });
+const MarketContext = createContext<Ctx>({ threads: {}, news: null, m5: null, global: null, strategy: null, engine: null, setups: [], loading: true, error: null, failed: {}, okAt: {}, intervalOf: () => 0, retry: () => {} });
+
+/** The paths of the reads, so a tab names the one it shows. */
+export const NEWS_PATH = "/api/news/daily";
+export const threadPath = (c: TfChart) => `/api/threads/timeframe?chart=${c}`;
 
 /**
  * The 1H, 4H and D1 Threads, News Daily, the 5m context and the Global Conclusion (the rooms and the conclusion pushed
@@ -37,17 +52,24 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
   // stays every 60 s until the hub has delivered both, then runs every 5 minutes as a fallback.
   const push = usePushMany(["threads", "decision"]);
+  // Each read keeps its own catch (one failure never blanks the others) and records what failed and when it last read.
+  const okAt = useRef<Record<string, number>>({});
+  const read = (path: string, failed: Record<string, string>) =>
+    get(path).then((v) => { okAt.current[path] = Date.now(); return v; }, (e) => { failed[path] = errorText(e); return null; });
+  const slowMs = push.live ? POLL_LIVE_MS : POLL_MS;
   const slow = usePoll(async () => {
+    const failed: Record<string, string> = {};
     const [d1, h4, h1, glob] = await Promise.all([
-      ...TF_CHARTS.map((c) => get(`/api/threads/timeframe?chart=${c}`).catch(() => null)),
-      get("/api/conclusion/global").catch(() => null),
+      ...TF_CHARTS.map((c) => read(threadPath(c), failed)),
+      read("/api/conclusion/global", failed),
     ]);
-    return { threads: { D1: d1, H4: h4, H1: h1 }, decision: glob };
-  }, push.live ? POLL_LIVE_MS : POLL_MS);
+    return { threads: { D1: d1, H4: h4, H1: h1 }, decision: glob, failed };
+  }, slowMs);
   // News Daily and the 5m context are not pushed yet: every 60 s, as before.
   const fast = usePoll(async () => {
-    const [news, m5] = await Promise.all([get("/api/news/daily").catch(() => null), get("/api/m5-context").catch(() => null)]);
-    return { news: news?.daily ?? null, m5: m5?.context ?? null };
+    const failed: Record<string, string> = {};
+    const [news, m5] = await Promise.all([read(NEWS_PATH, failed), read("/api/m5-context", failed)]);
+    return { news: news?.daily ?? null, m5: m5?.context ?? null, failed };
   }, POLL_MS);
   // The newest arrival of each, read or pushed, is shown.
   const [threadsBody, setThreadsBody] = useState<any>(null);
@@ -63,6 +85,10 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     global: glob?.global ?? null, strategy: glob?.global?.strategy ?? null, engine: glob?.engine ?? null, setups: Array.isArray(glob?.setups) ? glob.setups : [],
     loading: (slow.loading && !threadsBody && !decisionBody) || (fast.loading && !f),
     error: slow.error ?? fast.error,
+    failed: { ...((slow.data as any)?.failed ?? {}), ...(f?.failed ?? {}) },
+    okAt: { ...okAt.current },
+    intervalOf: (path) => (path === NEWS_PATH || path === "/api/m5-context" ? POLL_MS : slowMs),
+    retry: () => { void slow.refresh(); void fast.refresh(); },
   };
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
 }

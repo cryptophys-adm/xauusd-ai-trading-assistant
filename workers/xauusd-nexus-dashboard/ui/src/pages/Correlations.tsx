@@ -1,6 +1,6 @@
 import { GitCompareArrows, Globe2 } from "lucide-react";
 import { Stance, stanceColor } from "../components/Stance";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -110,14 +110,16 @@ function MacroRoom() {
 
 /** Backlog 11.3: DXY, the US 10-year yield, silver and WTI crude oil beside gold, with the rolling correlation of 4h returns. */
 export default function Correlations() {
-  const { data, loading, error } = usePoll(() => get("/api/correlations"), 300_000);
+  const poll = usePoll(() => get("/api/correlations"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const v = data as any;
   const rows: any[] = v?.assets ?? [];
   const hint = [`Correlation of 4h returns with gold over ${v?.windows?.short ?? 30} bars (~1 week) and ${v?.windows?.long ?? 120} bars (~1 month). Context, not a signal.`, v?.note].filter(Boolean).join(" ");
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <MacroRoom />
-      {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-fault">Unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
+      {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={4} /></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
         <Panel title="Correlations · 4h" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} hint={hint}>
           <div className="table-wrap">
             <table className="tbl">

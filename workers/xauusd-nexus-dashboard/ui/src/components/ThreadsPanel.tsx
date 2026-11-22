@@ -5,9 +5,9 @@ import { Post, calibrationText } from "./Post";
 import { MetricChips, RebuttalChips } from "./MetricChips";
 import CrowdLine from "./CrowdLine";
 import { Stance, stanceColor } from "./Stance";
-import { Badge, Hint, Skeleton } from "./ui";
+import { Badge, ErrorBox, Hint, Skeleton } from "./ui";
 import { useWarRoom } from "../lib/warroom";
-import { useMarket } from "../lib/market";
+import { NEWS_PATH, threadPath, useMarket } from "../lib/market";
 import { TABS, useTab, tabLabel, type Tab } from "../lib/tab";
 import { ago, candleWhen, pct, utc } from "../lib/format";
 
@@ -187,12 +187,16 @@ function NewsTab({ d }: { d: any }) {
 
 function TabBody({ tab }: { tab: Tab }) {
   const { room } = useWarRoom();
-  const { threads, news, loading, error } = useMarket();
+  const { threads, news, loading, failed, okAt, intervalOf, retry } = useMarket();
   if (tab === "M15") return room ? <RoomTab room={room} tab="M15" /> : <p className="text-[12px] text-muted">No War Room yet.</p>;
   if (loading) return <Skeleton rows={6} />;
-  if (tab === "NEWS") return news ? <NewsTab d={news} /> : error ? <p className="text-[12px] text-fault">Unavailable: {error}</p> : <p className="text-[12px] text-muted">No news analysis yet.</p>;
+  // A failed read says so (its route and code), never "No … yet": that is only for a good read with nothing in it.
+  const failure = (path: string) => failed[path]
+    ? <ErrorBox error={failed[path]} lastOk={okAt[path] ?? null} intervalMs={intervalOf(path)} onRetry={retry} />
+    : null;
+  if (tab === "NEWS") return news ? <NewsTab d={news} /> : failure(NEWS_PATH) ?? <p className="text-[12px] text-muted">No news analysis yet.</p>;
   const t = threads[tab];
-  return t ? <RoomTab room={t} tab={tab} /> : <p className="text-[12px] text-muted">No {tabLabel(tab)} War Room yet.</p>;
+  return t ? <RoomTab room={t} tab={tab} /> : failure(threadPath(tab)) ?? <p className="text-[12px] text-muted">No {tabLabel(tab)} War Room yet.</p>;
 }
 
 /**

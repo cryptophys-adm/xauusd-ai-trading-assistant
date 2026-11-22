@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { CalendarDays } from "lucide-react";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -12,7 +12,9 @@ const STATUS: Record<string, string> = { upcoming: "upcoming", imminent: "pre-re
 
 /** Backlog 11.1: the week's economic calendar (ForexFactory export) and the event-risk gate. */
 export default function Calendar() {
-  const { data, loading, error } = usePoll(() => get("/api/calendar"), 300_000);
+  const poll = usePoll(() => get("/api/calendar"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const [all, setAll] = useState(false);
   const v = data as any;
   const events: any[] = (v?.events ?? []).filter((e: any) => all || (e.currency === "USD" && e.impact === "High"));
@@ -60,7 +62,7 @@ export default function Calendar() {
           ) : null}
         </Panel>
       ) : null}
-      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Unavailable: {error}</p></Panel>
+      {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={6} /></Panel>
         : !events.length ? <Panel><Empty>{v?.fetched_at ? "No matching events this week." : "Not fetched yet."}</Empty></Panel> : (
         <Panel title={all ? "All events" : "High-impact USD events"}>
           <div className="table-wrap">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FileSearch, Lightbulb, ScrollText, Users } from "lucide-react";
-import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { useConfirm } from "../components/ConfirmDialog";
 import { ago, humanKey, utc } from "../lib/format";
@@ -430,7 +430,7 @@ export default function Councils() {
       <Panel title="Suggested topics" icon={<Lightbulb className="h-3.5 w-3.5 text-cyan-300" />}
         hint="Checked once an hour while the market is open: a strategy agent or pattern whose last 20 resolved trades ended at the stop or SL+ 65% of the time or more, a breaker, a losing market condition, the engine's hit rate, a seat at the weight floor, execution, data and cost signals. One open card per topic, the same signal at most once in 7 days, at most 3 new a day."
         right={s ? <Badge tone="slate">{suggestions.filter((x) => x.status === "open").length} open</Badge> : null}>
-        {sugPoll.loading && !s ? <Skeleton rows={3} /> : sugPoll.error && !s ? <Empty>Unavailable ({sugPoll.error}).</Empty> : !suggestions.length ? <Empty>No topic suggested yet{s?.mode === "off" ? " (the flags are off)" : ""}.</Empty> : (
+        {phaseOf(sugPoll) === "error" ? <PollError poll={sugPoll} /> : sugPoll.loading && !s ? <Skeleton rows={3} /> : !suggestions.length ? <Empty>No topic suggested yet{s?.mode === "off" ? " (the flags are off)" : ""}.</Empty> : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {suggestions.map((x) => <SuggestionCard key={x.id} s={x} picked={topic === x.topic_key} onPick={setTopic} />)}
           </div>
@@ -445,8 +445,8 @@ export default function Councils() {
         hint="Built now from the stored records, deterministically: the same evidence gives the same sha256. Omega's stop locked behind passed key levels is the headline SL+; the ledger's breakeven SL+ stands beside it."
         right={pk?.pack ? <span className="flex items-center gap-1.5"><Hint text="council_pack.v1; refs follow ev:xauusd/<source>/<id>[@<as_of>][#<field>]" /><Badge tone="slate">{Object.keys(pk.pack.sections ?? {}).length} sections</Badge></span> : null}>
         {!topic ? <Empty>Pick a suggested topic or build one above.</Empty>
+          : packPoll.error && !pk ? <PollError poll={packPoll} />
           : packPoll.loading ? <Skeleton rows={5} />
-          : packPoll.error ? <Empty>Unavailable ({packPoll.error}).</Empty>
           : pk?.pack ? <Pack pack={pk.pack} /> : <Empty>No pack.</Empty>}
       </Panel>
     </div>

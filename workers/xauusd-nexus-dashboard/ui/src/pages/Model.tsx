@@ -1,5 +1,5 @@
 import { ArrowRight, BookOpen, Brain, Database, GitBranch, Layers, Lightbulb, ShieldCheck, Trees } from "lucide-react";
-import { Badge, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Kpi, Panel, PollBody, Skeleton } from "../components/ui";
 import { C, DivergingBar } from "../components/charts";
 import { get } from "../lib/api";
 import { ago, utc } from "../lib/format";
@@ -205,33 +205,38 @@ export default function Model() {
         {loading ? <Skeleton rows={3} /> : <Pipeline dataset={d} baseline={b} gbm={g} live={l} />}
       </Panel>
 
-      <Panel title="Dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} hint={labelHint}>
-        {loading ? <Skeleton rows={4} /> : <Dataset d={d} />}
+      {/* Four polls, four panels: each carries its own state tag (mockup "Nexus data states"). A failed read shows its
+          route and code; "No … yet" is only for a good read with nothing in it. */}
+      <Panel title="Dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} hint={labelHint} poll={dataset} live>
+        <PollBody poll={dataset} skeleton={4}>{() => <Dataset d={d} />}</PollBody>
       </Panel>
 
       <Panel title="Baseline model" icon={<Layers className="h-3.5 w-3.5 text-cyan-300" />} hint="Logistic regression, retrained hourly. The bar other models must beat."
+        poll={baseline} live
         right={b ? <Badge tone="slate">{b.model_id} · {b.rows} rows · trained {ago(b.trained_at)}</Badge> : null}>
-        {baseline.loading && !baseline.data ? <Skeleton rows={4} /> : !b ? <Empty>No baseline yet.</Empty> : (
-          <>
-            <Gate b={b} />
-            <ModelTable checks={b.checks} prospective={b.prospective} top={b.top_features} gate={b.gate} importance="weight" />
-          </>
-        )}
+        <PollBody poll={baseline} skeleton={4} empty={!b && <Empty when="Retrained every hour once the dataset has labeled decisions.">No baseline yet</Empty>}>
+          {() => (
+            <>
+              <Gate b={b} />
+              <ModelTable checks={b.checks} prospective={b.prospective} top={b.top_features} gate={b.gate} importance="weight" />
+            </>
+          )}
+        </PollBody>
       </Panel>
 
       <Panel title="Decision model" icon={<Trees className="h-3.5 w-3.5 text-violet-300" />} hint="LightGBM, trained daily at 04:17 UTC. Shadow only until it passes the gate."
+        poll={gbm} live
         right={g ? <div className="flex gap-1.5"><Badge tone="slate">{g.model_id} · {g.rows} rows · {g.features} features · trained {ago(g.trained_at)}</Badge><Badge tone="amber">SHADOW</Badge></div> : null}>
-        {gbm.loading && !gbm.data ? <Skeleton rows={4} /> : !g ? <Empty>No model yet.</Empty> : (
-          <>
-            <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />
-          </>
-        )}
+        <PollBody poll={gbm} skeleton={4} empty={!g && <Empty when="Trained daily at 04:17 UTC from the labeled dataset.">No decision model yet</Empty>}>
+          {() => <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />}
+        </PollBody>
       </Panel>
 
       <Panel title="Live knowledge notes" icon={<BookOpen className="h-3.5 w-3.5 text-cyan-300" />}
         hint={`Shadow-tested notes go live when better than active${l?.rules ? `; retired if worse live (p < ${l.rules.alpha}, ${l.rules.min_decided} calls)` : ""}.`}
+        poll={tuning} live
         right={l ? <Badge tone={l.mode === "on" ? "green" : "slate"}>mode {l.mode ?? "—"}</Badge> : null}>
-        {tuning.loading && !tuning.data ? <Skeleton rows={3} /> : <LearnedLive l={l} />}
+        <PollBody poll={tuning} skeleton={3}>{() => <LearnedLive l={l} />}</PollBody>
       </Panel>
     </div>
   );

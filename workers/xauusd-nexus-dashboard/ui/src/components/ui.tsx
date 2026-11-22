@@ -1,7 +1,10 @@
 import { motion } from "framer-motion";
 import clsx from "clsx";
-import type { ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CHIP, FILL, T, type Tone } from "../lib/tokens";
+import type { Poll } from "../lib/usePoll";
+import { localClock, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, type PollPhase } from "../lib/pollState";
 
 /**
  * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
@@ -16,19 +19,135 @@ export function Hint({ text, className }: { text: string; className?: string }) 
   );
 }
 
-export function Panel({ title, icon, right, hint, children, className }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; hint?: string; children: ReactNode; className?: string }) {
+/** The state a poll puts its panel in, now. */
+export function phaseOf(poll: Poll): PollPhase {
+  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs }, Date.now());
+}
+
+/**
+ * A glass panel. Given a `poll`, its header's right slot carries the data state first, then the panel's own controls
+ * (mockup "Nexus data states", part A): amber "stale 7m" with the last good read and a retry, red "error", and with
+ * `live` the cyan time of the last good read. With no poll it is as before.
+ */
+export function Panel({ title, icon, right, hint, children, className, poll, live = false, pollRetry = true }: { title?: ReactNode; icon?: ReactNode; right?: ReactNode; hint?: string; children: ReactNode; className?: string; poll?: Poll; live?: boolean; pollRetry?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const phase = poll ? phaseOf(poll) : null;
+  const tag = poll && phase && (phase === "stale" || phase === "error" || (live && phase === "live"))
+    ? <PollTag poll={poll} phase={phase} open={open} onToggle={() => setOpen((o) => !o)} retry={pollRetry} />
+    : null;
   return (
     <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: "easeOut" }}
       className={clsx("glass p-4", className)}>
-      {(title || right) && (
+      {(title || right || tag) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="panel-title flex items-center gap-2">{icon}{title}{hint && <Hint text={hint} />}</h2>
-          {right}
+          {tag ? <div className="flex flex-wrap items-center gap-2">{tag}{right}</div> : right}
         </div>
       )}
+      {poll && open && phase === "stale" ? <StaleDetail poll={poll} /> : null}
       {children}
     </motion.section>
   );
+}
+
+/** A clock for the ages on screen, every `ms`. */
+function useNow(ms: number) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), ms); return () => window.clearInterval(t); }, [ms]);
+  return now;
+}
+
+const tagText = "mono whitespace-nowrap text-[11px]";
+const tagChip = "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5";
+
+/** The header tag of a poll: stale (amber, late), error (red, fault) or live (cyan, ok). */
+function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: PollPhase; open: boolean; onToggle: () => void; retry: boolean }) {
+  if (phase === "error") {
+    return <span className={clsx(tagText, tagChip, "border-fault-fill/35 bg-fault-fill/10 text-fault")} title={`${poll.error} · retry ${retryEvery(poll.intervalMs)}`}><Dot tone="fault" />error</span>;
+  }
+  if (phase === "live") {
+    if (poll.lastOk == null) return null;
+    return (
+      <span className={clsx(tagText, "inline-flex items-center gap-1.5 text-fg-2")} title={`updated ${utcClock(poll.lastOk)} UTC · ${localClock(poll.lastOk)} local`} aria-label={`Live, updated ${utcClock(poll.lastOk, false)} UTC`}>
+        <Dot tone="ok" />{utcClock(poll.lastOk, false)} UTC
+      </span>
+    );
+  }
+  return <StaleTag poll={poll} open={open} onToggle={onToggle} retry={retry} />;
+}
+
+/** Stale: the chip (a button: on a phone it opens the detail line), the last good read, and Retry now. */
+function StaleTag({ poll, open, onToggle, retry }: { poll: Poll; open: boolean; onToggle: () => void; retry: boolean }) {
+  const now = useNow(15_000);
+  const age = poll.lastOk != null ? shortAge(Math.max(now, Date.now()) - poll.lastOk) : "";
+  return (
+    <>
+      <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Stale ${age}, show details`} title={staleTitle(poll)}
+        className="inline-flex h-11 items-center rounded-md sm:h-auto">
+        <span className={clsx(tagText, tagChip, "border-late-fill/35 bg-late-fill/10 text-late")}><Dot tone="late" />stale {age}</span>
+      </button>
+      {poll.lastOk != null ? <span className={clsx(tagText, "hidden text-fg-2 sm:inline")}>ok {okLine(poll.lastOk, false)}</span> : null}
+      {retry ? <RetryButton onRetry={poll.refresh} busy={poll.loading} compact /> : null}
+    </>
+  );
+}
+
+/** The stale tag opened: what failed, how often, the retry cadence and the last good read. */
+function StaleDetail({ poll }: { poll: Poll }) {
+  return (
+    <div className="mono -mt-1 mb-3 rounded-lg border border-late-fill/25 bg-late-fill/6 px-2.5 py-2 text-[11px] leading-relaxed text-fg-2">
+      {poll.error != null
+        ? <><span className="text-late">{poll.error}</span> · {poll.failures} failed · retry {retryEvery(poll.intervalMs)}</>
+        : <><span className="text-late">no good read for {shortAge(2 * poll.intervalMs)}</span> · retry {retryEvery(poll.intervalMs)}</>}
+      <br />ok {okLine(poll.lastOk, false)}
+    </div>
+  );
+}
+
+/** Retry now: an icon (in a header) or a labelled button (in the error box); 44 px tall on a phone. */
+export function RetryButton({ onRetry, busy = false, compact = false }: { onRetry: () => void | Promise<void>; busy?: boolean; compact?: boolean }) {
+  return (
+    <button type="button" onClick={() => void onRetry()} disabled={busy} aria-label="Retry now" aria-busy={busy} title={compact ? "Retry now" : undefined}
+      className={clsx("inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/4 text-[12px] font-medium text-fg transition hover:border-white/20 hover:bg-white/8 disabled:cursor-wait disabled:opacity-60",
+        compact ? "h-11 w-11 sm:h-7 sm:w-7" : "h-11 px-2.5 sm:h-8")}>
+      <RefreshCw className={clsx("h-3.5 w-3.5 text-fg-2", busy && "animate-spin")} aria-hidden="true" />{compact ? null : "Retry now"}
+    </button>
+  );
+}
+
+/**
+ * A failed read with nothing on screen: the route and its code ("/api/ledger 502"), the retry cadence, the last good
+ * read and Retry now. The one error line of every page (no raw "Unavailable: HTTP 502").
+ */
+export function ErrorBox({ error, lastOk = null, intervalMs = 0, retrying = false, onRetry }: { error: string; lastOk?: number | null; intervalMs?: number; retrying?: boolean; onRetry?: () => void | Promise<void> }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-fault-fill/20 bg-fault-fill/6 px-3 py-2.5">
+      <div className="mono flex min-w-0 flex-col gap-1 text-[12px]">
+        <span className="break-all text-fault">{error}{intervalMs ? <span className="text-fg-2"> · retry {retryEvery(intervalMs)}</span> : null}</span>
+        <span className="text-[11px] text-fg-2">last ok {okLine(lastOk, false)}</span>
+      </div>
+      {onRetry ? <RetryButton onRetry={onRetry} busy={retrying} /> : null}
+    </div>
+  );
+}
+
+/** The error box of a poll. */
+export function PollError({ poll }: { poll: Poll }) {
+  return <ErrorBox error={poll.error ?? "read failed"} lastOk={poll.lastOk} intervalMs={poll.intervalMs} retrying={poll.loading} onRetry={poll.refresh} />;
+}
+
+/**
+ * The body of a polled panel: the skeleton on the first load only, the error box when the read failed with nothing
+ * on screen (kept while its retry runs), `empty` when the read was good with nothing to show, else the content.
+ * Pass the content as a function when it reads the data, so it runs only once there is some.
+ */
+export function PollBody({ poll, skeleton = 3, empty, children }: { poll: Poll; skeleton?: number | "chart"; empty?: ReactNode; children: ReactNode | (() => ReactNode) }) {
+  const phase = phaseOf(poll);
+  if (phase === "error") return <PollError poll={poll} />;
+  if (phase === "loading") return skeleton === "chart" ? <Skeleton variant="chart" /> : <Skeleton rows={skeleton} />;
+  if (empty) return <>{empty}</>;
+  if (phase === "idle") return null;
+  return <>{typeof children === "function" ? children() : children}</>;
 }
 
 /**
@@ -76,12 +195,34 @@ export function JsonView({ value }: { value: unknown }) {
   return <pre className="glass-inner mono max-h-[420px] overflow-auto p-3 text-[11px] leading-relaxed text-slate-300">{JSON.stringify(value, null, 2)}</pre>;
 }
 
-export function Skeleton({ rows = 3 }: { rows?: number }) {
-  return <div className="animate-pulse space-y-2">{Array.from({ length: rows }, (_, i) => <div key={i} className="h-9 rounded-lg bg-white/5" />)}</div>;
+/** The first-load placeholder, shaped like what it replaces: rows, or a chart (legend, plot, label, strip, footer). */
+export function Skeleton({ rows = 3, variant = "rows" }: { rows?: number; variant?: "rows" | "chart" }) {
+  if (variant === "chart") {
+    return (
+      <div className="flex animate-pulse flex-col gap-2" aria-hidden="true">
+        <div className="flex justify-between"><div className="h-2.5 w-[120px] rounded-sm bg-white/5" /><div className="h-[18px] w-12 rounded-full bg-white/5" /></div>
+        <div className="h-[150px] rounded-lg bg-white/5" />
+        <div className="h-2.5 w-[90px] rounded-sm bg-white/5" />
+        <div className="h-[52px] rounded-lg bg-white/5" />
+        <div className="h-2.5 rounded-sm bg-white/5" />
+      </div>
+    );
+  }
+  return <div className="animate-pulse space-y-2" aria-hidden="true">{Array.from({ length: rows }, (_, i) => <div key={i} className="h-9 rounded-lg bg-white/5" />)}</div>;
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="py-3 text-[12px] text-muted">{children}</p>;
+/**
+ * Nothing to show after a good read. With `when` it says what is missing and when it fills (mockup "Nexus data
+ * states"): "0 closed trades · 30D · TP1" over "Draws from the 2nd closed trade. The ledger runs every 5m."
+ */
+export function Empty({ children, when }: { children: ReactNode; when?: ReactNode }) {
+  if (when == null) return <p className="py-3 text-[12px] text-muted">{children}</p>;
+  return (
+    <div className="glass-inner flex flex-col justify-center gap-1.5 p-3.5 sm:min-h-[120px] sm:px-4">
+      <span className="mono text-[13px] text-fg">{children}</span>
+      <span className="text-[12px] leading-snug text-fg-2">{when}</span>
+    </div>
+  );
 }
 
 export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {

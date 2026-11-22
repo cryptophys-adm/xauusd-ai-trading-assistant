@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Crosshair, Grid3x3, ListChecks, Puzzle, Scale, Shapes } from "lucide-react";
-import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { C } from "../components/charts";
 import { Stance } from "../components/Stance";
 import { get } from "../lib/api";
@@ -312,7 +312,7 @@ export default function Strategy() {
         hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
         right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone="ok">{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
         <CouncilToggle arm={arm} onDone={() => setArmTick((t) => t + 1)} />
-        {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} arm={arm} reload={() => setArmTick((t) => t + 1)} />}
+        {phaseOf(agentsPoll) === "error" ? <PollError poll={agentsPoll} /> : loading ? <Skeleton rows={4} /> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} arm={arm} reload={() => setArmTick((t) => t + 1)} />}
       </Panel>
 
       <Panel title="Latest decision" icon={<Crosshair className="h-3.5 w-3.5 text-cyan-300" />} hint="What each agent would trade at the latest 15m decision. Prices are on the feed's scale (OANDA)."

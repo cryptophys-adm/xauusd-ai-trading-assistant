@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Activity, Database, Gauge, Newspaper, ShieldCheck } from "lucide-react";
 import PriorityQueue from "../components/PriorityQueue";
-import { Badge, Dot, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Dot, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { useSystemHealth, marketClosed } from "../lib/health";
@@ -13,11 +13,11 @@ const statusTone = (s?: string) => (s === "approved" ? "text-emerald-300" : s ==
 const when = (iso?: string | null) => (iso ? `${String(iso).slice(5, 16).replace("T", " ")} UTC` : "—");
 
 function Overview() {
-  const { items, loading, error } = useSystemHealth();
+  const { items, loading, poll } = useSystemHealth();
   const bad = items.filter((i) => i.tone === "red").length, warn = items.filter((i) => i.tone === "amber").length;
   return (
     <Panel title="Workers and lanes" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />} hint={marketClosed() ? "Market closed (Fri 17:30 – Sun 18:00 New York): grey lanes are idle." : undefined} right={<Badge tone={bad ? "red" : warn ? "amber" : "green"}>{bad ? `${bad} down` : warn ? `${warn} need attention` : "all nominal"}</Badge>}>
-      {loading ? <Skeleton rows={3} /> : error && !items.length ? <p className="text-[12px] text-rose-300">Status unavailable: {error}</p> : (
+      {phaseOf(poll) === "error" && !items.length ? <PollError poll={poll} /> : loading ? <Skeleton rows={3} /> : (
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {items.map((i) => (
             <div key={i.key} className="glass-inner px-3 py-2">
@@ -156,13 +156,15 @@ function NewsShadow() {
 }
 
 function Parity() {
-  const { data, loading, error } = usePoll(() => get("/api/parity"), 60_000);
+  const poll = usePoll(() => get("/api/parity"), 60_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const { status } = useSystemHealth();
   const [older, setOlder] = useState(false);
   const p = (data as any)?.parity;
   const cal = status?.ai_worker?.local_lane?.calibration;
-  if (loading && !data) return <Panel><Skeleton rows={5} /></Panel>;
-  if (error && !data) return <Panel><p className="text-[12px] text-rose-300">Parity unavailable: {error}</p></Panel>;
+  if (phase === "error") return <Panel><PollError poll={poll} /></Panel>;
+  if (phase === "loading") return <Panel><Skeleton rows={5} /></Panel>;
   if (!p) return <Panel><Empty>No parity data yet.</Empty></Panel>;
   const rows: any[] = (p.registry ?? []).filter((r: any) => older || r.current);
   return (

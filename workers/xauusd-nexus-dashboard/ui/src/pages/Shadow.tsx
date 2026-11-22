@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FlaskConical, GitPullRequest, Activity, BarChart2, Zap, ShieldCheck } from "lucide-react";
-import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -205,7 +205,9 @@ function TuningGrid() {
 }
 
 export default function Shadow() {
-  const { data, loading, error } = usePoll(() => get("/api/shadow-versions"), 300_000);
+  const poll = usePoll(() => get("/api/shadow-versions"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const families: any[] = (data as any)?.families ?? [];
 
   // Aggregated Shadow Telemetry
@@ -284,10 +286,10 @@ export default function Shadow() {
       {/* Dynamic Parameter Tuning Grid */}
       <TuningGrid />
 
-      {loading && !data ? (
+      {phase === "error" ? (
+        <Panel><PollError poll={poll} /></Panel>
+      ) : phase === "loading" ? (
         <Panel><Skeleton rows={6} /></Panel>
-      ) : error && !data ? (
-        <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
       ) : !families.length ? (
         <Panel><Empty>No data yet.</Empty></Panel>
       ) : (

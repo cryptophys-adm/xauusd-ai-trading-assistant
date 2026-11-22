@@ -1,5 +1,5 @@
 import { BellRing } from "lucide-react";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -8,7 +8,9 @@ const when = (t?: string | null) => (t ? `${t.slice(5, 16).replace("T", " ")} UT
 
 /** Backlog 11.2: the Telegram alerts of the Signal Ledger. Read-only: this page never sends. */
 export default function Alerts() {
-  const { data, loading, error } = usePoll(() => get("/api/alerts"), 60_000);
+  const poll = usePoll(() => get("/api/alerts"), 60_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const v = (data as any)?.alerts;
   const state = !v ? null : v.enabled ? { tone: "green" as const, text: "active" }
     : !v.switch_on ? { tone: "slate" as const, text: "off" } : { tone: "amber" as const, text: "bot not configured" };
@@ -17,7 +19,7 @@ export default function Alerts() {
       <Panel title="Alerts" icon={<BellRing className="h-3.5 w-3.5 text-cyan-300" />} hint="Each Signal Ledger event is sent to Telegram once, at most 5 messages per run. No orders are placed." right={state ? <Badge tone={state.tone}>{state.text}</Badge> : null}>
         {v && !v.bot_configured ? <p className="text-[12px] text-amber-200">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to start sending.</p> : null}
       </Panel>
-      {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Alerts unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
+      {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={4} /></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
         <>
           <Panel title="Pending" hint="Sent on the next sweep, every 15 minutes." right={<Badge tone="cyan">{v.pending.length}</Badge>}>
             {!v.started ? <Empty>Not started yet.</Empty>

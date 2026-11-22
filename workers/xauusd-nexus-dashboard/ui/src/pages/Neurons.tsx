@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
-import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Kpi, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { C } from "../components/charts";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -86,12 +86,14 @@ function RoomBars({ rows, room }: { rows: any[]; room: string }) {
 }
 
 export default function Neurons() {
-  const { data, loading, error } = usePoll(() => get("/api/neuron-allocation?days=7"), 300_000);
+  const poll = usePoll(() => get("/api/neuron-allocation?days=7"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const v = data as any;
   const rooms: string[] = useMemo(() => [...new Set(((v?.rooms_by_day ?? []) as any[]).map((r) => r.room))].sort(), [v]);
   const [room, setRoom] = useState("M15");
-  if (loading && !v) return <Skeleton rows={6} />;
-  if (error && !v) return <Empty>Neuron allocation unavailable ({error}).</Empty>;
+  if (phase === "error") return <div className="px-4 py-4 md:px-6"><Panel><PollError poll={poll} /></Panel></div>;
+  if (phase === "loading") return <Skeleton rows={6} />;
   const agents: any[] = v?.agents ?? [];
   const scored = agents.filter((a) => a.hit_rate != null);
   return (
