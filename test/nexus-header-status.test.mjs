@@ -14,21 +14,24 @@ test("header room cell: LIVE with the bar close in UTC, BEHIND with its age, CLO
   assert.equal(late.detail, "52m");
   assert.equal(late.tone, "late");
   assert.equal(roomCell({ barMs: now - 5 * 3_600_000, hasRoom: true, error: false, closed: false, now }).detail, "5h");
-  assert.equal(roomCell({ barMs: bar, hasRoom: true, error: true, closed: false, now }).code, "BEHIND", "a failed refresh with a room on screen is late, not live");
+  assert.equal(roomCell({ barMs: bar, hasRoom: true, error: true, closed: false, now }).code, "OFFLINE", "a failed read says so, even with an older room on screen");
   assert.equal(roomCell({ barMs: NaN, hasRoom: false, error: true, closed: false, now }).code, "OFFLINE");
   assert.equal(roomCell({ barMs: NaN, hasRoom: false, error: false, closed: true, now }).code, "CLOSED");
 });
 
-test("header Omega cell: ARMED, READY, NO BRIDGE (the fault), OFF, and a dash when unreadable", () => {
+test("header Omega cell: ON (the engine toggle, never called armed), READY, NO BRIDGE (the fault), OFF, and a dash when unreadable", () => {
   const s = (connected, armed, positions = 0) => ({ connected, armed, broker: "Broker Ltd", server: "Srv-Live", positions });
-  assert.deepEqual([omegaCell(s(true, true, 2)).code, omegaCell(s(true, true, 2)).positions, omegaCell(s(true, true, 2)).broker], ["ARMED", 2, "Broker Ltd"]);
+  assert.deepEqual([omegaCell(s(true, true, 2)).code, omegaCell(s(true, true, 2)).positions, omegaCell(s(true, true, 2)).broker], ["ON", 2, "Broker Ltd"]);
   assert.equal(omegaCell(s(true, false)).code, "READY");
   assert.equal(omegaCell(s(true, false)).positions, null, "no position count while none is open and the engine is off");
   assert.equal(omegaCell(s(true, false, 1)).positions, 1);
   assert.deepEqual([omegaCell(s(false, true)).code, omegaCell(s(false, true)).tone], ["NO BRIDGE", "fault"]);
   assert.deepEqual([omegaCell(s(false, false)).code, omegaCell(s(false, false)).tone], ["OFF", "off"]);
   assert.equal(omegaCell(null).code, "—");
-  for (const c of [omegaCell(s(true, true)), omegaCell(s(false, true)), omegaCell(null)]) assert.doesNotMatch(JSON.stringify(c), /Srv-Live/, "never the server");
+  for (const c of [omegaCell(s(true, true)), omegaCell(s(false, true)), omegaCell(null)]) {
+    assert.doesNotMatch(JSON.stringify(c), /Srv-Live/, "never the server");
+    assert.doesNotMatch(c.code, /ARM/i, "status.armed is the engine toggle, not the typed LIVE arm, the control mode or a limit fault");
+  }
 });
 
 test("header clock: UTC to the second, then the viewer's local time and offset", () => {

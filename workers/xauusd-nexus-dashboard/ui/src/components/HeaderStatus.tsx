@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useSyncExternalStore, type MouseEvent } from "react";
 import clsx from "clsx";
 import { clockParts, type Cell, type OmegaCell, type Tone } from "../lib/headerStatus";
 
@@ -10,10 +10,17 @@ function StatusDot({ tone, filled = true }: { tone: Tone; filled?: boolean }) {
   return <span aria-hidden="true" className={clsx("inline-block h-[7px] w-[7px] shrink-0 rounded-full border-[1.5px]", DOT[tone], !filled && "bg-transparent")} />;
 }
 
+/** One clock for the strip and the phone row: a single one-second interval while anything shows it. */
+const listeners = new Set<() => void>();
+let tick = Date.now();
+let timer: number | undefined;
+function subscribe(fn: () => void) {
+  listeners.add(fn);
+  if (timer === undefined) timer = window.setInterval(() => { tick = Date.now(); listeners.forEach((l) => l()); }, 1000);
+  return () => { listeners.delete(fn); if (!listeners.size && timer !== undefined) { window.clearInterval(timer); timer = undefined; } };
+}
 function useNow() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 1000); return () => window.clearInterval(t); }, []);
-  return now;
+  return new Date(useSyncExternalStore(subscribe, () => tick));
 }
 
 type Nav = (e: MouseEvent<HTMLAnchorElement>, href: string) => void;
@@ -48,10 +55,10 @@ export function StatusStrip({ room, omega, omegaActive, navigate }: { room: Cell
 }
 
 /** Phone (below sm): the same three cells as a row under the logo, in short codes. */
-const SHORT: Record<string, string> = { BEHIND: "", OFFLINE: "OFF", CLOSED: "CLSD", ARMED: "ARM", READY: "RDY", "NO BRIDGE": "NO BR" };
+const SHORT: Record<string, string> = { OFFLINE: "OFF", CLOSED: "CLSD", READY: "RDY", "NO BRIDGE": "NO BR" };
 export function StatusRow({ room, omega, omegaActive, navigate }: { room: Cell; omega: OmegaCell; omegaActive: boolean; navigate: Nav }) {
   const c = clockParts(useNow());
-  const roomCode = room.code === "BEHIND" ? room.detail ?? "LATE" : SHORT[room.code] ?? room.code;
+  const roomCode = room.code === "BEHIND" ? `LATE${room.detail ? ` ${room.detail}` : ""}` : SHORT[room.code] ?? room.code;
   const cell = "flex min-h-[44px] items-center justify-center gap-1.5";
   return (
     <div className="mono grid grid-cols-3 border-t border-white/10 text-[12px] sm:hidden">

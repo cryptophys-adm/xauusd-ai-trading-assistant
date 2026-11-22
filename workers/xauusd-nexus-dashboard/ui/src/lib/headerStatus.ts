@@ -21,16 +21,21 @@ export function roomCell({ barMs, hasRoom, error, closed, now = Date.now() }: { 
     return { code: "LIVE", detail: hhmmUtc(barMs), tone: "ok", title: `15m room, last bar closed ${hhmmUtc(barMs)} UTC` };
   }
   if (closed) return { code: "CLOSED", detail: null, tone: "off", title: "Market closed" };
-  if (!hasRoom) return { code: "OFFLINE", detail: null, tone: "fault", title: "The War Room could not be read" };
+  // A failed read is OFFLINE even with an older room still on screen: it says the read failed, not that the room is late.
+  if (error || !hasRoom) return { code: "OFFLINE", detail: null, tone: "fault", title: "The War Room could not be read" };
   const mins = Math.round(age / 60_000);
   const detail = !Number.isFinite(age) ? null : mins < 120 ? `${mins}m` : `${Math.round(mins / 60)}h`;
   return { code: "BEHIND", detail, tone: "late", title: detail ? `Last 15m room ${detail} ago; market open` : "No current 15m room; market open" };
 }
 
+/**
+ * `armed` in /omega/api/status is the engine toggle (settings.enabled) only: not the typed LIVE arm, the control
+ * mode (paused, killed) or a limit fault. So the cell says ON, never "armed" (review of #515, 2026-11-22).
+ */
 export function omegaCell(s: OmegaStatus | null): OmegaCell {
   if (!s) return { code: "—", detail: null, tone: "off", title: "Omega status could not be read", positions: null, broker: null, filled: false };
   const broker = s.broker || null;
-  if (s.connected && s.armed) return { code: "ARMED", detail: null, tone: "ok", title: "Bridge connected, Omega engine toggle on", positions: s.positions, broker, filled: true };
+  if (s.connected && s.armed) return { code: "ON", detail: null, tone: "ok", title: "Bridge connected, Omega engine toggle on", positions: s.positions, broker, filled: true };
   if (s.connected) return { code: "READY", detail: null, tone: "ok", title: "Bridge connected, Omega engine toggle off", positions: s.positions > 0 ? s.positions : null, broker, filled: false };
   if (s.armed) return { code: "NO BRIDGE", detail: null, tone: "fault", title: "Omega engine toggle on, but the bridge is not connected", positions: null, broker: null, filled: true };
   return { code: "OFF", detail: null, tone: "off", title: "Bridge not connected, Omega engine toggle off", positions: null, broker: null, filled: false };
