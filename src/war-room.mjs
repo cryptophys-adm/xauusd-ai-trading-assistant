@@ -36,7 +36,7 @@ import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } 
 import { effectiveLearnedPack } from "./learned-live.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
-import { projectionReading } from "./projection-agent.mjs";
+import { projectionReading, chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose, buildLiveRoomTask,
@@ -596,7 +596,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   try {
     const closeMs = Date.parse(barTime);
     const bars15 = (await seriesOf15(env)).filter((b) => Date.parse(b.close_time) <= closeMs);
-    projection = projectionReading({ bars: bars15, plane, calibration: await readPatternCalibration(env), timeframe: "15 minutes" });
+    projection = projectionReading({ bars: bars15, plane, calibration: await readPatternCalibration(env), timeframe: "15 minutes", patterns: chartPatternsMode(env) });
   } catch { projection = null; }
   // The 15m Desk: the 15m local records of the candle that just closed (owner decision 2026-11-06).
   let desk15 = { available: false, reading: [], approved_by_parity: false };
