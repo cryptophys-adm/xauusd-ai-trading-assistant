@@ -55,7 +55,7 @@ test("C2. the calibration shrinks each pattern toward the base rate, acts only f
   assert.equal(patternFactor(c, "double_top"), dt.factor);
   assert.equal(patternFactor(c, "flag"), 1);
   assert.equal(patternFactor(null, "double_top"), 1);
-  assert.deepEqual(calibrationFrom([]), { base_rate: null, resolved: 0, pending: 0, patterns: {} });
+  assert.deepEqual(calibrationFrom([]), { base_rate: null, resolved: 0, pending: 0, patterns: {}, by_tf: {} });
 });
 
 test("C3. the factor scales a broken-out pattern's levels (at most 1); a forming pattern keeps its defaults", () => {
@@ -83,7 +83,7 @@ test("C4. the hourly run writes the calibration to KV from the cached series; of
   const r = await runPatternCalibration(env, { now: Date.parse("2026-11-12T19:10:00Z") });
   assert.equal(r.status, "ok");
   const cal = await readPatternCalibration(env);
-  assert.equal(cal.version, "cryptophys.pattern-calibration.v1");
+  assert.equal(cal.version, "cryptophys.pattern-calibration.v2");
   assert.deepEqual(Object.keys(cal.charts), ["15", "60", "240", "D"]);
   assert.equal(cal.charts["15"].bars, 400);
   assert.equal(cal.charts.D.bars, 0);
