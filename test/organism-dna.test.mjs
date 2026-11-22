@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { organismDna, ORGANISM_SCHEMA } from "../src/organism.mjs";
 import { HUD_PLATFORM_IDS, PLATFORM_HOST_WORKER } from "../src/platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "../src/health-alerts.mjs";
+import { NEXUS_TEACHER_ID } from "../src/owner-corrections.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -16,7 +17,8 @@ const ai = dna.organs.find((o) => o.service === PLATFORM_HOST_WORKER);
 // The platform's external-organ ceiling (cryptophys-cloud-platform control-plane-shared/src/organism.ts).
 const CEILING = new Set(["signals.observe", "reports.publish", "memory.recall", "memory.remember"]);
 // XAUUSD_CEILING (platform V3, live 2026-11-17): the moderator alone may also read its handed-off proposals' state.
-const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"] });
+// Platform HAIC H3e: nexus-teacher alone may record the owner's corrections (src/owner-corrections.mjs).
+const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"] });
 
 function sourceFiles(dir) {
   return readdirSync(new URL(dir, root), { recursive: true }).map(String).filter((f) => /\.(mjs|ts)$/.test(f) && !f.endsWith(".d.mts")).map((f) => join(dir, f));
@@ -37,7 +39,7 @@ test("D1. one organ per Worker of this repository, named as its wrangler config 
 });
 
 test("D2. the agents are exactly those that report to the platform kernel, within the external ceiling", () => {
-  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID].sort();
+  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID].sort();
   assert.deepEqual(ai.agents.map((a) => a.id).sort(), code);
   for (const a of ai.agents) {
     assert.equal(a.voter, false, `${a.id}: no council seat for an external organ`);
