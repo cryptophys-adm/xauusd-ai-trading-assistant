@@ -6,7 +6,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { path } from "./support/pattern-fixtures.mjs";
-import { buildStrategy, loadStrategyInputs, chartPatternsMode } from "../src/strategy-engine.mjs";
+import { buildStrategy, loadStrategyInputs, chartPatternsMode, ownTimeframePlan, loadOwnTimeframePlanInputs } from "../src/strategy-engine.mjs";
+import { buildKeyLevels } from "../src/key-level-agent.mjs";
 import { projectionReading, chartPatternsMode as projectionMode } from "../src/projection-agent.mjs";
 import { slimInputs } from "../src/strategy-inputs.mjs";
 import { agentContext, agentPlans, agentStatuses, priceActionReading, AGENT_IDS } from "../src/strategy-agents.mjs";
@@ -85,4 +86,26 @@ test("PM5 every reader of the strategy builds from loadStrategyInputs, so each h
   assert.match(read("../src/strategy-engine.mjs"), /return buildStrategy\(await loadStrategyInputs\(env, \{ now, m5Context \}\), \{ mode \}\);/);
   assert.match(read("../src/strategy-inputs.mjs"), /const slim = slimInputs\(\{ \.\.\.inputs, now \}\);[\s\S]{0,120}build\(slim\)/);
   for (const f of ["../src/decision-engine.mjs", "../src/global-conclusion.mjs", "../src/strategy-inputs.mjs"]) assert.doesNotMatch(read(f), /buildStrategy\([^)]*env/, f);
+});
+
+test("PM6 the H1 chain's own-timeframe plan honours the switch: no projection-reader zone member while off", async () => {
+  assert.deepEqual((await loadOwnTimeframePlanInputs({ CHART_PATTERNS_MODE: "off" })).modes, { chartPatterns: "off" });
+  assert.deepEqual((await loadOwnTimeframePlanInputs({})).modes, { chartPatterns: "on" });
+  // The zones ownTimeframePlan builds from (the 1H snapshot and bars only), with and without the switch.
+  const zonesOf = (patterns) => buildKeyLevels({ snapshots: { "60": null }, bars: { H1: h1Bars }, price: h1Bars.at(-1).close, atrH1: 2.46, patterns }).zones;
+  const projection = (zones) => zones.flatMap((z) => z.members).filter((m) => m.reader === "projection");
+  assert.ok(projection(zonesOf("on")).length > 0, "the 1H triangle gives projection members while on");
+  assert.deepEqual(projection(zonesOf("off")), []);
+  // The plan itself: "on" and unset are today's plan; "off" builds from zones without pattern levels.
+  for (const dir of [1, -1]) {
+    const today = ownTimeframePlan({ snapshot: null, bars: h1Bars }, dir);
+    assert.deepEqual(ownTimeframePlan({ snapshot: null, bars: h1Bars, modes: { chartPatterns: "on" } }, dir), today);
+    assert.deepEqual(ownTimeframePlan({ snapshot: null, bars: h1Bars, modes: null }, dir), today);
+    const off = ownTimeframePlan({ snapshot: null, bars: h1Bars, modes: { chartPatterns: "off" } }, dir);
+    assert.doesNotMatch(JSON.stringify(off ?? {}), /breakout line|broken (?:upper|lower) line|triangle|flag|double top|triple top|pattern/i, `no pattern level in the plan (${dir})`);
+    assert.match(JSON.stringify(today ?? {}), /breakout line|broken (?:upper|lower) line/, `the fixture has pattern levels in today's plan (${dir})`);
+  }
+  assert.notDeepEqual(ownTimeframePlan({ snapshot: null, bars: h1Bars, modes: { chartPatterns: "off" } }, -1), ownTimeframePlan({ snapshot: null, bars: h1Bars }, -1), "the switch changes this plan on the fixture");
+  // The one live caller (src/index.ts) builds from loadOwnTimeframePlanInputs, so it carries the switch.
+  assert.match(readFileSync(new URL("../src/index.ts", import.meta.url), "utf8"), /ownTimeframePlan\(await loadOwnTimeframePlanInputs\(env\),/);
 });

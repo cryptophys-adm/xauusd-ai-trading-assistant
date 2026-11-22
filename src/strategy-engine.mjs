@@ -211,13 +211,14 @@ export function planForDirection(strategy, dir, { scalp = false } = {}) {
  * timeframes): the Key Level Agent's zones built from the 1H HUD snapshot and the closed 1H bars, the
  * 1H ATR and the last 1H close. No other chart's levels, no other room. Null without price or ATR.
  */
-export function ownTimeframePlan({ snapshot = null, bars = [] } = {}, dir) {
+export function ownTimeframePlan({ snapshot = null, bars = [], modes = null } = {}, dir) {
   if (!(dir === 1 || dir === -1)) return null;
   const closed = (bars || []).filter((b) => isNum(b?.close));
   const price = closed.at(-1)?.close ?? snapshot?.huds?.interstellar_eyes?.fields?.close ?? null;
   const atrH1 = atr(closed);
   if (!isNum(price) || !isNum(atrH1)) return null;
-  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1 });
+  // CHART_PATTERNS_MODE "off" leaves the 1H chart patterns out of this plan's zones too (Track A PR 1 review).
+  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1, patterns: modes?.chartPatterns === "off" ? "off" : "on" });
   const plan = tradeLevels({ dir, price, levels: zoneLevels(reading.zones), atrH1 });
   return plan ? { ...plan, source: "1H chart only", reference_price: r2(price), atr_h1: r2(atrH1) } : null;
 }
@@ -227,7 +228,7 @@ export async function loadOwnTimeframePlanInputs(env) {
   let snapshot = null;
   try { snapshot = await loadHudSnapshot(env, { timeframe: "60" }); } catch { snapshot = null; }
   const bars = await seriesCandles(env, "1h");
-  return { snapshot, bars: bars.slice(-60) };
+  return { snapshot, bars: bars.slice(-60), modes: { chartPatterns: chartPatternsMode(env) } };
 }
 
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
