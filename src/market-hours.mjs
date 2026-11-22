@@ -95,8 +95,10 @@ export function sessionOpenMs(name, ms) {
   const today = nyParts(ms);
   const open = nyLocalMs(today.y, today.m, today.d, s.from % 24);
   if (open != null && open <= ms) return open;
-  const prev = nyParts(ms - 24 * HOUR);
-  return nyLocalMs(prev.y, prev.m, prev.d, s.from % 24);
+  // The previous New York date by the calendar, not 24 hours back: the spring-forward Sunday has 23 hours, and 24
+  // hours back from Monday 00:00-01:00 lands on Saturday (Track A PR 2 review).
+  const prev = new Date(Date.UTC(today.y, today.m - 1, today.d - 1));
+  return nyLocalMs(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), s.from % 24);
 }
 
 /**

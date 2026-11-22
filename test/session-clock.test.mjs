@@ -84,6 +84,28 @@ test("SC4 sessionWindow: the opening range of 3 bars and the last 15-minute bar 
   assert.equal(sessionWindow("Sydney", at("2026-11-23T10:00:00Z")), null);
 });
 
+test("SC6 the latest open across both 2026 clock changes, every 7 minutes, for every session", () => {
+  const ny = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const clock = (ms) => Object.fromEntries(ny.formatToParts(new Date(ms)).map((x) => [x.type, Number(x.value)]));
+  let n = 0;
+  for (const [from, to] of [["2026-03-05T00:00:00Z", "2026-03-12T00:00:00Z"], ["2026-10-29T00:00:00Z", "2026-11-05T00:00:00Z"]]) {
+    for (let t = at(from); t < at(to); t += 7 * 60_000) {
+      for (const s of SESSIONS) {
+        const open = sessionOpenMs(s.name, t);
+        const c = clock(open);
+        assert.ok(open <= t && t - open < 25 * 3_600_000, `${s.name} ${iso(t)} → ${iso(open)}`);
+        assert.deepEqual([c.hour, c.minute], [s.from % 24, 0], `${s.name} ${iso(t)} opens at ${s.from % 24}:00 New York time`);
+        assert.equal(sessionWindow(s.name, t).open_ms, open);
+        n++;
+      }
+    }
+  }
+  assert.ok(n > 8000);
+  // The spring-forward Sunday has 23 hours: from Monday 00:00 New York the latest Tokyo open is Sunday's, not Saturday's.
+  assert.equal(iso(sessionOpenMs("Tokyo", at("2026-03-09T04:30:00Z"))), "2026-03-08T23:00:00.000Z");
+  assert.equal(iso(sessionOpenMs("London", at("2026-03-09T04:30:00Z"))), "2026-03-08T07:00:00.000Z", "Sunday's London open");
+});
+
 test("SC5 ENGINE_CODE_HASH is unchanged by the move", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
 });
