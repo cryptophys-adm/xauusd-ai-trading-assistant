@@ -115,3 +115,17 @@ test("PW6 the 1H, 4H and 1D rooms keep their statements in the run document's st
   assert.equal(out.rooms["1h"].analysts.length, 2);
   assert.deepEqual(seen, [], "the thread table is not read");
 });
+
+test("2026-11-22 (the frontend session on the CTA home): positional wording and spelled-out dollar amounts are refused", async () => {
+  const { publicPhrase, SPOKEN_AMOUNT } = await import("../src/public-warroom.mjs");
+  for (const refused of [
+    "I would not take any move until price action stabilizes or a setup triggers.",
+    "The average range is sitting at one hundred two dollars.",
+    "That is one hundred and two dollars of range.",
+    "The average range is about twenty-five dollars per hour.",
+    "A spike increases the risk of being stopped out.",
+    "Momentum would take a move above the range to confirm."
+  ]) assert.equal(publicPhrase(refused), false, refused);
+  for (const kept of ["The US dollar strength weighs on gold.", "A dollar rally would pressure gold.", "The 4H trend and the dollar move apart.", "Momentum is fading on the 4H chart."]) assert.equal(publicPhrase(kept), true, kept);
+  assert.equal(SPOKEN_AMOUNT.test("one hundred two dollars"), true);
+});

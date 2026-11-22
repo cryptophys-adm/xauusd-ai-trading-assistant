@@ -31,7 +31,13 @@ const ANALYSIS_TERMS = /\border[- ](flow|blocks?|book)s?\b/gi;
  * stands is advice, whatever its words: flat, ready to trade, waiting for an entry or a candle, the sidelines, a
  * reference to a ranked item ("#1").
  */
-export const POSITION_WORDING = /\b(flat|trade[- ]?ready|ready to trade|setup is ready|in the trade|in a trade|in position|on the sidelines|sidelines|stand aside|stay(?:ing)? out|wait(?:s|ed|ing)?|hold(?:s|ing)? off|take (?:the|a) trade|no trade|(?:enough|safe|ready|clear) to trade|tradeable|tradable|position(?:s|ed|ing)?)\b|#\s?\d/i;
+export const POSITION_WORDING = /\b(flat|trade[- ]?ready|ready to trade|setup is ready|in the trade|in a trade|in position|on the sidelines|sidelines|stand aside|stay(?:ing)? out|wait(?:s|ed|ing)?|hold(?:s|ing)? off|take (?:the|a|any|this|that) (?:trade|move|position|entry)|setup trigger(?:s|ed)?|a setup triggers|stop(?:s|ped)? (?:\w+ )?out|no trade|(?:enough|safe|ready|clear) to trade|tradeable|tradable|position(?:s|ed|ing)?)\b|#\s?\d/i;
+/**
+ * A money amount written in words (2026-11-22, the frontend session on the CTA home: "average range sitting at one
+ * hundred two dollars"): the digit check cannot see it, so any spelled-out number followed by dollars is refused.
+ */
+const NUMBER_WORD = "(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)";
+export const SPOKEN_AMOUNT = new RegExp(`\\b${NUMBER_WORD}(?:[\\s-]+(?:and[\\s-]+)?${NUMBER_WORD})*[\\s-]+(?:us )?(?:dollars?|bucks|usd)\\b`, "i");
 /** Names the public text may carry that contain a forbidden word: the Decision Matrix analyst is "Matrix" in public. */
 const PUBLIC_NAMES = [[/\bdecision matrix\b/gi, "Matrix"]];
 /** A ratio such as Fibonacci 0.618 is no price: decimals under 1 are left out of the price check. */
@@ -41,7 +47,7 @@ export const publicNames = (s) => PUBLIC_NAMES.reduce((t, [re, name]) => t.repla
 /** Pure: whether a text may stand in a public reading (no price, no order wording, no signal, no position). */
 export function publicPhrase(s) {
   const t = publicNames(s);
-  return Boolean(t.trim()) && !PRICE_LIKE.test(t.replace(RATIOS, " ")) && !ORDER_WORDING.test(t.replace(ANALYSIS_TERMS, " ")) && !SIGNAL_WORDING.test(t) && !POSITION_WORDING.test(t);
+  return Boolean(t.trim()) && !PRICE_LIKE.test(t.replace(RATIOS, " ")) && !SPOKEN_AMOUNT.test(t) && !ORDER_WORDING.test(t.replace(ANALYSIS_TERMS, " ")) && !SIGNAL_WORDING.test(t) && !POSITION_WORDING.test(t);
 }
 
 /**
