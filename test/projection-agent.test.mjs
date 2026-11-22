@@ -131,6 +131,11 @@ test("C6. the 15m Live War Room: the Projection Agent speaks after the Risk Mana
   const bars = wave(80, { start: Date.parse(BAR) - 80 * M });
   store.set("market-data:v2:series:OANDA:XAUUSD|15m", JSON.stringify({ candles: bars }));
   const close = bars.at(-1).close;
+  // A v2 calibration whose open breakouts carry prices (lines, target, height): the point where price-bearing data
+  // enters the store. The room reads the calibration, and still no price reaches its data.
+  const v2cal = calibratePatterns({ "15": bars }, { now: Date.parse(BAR) });
+  v2cal.open["15"] = [{ id: "double_top", name: "Double top", direction: -1, status: "confirmed", upper: close + 4.25, lower: close - 3.75, target: close - 11.5, height: 7.75, breakout_close: BAR, bars_at_calibration: 0, h: 30 }];
+  store.set(PATTERN_CALIBRATION_KEY, JSON.stringify(v2cal));
   store.set("hud:15:" + K15, JSON.stringify({ schema_version: "cryptophys.hud-snapshot.v1", symbol: "OANDA:XAUUSD", timeframe: "15", candle_key: K15, computed_at: BAR, huds: {}, chart_plane: { projection: { fib: { levels: { "0.618": close - 6 } } } } }));
   const calls = [];
   const ai = { calls, run: async (model, request) => {

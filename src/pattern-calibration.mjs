@@ -75,7 +75,7 @@ export function replayOccurrences(bars, { tf, window = CALIBRATION.window, horiz
       busyUntil.set(base, end);
       // bars: from the breakout bar to the bar that resolved it (or to the last bar while pending); h: its horizon.
       const row = { key, tf, id: p.id, status: p.status, direction: p.direction, at: bars[i].close_time ?? null, outcome, bars: end - i, h };
-      // A pending breakout keeps the pattern as it was at the breakout, so later bars can re-check it.
+      // A pending breakout keeps the pattern as it was on the bar first detected broken out, so later bars can re-check it.
       if (outcome === "pending") Object.assign(row, { name: p.name ?? null, upper: num(p.upper) ? p.upper : null, lower: num(p.lower) ? p.lower : null, target: p.target, height: num(p.height) ? p.height : null, breakout_close: bars[i].close_time ?? null });
       out.push(row);
     }
@@ -115,8 +115,9 @@ export function barsSummary(list) {
 
 /**
  * Pure: each chart's own record from its resolved breakouts: the chart's rate, the bars to target (target outcomes
- * only), and per pattern the target/failed/expired split, the raw rate and the rate shrunk toward the chart's rate
- * (a prior worth `prior` outcomes), active from `min_sample` resolved breakouts on that chart.
+ * only), and per pattern the target/failed/expired split, `rate` (raw, as in the pooled block) and `shrunk_rate`
+ * (shrunk toward the chart's rate by a prior worth `prior` outcomes), active from `min_sample` resolved breakouts on
+ * that chart.
  */
 function chartRecords(resolved, { min_sample, prior }) {
   const out = {};
@@ -130,7 +131,7 @@ function chartRecords(resolved, { min_sample, prior }) {
       const own = rows.filter((o) => o.id === id);
       const target = own.filter((o) => o.outcome === "target");
       const s = { n: own.length, target: target.length, failed: own.filter((o) => o.outcome === "failed").length, expired: own.filter((o) => o.outcome === "expired").length };
-      patterns[id] = { ...s, raw_rate: r3(s.target / s.n), rate: r3((s.target + prior * rate) / (s.n + prior)), active: s.n >= min_sample, bars_to_target: barsSummary(target.map((o) => o.bars)) };
+      patterns[id] = { ...s, rate: r3(s.target / s.n), shrunk_rate: r3((s.target + prior * rate) / (s.n + prior)), active: s.n >= min_sample, bars_to_target: barsSummary(target.map((o) => o.bars)) };
     }
     const ordered = Object.fromEntries(Object.entries(patterns).sort((a, b) => b[1].n - a[1].n || (a[0] < b[0] ? -1 : 1)));
     out[tf] = { resolved: rows.length, rate: r3(rate), bars_to_target: barsSummary(rows.filter((o) => o.outcome === "target").map((o) => o.bars)), patterns: ordered };
@@ -140,14 +141,15 @@ function chartRecords(resolved, { min_sample, prior }) {
 
 /**
  * Pure: how many bars a pattern's breakout on a chart is followed for: the pattern's own p90 bars to target on that
- * chart when it is active there, else the chart's p90 when it has at least `min_sample` targets, else
- * HORIZON_DEFAULT_BARS; never above `h` (the replay's own horizon for that pattern) when it is given.
+ * chart when it is active there and its own p90 comes from at least `min_sample` targets, else the chart's p90 when
+ * it has at least `min_sample` targets, else HORIZON_DEFAULT_BARS; never above `h` (the replay's own horizon for
+ * that pattern) when it is given.
  */
 export function horizonFor(calibration, tf, id, h = null, { min_sample = CALIBRATION.min_sample } = {}) {
   const chart = calibration?.by_tf?.[tf];
   const own = chart?.patterns?.[id];
   let bars = HORIZON_DEFAULT_BARS;
-  if (own?.active && num(own.bars_to_target?.p90)) bars = own.bars_to_target.p90;
+  if (own?.active && num(own.bars_to_target?.p90) && (own.bars_to_target.n ?? 0) >= min_sample) bars = own.bars_to_target.p90;
   else if (num(chart?.bars_to_target?.p90) && (chart.bars_to_target.n ?? 0) >= min_sample) bars = chart.bars_to_target.p90;
   return num(h) ? Math.min(h, bars) : bars;
 }
@@ -167,9 +169,11 @@ export function calibratePatterns(seriesByTf, { now = Date.now() } = {}) {
     charts[tf] = { bars: bars.length, from: bars[0]?.open_time ?? null, to: bars.at(-1)?.close_time ?? null, breakouts: occ.length };
     occurrences.push(...occ);
   }
-  // Each chart's breakouts still pending, with the pattern frozen at its breakout (Track A PR 4).
+  // Each chart's breakouts still pending, with the pattern as it was on the bar the replay first detected it broken
+  // out (v1's `at`), and the bars from there to this run (bars_at_calibration: frozen at computed_at; a live count is
+  // recomputed from breakout_close; the name bars_since_breakout is reserved for that live count, A10).
   const open = Object.fromEntries(CALIBRATION_SERIES.map(([tf]) => [tf, occurrences.filter((o) => o.tf === tf && o.outcome === "pending")
-    .map(({ id, name, direction, status, upper, lower, target, height, breakout_close, bars, h }) => ({ id, name, direction, status, upper, lower, target, height, breakout_close, bars_since_breakout: bars, h }))]));
+    .map(({ id, name, direction, status, upper, lower, target, height, breakout_close, bars, h }) => ({ id, name, direction, status, upper, lower, target, height, breakout_close, bars_at_calibration: bars, h }))]));
   return { version: PATTERN_CALIBRATION_VERSION, computed_at: new Date(now).toISOString(), rules: { ...CALIBRATION }, charts, ...calibrationFrom(occurrences), open };
 }
 
