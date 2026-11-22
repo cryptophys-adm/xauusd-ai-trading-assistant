@@ -6,6 +6,7 @@
   "description": "Nexus UI: the XAUUSD War Room and Threads in the Cerebrum Console obsidian design (same stack and palette as workers/console/ui in cryptophys-cloud-platform), served as Workers Static Assets.",
   "scripts": {
     "build": "tsc --noEmit -p . && node build.mjs",
+    "render-check": "node scripts/render-check.mjs",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

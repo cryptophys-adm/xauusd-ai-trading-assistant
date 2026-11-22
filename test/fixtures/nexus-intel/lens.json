@@ -1,0 +1,150 @@
+{
+  "status": "ok",
+  "agent": "Positioning & Liquidity",
+  "mode": "intraday",
+  "switches": {
+    "positioning_enabled": true,
+    "liquidity_enabled": true,
+    "setting": {
+      "positioning": "positioning_enabled",
+      "liquidity": "liquidity_enabled"
+    }
+  },
+  "doctrine_sha": "3f9c0d1e7a52b4c86d0e19f2a7b3c5d4e6f8091a2b3c4d5e6f708192a3b4c5d6",
+  "policy_pulled_at": "2026-11-20T14:12:00.000Z",
+  "positioning": {
+    "weights": {
+      "scalp": {
+        "weight": 0.02,
+        "source": "floor_rollback"
+      },
+      "intraday": {
+        "weight": 0.02,
+        "source": "floor_rollback"
+      },
+      "swing": {
+        "weight": 0.02,
+        "source": "floor_rollback"
+      },
+      "range": {
+        "weight": 0.02,
+        "source": "floor_rollback"
+      }
+    },
+    "score": {
+      "hits": 10,
+      "misses": 14,
+      "n": 24,
+      "share": 0.417,
+      "kinds": {
+        "h4": {
+          "hits": 10,
+          "misses": 14,
+          "share": 0.417
+        }
+      },
+      "score_floor": 0.45,
+      "score_window": 60
+    },
+    "floored": true,
+    "floor": {
+      "at_ms": 1795118400000,
+      "doctrine_sha": "3f9c0d1e7a52b4c86d0e19f2a7b3c5d4e6f8091a2b3c4d5e6f708192a3b4c5d6",
+      "score": 0.417,
+      "n": 24,
+      "score_floor": 0.45
+    },
+    "cot": {
+      "as_of": "2026-11-10",
+      "series": "disaggregated",
+      "age_days": 10.6,
+      "stale": false,
+      "fetch_fail_streak": 0
+    },
+    "facts": {
+      "crowding": "crowded_long",
+      "divergence": "price_down_net_up",
+      "net_pctl_3y": 0.94,
+      "net_change_z": 1.27,
+      "stale": false,
+      "line": "Positioning (CFTC as of 2026-11-10, released 2026-11-13): managed money net long at the 94th percentile of 3 years, crowded long; up 6,310 contracts on the week (+1.27 SD); open interest up 0.8%; price down while the net rose."
+    }
+  },
+  "liquidity": {
+    "weights": {
+      "scalp": {
+        "weight": 0.4,
+        "source": "anchor"
+      },
+      "intraday": {
+        "weight": 0.3,
+        "source": "anchor_baseline_insufficient"
+      },
+      "swing": {
+        "weight": 0.2,
+        "source": "anchor"
+      },
+      "range": {
+        "weight": 0.3,
+        "source": "anchor"
+      }
+    },
+    "score": {
+      "hits": 7,
+      "misses": 4,
+      "n": 11,
+      "share": 0.636,
+      "kinds": {
+        "sweep": {
+          "hits": 5,
+          "misses": 2,
+          "share": 0.714
+        },
+        "block": {
+          "hits": 2,
+          "misses": 2,
+          "share": 0.5
+        }
+      },
+      "score_floor": 0.45,
+      "score_window": 100
+    },
+    "floored": false,
+    "floor": null,
+    "baseline": "insufficient",
+    "baseline_weeks": 3,
+    "updated_at": "2026-11-20T15:00:00.000Z",
+    "facts": {
+      "available": true,
+      "baseline": "insufficient",
+      "baseline_weeks": 3,
+      "baseline_reset_at": null,
+      "basis": "rolling_hour_of_day",
+      "minute_at": "2026-11-20T14:59:00.000Z",
+      "vol_pctl": 0.62,
+      "vol_pctl_15m": 0.48,
+      "vol_spike": false,
+      "thin": false,
+      "spread_ratio": 1.15,
+      "spread_spike": false,
+      "sweep": {
+        "side": "sell_side",
+        "age_min": 22,
+        "vol_pctl": 0.97,
+        "reclaimed": true
+      },
+      "pools": {
+        "above": 2,
+        "below": 1,
+        "equal_highs": 2,
+        "equal_lows": 1
+      },
+      "hvn": {
+        "inside": false,
+        "above": 1,
+        "below": 2
+      }
+    },
+    "line": "Liquidity (broker M1, baseline: insufficient, 3 of 4 weeks): tick volume at the 62th percentile of its hour; the last 15 minutes at the 48th percentile; spread 1.15x the hour's norm; a reclaimed sell-side sweep 22 minutes ago; equal highs/lows untaken: 2 above, 1 below; high-volume nodes: 1 above, 2 below."
+  }
+}
