@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import clsx from "clsx";
 import type { ReactNode } from "react";
+import { CHIP, FILL, T, type Tone } from "../lib/tokens";
 
 /**
  * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
@@ -9,7 +10,7 @@ import type { ReactNode } from "react";
 export function Hint({ text, className }: { text: string; className?: string }) {
   return (
     <span tabIndex={0} role="note" aria-label={text} title={text}
-      className={clsx("inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-white/15 text-[9px] font-semibold normal-case leading-none tracking-normal text-slate-500 outline-hidden hover:border-white/30 hover:text-slate-300 focus:border-cyan-400/50 focus:text-slate-200", className)}>
+      className={clsx("inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-white/15 text-[9px] font-semibold normal-case leading-none tracking-normal text-muted outline-hidden hover:border-white/30 hover:text-slate-300 focus:border-cyan-400/50 focus:text-slate-200", className)}>
       i
     </span>
   );
@@ -21,7 +22,7 @@ export function Panel({ title, icon, right, hint, children, className }: { title
       className={clsx("glass p-4", className)}>
       {(title || right) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="eyebrow flex items-center gap-2">{icon}{title}{hint && <Hint text={hint} />}</h2>
+          <h2 className="panel-title flex items-center gap-2">{icon}{title}{hint && <Hint text={hint} />}</h2>
           {right}
         </div>
       )}
@@ -30,20 +31,34 @@ export function Panel({ title, icon, right, hint, children, className }: { title
   );
 }
 
-export function Kpi({ label, value, sub, color, icon }: { label: string; value: string; sub?: string; color: string; icon?: ReactNode }) {
+/**
+ * A KPI tile: a sentence-case label, the value in the text colour unless it carries a meaning (a gain or a loss, a
+ * status), and no glow (mockup "Nexus colours and text").
+ */
+export function Kpi({ label, value, sub, color, icon }: { label: string; value: string; sub?: string; color?: string; icon?: ReactNode }) {
   return (
     <div className="glass flex flex-col justify-between p-4">
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-        <span style={{ color }}>{icon}</span>{label}
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+        {icon && <span style={{ color: color ?? T.muted }}>{icon}</span>}{label}
       </div>
-      <div className="mono mt-2 text-[26px] font-extrabold leading-none" style={{ color, textShadow: `0 0 18px ${color}55` }}>{value}</div>
-      {sub && <div className="mt-1 text-[11px] text-slate-500">{sub}</div>}
+      <div className="mono mt-2 text-[24px] font-semibold leading-none" style={{ color: color ?? T.fg }}>{value}</div>
+      {sub && <div className="mono mt-1 text-[11px] text-muted">{sub}</div>}
     </div>
   );
 }
 
-export function Dot({ tone = "green", pulse = false }: { tone?: "green" | "amber" | "red" | "cyan" | "slate" | "purple"; pulse?: boolean }) {
-  const c = { green: "bg-emerald-400", amber: "bg-amber-400", red: "bg-rose-400", cyan: "bg-cyan-400", slate: "bg-slate-600", purple: "bg-violet-400" }[tone];
+/**
+ * Legacy tone names, kept so every caller still compiles: green is bull, red is bear (the same red as fault), amber
+ * is neutral (the same amber as late), cyan is ok, purple is shadow, slate is plain. New code names the meaning.
+ */
+type LegacyTone = "green" | "amber" | "red" | "cyan" | "slate" | "purple";
+export type BadgeTone = Tone | LegacyTone;
+const LEGACY: Record<LegacyTone, Tone> = { green: "bull", red: "bear", amber: "neutral", cyan: "ok", purple: "shadow", slate: "plain" };
+const toneOf = (t: BadgeTone): Tone => (t in LEGACY ? LEGACY[t as LegacyTone] : (t as Tone));
+
+export function Dot({ tone = "ok", pulse = false }: { tone?: BadgeTone; pulse?: boolean }) {
+  const t = toneOf(tone);
+  const c = t === "plain" ? "bg-off-fill" : FILL[t];
   return (
     <span className="relative inline-flex h-2 w-2 shrink-0">
       {pulse && <span className={clsx("absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping-slow", c)} />}
@@ -52,16 +67,9 @@ export function Dot({ tone = "green", pulse = false }: { tone?: "green" | "amber
   );
 }
 
-export function Badge({ tone = "slate", children }: { tone?: "green" | "amber" | "red" | "cyan" | "slate" | "purple"; children: ReactNode }) {
-  const c = {
-    green: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
-    amber: "border-amber-400/20 bg-amber-400/10 text-amber-200",
-    red: "border-rose-400/20 bg-rose-400/10 text-rose-300",
-    cyan: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200",
-    purple: "border-violet-400/20 bg-violet-400/10 text-violet-200",
-    slate: "border-white/10 bg-white/4 text-slate-300",
-  }[tone];
-  return <span className={clsx("chip", c)}>{children}</span>;
+/** A chip in a semantic tone: bull, bear, neutral (direction); ok, late, fault, off (status); shadow; plain. */
+export function Badge({ tone = "plain", children }: { tone?: BadgeTone; children: ReactNode }) {
+  return <span className={clsx("chip", CHIP[toneOf(tone)])}>{children}</span>;
 }
 
 export function JsonView({ value }: { value: unknown }) {
@@ -73,13 +81,14 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="py-3 text-[12px] text-slate-500">{children}</p>;
+  return <p className="py-3 text-[12px] text-muted">{children}</p>;
 }
 
 export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return <label className={clsx("block", className)}><span className="label">{label}</span>{children}</label>;
 }
 
-export function severityTone(s?: string): "red" | "amber" | "green" | "slate" {
-  return s === "critical" ? "red" : s === "warning" ? "amber" : s === "info" ? "green" : "slate";
+/** An alert's severity as a status tone: critical fault, warning late, info ok (never green: green is bullish). */
+export function severityTone(s?: string): Tone {
+  return s === "critical" ? "fault" : s === "warning" ? "late" : s === "info" ? "ok" : "plain";
 }

@@ -4,6 +4,7 @@ import { Badge, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { ago } from "../lib/format";
+import { T } from "../lib/tokens";
 
 /**
  * Aether, the Knowledge Guardian (owner 2026-11-09: its own page at nexus.cryptophys.work/aether,
@@ -16,9 +17,9 @@ const TF_LABEL: Record<string, string> = { "15": "15m", "60": "1H", "240": "4H",
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const num = (x?: number | null, d = 2) => (x == null ? "n/a" : x.toFixed(d));
 const short = (s?: string | null, n = 12) => (s ? s.slice(0, n) : "n/a");
-const statusTone = (s?: string): "green" | "amber" | "red" | "slate" | "purple" =>
-  s === "approved" ? "green" : s === "pending" ? "amber" : s === "rejected" ? "red" : s === "proposed" ? "purple" : "slate";
-const verdictTone = (v?: string | null) => (v?.startsWith("better_than_active") ? "text-emerald-300" : v === "running" || v === "collecting" ? "text-amber-200" : "text-slate-400");
+const statusTone = (s?: string): "ok" | "late" | "fault" | "plain" | "purple" =>
+  s === "approved" ? "ok" : s === "pending" ? "late" : s === "rejected" ? "fault" : s === "proposed" ? "purple" : "plain";
+const verdictTone = (v?: string | null) => (v?.startsWith("better_than_active") ? "text-ok" : v === "running" || v === "collecting" ? "text-late" : "text-slate-400");
 
 function Bar({ value, max, tone = "bg-cyan-400/70" }: { value: number; max: number; tone?: string }) {
   const w = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
@@ -100,7 +101,7 @@ function Weighting({ reports }: { reports: any[] }) {
               <div className="label">History</div>
               {(r.history || []).length ? (r.history || []).map((h: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center gap-2 py-0.5 text-[11px]">
-                  <Badge tone={h.kind === "rolled_back" ? "red" : h.kind === "activated" ? "green" : "slate"}>{h.kind}</Badge>
+                  <Badge tone={h.kind === "rolled_back" ? "fault" : h.kind === "activated" ? "ok" : "plain"}>{h.kind}</Badge>
                   <span className="mono text-slate-300">{h.id ?? ""}</span><span className="text-slate-500">{h.at ? ago(h.at) : ""}</span>
                   {h.reason && <span className="text-slate-500">· {String(h.reason).slice(0, 120)}</span>}
                 </div>
@@ -155,7 +156,7 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
                       <div className="absolute -top-0.5 h-2.5 w-px bg-amber-300/80" style={{ left: `${Math.round((B11[k] / max) * 100)}%` }} title={`Default ${pct(B11[k])}`} />
                     </div>
                     <span className="mono text-right text-slate-200">{pct(w)}</span>
-                    <span className={`mono text-right ${d == null || Math.abs(d) < 0.0005 ? "text-slate-500" : d > 0 ? "text-emerald-300" : "text-rose-300"}`}>{d == null ? "n/a" : Math.abs(d) < 0.0005 ? "=" : `${d > 0 ? "+" : ""}${Math.round(d * 1000) / 10}pp`}</span>
+                    <span className={`mono text-right ${d == null || Math.abs(d) < 0.0005 ? "text-slate-500" : d > 0 ? "text-ok" : "text-fault"}`}>{d == null ? "n/a" : Math.abs(d) < 0.0005 ? "=" : `${d > 0 ? "+" : ""}${Math.round(d * 1000) / 10}pp`}</span>
                   </div>
                 );
               })}
@@ -195,7 +196,7 @@ function WitnessWeights({ reports, reference }: { reports: any[]; reference: Rec
               <div className="label">History</div>
               {(r.history || []).length ? (r.history || []).map((h: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center gap-2 py-0.5 text-[11px]">
-                  <Badge tone={h.kind === "rolled_back" ? "red" : h.kind === "activated" ? "green" : "slate"}>{h.kind}</Badge>
+                  <Badge tone={h.kind === "rolled_back" ? "fault" : h.kind === "activated" ? "ok" : "plain"}>{h.kind}</Badge>
                   <span className="mono text-slate-300">{h.id ?? ""}</span><span className="text-slate-500">{h.at ? ago(h.at) : ""}</span>
                   {h.reason && <span className="text-slate-500">· {String(h.reason).slice(0, 120)}</span>}
                 </div>
@@ -234,10 +235,10 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
       hint="Recommends a quorum floor from execution friction and volatility. Recorded with each quorum, not applied."
       right={
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone={fidelity == null ? "slate" : fidelity >= 80 ? "green" : "amber"}>
+          <Badge tone={fidelity == null ? "plain" : fidelity >= 80 ? "ok" : "late"}>
             Fidelity {fidelity != null ? `${fidelity}%` : "no sample"}
           </Badge>
-          <Badge tone="slate">
+          <Badge tone="plain">
             Quorum {guard?.quorum_min != null ? `> ${pct(guard.quorum_min)} (${guard.mode})` : "—"}
           </Badge>
         </div>
@@ -249,7 +250,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Fidelity</span>
-            {frictionSurcharge > 0 ? <Badge tone="amber">+{pct(frictionSurcharge)} friction</Badge> : fidelity != null ? <Badge tone="green">OK</Badge> : null}
+            {frictionSurcharge > 0 ? <Badge tone="late">+{pct(frictionSurcharge)} friction</Badge> : fidelity != null ? <Badge tone="ok">OK</Badge> : null}
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{fidelity != null ? `${fidelity}%` : "—"}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
@@ -260,7 +261,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Agent accuracy</span>
-            {disqualified.length > 0 ? <Badge tone="red">{disqualified.length} disqualified</Badge> : scorecards?.avg_accuracy != null ? <Badge tone="green">OK</Badge> : null}
+            {disqualified.length > 0 ? <Badge tone="fault">{disqualified.length} disqualified</Badge> : scorecards?.avg_accuracy != null ? <Badge tone="ok">OK</Badge> : null}
           </div>
           <div className="mono mt-1 text-[20px] font-bold text-slate-200">{pct(scorecards?.avg_accuracy)}</div>
           <div className="mono mt-1 text-[11px] text-slate-500">
@@ -271,7 +272,7 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
         <div className="glass-inner p-3">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
             <span>Recommended floor</span>
-            <Badge tone={effectiveQuorum != null && baseQuorum != null && effectiveQuorum > baseQuorum ? "amber" : "cyan"}>
+            <Badge tone={effectiveQuorum != null && baseQuorum != null && effectiveQuorum > baseQuorum ? "late" : "ok"}>
               +{pct(frictionSurcharge + volSurcharge)}
             </Badge>
           </div>
@@ -322,20 +323,20 @@ function NexusAnalyticsBridge({ analytics, guard }: { analytics: any; guard: { q
           {discounts.length > 0 || disqualified.length > 0 ? (
             <div className="space-y-1 mono text-[11px]">
               {disqualified.map((a: string) => (
-                <div key={a} className="flex items-center justify-between py-1 px-2 rounded-sm bg-rose-500/10 border border-rose-500/20 text-rose-300">
+                <div key={a} className="flex items-center justify-between py-1 px-2 rounded-sm bg-fault-fill/10 border border-fault-fill/30 text-fault">
                   <span className="font-semibold">{a}</span>
-                  <Badge tone="red">DISQUALIFIED</Badge>
+                  <Badge tone="fault">DISQUALIFIED</Badge>
                 </div>
               ))}
               {discounts.filter(([a]) => !disqualified.includes(a)).map(([agent, mult]: [string, any]) => (
-                <div key={agent} className="flex items-center justify-between py-1 px-2 rounded-sm bg-amber-500/10 border border-amber-500/20 text-amber-200">
+                <div key={agent} className="flex items-center justify-between py-1 px-2 rounded-sm bg-amber-500/10 border border-amber-500/20 text-late">
                   <span>{agent}</span>
-                  <Badge tone="amber">{mult}x weight</Badge>
+                  <Badge tone="late">{mult}x weight</Badge>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="rounded-sm border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-300">
+            <div className="rounded-sm border border-ok-fill/30 bg-ok-fill/10 p-2 text-ok">
               All agents at full weight.
             </div>
           )}
@@ -353,7 +354,7 @@ const CHECK_LABEL: Record<string, string> = {
   ingest: "Card ingest", canon_index: "Canon index", embed_backlog: "Embedding backlog", ai_budget: "AI budget"
 };
 const checkLabel = (k: string) => CHECK_LABEL[k] ?? CHECK_LABEL[k.replace(/^aether_/, "")] ?? (k.replace(/^aether_/, "").startsWith("weighting_") ? `Weighting ${TF_LABEL[k.replace(/^(aether_)?weighting_/, "")] ?? k}` : k);
-const checkTone = (s?: string): "green" | "amber" | "slate" => (s === "ok" ? "green" : s === "warn" ? "amber" : "slate");
+const checkTone = (s?: string): "ok" | "late" | "plain" => (s === "ok" ? "ok" : s === "warn" ? "late" : "plain");
 
 /** End-to-end sync (hardening 2026-11-09): Aether's own checks plus the AI Worker's (KB match, push, reachability). */
 function Sync({ aether, worker }: { aether: any; worker: any }) {
@@ -364,7 +365,7 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
   const warn = rows.some(([, c]) => c?.status === "warn");
   return (
     <Panel title="Sync status" icon={<Activity className="h-3.5 w-3.5" />} hint={`Checked every 15 minutes; a warning raises a Priority Queue alert. "idle" means the market was closed.`}
-      right={rows.length ? <Badge tone={warn ? "amber" : "green"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge> : null}>
+      right={rows.length ? <Badge tone={warn ? "late" : "ok"}>{warn ? "attention" : "in sync"}{aether?.market_open === false ? " · market closed" : ""}</Badge> : null}>
       {!rows.length ? <Empty>No sync status yet.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -397,7 +398,7 @@ function Sync({ aether, worker }: { aether: any; worker: any }) {
 function Guardian({ g }: { g: any }) {
   const rows = g?.findings || [];
   return (
-    <Panel title="Agent compliance, 24h" icon={<ShieldAlert className="h-3.5 w-3.5" />} right={<Badge tone="slate">{g?.cards ?? 0} cards · warn ≥ {g?.threshold_per_100 ?? 20}/100</Badge>}>
+    <Panel title="Agent compliance, 24h" icon={<ShieldAlert className="h-3.5 w-3.5" />} right={<Badge tone="plain">{g?.cards ?? 0} cards · warn ≥ {g?.threshold_per_100 ?? 20}/100</Badge>}>
       {rows.length ? (
         <div className="table-wrap">
           <table className="tbl">
@@ -406,7 +407,7 @@ function Guardian({ g }: { g: any }) {
               {rows.map((f: any) => (
                 <tr key={`${f.agent}|${f.check}`}>
                   <td className="mono">{f.agent}</td><td className="mono">{f.check}</td><td className="mono">{f.breaks}</td><td className="mono">{f.messages}</td>
-                  <td className={`mono ${f.per_100 >= (g.threshold_per_100 ?? 20) ? "text-rose-300" : "text-slate-300"}`}>{f.per_100}</td>
+                  <td className={`mono ${f.per_100 >= (g.threshold_per_100 ?? 20) ? "text-fault" : "text-slate-300"}`}>{f.per_100}</td>
                 </tr>
               ))}
             </tbody>
@@ -427,7 +428,7 @@ function Knowledge({ k }: { k: any }) {
           {k.items.map((it: any) => (
             <div key={`${it.item_id}@${it.version}`} className="glass-inner p-3">
               <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px]">
-                <Badge tone={statusTone(it.status)}>{it.status}</Badge><Badge tone="slate">{it.kind}</Badge>
+                <Badge tone={statusTone(it.status)}>{it.status}</Badge><Badge tone="plain">{it.kind}</Badge>
                 <span className="mono text-slate-400">{it.agent}</span><span className="ml-auto text-slate-500">{ago(it.updated_at)}</span>
               </div>
               <p className="text-[12px] leading-relaxed text-slate-200">{it.text ?? it.item_id}</p>
@@ -454,12 +455,12 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
       right={
         <div className="flex items-center gap-1.5">
           {council?.mode && (
-            <Badge tone={council.mode === "propose" ? "green" : "amber"}>
+            <Badge tone={council.mode === "propose" ? "ok" : "late"}>
               council {council.mode}
             </Badge>
           )}
           {council?.schedule_utc && (
-            <Badge tone="cyan">{council.schedule_utc}</Badge>
+            <Badge tone="ok">{council.schedule_utc}</Badge>
           )}
           <Badge tone="purple">v{c?.version} · {short(c?.content_sha256)}</Badge>
         </div>
@@ -469,7 +470,7 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
       {/* Council & Seats Status Card */}
       <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Council</span>
+          <span className="text-[11px] font-medium text-muted">Council</span>
           <div className="mt-1 flex items-center justify-between">
             <span className="mono text-cyan-300">{council?.agent ?? "knowledge-council"}</span>
           </div>
@@ -479,10 +480,10 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
         </div>
 
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Nexus seat</span>
+          <span className="text-[11px] font-medium text-muted">Nexus seat</span>
           <div className="mt-1 flex items-center justify-between">
             <span className="text-slate-300">Decisions</span>
-            <Badge tone={facts?.seats?.nexus ? "green" : "slate"}>
+            <Badge tone={facts?.seats?.nexus ? "ok" : "plain"}>
               {facts?.seats?.nexus ? `${facts.seats.nexus.facts} facts` : "no data"}
             </Badge>
           </div>
@@ -492,10 +493,10 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
         </div>
 
         <div className="glass-inner p-2.5 text-[12px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Omega seat</span>
+          <span className="text-[11px] font-medium text-muted">Omega seat</span>
           <div className="mt-1 flex items-center justify-between">
             <span className="text-slate-300">Execution</span>
-            <Badge tone={facts?.seats?.omega ? "green" : "slate"}>
+            <Badge tone={facts?.seats?.omega ? "ok" : "plain"}>
               {facts?.seats?.omega ? `${facts.seats.omega.facts} facts` : "no data"}
             </Badge>
           </div>
@@ -508,7 +509,7 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
       {/* Applied Amendments from Cerebrum Consensus */}
       <div className="mb-4">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <span className="text-[11px] font-medium text-muted">
             Amendments ({applied.length})
           </span>
           {applied.length === 0 && (
@@ -520,13 +521,13 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
             {applied.map((a: any) => (
               <div key={a.amendment_id} className="glass-inner flex items-center justify-between p-2 text-[12px]">
                 <div>
-                  <span className="mono text-emerald-300">{a.amendment_id}</span>
+                  <span className="mono text-ok">{a.amendment_id}</span>
                   <span className="ml-2 font-medium text-slate-200">{a.rule}</span>
                   <span className="ml-2 text-slate-400">({a.action})</span>
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-slate-400">
                   <span>Executed {ago(a.executed_at)}</span>
-                  <Badge tone="green">applied</Badge>
+                  <Badge tone="ok">applied</Badge>
                 </div>
               </div>
             ))}
@@ -540,7 +541,7 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
 
       {/* Active Doctrine Rules List */}
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <span className="text-[11px] font-medium text-muted">
           Rules in force ({rules.length})
         </span>
       </div>
@@ -550,11 +551,11 @@ function Canon({ c, doctrine }: { c: any; doctrine?: any }) {
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <div className="flex items-center gap-2">
                 <span className="mono font-semibold text-cyan-300">{r.id}</span>
-                <Badge tone={r.class === "constitutional" ? "purple" : "cyan"}>
+                <Badge tone={r.class === "constitutional" ? "purple" : "ok"}>
                   {r.class || "operational"}
                 </Badge>
                 {r.amended && (
-                  <Badge tone="green">
+                  <Badge tone="ok">
                     Amended: {r.amended.amendment_id}
                   </Badge>
                 )}
@@ -591,14 +592,14 @@ export default function Aether() {
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Aether" icon={<Brain className="h-3.5 w-3.5" />} hint="Knowledge guardian: keeps the canon, stores decision cards, audits compliance and weighting. Never changes a decision."
-        right={<Badge tone="slate">updated {ago(o.generated_at)}</Badge>}>
+        right={<Badge tone="plain">updated {ago(o.generated_at)}</Badge>}>
         {null}
       </Panel>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="Decision cards" value={String(totalCards)} sub={charts.map(([k, v]) => `${TF_LABEL[k] ?? k} ${v.cards}`).join(" · ") || "none yet"} color="#39d0d8" icon={<Database className="h-3 w-3" />} />
-        <Kpi label="Ingested 24h" value={String(o.ingest?.last_24h?.accepted ?? 0)} sub={`${o.ingest?.last_24h?.rejected ?? 0} refused · ${o.ingest?.last_24h?.calls ?? 0} calls`} color="#3fb950" icon={<BookOpenCheck className="h-3 w-3" />} />
-        <Kpi label="AI budget" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="today" color={ai.used_today >= ai.daily_limit ? "#f85149" : "#d29922"} icon={<Cpu className="h-3 w-3" />} />
-        <Kpi label="Vector index" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? "#3fb950" : "#d29922"} icon={<Brain className="h-3 w-3" />} />
+        <Kpi label="Decision cards" value={String(totalCards)} sub={charts.map(([k, v]) => `${TF_LABEL[k] ?? k} ${v.cards}`).join(" · ") || "none yet"} icon={<Database className="h-3 w-3" />} />
+        <Kpi label="Ingested 24h" value={String(o.ingest?.last_24h?.accepted ?? 0)} sub={`${o.ingest?.last_24h?.rejected ?? 0} refused · ${o.ingest?.last_24h?.calls ?? 0} calls`} icon={<BookOpenCheck className="h-3 w-3" />} />
+        <Kpi label="AI budget" value={`${ai.used_today ?? 0}/${ai.daily_limit ?? 0}`} sub="today" color={ai.used_today >= ai.daily_limit ? T.fault : undefined} icon={<Cpu className="h-3 w-3" />} />
+        <Kpi label="Vector index" value={o.indexes?.canon?.indexed ? "in sync" : "pending"} sub={`${o.indexes?.canon?.vectors ?? 0} canon vectors · ${o.indexes?.market?.pending_cards ?? 0} cards to embed`} color={o.indexes?.canon?.indexed ? T.ok : T.late} icon={<Brain className="h-3 w-3" />} />
       </div>
       <NexusAnalyticsBridge analytics={analytics} guard={guard} />
       <Sync aether={o.sync} worker={(status as any)?.aether?.sync} />

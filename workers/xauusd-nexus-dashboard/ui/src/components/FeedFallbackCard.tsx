@@ -63,11 +63,11 @@ export default function FeedFallbackCard() {
 
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-2 flex items-center gap-2"><RadioTower className="h-3 w-3 text-cyan-300" />Data source · MT5 fallback</div>
+      <div className="panel-title mb-2 flex items-center gap-2"><RadioTower className="h-3 w-3 text-cyan-300" />Data source · MT5 fallback</div>
       {state ? (
         <div className="space-y-1.5 text-[11.5px]">
           <div className="flex items-center gap-2">
-            <Dot tone={state.active ? "amber" : "green"} pulse={Boolean(state.active)} />
+            <Dot tone={state.active ? "late" : "ok"} pulse={Boolean(state.active)} />
             <span className="text-slate-100">{state.active ? `Broker MT5 bars since ${hhmm(state.active_since)}` : "TradingView (OANDA)"}</span>
           </div>
           {state.active && state.cause ? (
@@ -76,7 +76,7 @@ export default function FeedFallbackCard() {
             </div>
           ) : null}
           <div className="text-slate-400">
-            Fallback switch: <b className={on ? "text-emerald-300" : "text-slate-200"}>{on ? "ON" : "OFF"}</b>
+            Fallback switch: <b className={on ? "text-ok" : "text-off"}>{on ? "ON" : "OFF"}</b>
             {state.mode_source === "owner" ? <span> · set {hhmm(state.set_at)}{state.reason ? ` — ${state.reason}` : ""}</span> : <span> · default</span>}
           </div>
           <div className="text-slate-500">Broker corpus: {state.corpus ? `last bar ${age(state.corpus.age_s)} ago` : "—"}</div>
@@ -107,7 +107,7 @@ export default function FeedFallbackCard() {
       ) : (
         <div className="text-[11.5px] text-slate-500">{error ? `Unavailable (${error})` : "—"}</div>
       )}
-      {state && error ? <div className="mt-1 text-[10.5px] text-rose-300">{error}</div> : null}
+      {state && error ? <div className="mt-1 text-[10.5px] text-fault">{error}</div> : null}
     </div>
   );
 }

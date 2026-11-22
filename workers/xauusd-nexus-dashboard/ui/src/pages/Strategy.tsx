@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Crosshair, Grid3x3, ListChecks, Puzzle, Scale, Shapes } from "lucide-react";
 import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { C } from "../components/charts";
+import { Stance } from "../components/Stance";
 import { get } from "../lib/api";
 import { ago } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
@@ -17,7 +18,7 @@ const num = (x: unknown): x is number => typeof x === "number" && Number.isFinit
 const R = (x: number | null | undefined) => (num(x) ? `${x > 0 ? "+" : ""}${x.toFixed(2)}R` : "—");
 const pc = (x: number | null | undefined) => (num(x) ? `${Math.round(x * 100)}%` : "—");
 const px = (x: number | null | undefined) => (num(x) ? x.toFixed(2) : "—");
-const tone = (s?: string): "green" | "slate" | "red" => (s === "live" ? "green" : s === "off" ? "red" : "slate");
+const tone = (s?: string): "ok" | "off" | "plain" => (s === "live" ? "ok" : s === "off" ? "off" : "plain");
 const rColor = (x: number | null | undefined) => (!num(x) || Math.abs(x) < 0.005 ? C.muted : x > 0 ? C.bull : C.bear);
 const contextText = (c?: string) => String(c ?? "").replace("|", " · ").replace("none · ", "");
 const armText = (id?: string) => { const m = /^e([\d.]+)@s([\d.]+)$/.exec(String(id ?? "")); return !m ? "—" : m[1] === "0" && m[2] === "1" ? "the plan as it is" : `entry ${m[1]} ATR deeper · stop ×${m[2]}`; };
@@ -50,10 +51,10 @@ function ArmButton({ id, arm, onDone }: { id: string; arm: ArmState; onDone: () 
   return (
     <div className="mt-2 flex items-center gap-2">
       <button type="button" disabled={busy || (!armed && !canArm)} title={title} onClick={click}
-        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold ${armed ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-1 ring-slate-500/40"} disabled:opacity-40`}>
+        className={`rounded-md px-2.5 py-1 text-[11px] font-semibold ${armed ? "bg-ok-fill/15 text-ok ring-1 ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-1 ring-slate-500/40"} disabled:opacity-40`}>
         {busy ? "…" : armed ? "Armed · Disarm" : "Arm"}
       </button>
-      {err ? <span className="text-[10.5px] text-rose-300">{err}</span> : null}
+      {err ? <span className="text-[11px] text-fault">{err}</span> : null}
     </div>
   );
 }
@@ -66,7 +67,7 @@ const RECO_TEXT: Record<string, string> = {
 function RecoLine({ card }: { card: any }) {
   const r = card?.recommendation;
   if (!r) return null;
-  const verdict: [string, "green" | "red" | "slate"] = r.verdict === "recommended" ? ["Recommended", "green"] : r.verdict === "not_recommended" ? ["Not recommended", "red"] : ["Neutral", "slate"];
+  const verdict: [string, "ok" | "fault" | "plain"] = r.verdict === "recommended" ? ["Recommended", "ok"] : r.verdict === "not_recommended" ? ["Not recommended", "fault"] : ["Neutral", "plain"];
   const ex = card.exits ?? {}, run = card.executed ?? {};
   const rules = (r.rules ?? []).map((x: any) => `${x.holds ? "✓" : "✗"} ${x.rule}: ${x.value ?? "n/a"} (${x.threshold}) ${x.ref}`).join("\n");
   return (
@@ -87,7 +88,7 @@ const ownerPost = async (path: string, body: unknown) => {
 function VerdictLine({ v }: { v: any }) {
   if (!v) return null;
   const wf = v.walk_forward ?? {};
-  const tone: "green" | "red" | "slate" = wf.status === "pass" ? "green" : wf.status === "fail" ? "red" : "slate";
+  const tone: "ok" | "fault" | "plain" = wf.status === "pass" ? "ok" : wf.status === "fail" ? "fault" : "plain";
   return (
     <div className="mt-1 text-[10.5px] text-slate-400" title={`walk-forward: ${wf.n} setups, mean ${wf.mean_r}R, bootstrap low ${wf.low}, latest ${wf.holdout_n}: ${wf.holdout_mean_r}R${v.live_mean_r != null ? ` · live last 10: ${v.live_mean_r}R` : ""}`}>
       <Badge tone={tone}>walk-forward {wf.status}</Badge> <span>Council: <span className="text-slate-200">{v.proposal}</span>{v.reason ? ` · ${v.reason}` : ""}{v.applied ? ` · ${v.applied}` : ""}</span>
@@ -116,9 +117,9 @@ function CouncilToggle({ arm, onDone }: { arm: ArmState; onDone: () => void }) {
       <span>Council auto-arm:</span>
       <button type="button" disabled={!allowed && !c.auto} title={allowed ? "When on, the strategy council arms and disarms by itself within its guards; your manual clicks pin a strategy" : "Waiting for the platform's approval (ADR-0020 Amendment 2)"}
         onClick={async () => { setErr(null); try { await ownerPost("/omega/api/strategy-council", { auto: !c.auto }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { onDone(); } }}
-        className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${c.auto ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"} disabled:opacity-40`}>{c.auto ? "On" : "Off"}</button>
+        className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${c.auto ? "bg-ok-fill/15 text-ok ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"} disabled:opacity-40`}>{c.auto ? "On" : "Off"}</button>
       <span>{c.acting ? "the council arms and disarms within its guards" : allowed ? "proposals only" : "proposals only · waiting for the platform's approval"}</span>
-      {err ? <span className="text-rose-300">{err}</span> : null}
+      {err ? <span className="text-fault">{err}</span> : null}
     </div>
   );
 }
@@ -136,8 +137,8 @@ function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: stri
                 <span className="truncate">{a.label}</span><Hint text={a.fits} />
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {chosen === a.id ? <Badge tone="cyan">in use</Badge> : null}
-                {a.suspended ? <Badge tone="amber">suspended</Badge> : <Badge tone={tone(a.status)}>{a.status}</Badge>}
+                {chosen === a.id ? <Badge tone="ok">in use</Badge> : null}
+                {a.suspended ? <Badge tone="late">suspended</Badge> : <Badge tone={tone(a.status)}>{a.status}</Badge>}
               </div>
             </div>
             <div className="mt-1 text-[11px] text-slate-400">{a.family ? `${a.patterns?.length ?? 0} patterns of the Projection Agent` : a.patterns ? `${a.patterns.length} patterns, before they break` : String(a.fits ?? "").split(":")[0]}</div>
@@ -146,11 +147,11 @@ function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: stri
                 {[["Setups", String(rec.setups), C.muted], ["Mean", R(rec.mean_r), rColor(rec.mean_r)], ["Filled", pc(rec.fill_rate), C.muted], ["Target", pc(rec.target_rate), C.muted]].map(([k, v, color]) => (
                   <div key={k}>
                     <div className="mono text-[14px] font-bold" style={{ color: color === C.muted ? undefined : color }}>{v}</div>
-                    <div className="text-[9.5px] uppercase tracking-wider text-slate-500">{k}</div>
+                    <div className="text-[11px] text-muted">{k}</div>
                   </div>
                 ))}
               </div>
-            ) : <div className="mt-3 text-[11px] text-slate-500">No resolved setup yet.</div>}
+            ) : <div className="mt-3 text-[11px] text-muted">No resolved setup yet.</div>}
             <RecoLine card={a.card} />
             <VerdictLine v={a.verdicts} />
             <ArmButton id={a.id} arm={arm} onDone={reload} />
@@ -174,7 +175,7 @@ function PatternRecords({ agents, held }: { agents: any[]; held: string[] }) {
         <tbody>
           {rows.map((p: any) => (
             <tr key={p.agent + p.pattern}>
-              <td className="whitespace-nowrap"><span className="text-slate-200">{p.name}</span>{held.includes(`${p.agent}:${p.pattern}`) ? <span className="ml-2"><Badge tone="amber">held back</Badge></span> : null}</td>
+              <td className="whitespace-nowrap"><span className="text-slate-200">{p.name}</span>{held.includes(`${p.agent}:${p.pattern}`) ? <span className="ml-2"><Badge tone="late">held back</Badge></span> : null}</td>
               <td className="text-slate-400">{p.family}</td>
               <td className="mono">{p.setups}</td>
               <td className="mono" style={{ color: rColor(p.mean_r) }}>{R(p.mean_r)}</td>
@@ -201,7 +202,7 @@ function LatestPlans({ latest, agents }: { latest: any; agents: any[] }) {
         <tbody>
           {rows.map(({ side, id, p }) => (
             <tr key={side + id}>
-              <td className="whitespace-nowrap"><span className="font-semibold text-slate-200">{label(id)}</span>{latest.chosen === id && latest.stance !== "WAIT" ? <span className="ml-2"><Badge tone="cyan">traded</Badge></span> : p.status !== "live" ? <span className="ml-2"><Badge tone="slate">{p.status}</Badge></span> : null}</td>
+              <td className="whitespace-nowrap"><span className="font-semibold text-slate-200">{label(id)}</span>{latest.chosen === id && latest.stance !== "WAIT" ? <span className="ml-2"><Badge tone="ok">traded</Badge></span> : p.status !== "live" ? <span className="ml-2"><Badge tone="slate">{p.status}</Badge></span> : null}</td>
               <td style={{ color: side === "long" ? C.bull : C.bear }}>{side === "long" ? "BUY" : "SELL"}</td>
               <td className="mono">{p.at_level ? "market " : "limit "}{px(p.entry)}</td>
               <td className="mono">{px(p.stop)}</td>
@@ -231,7 +232,7 @@ function ByContext({ agents }: { agents: any[] }) {
               <td>{contextText(ctx)}</td>
               {withRecord.map((a) => {
                 const c = a.record.contexts.find((x: any) => x.context === ctx);
-                return <td key={a.id} className="mono">{c ? <><span style={{ color: rColor(c.mean_r) }}>{R(c.mean_r)}</span><span className="ml-1.5 text-[10px] text-slate-500">{c.setups}</span></> : <span className="text-slate-600">—</span>}</td>;
+                return <td key={a.id} className="mono">{c ? <><span style={{ color: rColor(c.mean_r) }}>{R(c.mean_r)}</span><span className="ml-1.5 text-[10px] text-muted">{c.setups}</span></> : <span className="text-muted">—</span>}</td>;
               })}
             </tr>
           ))}
@@ -288,8 +289,8 @@ function GridAdapt({ g }: { g: any }) {
   );
 }
 
-const VERDICT: Record<string, { text: string; tone: "green" | "amber" | "slate" }> = {
-  better_than_plan: { text: "better than the plan", tone: "green" }, not_better: { text: "not better", tone: "amber" }, collecting: { text: "collecting", tone: "slate" }
+const VERDICT: Record<string, { text: string; tone: "ok" | "late" | "plain" }> = {
+  better_than_plan: { text: "better than the plan", tone: "ok" }, not_better: { text: "not better", tone: "late" }, collecting: { text: "collecting", tone: "plain" }
 };
 
 export default function Strategy() {
@@ -309,13 +310,13 @@ export default function Strategy() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Strategy agents" icon={<Puzzle className="h-3.5 w-3.5 text-cyan-300" />}
         hint="Each agent is one way of trading price action. The council picks the side; a live agent may be chosen for the plan, a shadow agent is recorded and measured only. A live agent with a negative record over 30 setups is suspended until its record recovers."
-        right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone={armIds.length ? "green" : "cyan"}>{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
+        right={s ? <span className="flex items-center gap-1.5">{arm && !arm.error && arm.mode !== "off" ? <span title={armIds.length ? `Only the armed strategies open positions: ${armIds.join(", ")}` : "No strategy armed: each entry is the one best strategy by confidence × confluence"}><Badge tone="ok">{armIds.length ? `ARMED ${armIds.length}/${arm.max ?? 3}` : "AUTO · best of all"}</Badge></span> : null}<Badge tone="slate">{agents.filter((a) => a.status === "live").length} live · {agents.filter((a) => a.status === "shadow" && !a.suspended).length} shadow{agents.some((a) => a.suspended) ? ` · ${agents.filter((a) => a.suspended).length} suspended` : ""}</Badge></span> : null}>
         <CouncilToggle arm={arm} onDone={() => setArmTick((t) => t + 1)} />
         {loading ? <Skeleton rows={4} /> : agentsPoll.error && !s ? <Empty>Unavailable ({agentsPoll.error}).</Empty> : <Registry agents={agents} chosen={latest?.stance && latest.stance !== "WAIT" ? latest.chosen : null} arm={arm} reload={() => setArmTick((t) => t + 1)} />}
       </Panel>
 
       <Panel title="Latest decision" icon={<Crosshair className="h-3.5 w-3.5 text-cyan-300" />} hint="What each agent would trade at the latest 15m decision. Prices are on the feed's scale (OANDA)."
-        right={latest ? <span className="flex items-center gap-2"><span className="mono text-[10.5px] text-slate-500">{String(latest.bar_close ?? "").slice(11, 16)} UTC</span><Badge tone={latest.stance === "BUY" ? "green" : latest.stance === "SELL" ? "red" : "amber"}>{latest.stance}</Badge></span> : null}>
+        right={latest ? <span className="flex items-center gap-2"><span className="mono text-[11px] text-muted">{String(latest.bar_close ?? "").slice(11, 16)} UTC</span><Stance value={latest.stance} /></span> : null}>
         {loading ? <Skeleton rows={3} /> : !latest ? <Empty>No decision yet.</Empty> : !latest.plans ? <Empty>This decision was made before the agents.</Empty> : <LatestPlans latest={latest} agents={agents} />}
       </Panel>
 
@@ -349,7 +350,7 @@ export default function Strategy() {
                 ["p-value", num(wf.discovery?.p_value) ? wf.discovery.p_value.toFixed(3) : "—"],
                 ["Held-out part", wf.holdout ? R(wf.holdout.mean_diff) : "—"]
               ].map(([k, v]) => (
-                <div key={k}><div className="text-[10px] uppercase tracking-wider text-slate-500">{k}</div><div className="mono text-[14px] font-semibold text-slate-200">{v}</div></div>
+                <div key={k}><div className="text-[11px] text-muted">{k}</div><div className="mono text-[14px] font-semibold text-slate-200">{v}</div></div>
               ))}
             </div>
             <div>
@@ -358,12 +359,12 @@ export default function Strategy() {
                 <div className="space-y-1">
                   {learning.learned.contexts.map((c: any) => (
                     <div key={c.context} className="flex items-center justify-between gap-3 text-[11.5px]">
-                      <span className="text-slate-300">{contextText(c.context)}<span className="ml-1.5 text-[10px] text-slate-500">{c.n}</span></span>
+                      <span className="text-slate-300">{contextText(c.context)}<span className="ml-1.5 text-[10px] text-muted">{c.n}</span></span>
                       <span className="mono text-slate-400">{armText(c.pick)}{c.gain ? <span className="ml-2" style={{ color: C.bull }}>{R(c.gain)}</span> : null}</span>
                     </div>
                   ))}
                 </div>
-              ) : <div className="text-[11px] text-slate-500">No market condition measured yet.</div>}
+              ) : <div className="text-[11px] text-muted">No market condition measured yet.</div>}
               {plan && advice && !advice.keeps_plan ? (
                 <div className="glass-inner mt-3 p-2.5 text-[11.5px] text-slate-300">
                   Latest plan: entry <span className="mono">{px(plan.entry)}</span>, stop <span className="mono">{px(plan.stop)}</span>. Learned: entry <span className="mono text-cyan-300">{px(advice.entry)}</span>, stop <span className="mono text-cyan-300">{px(advice.stop)}</span> ({advice.rrr}R). Not applied.

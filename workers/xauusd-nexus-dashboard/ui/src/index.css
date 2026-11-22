@@ -1,6 +1,23 @@
 @import "tailwindcss";
-/* The palette, fonts and motion stay in tailwind.config.js (the same as the Cerebrum Console). */
+/* The fonts and motion, and the Console's obsidian surfaces, stay in tailwind.config.js (the same as the Cerebrum Console). */
 @config "../tailwind.config.js";
+
+/* The Nexus colour set (mockup "Nexus colours and text", owner 2026-11-22). One source with src/lib/tokens.ts: the
+   same names and values (test/nexus-tokens.test.mjs). Each tone has a text value (4.5:1 or more on the panel
+   #0b0f18) and a fill value for bars, dots, lines and chip borders. "ghost" is the shadow-only token (the class
+   name "shadow" belongs to Tailwind's box shadows). "dim" is for rules and disabled lines, never for text. */
+@theme {
+  --color-bull: #4ade80; --color-bull-fill: #22c55e;
+  --color-bear: #f87171; --color-bear-fill: #ef4444;
+  --color-neutral: #fcd34d; --color-neutral-fill: #fbbf24;
+  --color-ok: #67e8f9; --color-ok-fill: #22d3ee;
+  --color-late: #fcd34d; --color-late-fill: #fbbf24;
+  --color-fault: #f87171; --color-fault-fill: #ef4444;
+  --color-off: #94a3b8; --color-off-fill: #94a3b8;
+  --color-ghost: #c4b5fd; --color-ghost-fill: #a78bfa;
+  --color-fg: #e6edf3; --color-fg-2: #8b949e; --color-muted: #7d8590; --color-dim: #484f58;
+  --color-ground: #05070c; --color-panel: #0b0f18; --color-bar: #0f1522;
+}
 
 /* Tailwind 4 (2026-11-17: vite replaced by esbuild, Tailwind 3 to 4, for npm advisory GHSA-fc5q-39xc-vjpf in picomatch):
    v3's defaults that v4 changed, kept so the pages look the same. */
@@ -16,24 +33,17 @@
 }
 
 @layer utilities {
-  /* Core palette from the original Nexus globals.css (GitHub Dark x Grafana on obsidian). */
-  :root {
-    --bg: #05070c; --bg-elevated: #0d1117; --surface: #161b22; --surface-hi: #21262d;
-    --border: #30363d; --border-hi: #484f58;
-    --text-primary: #e6edf3; --text-secondary: #8b949e; --text-dim: #484f58;
-    --green: #3fb950; --red: #f85149; --amber: #d29922; --blue: #58a6ff; --purple: #bc8cff; --cyan: #39d0d8;
-  }
   html { color-scheme: dark; font-size: 14px; }
   body {
-    background: var(--bg); color: var(--text-primary); min-height: 100dvh;
+    background: var(--color-ground); color: var(--color-fg); min-height: 100dvh;
     font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
   }
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.10); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-dim); }
   .mono { font-family: ui-monospace, "JetBrains Mono", "SF Mono", "Fira Code", monospace; font-variant-numeric: tabular-nums; }
   :focus-visible { outline: 2px solid rgba(34, 211, 238, 0.7); outline-offset: 2px; border-radius: 6px; }
 }
@@ -41,16 +51,19 @@
 @layer components {
   .glass { @apply rounded-2xl border border-white/10 bg-white/3 backdrop-blur-xs; }
   .glass-inner { @apply rounded-xl border border-white/5 bg-black/20; }
-  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500; }
-  .chip { @apply inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]; }
+  /* Labels, chips and table heads: sentence case, no letter spacing, labels in muted (#7d8590, 5.1:1; slate-500
+     was 4.0:1). Codes stay as written: BUY, TP1, LIVE. The panel title is ui.tsx's .panel-title. */
+  .eyebrow { @apply text-[11px] font-medium text-muted; }
+  .panel-title { @apply text-[13px] font-semibold text-fg; }
+  .chip { @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium; }
   .btn { @apply inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/4 px-3 py-2 text-[12px] font-semibold text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40; }
   .btn-danger { @apply border-rose-400/30 bg-rose-400/10 text-rose-200 hover:border-rose-400/60 hover:bg-rose-400/20; }
   .btn-approve { @apply border-emerald-400/30 bg-emerald-400/10 text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-400/20; }
   .field { @apply w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-[13px] text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/50 focus:outline-hidden; }
-  .label { @apply mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500; }
+  .label { @apply mb-1 block text-[11px] font-medium text-muted; }
   .table-wrap { @apply overflow-x-auto; }
   .tbl { @apply w-full text-left text-[12px]; }
-  .tbl th { @apply border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500; }
+  .tbl th { @apply border-b border-white/10 px-3 py-2 text-[11px] font-medium text-muted; }
   .tbl td { @apply border-b border-white/5 px-3 py-2 text-slate-300; }
   .tbl tr:hover td { @apply bg-white/2; }
 }

@@ -1,7 +1,8 @@
 import { Users } from "lucide-react";
 import { Badge, Hint } from "./ui";
+import { T } from "../lib/tokens";
 
-const COLOR: Record<string, string> = { BULLISH: "#34d399", NEUTRAL: "#64748b", BEARISH: "#fb7185" };
+const COLOR: Record<string, string> = { BULLISH: T.bullFill, NEUTRAL: T.neutralFill, BEARISH: T.bearFill };
 const ORDER = ["BULLISH", "NEUTRAL", "BEARISH"] as const;
 
 /** One stacked bar of the three biases (shares of 1). */
@@ -13,15 +14,15 @@ function Bar({ label, shares }: { label: string; shares: Record<string, number> 
   return (
     <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
       <div className="flex items-center justify-between sm:w-[76px] sm:shrink-0">
-        <span className="whitespace-nowrap text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</span>
+        <span className="whitespace-nowrap text-[11px] font-medium text-muted">{label}</span>
       </div>
-      <div className="flex h-2.5 flex-1 overflow-hidden rounded-xs bg-white/5" role="img" aria-label={`${label}: ${ORDER.map((k) => `${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`).join(", ")}`}>
+      <div className="flex h-2.5 flex-1 gap-px overflow-hidden rounded-xs bg-white/5" role="img" aria-label={`${label}: ${ORDER.map((k) => `${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`).join(", ")}`}>
         {ORDER.map((k) => <div key={k} style={{ width: `${((shares[k] ?? 0) / total) * 100}%`, background: COLOR[k] }} title={`${k.toLowerCase()} ${Math.round(((shares[k] ?? 0) / total) * 100)}%`} />)}
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 mono text-[10px]" aria-label={`${label} percentages`}>
-        <span className="font-medium text-emerald-300" title="Bullish share">▲{bullPct}%</span>
-        <span className="font-medium text-slate-400" title="Neutral share">·{neutPct}%</span>
-        <span className="font-medium text-rose-300" title="Bearish share">▼{bearPct}%</span>
+      <div className="flex shrink-0 items-center gap-1.5 mono text-[11px]" aria-label={`${label} percentages`}>
+        <span className="font-medium text-bull" title="Bullish share">▲{bullPct}%</span>
+        <span className="font-medium text-neutral" title="Neutral share">·{neutPct}%</span>
+        <span className="font-medium text-bear" title="Bearish share">▼{bearPct}%</span>
       </div>
     </div>
   );
@@ -37,17 +38,17 @@ export default function CrowdLine({ crowd: c, conclusionBias }: { crowd: any; co
   return (
     <section className="glass-inner p-3" aria-label="Crowd line">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="eyebrow flex items-center gap-1.5 text-[10px]"><Users className="h-3 w-3 text-cyan-300" />Crowd line<Hint text="Agents' final bias by head count and weighted by 30-day record." /></span>
-        <Badge tone="slate">{c.agents} agents · {c.scored_agents} scored</Badge>
-        <Badge tone={c.weighted_bias === "BULLISH" ? "green" : c.weighted_bias === "BEARISH" ? "red" : "slate"}>weighted {String(c.weighted_bias).toLowerCase()}</Badge>
-        <Badge tone={c.disagreement > 0.7 ? "amber" : "slate"}>disagreement {c.disagreement}</Badge>
-        {differs && <Badge tone="amber">differs from conclusion</Badge>}
+        <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fg"><Users className="h-3 w-3 text-fg-2" />Crowd line<Hint text="Agents' final bias by head count and weighted by 30-day record." /></span>
+        <Badge tone="plain">{c.agents} agents · {c.scored_agents} scored</Badge>
+        <Badge tone={c.weighted_bias === "BULLISH" ? "bull" : c.weighted_bias === "BEARISH" ? "bear" : "neutral"}><span className="mono">{c.weighted_bias === "BULLISH" ? "▲ " : c.weighted_bias === "BEARISH" ? "▼ " : "· "}weighted {String(c.weighted_bias).toLowerCase()}</span></Badge>
+        <Badge tone={c.disagreement > 0.7 ? "late" : "plain"}>disagreement {c.disagreement}</Badge>
+        {differs && <Badge tone="late">differs from conclusion</Badge>}
       </div>
       <div className="space-y-1.5">
-        <Bar label="head count" shares={c.biases ?? {}} />
-        <Bar label="weighted" shares={c.weighted_biases ?? {}} />
+        <Bar label="Head count" shares={c.biases ?? {}} />
+        <Bar label="Weighted" shares={c.weighted_biases ?? {}} />
       </div>
-      {!!c.disagreeing_families?.length && <p className="mt-2 text-[11px] text-slate-500">Against crowd: {c.disagreeing_families.join(", ")}</p>}
+      {!!c.disagreeing_families?.length && <p className="mt-2 text-[11px] text-muted">Against crowd: {c.disagreeing_families.join(", ")}</p>}
     </section>
   );
 }
