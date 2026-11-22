@@ -146,3 +146,29 @@ test("LS3 the council's move and cancel through the sync: applied once, the payl
     for (const m of sent) assert.equal(m.chat_id, "owner-private");
   } finally { globalThis.fetch = realFetch; }
 });
+
+test("LS4 OmegaExecutor 1.22: the EA's own deletions say their reason in the event and the owner's line; 1.21's empty field says 'by the EA'", async () => {
+  resetOmegaBrokerSchemaForTests(); resetLimitCouncilSchemaForTests();
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { sent.push({ url: String(url), body: JSON.parse(init.body) }); return new Response("{}"); };
+  try {
+    const e = { DB: d1(), SIGNAL_CACHE: kv(), OMEGA_ENGINE_ENABLED: "true", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "owner-private" };
+    const results = [
+      { id: "ea:del:701", ok: true, ticket: 701, error: "expired", executed_ms: NOW - 3000 },
+      { id: "ea:del:702", ok: true, ticket: 702, error: "max_life", executed_ms: NOW - 2000 },
+      { id: "ea:del:703", ok: true, ticket: 703, error: "dead_man", executed_ms: NOW - 1000 },
+      { id: "ea:del:704", ok: true, ticket: 704, executed_ms: NOW - 500 }
+    ];
+    const sync = () => bridgeSync(e, { state: { ...STATE, executor: { ...STATE.executor, version: "1.22" } }, results, publicKey: SPKI, kid: KID, bridgeVersion: "1.7.0" }, { now: NOW, signal: SIGNAL });
+    await sync();
+    const reasons = e.DB.raw.prepare("SELECT detail FROM omega_events WHERE action = 'limit_cancelled' ORDER BY id").all().map((r) => JSON.parse(r.detail)).map((d) => [d.ticket, d.reason]);
+    assert.deepEqual(reasons, [[701, "ea_expired"], [702, "ea_max_life"], [703, "ea_dead_man"], [704, "ea_by the EA"]]);
+    const lines = sent.filter((m) => /Limit Cancelled/.test(m.body.text));
+    assert.deepEqual(lines.map((m) => m.body.text.match(/deleted by the EA \(([^)]*)\)/)?.[1]), ["expired", "max_life", "dead_man", "by the EA"]);
+    assert.ok(lines.every((m) => m.body.chat_id === "owner-private"), "the owner's private chat only");
+    // Said once: the same results in the next sync add nothing.
+    await sync();
+    assert.equal(sent.filter((m) => /Limit Cancelled/.test(m.body.text)).length, 4);
+  } finally { globalThis.fetch = realFetch; }
+});

@@ -104,7 +104,7 @@ test("LE6 OmegaExecutor 1.21: place_limit with lot@price and a required expiry, 
   assert.ok("0.01@4098.25".length <= 32);
 });
 
-test("LE7 OmegaExecutor 1.22: the EA's own deletions carry their reason when ok; every other ok result keeps an empty field", async () => {
+test("LE8 OmegaExecutor 1.22: the EA's own deletions carry their reason when ok; every other ok result keeps an empty field", async () => {
   const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url), "utf8");
   assert.match(ea, /string errField = \(!ok \|\| StringFind\(id, "ea:del:"\) == 0\) \? CleanCsvField\(errorMsg\) : "";/);
   assert.match(ea, /AppendResult\(StringFormat\("ea:del:%I64u", t\), ok, t, ok \? why : trade\.ResultRetcodeDescription\(\), nowMs\);/);

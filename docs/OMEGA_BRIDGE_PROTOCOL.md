@@ -59,7 +59,10 @@ Content-Type: application/json
   { "id": "cl:123456789:opp", "ok": false, "error": "requote", "executed_ms": 1794225611000 } ]
 ```
 
-`ticket` is the position ticket of an `open`; `error` is the terminal's text for a failure.
+`ticket` is the position ticket of an `open`; `error` is the terminal's text for a failure. Results with the id
+`ea:del:<ticket>` are the EA's own deletions of its pending limits (OmegaExecutor 1.21+: expiry, maximum life, dead-man
+switch), with no intent behind them; from 1.22 an ok one carries the reason in `error` (`expired`, `max_life` or
+`dead_man`), which the server shows as the deletion's reason. Every other ok result has no `error`.
 
 ### Response body (200)
 
