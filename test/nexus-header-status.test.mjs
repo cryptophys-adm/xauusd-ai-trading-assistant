@@ -29,6 +29,10 @@ test("header Omega cell: the real execution state (owner 2026-11-22: \"Ya status
   assert.match(c({ control_mode: "killed", control_reason: "env_kill_switch" }).title, /env_kill_switch/, "the reason is a tooltip, never a state");
   assert.deepEqual([c({ control_mode: "paused" }).code, c({ control_mode: "paused" }).tone], ["PAUSED", "late"]);
   assert.deepEqual([c({ limit_fault: { why: "no_answer" } }).code, c({ limit_fault: { why: "no_answer" } }).tone], ["STOP", "fault"]);
+  assert.match(c({ limit_fault: { why: "no_answer" } }).title, /No new entries/);
+  assert.deepEqual([c({ limit_fault: { why: "no_ticket" } }).code, c({ limit_fault: { why: "no_ticket" } }).tone], ["MKT", "late"], "no_ticket keeps entering at market: not a stop");
+  assert.match(c({ limit_fault: { why: "no_ticket" } }).title, /entering at market/);
+  assert.equal(c({ live_armed: false, account_mode: "contest" }).code, "ON", "a contest account needs the LIVE arm, like the engine");
   assert.equal(c({ connected: false }).code, "NO BRIDGE");
   assert.equal(c({ engine_enabled: false }).code, "READY", "the env switch off: the engine is off whatever the toggle says");
   assert.match(c({ engine_enabled: false }).title, /OMEGA_ENGINE_ENABLED off/);

@@ -34,9 +34,10 @@ export function roomCell({ barMs, hasRoom, error, closed, now = Date.now() }: { 
  * engine_enabled). Without them (an older Omega) the cell never claims ARMED: it says ON.
  *   KILLED  red    control killed (or EA_SIGNALS_ENABLED false)
  *   PAUSED  amber  control paused
- *   STOP    red    engine on, entries stopped fail-closed by a limit fault
+ *   STOP    red    engine on, no new entries: a limit the EA never answered (or another limit fault)
+ *   MKT     amber  engine on, limit entries stopped, entering at market (the EA answered without a ticket)
  *   NO BRIDGE red  engine on, bridge not connected
- *   ARMED   cyan   engine on, bridge connected, and a real account live-armed or a demo/contest account
+ *   ARMED   cyan   engine on, bridge connected, and LIVE armed or a demo account (a contest account needs the arm)
  *   ON      amber  engine on, bridge connected, a real account not live-armed (or the state unknown)
  *   READY   cyan   bridge connected, engine off;  OFF grey: neither;  — : unreadable
  */
@@ -49,10 +50,14 @@ export function omegaCell(s: OmegaStatus | null): OmegaCell {
   if (s.control_mode === "killed") return { code: "KILLED", detail: null, tone: "fault", title: `Omega killed${why}`, positions: pos, broker, filled: true };
   if (s.control_mode === "paused") return { code: "PAUSED", detail: null, tone: "late", title: `Omega paused${why}`, positions: pos, broker, filled: true };
   const engineOn = s.armed && s.engine_enabled !== false;
-  if (engineOn && s.limit_fault) return { code: "STOP", detail: null, tone: "fault", title: `Entries stopped fail-closed: ${s.limit_fault.why}`, positions: pos, broker, filled: true };
+  // The two fail-closed faults differ (owner 2026-11-21): no_answer stops every new entry; no_ticket stops limit
+  // entries only and Omega keeps entering at market, until the owner saves the settings.
+  if (engineOn && s.limit_fault?.why === "no_ticket") return { code: "MKT", detail: null, tone: "late", title: "Limit entries stopped, entering at market: the EA answered without a ticket; until you save the Omega settings", positions: pos, broker, filled: true };
+  if (engineOn && s.limit_fault) return { code: "STOP", detail: null, tone: "fault", title: s.limit_fault.why === "no_answer" ? "No new entries: a limit the EA never answered; until the EA answers or you save the Omega settings" : `No new entries: limit fault (${s.limit_fault.why}); until you save the Omega settings`, positions: pos, broker, filled: true };
   if (engineOn && !s.connected) return { code: "NO BRIDGE", detail: null, tone: "fault", title: "Omega engine on, but the bridge is not connected", positions: null, broker: null, filled: true };
   if (engineOn) {
-    const armed = s.live_armed === true || s.account_mode === "demo" || s.account_mode === "contest";
+    // Only a demo account trades without the LIVE arm (src/omega-engine.mjs: trade_mode !== "demo" && !live_armed → disarmed).
+    const armed = s.live_armed === true || s.account_mode === "demo";
     return armed
       ? { code: "ARMED", detail: null, tone: "ok", title: `Engine on, bridge connected${acct}${s.live_armed ? ", LIVE armed" : ""}`, positions: s.positions, broker, filled: true }
       : { code: "ON", detail: null, tone: "late", title: s.account_mode === "real" ? "Engine on, real account not LIVE armed" : "Engine on; the live arm is not known", positions: s.positions, broker, filled: false };
