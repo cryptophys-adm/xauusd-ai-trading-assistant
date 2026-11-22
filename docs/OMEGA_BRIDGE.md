@@ -121,7 +121,7 @@ Default directory: `/opt/mt5-ingestion-gateway/prefix/drive_c/Program Files/Meta
 | `state.json` | `OmegaExecutor.mq5` (via `state.tmp` + `FileMove(..., FILE_REWRITE)` every `StateEverySeconds=2`) | `omega-bridge` | JSON object with `connected`, `server`, `account` (`trade_mode`, `currency`, `balance`, `equity`, `day_start_balance`, `day_realized_pl`), `symbol` spec, `positions` (only `MagicNumber=920200`), and `received_ms` (UTC ms). Parse errors are treated as `state: null`. Never contains login. |
 | `intents.txt` | `omega-bridge` (atomic `intents.txt.tmp.*` + `rename`) | `OmegaExecutor.mq5` | ASCII text. Line 1: `#v1;<written_ms>`. Subsequent lines: `id;kind;side;volume;sl;tp;ticket` (`kind` is `open`, `close`, or `close_all`). |
 | `processed.txt` | `OmegaExecutor.mq5` | `OmegaExecutor.mq5` | One executed intent `id` per line. Loaded at `OnInit` and appended after each intent is handled so no intent `id` is ever executed twice across restarts. |
-| `results.txt` | `OmegaExecutor.mq5` (append) | `omega-bridge` | ASCII lines: `id;ok(1\|0);ticket;error;executed_ms`. On each cycle, `omega-bridge` atomically renames `results.txt` to `results.<ms>.done`, reads and reports the results, and prunes `.done` files keeping only the newest 20. |
+| `results.txt` | `OmegaExecutor.mq5` (append) | `omega-bridge` | ASCII lines: `id;ok(1\|0);ticket;error;executed_ms` (the error field is empty on ok lines, except the EA's own deletions `ea:del:<ticket>` from 1.22, which carry their reason). On each cycle, `omega-bridge` atomically renames `results.txt` to `results.<ms>.done`, reads and reports the results, and prunes `.done` files keeping only the newest 20. |
 
 ---
 
@@ -205,6 +205,10 @@ MT5's `[StartUp]` section in `/opt/mt5-ingestion-gateway/config/terminal_gateway
     `account_seen`, `spec_changed`, `spec_invalid`, `spec_validated`, `account_ref_upgraded`; one Telegram line
     for a new account, a changed spec and its first validation. The login hash is used in the sync only: it is
     not stored with the bridge state and not served.
+  - **1.22 (2026-11-22, reporting only):** the EA's own deletions (`ea:del:<ticket>`, ok) carry their reason in the
+    error field: `expired`, `max_life` or `dead_man`. Every other ok result keeps an empty field, as before. The Worker
+    already reads it (`eaDeletedLine`: the event's reason `ea_<why>` and the owner's line "deleted by the EA (<why>)");
+    with 1.21 the line says "by the EA". No trading change; the bridge is unchanged. Optional to install.
   - **1.21 (2026-11-20, limit entries; docs/RFC_OMEGA_LIMIT_ENTRY.md stage 1):** `place_limit` (the volume field carries
     `<lot>@<price>`, the ticket field the expiry in UTC epoch seconds) and `delete_order`. No pending order without an
     end: the broker's expiry where the symbol allows one, and the EA's own timer deletes it at that time in any case

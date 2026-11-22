@@ -88,7 +88,7 @@ test("LE7 an Omega pending order without a stop is said and deleted (Omega never
 
 test("LE6 OmegaExecutor 1.21: place_limit with lot@price and a required expiry, delete_order, no GTC, a dead-man switch", () => {
   const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url), "utf8");
-  assert.match(ea, /#property version\s+"1\.21"/);
+  assert.match(ea, /#property version\s+"1\.22"/);
   assert.ok(ea.includes('kind == "place_limit"') && ea.includes('kind == "delete_order"'));
   assert.match(ea, /StringSplit\(volField, '@', parts\)/, "the volume field carries <lot>@<price>; the bridge is unchanged");
   assert.match(ea, /refused: expiry/, "no order without an expiry ahead");
@@ -102,4 +102,15 @@ test("LE6 OmegaExecutor 1.21: place_limit with lot@price and a required expiry, 
   const files = readFileSync(new URL("../bridge/omega-bridge/src/files.mjs", import.meta.url), "utf8");
   assert.match(files, /cleanAsciiField\(intent\.volume, 32\)/);
   assert.ok("0.01@4098.25".length <= 32);
+});
+
+test("LE8 OmegaExecutor 1.22: the EA's own deletions carry their reason when ok; every other ok result keeps an empty field", async () => {
+  const ea = readFileSync(new URL("../ea/mt5/OmegaExecutor.mq5", import.meta.url), "utf8");
+  assert.match(ea, /string errField = \(!ok \|\| StringFind\(id, "ea:del:"\) == 0\) \? CleanCsvField\(errorMsg\) : "";/);
+  assert.match(ea, /AppendResult\(StringFormat\("ea:del:%I64u", t\), ok, t, ok \? why : trade\.ResultRetcodeDescription\(\), nowMs\);/);
+  // The bridge keeps the field on an ok line as it is, so the Worker's eaDeletedLine reads the reason.
+  const { parseResultsText } = await import("../bridge/omega-bridge/src/files.mjs");
+  const [del, plain] = parseResultsText("ea:del:777;1;777;expired;1763600000000\nlim:1;1;778;;1763600000001\n");
+  assert.deepEqual([del.id, del.ok, del.ticket, del.error], ["ea:del:777", true, 777, "expired"]);
+  assert.equal(plain.error, undefined);
 });
