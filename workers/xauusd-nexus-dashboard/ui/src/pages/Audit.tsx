@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { BookOpenCheck } from "lucide-react";
-import { Badge, Empty, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { stanceColor } from "../components/Stance";
@@ -104,18 +104,20 @@ function AetherStatus() {
  */
 export default function Audit() {
   const [chart, setChart] = useState("60");
-  const { data, loading, error } = usePoll(() => get(`/api/decision-cards?chart=${chart}&limit=8`), 300_000, [chart]);
+  const poll = usePoll(() => get(`/api/decision-cards?chart=${chart}&limit=8`), 300_000, [chart]);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const cards: any[] = (data as any)?.cards ?? [];
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
+      <Panel title="Decision audit" icon={<BookOpenCheck className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint="Each room conclusion with agent stances, rule breaks and scored outcomes.">
         <div className="flex flex-wrap gap-2">
           {CHARTS.map(([k, label]) => (
             <button key={k} onClick={() => setChart(k)} className={`rounded-sm border px-2 py-1 text-[12px] ${chart === k ? "border-white/30 bg-white/8 text-fg" : "border-white/10 text-fg-2 hover:text-fg"}`}>{label}</button>
           ))}
         </div>
       </Panel>
-      {loading && !data ? <Panel><Skeleton rows={6} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-fault">Decision cards unavailable: {error}</p></Panel>
+      {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={6} /></Panel>
         : !cards.length ? <Panel><Empty>No decisions yet.</Empty></Panel> : cards.map((c) => <Card key={c.card_id} c={c} />)}
       <ComplianceTable />
       <AetherStatus />

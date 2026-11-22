@@ -20,7 +20,7 @@ import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesAp
 import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import OmegaWhy from "../components/OmegaWhy";
-import { get } from "../lib/api";
+import { CHART_READ, get } from "../lib/api";
 import { C } from "../components/charts";
 import { CANDLE, T, tagText, volumeColor } from "../lib/tokens";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
@@ -202,7 +202,7 @@ function Mt5ChartCanvas({
   useEffect(() => {
     let alive = true;
     const loadCandles = () => {
-      get<{ candles: Candle[] }>(`/api/ohlcv?timeframe=${tf}&limit=300`)
+      get<{ candles: Candle[] }>(`/api/ohlcv?timeframe=${tf}&limit=300`, CHART_READ)
         .then((r) => {
           if (alive) setCandles(r.candles || []);
         })
@@ -561,7 +561,7 @@ export default function Omega() {
   // Omega's own route (it checks the Access identity), once for every open page; it replaces the 0.5-second
   // overview stream. The read stays every 8 s until the first push, then every 60 s as a fallback.
   const push = usePushMany(["omega-overview"], "/omega/api/push");
-  const pushed = push.data["omega-overview"];
+  const pushed = push.snap["omega-overview"]?.data;
   useEffect(() => { if (pushed) applyOverview(pushed); }, [pushed]);
   useEffect(() => { setStreamLive(push.live); }, [push.live]);
   useEffect(() => { load(); }, []);

@@ -110,3 +110,26 @@ test("the Omega overview: replayed on connect only while fresh, and counted so i
   assert.equal(ctx.sockets[1].sent.length, 0, "90 s old: not replayed, the page reads it");
   assert.equal(h.subscribers("nope"), 0);
 });
+
+test("a connect's stored snapshots are marked replay: true; a live publish replay: false (#520, fifth review)", async () => {
+  const ctx = fakeCtx();
+  const h = hub(ctx);
+  // nothing stored yet: a first page connects, then the first live publish reaches it, marked live
+  await h.connect(upgrade("decision"));
+  const first = ctx.sockets[0];
+  assert.equal(first.sent.length, 0, "nothing stored: no replay on connect");
+  await h.publish("decision", { side: "BUY" }, { now: Date.parse("2026-11-22T12:05:00.000Z") });
+  assert.equal(first.sent.length, 1);
+  assert.equal(first.sent[0].replay, false, "a topic's first live publish is not a replay");
+  // a second page connects and gets the stored snapshot, marked replay, for each topic it asks for
+  await h.publish("war-room", { status: "ok", room: { bar_time: "2026-11-22T12:00:00.000Z" } }, { now: Date.parse("2026-11-22T12:06:00.000Z") });
+  await h.connect(upgrade("decision,war-room"));
+  const second = ctx.sockets[1];
+  assert.deepEqual(second.sent.map((m) => [m.topic, m.replay]), [["decision", true], ["war-room", true]]);
+  assert.equal(second.sent[0].at, "2026-11-22T12:05:00.000Z", "the replay keeps its own time");
+  // then a live publish reaches both pages, marked live
+  await h.publish("decision", { side: "SELL" }, { now: Date.parse("2026-11-22T12:10:00.000Z") });
+  assert.equal(first.sent.at(-1).replay, false);
+  assert.equal(second.sent.at(-1).replay, false);
+  assert.equal(second.sent.at(-1).data.side, "SELL");
+});

@@ -1,5 +1,5 @@
 import { AlertTriangle } from "lucide-react";
-import { Dot } from "./ui";
+import { Dot, phaseOf } from "./ui";
 import { useSystemHealth } from "../lib/health";
 
 /**
@@ -7,8 +7,16 @@ import { useSystemHealth } from "../lib/health";
  * live on the System status page; this panel appears only when a lane is amber or red.
  */
 export default function SystemIssues() {
-  const { items } = useSystemHealth();
-  const issues = items.filter((i) => i.tone === "red" || i.tone === "amber");
+  const { items, poll, lanePoll } = useSystemHealth();
+  // Review of #520: a failed or stale /api/status is an issue too (its rows are missing or old), never silence; so is
+  // a failed or stale /api/local-lane (re-review: the pull adapter's rows), as System status lists it.
+  const readIssue = ([["status-read", "System status", poll], ["lane-read", "Pull adapter", lanePoll]] as const).flatMap(([key, label, p]) => {
+    const phase = phaseOf(p);
+    return phase === "error" || phase === "stale"
+      ? [{ key, label, tone: "amber" as const, detail: p.error ?? "no good read for 2 × the interval", worker: undefined as string | undefined }]
+      : [];
+  });
+  const issues = [...readIssue, ...items.filter((i) => i.tone === "red" || i.tone === "amber")];
   if (!issues.length) return null;
   return (
     <a href="/#/status" className="glass block border-rose-400/20 p-4 transition hover:border-rose-300/40">

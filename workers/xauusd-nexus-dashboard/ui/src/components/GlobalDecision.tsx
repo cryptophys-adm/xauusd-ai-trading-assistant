@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { Check, Minus, ShieldAlert, Target, X } from "lucide-react";
-import { Badge, Hint, Panel, Skeleton } from "./ui";
+import { Badge, Hint, Panel, PollError, Skeleton, phaseOf } from "./ui";
 import { Stance, stanceColor } from "./Stance";
 import { DivergingBar, leanColor } from "./charts";
-import { useMarket, leanLabel } from "../lib/market";
+import { GLOBAL_PATH, useMarket, leanLabel } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { candleWhen, pct, utc } from "../lib/format";
 import SetupLifecycle, { zoneAt } from "./SetupLifecycle";
@@ -228,7 +228,13 @@ const TREND_TONE: Record<string, string> = { up: "text-bull", down: "text-bear",
  * off), the card shows the strategy engine's view as before. From GET /api/conclusion/global.
  */
 export default function GlobalDecision() {
-  const { global: g, engine: e, setups, loading } = useMarket();
+  const { global: g, engine: e, setups, loading, pollOf } = useMarket();
+  // Review of #520: the read of /api/conclusion/global as a poll. A later failure keeps the last decision on screen,
+  // marked stale (the tag: its age, the last good read, the route and code, Retry now); a first-load failure is the
+  // error box; "No decision yet." is only for a good read with no decision in it.
+  const poll = pollOf(GLOBAL_PATH);
+  const phase = phaseOf(poll);
+  const none = !g && !e;
   // The live setups (levels locked at their decision); without one, the last that ended in the past 2 hours.
   const live = (setups ?? []).filter((x: any) => x.status === "pending" || x.status === "open");
   const shown = live.length ? live : (setups ?? []).slice(0, 1);
@@ -284,10 +290,10 @@ export default function GlobalDecision() {
   const lastAuto = modeSel?.last_switch && modeSel.last_switch.actor !== "owner" && modeSel.last_switch.to === mode && (Date.now() - Number(modeSel.last_switch.at_ms ?? 0)) < 86_400_000 ? modeSel.last_switch : null;
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
-    <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />}
+    <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} staleOpen
       hint={e ? "Decided at each 15m close within guardrails. Hover a row for details." : "Advisory only, from closed bars. Hover a row for details."}
       right={e ? <div className="flex items-center gap-1.5"><span title="The trading mode this decision was made in"><Badge tone="plain">{e.trading_mode ?? "mode unknown"}</Badge></span><Badge tone={e.source === "council" ? "ok" : "late"}>{e.source === "council" ? "AI council" : "fallback"}</Badge></div> : st && <Badge tone={st.tone}>{st.label}</Badge>}>
-      {loading && !g && !e ? <Skeleton rows={5} /> : !g && !e ? <p className="text-[12px] text-muted">No decision yet.</p> : (
+      {phase === "error" || (none && poll.error != null) ? <PollError poll={poll} /> : none && (loading || phase === "loading") ? <Skeleton rows={5} /> : none ? <p className="text-[12px] text-muted">No decision yet.</p> : (
         <>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
             <div className="flex flex-col">

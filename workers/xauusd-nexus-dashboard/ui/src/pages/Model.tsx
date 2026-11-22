@@ -1,5 +1,5 @@
 import { ArrowRight, BookOpen, Brain, Database, GitBranch, Layers, Lightbulb, ShieldCheck, Trees } from "lucide-react";
-import { Badge, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Kpi, Panel, PollBody, Skeleton, type BadgeTone } from "../components/ui";
 import { C, DivergingBar } from "../components/charts";
 import { get } from "../lib/api";
 import { ago, utc } from "../lib/format";
@@ -19,24 +19,32 @@ const num = (x: unknown): x is number => typeof x === "number" && Number.isFinit
 const sgn = (x: number | null | undefined, d = 3) => (num(x) ? `${x > 0 ? "+" : ""}${x.toFixed(d)}` : "—");
 const r2 = (x: number | null | undefined) => (num(x) ? `${x > 0 ? "+" : ""}${x.toFixed(2)}R` : "—");
 
-/** The four steps of the loop, each with its live state, so the owner sees where the platform is. */
-function Pipeline({ dataset, baseline, gbm, live }: { dataset: any; baseline: any; gbm: any; live: any }) {
+/**
+ * The four steps of the loop, each with its live state, so the owner sees where the platform is. A step whose read
+ * failed with nothing on screen shows "—" (or "baseline error" / "gbm error") in the fault tone, its error as the
+ * tooltip, and the panel below carries the error box (review of #520): never "not yet" or "shadow only" from a
+ * failed read.
+ */
+type Failed = { dataset: string | null; baseline: string | null; gbm: string | null; tuning: string | null };
+function Pipeline({ dataset, baseline, gbm, live, failed }: { dataset: any; baseline: any; gbm: any; live: any; failed: Failed }) {
   const labeled = (dataset?.by_status ?? []).find((s: any) => s.label_status === "labeled")?.n ?? 0;
   const promoted = baseline?.promotion?.status === "promoted";
   const liveNotes = (live?.items ?? []).filter((i: any) => i.status === "live").length;
-  const steps = [
-    { icon: <Database className="h-4 w-4" />, title: "Record", text: "Each 15m decision is saved with its features and labeled in R.", state: `${labeled} labeled`, tone: labeled ? "green" : "slate" },
-    { icon: <Brain className="h-4 w-4" />, title: "Learn", text: "Hourly baseline and daily LightGBM learn which setups hit target.", state: `${baseline?.model_id ? "baseline ok" : "baseline —"} · ${gbm?.model_id ? "gbm ok" : "gbm —"}`, tone: baseline?.model_id || gbm?.model_id ? "green" : "slate" },
-    { icon: <ShieldCheck className="h-4 w-4" />, title: "Validate", text: "Scored on unseen live decisions; must beat the base rate.", state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "green" : "amber" },
-    { icon: <Lightbulb className="h-4 w-4" />, title: "Apply", text: "Passing models advise the council; proven notes go live.", state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "cyan" : "slate" }
-  ] as const;
+  const learnFailed = failed.baseline ?? failed.gbm;
+  const part = (name: string, model: any, err: string | null) => (err ? `${name} error` : model?.model_id ? `${name} ok` : `no ${name}`);
+  const steps: { icon: JSX.Element; title: string; text: string; state: string; tone: BadgeTone; error?: string | null }[] = [
+    { icon: <Database className="h-4 w-4" />, title: "Record", text: "Each 15m decision is saved with its features and labeled in R.", ...(failed.dataset ? { state: "—", tone: "fault", error: failed.dataset } : { state: `${labeled} labeled`, tone: labeled ? "green" : "slate" }) },
+    { icon: <Brain className="h-4 w-4" />, title: "Learn", text: "Hourly baseline and daily LightGBM learn which setups hit target.", state: `${part("baseline", baseline, failed.baseline)} · ${part("gbm", gbm, failed.gbm)}`, tone: learnFailed ? "fault" : baseline?.model_id || gbm?.model_id ? "green" : "slate", error: [failed.baseline, failed.gbm].filter(Boolean).join(" · ") || null },
+    { icon: <ShieldCheck className="h-4 w-4" />, title: "Validate", text: "Scored on unseen live decisions; must beat the base rate.", ...(failed.baseline ? { state: "—", tone: "fault", error: failed.baseline } : { state: promoted ? `passed (${baseline.promotion.set})` : "not yet", tone: promoted ? "green" : "amber" }) },
+    { icon: <Lightbulb className="h-4 w-4" />, title: "Apply", text: "Passing models advise the council; proven notes go live.", ...(failed.baseline || failed.tuning ? { state: "—", tone: "fault", error: [failed.baseline, failed.tuning].filter(Boolean).join(" · ") } : { state: `${promoted ? "advising" : "shadow only"} · ${liveNotes} live note${liveNotes === 1 ? "" : "s"}`, tone: promoted || liveNotes ? "cyan" : "slate" }) }
+  ];
   return (
     <div className="grid gap-2 md:grid-cols-4">
       {steps.map((s, i) => (
         <div key={s.title} className="glass relative p-3">
           <div className="flex items-center gap-2 text-[12px] font-semibold text-slate-200"><span className="text-cyan-300">{s.icon}</span>{s.title}</div>
           <p className="mt-1.5 text-[11px] leading-snug text-slate-400">{s.text}</p>
-          <div className="mt-2"><Badge tone={s.tone}>{s.state}</Badge></div>
+          <div className="mt-2" title={s.error ?? undefined}><Badge tone={s.tone}>{s.state}</Badge></div>
           {i < steps.length - 1 && <ArrowRight className="absolute -right-2.5 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-slate-600 md:block" />}
         </div>
       ))}
@@ -197,41 +205,49 @@ export default function Model() {
   const g = (gbm.data as any)?.gbm ?? null;
   const l = (tuning.data as any)?.learned_live ?? null;
   const loading = dataset.loading && !dataset.data;
+  // A read that failed with nothing on screen (a failed refresh keeps its data, under the panel's stale tag).
+  const failedOf = (p: { data: unknown; error: string | null }) => (p.data == null ? p.error : null);
+  const failedNow: Failed = { dataset: failedOf(dataset), baseline: failedOf(baseline), gbm: failedOf(gbm), tuning: failedOf(tuning) };
   const hrs = (r: any, dflt: number) => (r ? r.horizon_ms / 3_600_000 : dflt);
   const labelHint = d ? `Tight: ${d.rules?.target_atr ?? 1.5} ATR target / ${d.rules?.stop_atr ?? 1} ATR stop, ${hrs(d.rules, 4)}h. Wide: ${d.wide_rules?.target_atr ?? 4.5} / ${d.wide_rules?.stop_atr ?? 3} ATR, ${hrs(d.wide_rules, 12)}h.` : undefined;
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Learning pipeline" icon={<GitBranch className="h-3.5 w-3.5 text-cyan-300" />}>
-        {loading ? <Skeleton rows={3} /> : <Pipeline dataset={d} baseline={b} gbm={g} live={l} />}
+        {loading ? <Skeleton rows={3} /> : <Pipeline dataset={d} baseline={b} gbm={g} live={l} failed={failedNow} />}
       </Panel>
 
-      <Panel title="Dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} hint={labelHint}>
-        {loading ? <Skeleton rows={4} /> : <Dataset d={d} />}
+      {/* Four polls, four panels: each carries its own state tag (mockup "Nexus data states"). A failed read shows its
+          route and code; "No … yet" is only for a good read with nothing in it. */}
+      <Panel title="Dataset" icon={<Database className="h-3.5 w-3.5 text-cyan-300" />} hint={labelHint} poll={dataset} live>
+        <PollBody poll={dataset} skeleton={4}>{() => <Dataset d={d} />}</PollBody>
       </Panel>
 
       <Panel title="Baseline model" icon={<Layers className="h-3.5 w-3.5 text-cyan-300" />} hint="Logistic regression, retrained hourly. The bar other models must beat."
+        poll={baseline} live
         right={b ? <Badge tone="slate">{b.model_id} · {b.rows} rows · trained {ago(b.trained_at)}</Badge> : null}>
-        {baseline.loading && !baseline.data ? <Skeleton rows={4} /> : !b ? <Empty>No baseline yet.</Empty> : (
-          <>
-            <Gate b={b} />
-            <ModelTable checks={b.checks} prospective={b.prospective} top={b.top_features} gate={b.gate} importance="weight" />
-          </>
-        )}
+        <PollBody poll={baseline} skeleton={4} empty={!b && <Empty when="Retrained every hour once the dataset has labeled decisions.">No baseline yet</Empty>}>
+          {() => (
+            <>
+              <Gate b={b} />
+              <ModelTable checks={b.checks} prospective={b.prospective} top={b.top_features} gate={b.gate} importance="weight" />
+            </>
+          )}
+        </PollBody>
       </Panel>
 
       <Panel title="Decision model" icon={<Trees className="h-3.5 w-3.5 text-violet-300" />} hint="LightGBM, trained daily at 04:17 UTC. Shadow only until it passes the gate."
+        poll={gbm} live
         right={g ? <div className="flex gap-1.5"><Badge tone="slate">{g.model_id} · {g.rows} rows · {g.features} features · trained {ago(g.trained_at)}</Badge><Badge tone="amber">SHADOW</Badge></div> : null}>
-        {gbm.loading && !gbm.data ? <Skeleton rows={4} /> : !g ? <Empty>No model yet.</Empty> : (
-          <>
-            <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />
-          </>
-        )}
+        <PollBody poll={gbm} skeleton={4} empty={!g && <Empty when="Trained daily at 04:17 UTC from the labeled dataset.">No decision model yet</Empty>}>
+          {() => <ModelTable checks={g.checks} prospective={g.prospective} top={g.top_features} importance="gain" />}
+        </PollBody>
       </Panel>
 
       <Panel title="Live knowledge notes" icon={<BookOpen className="h-3.5 w-3.5 text-cyan-300" />}
         hint={`Shadow-tested notes go live when better than active${l?.rules ? `; retired if worse live (p < ${l.rules.alpha}, ${l.rules.min_decided} calls)` : ""}.`}
+        poll={tuning} live
         right={l ? <Badge tone={l.mode === "on" ? "green" : "slate"}>mode {l.mode ?? "—"}</Badge> : null}>
-        {tuning.loading && !tuning.data ? <Skeleton rows={3} /> : <LearnedLive l={l} />}
+        <PollBody poll={tuning} skeleton={3}>{() => <LearnedLive l={l} />}</PollBody>
       </Panel>
     </div>
   );

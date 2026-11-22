@@ -1,9 +1,9 @@
 import { Bot } from "lucide-react";
-import { Skeleton } from "./ui";
+import { ErrorLine, Skeleton } from "./ui";
 import { Stance } from "./Stance";
 import { calibrationText, BiasTag } from "./Post";
 import { useWarRoom } from "../lib/warroom";
-import { useMarket } from "../lib/market";
+import { NEWS_PATH, threadPath, useMarket } from "../lib/market";
 import { useTab, tabLabel } from "../lib/tab";
 import { pct } from "../lib/format";
 
@@ -30,10 +30,12 @@ function Agent({ name, stance, bias, cal, ok = true }: { name: string; stance?: 
  */
 export default function Roster() {
   const { tab } = useTab();
-  const { room: m15, loading: l15 } = useWarRoom();
-  const { threads, news, loading } = useMarket();
+  const { room: m15, loading: l15, poll: roomPoll } = useWarRoom();
+  const { threads, news, loading, failed } = useMarket();
   const room = tab === "M15" ? m15 : tab === "NEWS" ? null : threads[tab];
   const busy = tab === "M15" ? l15 && !m15 : loading;
+  // Review of #520: a failed read is its error line (the tab's box says the rest), never "No … yet".
+  const readError = tab === "M15" ? roomPoll.error : tab === "NEWS" ? failed[NEWS_PATH] ?? null : failed[threadPath(tab)] ?? null;
   const said: Record<string, any> = {};
   for (const o of room?.openings ?? []) said[o.id] = o;
   const list = room?.roster ?? [];
@@ -43,8 +45,8 @@ export default function Roster() {
       {busy ? <Skeleton rows={5} /> : tab === "NEWS" ? (
         news?.tldr?.status === "ok"
           ? <Agent name="News Analyst" stance={news.tldr.stance} cal={`24h · confidence ${pct(news.tldr.confidence)}`} />
-          : <p className="text-[12px] text-slate-500">No conclusion yet.</p>
-      ) : !list.length ? <p className="text-[12px] text-slate-500">No session yet.</p> : (
+          : readError ? <ErrorLine error={readError} /> : <p className="text-[12px] text-slate-500">No conclusion yet.</p>
+      ) : !list.length ? (readError ? <ErrorLine error={readError} /> : <p className="text-[12px] text-slate-500">No session yet.</p>) : (
         <div className="max-h-[60vh] space-y-1.5 overflow-y-auto pr-1">
           {list.map((a: any) => <Agent key={a.id} name={a.name} stance={said[a.id]?.stance} bias={said[a.id]?.bias} ok={said[a.id]?.status === "ok"} cal={calibrationText(a.calibration)} />)}
         </div>

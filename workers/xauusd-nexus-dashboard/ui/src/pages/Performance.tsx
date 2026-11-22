@@ -19,7 +19,7 @@ import {
   TrendingUp,
   Zap,
 } from "lucide-react";
-import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Dot, Empty, Hint, Kpi, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import { C } from "../components/charts";
 import { T } from "../lib/tokens";
@@ -319,6 +319,8 @@ function UnderwaterDrawdownChart({
 }
 
 type Policy = "tp1" | "tp2" | "omega" | "omega4";
+/** The exit policy in the equity panel's empty line. */
+const POLICY_SHORT: Record<Policy, string> = { tp1: "TP1", tp2: "TP2", omega: "Omega v3", omega4: "Omega v4" };
 const MODES = ["scalp", "intraday", "swing", "range"] as const;
 // v3 and v4 exits (v4: the live engine's own close reasons, src/ledger-omega4.mjs; the parity table uses the same codes).
 const OMEGA_EXIT: Record<string, string> = {
@@ -1326,11 +1328,14 @@ export default function Performance() {
   const [policy, setPolicy] = useState<Policy>("tp1");
 
   const queryUrl = days === 30 ? "/api/ledger?days=30" : `/api/ledger?days=${days}`;
-  const { data, loading, error, refresh } = usePoll(
+  // One poll feeds every panel of the page, so its state tag shows once, beside Refresh (mockup "Nexus data states").
+  const ledgerPoll = usePoll(
     () => get(queryUrl),
     60_000,
     [days]
   );
+  const { data, refresh } = ledgerPoll;
+  const phase = phaseOf(ledgerPoll);
 
   const l = (data as any)?.ledger;
   const omega = (data as any)?.omega;
@@ -1356,12 +1361,15 @@ export default function Performance() {
         title="Performance"
         icon={<LineChart className="h-4 w-4 text-cyan-300" />}
         hint={`Decision Engine signals tracked on closed bars (${l?.rules?.bars ?? "1m, else 15m"}): fill within ${l?.rules?.fill_window_hours ?? 8}h, then target, stop (−1R) or exit after ${l?.rules?.hold_max_hours ?? 72}h. Results in R.`}
+        poll={ledgerPoll}
+        live
+        pollRetry={false}
         right={
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void refresh()}
-              className="flex items-center gap-1 rounded-sm border border-white/10 px-2 py-1 text-[10px] text-slate-400 hover:text-white"
+              className="flex h-11 items-center gap-1 rounded-sm border border-white/10 px-2 py-1 text-[10px] text-slate-400 hover:text-white sm:h-auto"
               title="Refresh"
             >
               <RefreshCw className="h-3 w-3" /> Refresh
@@ -1473,13 +1481,13 @@ export default function Performance() {
       </Panel>
 
       {/* Main Content Area */}
-      {loading && !data ? (
+      {phase === "error" ? (
+        <Panel>
+          <PollError poll={ledgerPoll} />
+        </Panel>
+      ) : phase === "loading" ? (
         <Panel>
           <Skeleton rows={8} />
-        </Panel>
-      ) : error && !data ? (
-        <Panel>
-          <p className="text-[12px] text-fault">Failed to load: {error}</p>
         </Panel>
       ) : (
         <>
@@ -1578,8 +1586,17 @@ export default function Performance() {
                   </div>
                 }
               >
-                <InteractiveEquityCurve points={perf?.equity ?? []} currency="R" />
-                <UnderwaterDrawdownChart points={perf?.equity ?? []} currency="R" />
+                {(perf?.equity?.length ?? 0) < 2 ? (
+                  // Empty (mockup "Nexus data states"): what is missing, and when it fills.
+                  <Empty when="Draws from the 2nd closed trade. The ledger runs every 5m.">
+                    {perf?.trades ?? 0} closed trade{(perf?.trades ?? 0) === 1 ? "" : "s"} · {days}D · {POLICY_SHORT[policy]}
+                  </Empty>
+                ) : (
+                  <>
+                    <InteractiveEquityCurve points={perf?.equity ?? []} currency="R" />
+                    <UnderwaterDrawdownChart points={perf?.equity ?? []} currency="R" />
+                  </>
+                )}
                 <p className="mt-2 text-[11px] text-slate-500">
                   Unfilled:{" "}
                   {Object.entries(block.cancelled ?? {})

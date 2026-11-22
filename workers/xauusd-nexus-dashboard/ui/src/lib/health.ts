@@ -72,5 +72,5 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
 export function useSystemHealth() {
   const status = usePoll(() => get("/api/status"), 30_000);
   const lane = usePoll(() => get("/api/local-lane"), 60_000);
-  return { status: status.data as any, lane: lane.data as any, items: healthItems(status.data, lane.data), loading: status.loading && !status.data, error: status.error };
+  return { status: status.data as any, lane: lane.data as any, items: healthItems(status.data, lane.data), loading: status.loading && !status.data, error: status.error, poll: status, lanePoll: lane };
 }

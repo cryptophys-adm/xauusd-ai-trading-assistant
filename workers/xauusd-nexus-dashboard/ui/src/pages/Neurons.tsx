@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
-import { Badge, Empty, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Kpi, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { C } from "../components/charts";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
@@ -86,12 +86,14 @@ function RoomBars({ rows, room }: { rows: any[]; room: string }) {
 }
 
 export default function Neurons() {
-  const { data, loading, error } = usePoll(() => get("/api/neuron-allocation?days=7"), 300_000);
+  const poll = usePoll(() => get("/api/neuron-allocation?days=7"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const v = data as any;
   const rooms: string[] = useMemo(() => [...new Set(((v?.rooms_by_day ?? []) as any[]).map((r) => r.room))].sort(), [v]);
   const [room, setRoom] = useState("M15");
-  if (loading && !v) return <Skeleton rows={6} />;
-  if (error && !v) return <Empty>Neuron allocation unavailable ({error}).</Empty>;
+  if (phase === "error") return <div className="px-4 py-4 md:px-6"><Panel><PollError poll={poll} /></Panel></div>;
+  if (phase === "loading") return <Skeleton rows={6} />;
   const agents: any[] = v?.agents ?? [];
   const scored = agents.filter((a) => a.hit_rate != null);
   return (
@@ -105,7 +107,7 @@ export default function Neurons() {
 
       <div className="max-w-xl"><ShadowSwitchCard /></div>
 
-      <Panel title="Agents" hint="Neurons from each agent's room messages, priced with its model's input/output mix of the day. Hit rate: directional calls of the last 30 days (± the number scored). Grounding: share of cited metrics found in the agent's input, measured once agents answer in metrics.">
+      <Panel title="Agents" poll={poll} live hint="Neurons from each agent's room messages, priced with its model's input/output mix of the day. Hit rate: directional calls of the last 30 days (± the number scored). Grounding: share of cited metrics found in the agent's input, measured once agents answer in metrics.">
         {!agents.length ? <Empty>No AI call recorded in the window.</Empty> : (
           <div className="table-wrap">
             <table className="tbl">

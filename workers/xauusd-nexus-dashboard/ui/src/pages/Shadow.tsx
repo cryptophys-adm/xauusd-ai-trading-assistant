@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FlaskConical, GitPullRequest, Activity, BarChart2, Zap, ShieldCheck } from "lucide-react";
-import { Badge, Empty, Hint, Panel, Skeleton } from "../components/ui";
+import { Badge, Empty, Hint, Panel, PollError, Skeleton, phaseOf } from "../components/ui";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
@@ -56,8 +56,10 @@ function armBadge(k: any) {
 
 /** Aether A8: every TUNING_GRID point, running (discovery with Holm, holdout), stopped or untested. */
 function TuningGrid() {
-  const { data } = usePoll(() => get("/api/tuning"), 300_000);
-  const t = data as any;
+  const poll = usePoll(() => get("/api/tuning"), 300_000);
+  const t = poll.data as any;
+  // Review of #520: a failed read says so; nothing is shown only for a good read without a grid.
+  if (phaseOf(poll) === "error") return <Panel title="Parameter tuning" icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}><PollError poll={poll} /></Panel>;
   if (!t?.families?.length) return null;
 
   return (
@@ -65,6 +67,7 @@ function TuningGrid() {
       title="Parameter tuning"
       icon={<Zap className="h-3.5 w-3.5 text-cyan-400" />}
       hint={`Discovery ≥ ${t.statistics.min_discovery_bars} bars, Holm-corrected sign test (${t.holm_month}), then a ${t.statistics.holdout_bars}-bar holdout.`}
+      poll={poll}
     >
 
       {/* Grid Families Table */}
@@ -205,8 +208,13 @@ function TuningGrid() {
 }
 
 export default function Shadow() {
-  const { data, loading, error } = usePoll(() => get("/api/shadow-versions"), 300_000);
+  const poll = usePoll(() => get("/api/shadow-versions"), 300_000);
+  const { data } = poll;
+  const phase = phaseOf(poll);
   const families: any[] = (data as any)?.families ?? [];
+  // Review of #520: without a good read the KPI cards show "—", never 0 or "None yet" above the error box.
+  const known = data != null;
+  const kpi = (n: number) => (known ? n : "—");
 
   // Aggregated Shadow Telemetry
   let totalCandidates = 0;
@@ -230,6 +238,7 @@ export default function Shadow() {
         title="Shadow testing"
         icon={<FlaskConical className="h-4 w-4 text-violet-300" />}
         hint="Candidates run beside the active version on the same closed bars. Parameters promote via PR; notes promote automatically."
+        poll={poll} live
       >
         {null}
       </Panel>
@@ -242,9 +251,9 @@ export default function Shadow() {
             <span>Candidates</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
-            {totalCandidates}
+            {kpi(totalCandidates)}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">{families.length} families</div>
+          <div className="mt-1 text-[11px] text-slate-500">{known ? `${families.length} families` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
@@ -253,9 +262,9 @@ export default function Shadow() {
             <span>Ready</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
-            {promotionReadyCount}
+            {kpi(promotionReadyCount)}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">{promotionReadyCount ? "p < 0.05 + holdout" : "None yet"}</div>
+          <div className="mt-1 text-[11px] text-slate-500">{!known ? "—" : promotionReadyCount ? "p < 0.05 + holdout" : "None yet"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
@@ -264,7 +273,7 @@ export default function Shadow() {
             <span>Collecting</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
-            {collectingCount}
+            {kpi(collectingCount)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">&ge; 50 pairs</div>
         </div>
@@ -275,7 +284,7 @@ export default function Shadow() {
             <span>Bars evaluated</span>
           </div>
           <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
-            {totalBarsEvaluated}
+            {kpi(totalBarsEvaluated)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">H1 closed bars</div>
         </div>
@@ -284,10 +293,10 @@ export default function Shadow() {
       {/* Dynamic Parameter Tuning Grid */}
       <TuningGrid />
 
-      {loading && !data ? (
+      {phase === "error" ? (
+        <Panel><PollError poll={poll} /></Panel>
+      ) : phase === "loading" ? (
         <Panel><Skeleton rows={6} /></Panel>
-      ) : error && !data ? (
-        <Panel><p className="text-[12px] text-rose-300">Shadow data unavailable: {error}</p></Panel>
       ) : !families.length ? (
         <Panel><Empty>No data yet.</Empty></Panel>
       ) : (

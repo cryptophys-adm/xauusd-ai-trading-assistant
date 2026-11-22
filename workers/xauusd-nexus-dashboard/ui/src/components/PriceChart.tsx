@@ -3,17 +3,20 @@ import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesAp
 import { CandlestickChart, Link2, Unlink2 } from "lucide-react";
 import clsx from "clsx";
 import { Panel } from "./ui";
-import { get } from "../lib/api";
-import { useMarket } from "../lib/market";
+import { CHART_READ, get } from "../lib/api";
+import { GLOBAL_PATH, useMarket } from "../lib/market";
+import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
 import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
-import { CANDLE, KWW, T, tagText, volumeColor } from "../lib/tokens";
+import { CANDLE, KWW, T, rgba, tagText, volumeColor } from "../lib/tokens";
 
 const ZONE_COLOR: Record<string, string> = { support: T.bullFill, resistance: T.bearFill, "at price": T.okFill };
 const ZONE_ALPHA: Record<string, number> = { strong: 0.16, medium: 0.1, weak: 0.06 };
 /** The progressive stop (SL+): no direction and not the KWW yellow, so its own sky blue (its colour before 2026-11-22). */
 const SL_PLUS = "#38bdf8";
+/** A stale plan line's colour strength (re-review of #520): dimmed, its axis tag kept readable. */
+const STALE_LINE_ALPHA = 0.45;
 const fmt = (z: any) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
 
 const TFS = [["M5", "5m"], ["M15", "15m"], ["H1", "1H"], ["H4", "4H"], ["D1", "1D"]] as const;
@@ -68,7 +71,25 @@ export default function PriceChart() {
   const [showZones, setShowZones] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartZones") !== "off"; } catch { return true; } });
   const [showPlan, setShowPlan] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartPlan") !== "off"; } catch { return true; } });
   const [layers, setLayers] = useState<Layers>(readLayers);
-  const { global: g } = useMarket();
+  const { global: g, pollOf } = useMarket();
+  // Re-review of #520: the plan lines and zones come from the kept decision, which can be old. While its read is stale
+  // they are dimmed and each title says so ("Entry · stale 1h"); past PLAN_HIDE_MS they are dropped, with a note, so
+  // the chart never shows an old plan at full strength when the decision card is collapsed or below it.
+  const decisionPoll = pollOf(GLOBAL_PATH);
+  // Third review: the decision's age is local (lastOk on the steady clock, localNow), so a backward wall-clock step
+  // never holds an old plan at full strength. Fourth review: a hub replay's plan is aged by its server-aged time
+  // (replayAt), hidden while of unknown age; fifth review: dimmed while checking (the first read in flight).
+  const planFacts = { hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, replayed: decisionPoll.replayed, replayAt: decisionPoll.replayAt, checking: decisionPoll.checking, intervalMs: decisionPoll.intervalMs };
+  const mark = planMark(planFacts, localNow());
+  // Fifth review: the mark follows the decision card's 1 s clock (PLAN_TICK_MS), so after a wake or a forward step the
+  // plan dims within a second of the card's stale tag; the chart renders only when the mark changes (markKey).
+  const markNow = useRef({ facts: planFacts, key: markKey(mark) });
+  markNow.current = { facts: planFacts, key: markKey(mark) };
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => { if (markKey(planMark(markNow.current.facts, localNow())) !== markNow.current.key) setClock((n) => n + 1); }, PLAN_TICK_MS);
+    return () => window.clearInterval(t);
+  }, []);
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
 
   // Synchronize chart timeframe with active War Room tab unless unlinked by user.
@@ -182,20 +203,21 @@ export default function PriceChart() {
   useEffect(() => {
     const series = candles.current;
     if (!series) return;
-    const candidates: any[] = showZones ? strategy?.key_levels?.candidates ?? [] : [];
+    const candidates: any[] = showZones && mark.show ? strategy?.key_levels?.candidates ?? [] : [];
     const zones: ChartZone[] = candidates.map((z) => ({
-      low: z.low, high: z.high, color: ZONE_COLOR[z.role] ?? T.muted, alpha: ZONE_ALPHA[z.strength] ?? 0.08,
-      label: `${fmt(z)} · ${z.strength} · ${z.sources} families`
+      low: z.low, high: z.high, color: ZONE_COLOR[z.role] ?? T.muted, alpha: (ZONE_ALPHA[z.strength] ?? 0.08) * (mark.dim ? 0.5 : 1),
+      label: `${fmt(z)} · ${z.strength} · ${z.sources} families${mark.suffix}`
     }));
     zonesRef.current?.setZones(zones);
     for (const l of planLines.current) series.removePriceLine(l);
     planLines.current = [];
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL";
-    const p = showPlan && hasClearDecision ? strategy?.plan : null;
+    const p = showPlan && hasClearDecision && mark.show ? strategy?.plan : null;
     if (p) {
+      // Stale: the line dimmed and its title marked; the axis tag keeps its fill so the price stays readable.
       const line = (price: number | null | undefined, title: string, color: string, style: LineStyle) => {
-        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, axisLabelTextColor: tagText(color) }));
+        if (typeof price === "number") planLines.current.push(series.createPriceLine({ price, title: title + mark.suffix, color: mark.dim ? rgba(color, STALE_LINE_ALPHA) : color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, axisLabelColor: color, axisLabelTextColor: tagText(color) }));
       };
       line(p.entry, p.at_level ? "Entry" : "Entry (pullback)", T.okFill, LineStyle.Solid);
       line(p.stop, "Stop", T.bearFill, LineStyle.Dashed);
@@ -205,13 +227,13 @@ export default function PriceChart() {
       line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, T.bullFill, LineStyle.Dashed);
       line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, T.bullFill, LineStyle.Dotted);
     }
-  }, [strategy, showZones, showPlan]);
+  }, [strategy, showZones, showPlan, mark.show, mark.dim, mark.suffix]);
 
   useEffect(() => {
     let fit = true;
     const load = async () => {
       try {
-        const d = await get<{ candles: Bar[]; timeframe: string; basis: string; latest_close_time: string }>(`/api/ohlcv?timeframe=${tf}&limit=400`);
+        const d = await get<{ candles: Bar[]; timeframe: string; basis: string; latest_close_time: string }>(`/api/ohlcv?timeframe=${tf}&limit=400`, CHART_READ);
         const cs = d.candles || [];
         candles.current?.setData(cs.map((x) => ({ time: x.time as UTCTimestamp, open: x.open, high: x.high, low: x.low, close: x.close })));
         volume.current?.setData(cs.filter((x) => x.volume != null).map((x) => ({ time: x.time as UTCTimestamp, value: x.volume as number, color: volumeColor(x.close >= x.open) })));
@@ -245,7 +267,7 @@ export default function PriceChart() {
     let alive = true;
     const load = async () => {
       try {
-        const d = await get<{ levels?: { chart_plane?: any } }>(`/api/hud/levels?tf=${planeTf}`);
+        const d = await get<{ levels?: { chart_plane?: any } }>(`/api/hud/levels?tf=${planeTf}`, CHART_READ);
         if (alive) setPlane(d.levels?.chart_plane ?? null);
       } catch { if (alive) setPlane(null); }
     };
@@ -318,6 +340,10 @@ export default function PriceChart() {
     layerZonesRef.current?.setZones(zones);
   }, [plane, planeTf, layers.volume, layers.liquidity, layers.session, fibShown]);
 
+  // The note only when something was dropped: a clear decision's plan, or the zones.
+  const planHidden = !mark.show && ((showPlan && !!strategy?.plan && (strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL")) || (showZones && (strategy?.key_levels?.candidates?.length ?? 0) > 0));
+  const hiddenWhy = decisionPoll.replayed && decisionPoll.replayAt == null ? "the decision is a hub replay of unknown age (no read has answered yet)" : mark.note === "plan hidden: decision stale" ? "the decision's age is unknown or ahead of this clock" : "the decision's plan and zones are older than 2h";
+  const staleTitle = decisionPoll.error ? `${decisionPoll.error} · ${hiddenWhy}` : hiddenWhy;
   const up = (head.change ?? 0) >= 0;
   const chip = (on: boolean) => clsx("rounded-md border px-2 py-1 text-[11px] font-semibold transition shrink-0", on ? "border-violet-400/40 bg-violet-400/10 text-violet-100" : "border-white/10 text-slate-500 hover:text-white");
   const fibNext: Record<Layers["fib"], Layers["fib"]> = { auto: "on", on: "off", off: "auto" };
@@ -368,7 +394,10 @@ export default function PriceChart() {
         <button type="button" aria-pressed={layers.liquidity} title="Whale zones, FVG targets, QM and RBS/SBR" className={chip(layers.liquidity)} onClick={() => setLayer("liquidity", !layers.liquidity)}>Liquidity</button>
         <button type="button" aria-pressed={layers.session} title="True day, week and month opens" className={chip(layers.session)} onClick={() => setLayer("session", !layers.session)}>Session</button>
       </div>
-      <div ref={el} className="h-[300px] w-full sm:h-[400px]" />
+      <div className="relative">
+        <div ref={el} className="h-[300px] w-full sm:h-[400px]" />
+        {planHidden ? <div className="mono pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-late-fill/35 bg-late-fill/10 px-2 py-0.5 text-[11px] text-late" title={staleTitle}>{mark.note}</div> : null}
+      </div>
       <div className="mt-2 flex flex-wrap justify-between gap-2 text-[11px] text-muted">
         <span>{head.error ? <span className="text-fault">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"}`}</span>
         <span className="normal-case tracking-normal">{plane ? `GMI levels from the ${PLANE_LABEL[planeTf]} snapshot` : "GMI levels: waiting for the chart plane"}</span>

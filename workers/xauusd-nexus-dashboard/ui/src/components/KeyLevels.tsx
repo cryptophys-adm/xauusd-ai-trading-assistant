@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useId, useState } from "react";
 import { Crosshair } from "lucide-react";
-import { Badge, Panel, Skeleton } from "./ui";
+import { Badge, ErrorLine, Panel, Skeleton } from "./ui";
 import { C } from "./charts";
-import { useMarket } from "../lib/market";
+import { GLOBAL_PATH, useMarket } from "../lib/market";
 import { tabLabel } from "../lib/tab";
 import { utc } from "../lib/format";
 import { nearestCandidates } from "../lib/keyZones";
@@ -143,7 +143,9 @@ export function KeyLevelMap({ k, cam, close, daily, weekly }: { k: any; cam: Rec
  * most two per side; the strategy engine places its entries, stops and targets on these zones.
  */
 export default function KeyLevels({ levels, loading: levelsLoading, tab }: { levels: any; loading: boolean; tab: string }) {
-  const { global: g, loading } = useMarket();
+  const { global: g, loading, failed } = useMarket();
+  // Review of #520: with no levels because /api/conclusion/global failed, its error line, never "No level data yet."
+  const readError = failed[GLOBAL_PATH] ?? null;
   const k = g?.strategy?.key_levels ?? null;
   const [pick, setPick] = useState<string | null>(null);
   useEffect(() => setPick(null), [tab]);
@@ -163,7 +165,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
   return (
     <Panel title={`Key levels · ${chartName(tab)}`} icon={<Crosshair className="h-3.5 w-3.5 text-violet-300" />} hint={hint}
       right={hasK ? <Badge tone="purple">{k.candidates?.length ?? 0} candidates</Badge> : null}>
-      {busy ? <Skeleton rows={5} /> : !hasK && !set ? <p className="text-[12px] text-slate-500">No level data yet.</p> : (
+      {busy ? <Skeleton rows={5} /> : !hasK && !set ? (readError ? <ErrorLine error={readError} /> : <p className="text-[12px] text-slate-500">No level data yet.</p>) : (
         <>
           {hasK && (
             <div className="mb-2 grid grid-cols-4 gap-1" aria-label="Level readers">
@@ -201,7 +203,8 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-ok" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
           </div>
           <div className="mb-0.5 flex justify-between px-1 text-[9px] uppercase tracking-[0.12em] text-slate-600">
-            <span>Camarilla · pivots</span><span>{hasK ? "Zones" : "No zones"}</span>
+            {/* Re-review of #520: no zones because the decision read failed is that read's error, not "No zones". */}
+            <span>Camarilla · pivots</span>{hasK ? <span>Zones</span> : readError ? <span className="mono normal-case tracking-normal text-fault">{readError}</span> : <span>No zones</span>}
           </div>
           <KeyLevelMap k={hasK ? k : null} cam={set?.levels ?? null} close={levels?.close ?? null} daily={levels?.cpr?.daily} weekly={levels?.cpr?.weekly} />
           {set && (
