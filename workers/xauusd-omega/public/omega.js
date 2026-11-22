@@ -118,7 +118,7 @@ function clockCell() {
       el("span", { class: "now long" }, t.utc), el("span", { class: "now short" }, `${t.utcShort}Z`), el("span", { class: "k long" }, "UTC"),
       el("span", { class: "v" }, t.local), el("span", { class: "k long" }, t.zone));
 }
-function tick() { document.getElementById("clock")?.replaceWith(clockCell()); }
+function tick() { const c = document.getElementById("clock"); if (c) c.replaceWith(clockCell()); else renderStrip(); }
 function renderStrip() {
   const o = omegaCell(withOverview(lastStatus, lastOverview));
   const ea = eaCell(lastEa);
@@ -370,6 +370,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Read now, then every POLL_MS while the tab is visible, and at once when it becomes visible again.
+  renderStrip();
   load();
   setInterval(() => { if (document.visibilityState === "visible") load(); }, POLL_MS);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load(); });

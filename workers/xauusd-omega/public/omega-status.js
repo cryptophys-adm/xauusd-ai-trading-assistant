@@ -52,20 +52,26 @@ export function withOverview(status, o) {
   if (!o) return status;
   const killed = o.signal?.kill === true;
   const mode = killed ? "killed" : ["active", "paused", "killed"].includes(o.control?.mode) ? o.control.mode : null;
-  const reason = killed ? (o.signal?.kill_source === "env" ? "env_kill_switch" : o.signal?.kill_source || o.control?.reason || null) : o.control?.reason || null;
+  // An env kill is EA_SIGNALS_ENABLED; an Omega kill (kill_source "omega") carries the owner's typed reason.
+  const reason = killed && o.signal?.kill_source === "env" ? "env_kill_switch" : o.control?.reason || null;
   const ACCOUNT = { real: "real", live: "real", demo: "demo", contest: "contest" };
   const account = ACCOUNT[o.broker?.bridge?.trade_mode] ?? ACCOUNT[o.heartbeat?.mode] ?? null;
+  // The arm and the server switch travel with the account: filling one without the others misreads a real, armed account.
+  const liveArmed = typeof o.broker?.engine?.live_armed === "boolean" ? o.broker.engine.live_armed : null;
+  const engineEnabled = typeof o.broker?.engine?.env_enabled === "boolean" ? o.broker.engine.env_enabled : null;
   if (!status) {
     // Status unreadable: still show a kill or a pause, never hide it behind a dash.
     return mode === "killed" || mode === "paused"
-      ? { connected: false, armed: false, broker: null, positions: 0, live_armed: null, control_mode: mode, control_reason: reason ? String(reason).slice(0, 60) : null, limit_fault: null, account_mode: account, engine_enabled: null }
+      ? { connected: false, armed: false, broker: null, positions: 0, live_armed: liveArmed, control_mode: mode, control_reason: reason ? String(reason).slice(0, 60) : null, limit_fault: null, account_mode: account, engine_enabled: engineEnabled }
       : null;
   }
   return {
     ...status,
     control_mode: status.control_mode ?? mode,
     control_reason: status.control_mode ? status.control_reason : (reason ? String(reason).slice(0, 60) : null),
-    account_mode: status.account_mode ?? account
+    account_mode: status.account_mode ?? account,
+    live_armed: status.live_armed ?? liveArmed,
+    engine_enabled: status.engine_enabled ?? engineEnabled
   };
 }
 

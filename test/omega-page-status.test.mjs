@@ -48,12 +48,19 @@ test("the Omega page reads the status like the Nexus header: validated, the reas
 test("before xauusd #516 is live, the kill console still shows a kill, a pause and the account, from the overview", () => {
   const old = { connected: true, armed: true, broker: "Broker Ltd", positions: 1 }; // ./api/status without the #516 fields
   const cellOf = (s, o) => page.omegaCell(page.withOverview(page.readStatus(s), o));
-  assert.equal(cellOf(old, { control: { mode: "killed", reason: "owner" } }).code, "KILLED");
+  const omegaKill = cellOf(old, { control: { mode: "killed", reason: "manual stop" }, signal: { kill: true, kill_source: "omega" } }); // the shape eaSignal gives an Omega kill
+  assert.deepEqual([omegaKill.code, omegaKill.title], ["KILLED", "Omega killed (manual stop)"], "an Omega kill carries the owner's typed reason");
   assert.equal(cellOf(old, { control: { mode: "paused", reason: "news" } }).code, "PAUSED");
   const env = cellOf(old, { control: { mode: "active" }, signal: { kill: true, kill_source: "env" } });
   assert.deepEqual([env.code, env.title], ["KILLED", "Omega killed (env_kill_switch)"], "an env kill reaches the overview as signal.kill");
   assert.equal(cellOf(old, { control: { mode: "active" }, heartbeat: { mode: "demo" } }).code, "ARMED", "a demo account needs no live arm");
   assert.equal(cellOf(old, { control: { mode: "active" }, heartbeat: { mode: "live" } }).code, "ON", "live there means a real account");
+  const armedReal = cellOf(old, { control: { mode: "active" }, broker: { bridge: { trade_mode: "real" }, engine: { live_armed: true, env_enabled: true } } });
+  assert.deepEqual([armedReal.code, armedReal.title], ["ARMED", "Engine on, bridge connected, real account, LIVE armed"], "a LIVE-armed real account is ARMED, never 'not LIVE armed'");
+  const notArmed = cellOf(old, { control: { mode: "active" }, broker: { bridge: { trade_mode: "real" }, engine: { live_armed: false, env_enabled: true } } });
+  assert.deepEqual([notArmed.code, notArmed.title], ["ON", "Engine on, real account not LIVE armed"]);
+  const serverOff = cellOf(old, { control: { mode: "active" }, broker: { bridge: { trade_mode: "demo" }, engine: { live_armed: false, env_enabled: false } } });
+  assert.deepEqual([serverOff.code, serverOff.title], ["READY", "Bridge connected, Omega engine off (OMEGA_ENGINE_ENABLED off)"], "the server switch off is never ARMED");
   assert.equal(cellOf(old, { control: { mode: "active" }, broker: { bridge: { trade_mode: "real" } }, heartbeat: { mode: "demo" } }).code, "ON", "the bridge's trade mode first");
   assert.equal(page.omegaCell(page.withOverview(null, { control: { mode: "killed" } })).code, "KILLED", "an unreadable status never hides a kill");
   assert.equal(page.omegaCell(page.withOverview(null, { control: { mode: "active" } })).code, "—");
