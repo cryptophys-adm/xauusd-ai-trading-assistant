@@ -29,16 +29,34 @@ export function errorText(e: unknown): string {
 }
 
 /**
+ * The routes whose own HTTP cache the page keeps (third review of #520): /api/ohlcv answers with max-age=30, so the
+ * chart's candle reads (the price chart, Omega's terminal chart) share it instead of reading through.
+ */
+export const CACHED_ROUTES = ["/api/ohlcv"];
+
+/**
+ * `cache` of a get(): "no-store" for the poll and retry reads (re-review of #520: the browser holds a second GET of a
+ * URL behind one in flight, its cache lock of up to ~20 s, so Retry now past a hung read would wait on it; a poll
+ * wants the answer of now anyway); the browser's default for CACHED_ROUTES. An explicit `cache` wins.
+ */
+export type GetOptions = { cache?: RequestCache };
+
+/** The options of a chart read (candles, the chart plane): the browser's own cache, never no-store. */
+export const CHART_READ: GetOptions = { cache: "default" };
+
+export function cacheOf(path: string, opts: GetOptions = {}): RequestCache {
+  return opts.cache ?? (CACHED_ROUTES.includes(path.split("?")[0]) ? "default" : "no-store");
+}
+
+/**
  * Read-only API of the Nexus Worker: /api/ohlcv and /api/local-lane are its own RPC reads; every
  * other /api/* path is proxied to the AI Worker. Same origin, GET only: Nexus never changes state.
  * A failure throws an ApiError (above).
  */
-export async function get<T = any>(path: string): Promise<T> {
+export async function get<T = any>(path: string, opts: GetOptions = {}): Promise<T> {
   let r: Response;
   try {
-    // No HTTP cache (re-review of #520): the browser holds a second GET of a URL behind one in flight (its cache
-    // lock, up to ~20 s), so Retry now past a hung read would wait on it; a poll wants the answer of now anyway.
-    r = await fetch(path, { headers: { accept: "application/json" }, cache: "no-store" });
+    r = await fetch(path, { headers: { accept: "application/json" }, cache: cacheOf(path, opts) });
   } catch {
     throw new ApiError(path, 0, null);
   }

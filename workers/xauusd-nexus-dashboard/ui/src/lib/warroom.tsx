@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { get } from "./api";
 import { usePoll, type Poll } from "./usePoll";
 import { usePush } from "./push";
-import { isStale, pushApplies, withPush } from "./pollState";
+import { isStale, localNow, pushApplies, pushShown, withPush, type PushMark } from "./pollState";
 
 export type Room = any;
 /**
@@ -24,29 +24,30 @@ const POLL_MS = 10_000;
 /**
  * The latest Live War Room 15m and the latest H1 decision (60 s), shared by the page. The room comes from the
  * push hub as it changes; the read every 10 seconds stays until the hub has delivered a snapshot, then runs
- * every 5 minutes as a fallback. The newest of the two arrivals is shown.
+ * every 5 minutes as a fallback. The newest of the two arrivals, on the local order, is shown.
  */
 export function WarRoomProvider({ children }: { children: ReactNode }) {
   const push = usePush<any>("war-room");
   const war = usePoll(() => get(WAR_ROOM_PATH), push.live ? POLL_LIVE_MS : POLL_MS);
   const dec = usePoll(() => get("/api/decisions?limit=1"), 60_000);
-  // The room on screen and how new it is (`at`: a read's answer time, or a push's own `at`), and the own `at` of the
-  // last push applied. Re-review of #520: a push applies only when newer than the room on screen, and counts as a good
-  // arrival only when newer than the last failed read (withPush), so the hub's replay of an old snapshot on reconnect
-  // never replaces a newer room or clears a live failure.
-  const [shown, setShown] = useState<{ data: any; at: number | null; pushAt: number | null }>({ data: null, at: null, pushAt: null });
-  useEffect(() => { if (war.data) setShown((s) => ({ ...s, data: war.data, at: war.lastOk })); }, [war.data]);
+  // The last applied push (third review of #520): its body, its arrival (local sequence and steady time) and the newest
+  // hub `at` applied. A push applies unless the hub's `at` marks it a replay older than what is on screen
+  // (pushApplies); the room on screen is the push's only when it arrived after the read that brought the read's room
+  // was sent (pushShown), so a read sent before a newer push never overwrites it; the push's arrival counts toward
+  // lastOk and clears the read's error only when it arrived after the failed read was sent (withPush).
+  const [pushed, setPushed] = useState<{ data: any; mark: PushMark; at: number } | null>(null);
   useEffect(() => {
     const snap = push.snap;
     if (!snap?.data) return;
-    setShown((s) => (pushApplies(snap.at, s.at) ? { data: snap.data, at: snap.at, pushAt: Math.max(s.pushAt ?? -Infinity, snap.at as number) } : s));
+    setPushed((s) => (pushApplies(snap, s?.at ?? null) ? { data: snap.data, mark: { seq: snap.seq, local: snap.local }, at: Math.max(s?.at ?? -Infinity, snap.at as number) } : s));
   }, [push.snap]);
-  const latest = shown.data;
-  const f = withPush({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failures: war.failures }, shown.pushAt);
+  const mark = pushed?.mark ?? null;
+  const latest = war.data != null && !pushShown(war.sentSeq, mark) ? war.data : pushed?.data ?? war.data ?? null;
+  const f = withPush({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, mark);
   const poll: Poll = {
     ...war, ...f, data: latest,
     loading: !latest && war.loading,
-    stale: isStale({ hasData: latest != null, error: f.error, lastOk: f.lastOk, intervalMs: war.intervalMs }, Date.now()),
+    stale: isStale({ hasData: latest != null, error: f.error, lastOk: f.lastOk, intervalMs: war.intervalMs }, localNow()),
   };
   const value: Ctx = {
     room: latest?.room ?? null,

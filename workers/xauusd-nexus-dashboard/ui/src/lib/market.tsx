@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useReducer, useRef, type ReactNod
 import { errorText, get } from "./api";
 import { useSchedule, type Poll } from "./usePoll";
 import { usePushMany } from "./push";
-import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, monotonic, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
+import { STALE_TICK_MS, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, routeFacts, routePushed, routeSent, routeSettled, type ReadOutcome, type RouteState } from "./pollState";
 
 /** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
 const POLL_LIVE_MS = 300_000;
@@ -32,7 +32,7 @@ type Ctx = {
    * keeps its own catch, so one failure never blanks the others, and a tab can tell a failed read from an empty one.
    */
   failed: Record<string, string>;
-  /** The last good answer of each read, by path (ms, the browser clock). */
+  /** The last good arrival of each read, by path (ms, the steady local clock localNow). */
   okAt: Record<string, number>;
   /** The retry cadence of the read at a path (ms). */
   intervalOf: (path: string) => number;
@@ -44,7 +44,7 @@ type Ctx = {
   pollOf: (path: string) => Poll;
   /** A read of some path is in flight. */
   busy: boolean;
-  /** Read every path again now (each joins its own young read in flight: repeated clicks start no parallel reads). */
+  /** Read every path again now (each joins only a read of its own sent within RETRY_JOIN_MS: a double click starts one). */
   retry: () => Promise<void>;
 };
 const idlePoll: Poll = { data: null, error: null, loading: true, refresh: () => {}, lastOk: null, lastFail: null, failures: 0, stale: false, intervalMs: 0 };
@@ -80,10 +80,16 @@ function shownOf(path: string, body: any): unknown {
  * Re-review of #520 (lib/pollState.ts RouteState):
  * - each path applies its own answer as it resolves, and records lastOk only then: a hung sibling read (D1's room)
  *   no longer holds the decision back while it reads as live;
- * - a push applies only when its own `at` (the hub's publish time) is newer than the data on screen, and counts as a
- *   good arrival only when newer than the last failed read: the hub's replay of an old snapshot on reconnect never
- *   clears a live failure or replaces newer data;
- * - `busy` and Retry now are per path, and Retry now never waits on a read older than the path's interval.
+ * - `busy` and Retry now are per path.
+ *
+ * Third review of #520: one local order for reads and pushes (nextSeq, taken when a read is sent and when a push
+ * arrives; never a wall clock, never the hub's `at` against a browser time):
+ * - a settled read replaces the data unless a push arrived after it was sent; a push replaces it unless the hub's
+ *   `at` marks it a replay older than what is on screen (pushApplies);
+ * - lastOk is the steady local time (localNow) of the last good arrival, a read's settle or a push's arrival, so a
+ *   push applied before a later failed read keeps its age; only clearing the error needs the push to have arrived
+ *   after the failed read was sent (withPush);
+ * - Retry now joins only a read sent within RETRY_JOIN_MS, else sends a new one, even during a hang.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
@@ -99,24 +105,22 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   // One read of one path: its own catch, its own settle. A failed read records what failed and when and keeps the
   // data as it was (routeSettled never sets it to null); a read overtaken by a newer settled one is dropped.
   const read = (path: string): Promise<void> => {
-    const sent = routeSent(route(path));
-    routes.current[path] = sent;
-    const id = sent.sent;
-    const startedAt = Date.now();
+    const id = nextSeq();
+    routes.current[path] = routeSent(route(path), id);
     const settle = (r: ReadOutcome) => { routes.current[path] = routeSettled(route(path), id, r); bump(); };
     const p = get(path).then(
-      (data) => settle({ ok: true, data, startedAt, at: Date.now() }),
-      (e) => settle({ ok: false, error: errorText(e), at: Date.now() }),
+      (data) => settle({ ok: true, data, at: localNow() }),
+      (e) => settle({ ok: false, error: errorText(e), at: localNow() }),
     );
-    flights.current[path] = { since: monotonic(), p };
+    flights.current[path] = { since: localNow(), p };
     void p.then(() => { if (flights.current[path]?.p === p) delete flights.current[path]; });
     bump();
     return p;
   };
-  /** Retry now for one path: joins its read in flight while younger than its interval, else reads again. */
+  /** Retry now for one path: joins its read in flight while younger than RETRY_JOIN_MS, else sends a new one. */
   const refresh = (path: string): Promise<void> => {
     const f = flights.current[path];
-    return f && joinsInFlight(f.since, monotonic(), intervalOf(path)) ? f.p : read(path);
+    return f && joinsInFlight(f.since, localNow()) ? f.p : read(path);
   };
   const retry = async () => { await Promise.all(ALL_PATHS.map(refresh)); };
 
@@ -126,11 +130,11 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     return isStale({ hasData: shownOf(path, route(path).data) != null, error: f.error, lastOk: f.lastOk, intervalMs: intervalOf(path) }, t);
   };
   const staleSig = (t: number) => ALL_PATHS.map((p) => (staleOf(p, t) ? "1" : "0")).join("");
-  const now = Date.now();
+  const now = localNow();
   const sig = useRef({ shown: "", of: staleSig });
   sig.current = { shown: staleSig(now), of: staleSig };
   useEffect(() => {
-    const check = () => { if (sig.current.of(Date.now()) !== sig.current.shown) bump(); };
+    const check = () => { if (sig.current.of(localNow()) !== sig.current.shown) bump(); };
     const t = window.setInterval(check, STALE_TICK_MS);
     const onVisible = () => { if (document.visibilityState === "visible") check(); };
     document.addEventListener("visibilitychange", onVisible);
@@ -141,18 +145,18 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   // News Daily and the 5m context are not pushed yet: every 60 s, as before.
   useSchedule(() => { for (const p of FAST_PATHS) void read(p); }, POLL_MS);
 
-  // A push: each room and the decision, by its own `at` (routePushed).
+  // A push: each room and the decision, by its arrival (routePushed; the hub's `at` only keeps a replay out).
   const threadsSnap = push.snap.threads ?? null;
   const decisionSnap = push.snap.decision ?? null;
   useEffect(() => {
     if (!threadsSnap) return;
-    for (const c of TF_CHARTS) routes.current[threadPath(c)] = routePushed(route(threadPath(c)), threadsSnap.data?.[c] ?? null, threadsSnap.at);
+    for (const c of TF_CHARTS) routes.current[threadPath(c)] = routePushed(route(threadPath(c)), threadsSnap.data?.[c] ?? null, threadsSnap);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadsSnap]);
   useEffect(() => {
     if (!decisionSnap) return;
-    routes.current[GLOBAL_PATH] = routePushed(route(GLOBAL_PATH), decisionSnap.data, decisionSnap.at);
+    routes.current[GLOBAL_PATH] = routePushed(route(GLOBAL_PATH), decisionSnap.data, decisionSnap);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decisionSnap]);

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { pushTime } from "./pollState";
+import { localNow, nextSeq, pushTime, type PushArrival } from "./pollState";
 
 /**
- * One topic's latest snapshot: its body and its own time (`at`: when the hub published it, ms; null when the message
- * had none). Re-review of #520: the hub replays each topic's stored snapshot on every connect, so the time a snapshot
- * reached the page says nothing about how new it is; a page compares `at` (pushApplies in lib/pollState.ts).
+ * One topic's latest snapshot: its body, the hub's own time (`at`: when the hub published it, ms, the hub's clock; null
+ * when the message had none), and its arrival (third review of #520): the local sequence (`seq`, nextSeq) and the
+ * steady clock (`local`, localNow) when it reached the page, and `replay`: the first snapshot of the topic on this
+ * socket, which the hub sends from its store on every connect. A page orders it by `seq` and counts its age from
+ * `local`; `at` only recognises a replay older than the data on screen (pushApplies in lib/pollState.ts).
  */
-export type Snapshot<T = any> = { data: T; at: number | null };
+export type Snapshot<T = any> = PushArrival & { data: T };
 
 /**
  * The push hub's snapshots of some topics (ADR-0015 phase 1, GET /api/stream on this origin, or Omega's
@@ -14,8 +16,8 @@ export type Snapshot<T = any> = { data: T; at: number | null };
  * the latest snapshot of each topic the hub holds as soon as the socket opens, then each new one as its cell
  * publishes it. The socket reconnects with a growing pause (up to a minute) and sends "ping" every 30 seconds,
  * which the hub answers without waking. `live` is true once every topic has delivered a snapshot on the open
- * socket: the page may then poll rarely. `snap` holds each topic's latest snapshot with its own time (Snapshot), a
- * new object per message, so a replay of the same body is still an arrival the page judges by its `at`.
+ * socket: the page may then poll rarely. `snap` holds each topic's latest snapshot with its arrival (Snapshot), a
+ * new object per message, so a replay of the same body is still an arrival the page judges (pushApplies).
  */
 export function usePushMany(topics: string[], path = "/api/stream") {
   const key = topics.join(",");
@@ -45,8 +47,8 @@ export function usePushMany(topics: string[], path = "/api/stream") {
         try {
           const msg = JSON.parse(String(ev.data));
           if (msg?.type === "snapshot" && wanted.includes(msg.topic) && msg.data) {
-            const at = pushTime(msg.at, Date.now());
-            setSnap((d) => ({ ...d, [msg.topic]: { data: msg.data, at } }));
+            const arrival: PushArrival = { seq: nextSeq(), local: localNow(), at: pushTime(msg.at), replay: !seen.has(msg.topic) };
+            setSnap((d) => ({ ...d, [msg.topic]: { data: msg.data, ...arrival } }));
             seen.add(msg.topic);
             if (seen.size === wanted.length) setLive(true);
           }
@@ -67,7 +69,7 @@ export function usePushMany(topics: string[], path = "/api/stream") {
   return { snap, live };
 }
 
-/** One topic's snapshots (the War Room's): the latest with its own time, or null before one. */
+/** One topic's snapshots (the War Room's): the latest with its arrival, or null before one. */
 export function usePush<T = unknown>(topic: string) {
   const { snap, live } = usePushMany([topic]);
   return { snap: (snap[topic] ?? null) as Snapshot<T> | null, live };

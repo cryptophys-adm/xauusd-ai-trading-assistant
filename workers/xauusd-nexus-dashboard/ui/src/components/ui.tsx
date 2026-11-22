@@ -4,7 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { CHIP, FILL, T, type Tone } from "../lib/tokens";
 import type { Poll } from "../lib/usePoll";
-import { localClock, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, type PollPhase } from "../lib/pollState";
+import { localClock, localNow, okLine, pollPhase, retryEvery, shortAge, staleTitle, utcClock, wallOf, type PollPhase } from "../lib/pollState";
 
 /**
  * An explanation kept out of the layout (owner 2026-11-13: no paragraphs of notes on a production page):
@@ -19,9 +19,9 @@ export function Hint({ text, className }: { text: string; className?: string }) 
   );
 }
 
-/** The state a poll puts its panel in, now. */
+/** The state a poll puts its panel in, now (its times are on the steady local clock, localNow). */
 export function phaseOf(poll: Poll): PollPhase {
-  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs }, Date.now());
+  return pollPhase({ hasData: poll.data != null, error: poll.error, loading: poll.loading, lastOk: poll.lastOk, lastFail: poll.lastFail, failures: poll.failures, intervalMs: poll.intervalMs }, localNow());
 }
 
 /**
@@ -51,12 +51,15 @@ export function Panel({ title, icon, right, hint, children, className, poll, liv
   );
 }
 
-/** A clock for the ages on screen, every `ms`. */
+/** A clock for the ages on screen, every `ms`: the steady local clock (localNow), as the polls' times. */
 function useNow(ms: number) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), ms); return () => window.clearInterval(t); }, [ms]);
+  const [now, setNow] = useState(() => localNow());
+  useEffect(() => { const t = window.setInterval(() => setNow(localNow()), ms); return () => window.clearInterval(t); }, [ms]);
   return now;
 }
+
+/** A poll's times as the wall clock reads them now (wallOf), for the clock times on screen; ages stay local. */
+const shownTimes = (poll: Poll): Poll => ({ ...poll, lastOk: wallOf(poll.lastOk), lastFail: wallOf(poll.lastFail) });
 
 const tagText = "mono whitespace-nowrap text-[11px]";
 const tagChip = "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5";
@@ -67,10 +70,11 @@ function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: Po
     return <span className={clsx(tagText, tagChip, "border-fault-fill/35 bg-fault-fill/10 text-fault")} title={`${poll.error} · retry ${retryEvery(poll.intervalMs)}`}><Dot tone="fault" />error</span>;
   }
   if (phase === "live") {
-    if (poll.lastOk == null) return null;
+    const ok = wallOf(poll.lastOk);
+    if (ok == null) return null;
     return (
-      <span className={clsx(tagText, "inline-flex items-center gap-1.5 text-fg-2")} title={`updated ${utcClock(poll.lastOk)} UTC · ${localClock(poll.lastOk)} local`} aria-label={`Live, updated ${utcClock(poll.lastOk, false)} UTC`}>
-        <Dot tone="ok" />{utcClock(poll.lastOk, false)} UTC
+      <span className={clsx(tagText, "inline-flex items-center gap-1.5 text-fg-2")} title={`updated ${utcClock(ok)} UTC · ${localClock(ok)} local`} aria-label={`Live, updated ${utcClock(ok, false)} UTC`}>
+        <Dot tone="ok" />{utcClock(ok, false)} UTC
       </span>
     );
   }
@@ -80,14 +84,15 @@ function PollTag({ poll, phase, open, onToggle, retry }: { poll: Poll; phase: Po
 /** Stale: the chip (a button: on a phone it opens the detail line), the last good read, and Retry now. */
 function StaleTag({ poll, open, onToggle, retry }: { poll: Poll; open: boolean; onToggle: () => void; retry: boolean }) {
   const now = useNow(15_000);
-  const age = poll.lastOk != null ? shortAge(Math.max(now, Date.now()) - poll.lastOk) : "";
+  const age = poll.lastOk != null ? shortAge(Math.max(now, localNow()) - poll.lastOk) : "";
+  const shown = shownTimes(poll);
   return (
     <>
-      <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Stale ${age}, show details`} title={staleTitle(poll)}
+      <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Stale ${age}, show details`} title={staleTitle(shown)}
         className="inline-flex h-11 items-center rounded-md sm:h-auto">
         <span className={clsx(tagText, tagChip, "border-late-fill/35 bg-late-fill/10 text-late")}><Dot tone="late" />stale {age}</span>
       </button>
-      {poll.lastOk != null ? <span className={clsx(tagText, "hidden text-fg-2 sm:inline")}>ok {okLine(poll.lastOk, false)}</span> : null}
+      {shown.lastOk != null ? <span className={clsx(tagText, "hidden text-fg-2 sm:inline")}>ok {okLine(shown.lastOk, false)}</span> : null}
       {retry ? <RetryButton onRetry={poll.refresh} busy={pollBusy(poll)} compact /> : null}
     </>
   );
@@ -100,7 +105,7 @@ function StaleDetail({ poll }: { poll: Poll }) {
       {poll.error != null
         ? <><span className="text-late">{poll.error}</span> · {poll.failures} failed · retry {retryEvery(poll.intervalMs)}</>
         : <><span className="text-late">no good read for {shortAge(2 * poll.intervalMs)}</span> · retry {retryEvery(poll.intervalMs)}</>}
-      <br />ok {okLine(poll.lastOk, false)}
+      <br />ok {okLine(wallOf(poll.lastOk), false)}
     </div>
   );
 }
@@ -155,7 +160,7 @@ export function ErrorBox({ error, lastOk = null, intervalMs = 0, retrying = fals
 
 /** The error box of a poll. */
 export function PollError({ poll }: { poll: Poll }) {
-  return <ErrorBox error={poll.error ?? "read failed"} lastOk={poll.lastOk} intervalMs={poll.intervalMs} retrying={pollBusy(poll)} onRetry={poll.refresh} />;
+  return <ErrorBox error={poll.error ?? "read failed"} lastOk={wallOf(poll.lastOk)} intervalMs={poll.intervalMs} retrying={pollBusy(poll)} onRetry={poll.refresh} />;
 }
 
 /**

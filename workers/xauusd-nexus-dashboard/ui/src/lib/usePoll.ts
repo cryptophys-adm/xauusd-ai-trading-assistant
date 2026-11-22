@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorText } from "./api";
-import { STALE_TICK_MS, isStale, singleFlight, staleAt, staleChanged, staleWake } from "./pollState";
+import { STALE_TICK_MS, isStale, localNow, nextSeq, singleFlight, staleAt, staleChanged, staleWake } from "./pollState";
 
 /**
  * Load once, then refresh every `intervalMs` while the tab is visible (0 = no refresh), and at once when the tab
@@ -10,12 +10,16 @@ import { STALE_TICK_MS, isStale, singleFlight, staleAt, staleChanged, staleWake 
  * (ADR-0015) keeps its data on screen.
  *
  * The data states (mockup "Nexus data states", part A; lib/pollState.ts): `lastOk` and `lastFail` (ms, the
- * browser clock: the API has no generated_at), `failures` (failed reads in a row) and `stale` (data on screen and
- * the last read failed, or no good read for 2 × the interval). A failed refresh keeps the data as it was.
+ * steady local clock localNow: the API has no generated_at, and a backward wall-clock step never freezes an age),
+ * `failures` (failed reads in a row) and `stale` (data on screen and the last read failed, or no good read for 2 ×
+ * the interval). A failed refresh keeps the data as it was. `sentSeq` is the local sequence (nextSeq) of the send of
+ * the read whose answer `data` is, `failSeq` that of the last failed read: a page that also takes a push (the War
+ * Room's 15m room) orders the two by it (third review of #520).
  *
  * Review of #520: `busy` is true while any read is in flight, and `refresh` (Retry now) joins the read in flight
- * instead of starting another, but only while that read is younger than the interval (re-review: a hung read is
- * never joined, so Retry now always gets a new read past it; joinsInFlight in lib/pollState.ts). The stale verdict follows the wall clock after a sleep or a clock jump: the tab
+ * instead of starting another, but only while that read is younger than RETRY_JOIN_MS (third review: any older read,
+ * the hung one or the poll's own scheduled one, is never joined, so Retry now always sends a request past it;
+ * joinsInFlight in lib/pollState.ts). The stale verdict follows the steady clock (it counts a sleep and never runs back): the tab
  * becoming visible re-evaluates it before the refresh, a coarse tick (STALE_TICK_MS) re-evaluates it while data is
  * on screen, and a stale timer that fires early (the clock moved back) is armed again (staleWake).
  */
@@ -27,11 +31,11 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [lastFail, setLastFail] = useState<number | null>(null);
   const [failures, setFailures] = useState(0);
+  const [sentSeq, setSentSeq] = useState<number | null>(null);
+  const [failSeq, setFailSeq] = useState<number | null>(null);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const loadRef = useRef(load);
   loadRef.current = load;
-  const intervalRef = useRef(intervalMs);
-  intervalRef.current = intervalMs;
   const hasData = useRef(false);
   const seq = useRef(0);
   const pending = useRef(0);
@@ -39,15 +43,16 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   const mounted = useRef(false);
 
   const read = useCallback(async () => {
-    const id = ++seq.current;
+    const id = nextSeq();
+    seq.current = id;
     if (!hasData.current) setLoading(true);
     pending.current += 1;
     setBusy(true);
     try {
       const value = await loadRef.current();
-      if (id === seq.current) { setData(value); hasData.current = true; setError(null); setLastOk(Date.now()); setFailures(0); }
+      if (id === seq.current) { setData(value); hasData.current = true; setSentSeq(id); setError(null); setLastOk(localNow()); setFailures(0); }
     } catch (e) {
-      if (id === seq.current) { setError(errorText(e)); setLastFail(Date.now()); setFailures((n) => n + 1); }
+      if (id === seq.current) { setError(errorText(e)); setLastFail(localNow()); setFailSeq(id); setFailures((n) => n + 1); }
     } finally {
       if (id === seq.current) setLoading(false);
       pending.current -= 1;
@@ -56,19 +61,19 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   }, []);
   /** The poll's own reads (mount, deps, the interval, the tab coming back): always run; the newest one wins. */
   const start = useCallback(() => flight.current.start(read), [read]);
-  /** Retry now: joins a read in flight younger than the interval (repeated clicks start no parallel reads), else reads. */
-  const refresh = useCallback(() => flight.current.retry(read, intervalRef.current), [read]);
+  /** Retry now: joins a read in flight younger than RETRY_JOIN_MS (a double click starts one read), else reads. */
+  const refresh = useCallback(() => flight.current.retry(read), [read]);
 
   // The data: loaded on mount, and again (from empty) when the deps change.
   useEffect(() => {
-    if (mounted.current) { hasData.current = false; setData(null); setError(null); setLastOk(null); setLastFail(null); setFailures(0); }
+    if (mounted.current) { hasData.current = false; setData(null); setError(null); setLastOk(null); setLastFail(null); setFailures(0); setSentSeq(null); setFailSeq(null); }
     mounted.current = true;
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   const present = data != null;
-  const stale = isStale({ hasData: present, error, lastOk, intervalMs }, Date.now());
+  const stale = isStale({ hasData: present, error, lastOk, intervalMs }, localNow());
   // The verdict on screen, for the tick and the tab coming back (they render only when it changes).
   const shown = useRef({ stale, facts: { hasData: present, error, lastOk, intervalMs } });
   shown.current = { stale, facts: { hasData: present, error, lastOk, intervalMs } };
@@ -80,7 +85,7 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
     const t = window.setInterval(() => { if (document.visibilityState === "visible") void start(); }, intervalMs);
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
-      if (staleChanged(shown.current.stale, shown.current.facts, Date.now())) rerender();
+      if (staleChanged(shown.current.stale, shown.current.facts, localNow())) rerender();
       void start();
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -91,7 +96,7 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
   // the stale timer below can be late; this tick turns the tag within STALE_TICK_MS.
   useEffect(() => {
     if (!intervalMs || !present) return;
-    const t = window.setInterval(() => { if (staleChanged(shown.current.stale, shown.current.facts, Date.now())) rerender(); }, STALE_TICK_MS);
+    const t = window.setInterval(() => { if (staleChanged(shown.current.stale, shown.current.facts, localNow())) rerender(); }, STALE_TICK_MS);
     return () => window.clearInterval(t);
   }, [intervalMs, present]);
 
@@ -103,16 +108,16 @@ export function usePoll<T>(load: () => Promise<T>, intervalMs = 0, deps: unknown
     let t = 0;
     const arm = (ms: number) => {
       t = window.setTimeout(() => {
-        const w = staleWake(at, Date.now());
+        const w = staleWake(at, localNow());
         if (w.rearmMs != null) arm(w.rearmMs);
         else if (w.render) rerender();
       }, Math.max(0, ms));
     };
-    arm(at - Date.now());
+    arm(at - localNow());
     return () => window.clearTimeout(t);
   }, [lastOk, intervalMs]);
 
-  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs, busy };
+  return { data, error, loading, refresh, lastOk, lastFail, failures, stale, intervalMs, busy, sentSeq, failSeq };
 }
 
 /**

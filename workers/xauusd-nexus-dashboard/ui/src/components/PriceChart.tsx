@@ -3,9 +3,9 @@ import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesAp
 import { CandlestickChart, Link2, Unlink2 } from "lucide-react";
 import clsx from "clsx";
 import { Panel } from "./ui";
-import { get } from "../lib/api";
+import { CHART_READ, get } from "../lib/api";
 import { GLOBAL_PATH, useMarket } from "../lib/market";
-import { planMark } from "../lib/pollState";
+import { localNow, planMark } from "../lib/pollState";
 import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
@@ -76,9 +76,11 @@ export default function PriceChart() {
   // they are dimmed and each title says so ("Entry · stale 1h"); past PLAN_HIDE_MS they are dropped, with a note, so
   // the chart never shows an old plan at full strength when the decision card is collapsed or below it.
   const decisionPoll = pollOf(GLOBAL_PATH);
-  const [clock, setClock] = useState(() => Date.now());
-  useEffect(() => { const t = window.setInterval(() => setClock(Date.now()), 30_000); return () => window.clearInterval(t); }, []);
-  const mark = planMark({ hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, intervalMs: decisionPoll.intervalMs }, Math.max(clock, Date.now()));
+  // Third review: the decision's age is local (lastOk on the steady clock, localNow), so a backward wall-clock step
+  // never holds an old plan at full strength; the tick only re-renders.
+  const [, setClock] = useState(0);
+  useEffect(() => { const t = window.setInterval(() => setClock((n) => n + 1), 30_000); return () => window.clearInterval(t); }, []);
+  const mark = planMark({ hasData: decisionPoll.data != null, error: decisionPoll.error, lastOk: decisionPoll.lastOk, intervalMs: decisionPoll.intervalMs }, localNow());
   const [head, setHead] = useState<{ last?: number; change?: number; pct?: number; basis?: string; closed?: string; error?: string }>({});
 
   // Synchronize chart timeframe with active War Room tab unless unlinked by user.
@@ -222,7 +224,7 @@ export default function PriceChart() {
     let fit = true;
     const load = async () => {
       try {
-        const d = await get<{ candles: Bar[]; timeframe: string; basis: string; latest_close_time: string }>(`/api/ohlcv?timeframe=${tf}&limit=400`);
+        const d = await get<{ candles: Bar[]; timeframe: string; basis: string; latest_close_time: string }>(`/api/ohlcv?timeframe=${tf}&limit=400`, CHART_READ);
         const cs = d.candles || [];
         candles.current?.setData(cs.map((x) => ({ time: x.time as UTCTimestamp, open: x.open, high: x.high, low: x.low, close: x.close })));
         volume.current?.setData(cs.filter((x) => x.volume != null).map((x) => ({ time: x.time as UTCTimestamp, value: x.volume as number, color: volumeColor(x.close >= x.open) })));
@@ -256,7 +258,7 @@ export default function PriceChart() {
     let alive = true;
     const load = async () => {
       try {
-        const d = await get<{ levels?: { chart_plane?: any } }>(`/api/hud/levels?tf=${planeTf}`);
+        const d = await get<{ levels?: { chart_plane?: any } }>(`/api/hud/levels?tf=${planeTf}`, CHART_READ);
         if (alive) setPlane(d.levels?.chart_plane ?? null);
       } catch { if (alive) setPlane(null); }
     };
