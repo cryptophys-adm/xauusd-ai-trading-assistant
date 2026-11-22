@@ -35,7 +35,7 @@
 // switch: DECISION_ENGINE = "off" restores the H1 decision for the EA, Telegram and the ledger.
 // The server never sizes a position; prices come only from the key-level plan.
 
-import { goldClosedAt, nextGoldChange } from "./market-hours.mjs";
+import { goldClosedAt, nextGoldChange, SESSIONS, nyHour } from "./market-hours.mjs";
 import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
@@ -327,19 +327,10 @@ export function compositeSentiment({ news = null, macro = null, newsLean = null,
 // open/closed) menjadi pertimbangan global decision": the right panel's cards go to the council in
 // `context.market`, give deterministic cautions, and a closed market is a guardrail.
 
-/** New York clock hours of the sessions, as the Chronos Matrix (and the Nexus session clock) define them. */
-export const SESSIONS = Object.freeze([
-  Object.freeze({ name: "Tokyo", from: 19, to: 28 }),
-  Object.freeze({ name: "London", from: 3, to: 12 }),
-  Object.freeze({ name: "New York", from: 8, to: 17 })
-]);
+// The sessions and the New York clock live in src/market-hours.mjs (Track A PR 2: one session clock); SESSIONS is
+// re-exported here for the readers that import it from the Decision Engine.
+export { SESSIONS };
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-function nyHour(ms) {
-  try {
-    const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(new Date(ms));
-    return Number(p.find((x) => x.type === "hour")?.value ?? 0) + Number(p.find((x) => x.type === "minute")?.value ?? 0) / 60;
-  } catch { return (new Date(ms).getUTCHours() + 19) % 24; }
-}
 
 /** Pure: the session at `now`: day and date (UTC), market open or closed, the active sessions, the next change. */
 export function sessionAt(now) {
