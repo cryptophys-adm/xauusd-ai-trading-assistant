@@ -2890,7 +2890,7 @@ async function runLedgerStep(env: Env): Promise<void> {
   // measured record turns negative (it goes back to shadow) and when it is live again.
   if (plans.status === "ok") {
     const breaker = await syncAgentBreaker(env, ((await readPlanLearning(env)) as Record<string, any> | null)?.agents ?? [], { send: (text: string) => sendTelegram(env, text) });
-    if (breaker.status !== "unchanged") console.log("strategy_agents_breaker", JSON.stringify(breaker));
+    if (breaker.status !== "unchanged" || breaker.roster) console.log("strategy_agents_breaker", JSON.stringify(breaker));
   }
   // The strategy recommendation cards (RFC §3): read-only, deterministic, at most every 15 minutes into KV.
   const reco = await computeRecommendations(env);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, CONSENSUS_RULES, agentVoice, agentsConsensus, PATTERN_FAMILIES, PATTERN_BREAKER, suspendedPatterns, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
+  STRATEGY_AGENTS, AGENT_IDS, DEFAULT_AGENT, PROJECTION_NOTE, CONSENSUS_RULES, agentVoice, agentsConsensus, PATTERN_FAMILIES, PATTERN_BREAKER, suspendedPatterns, priceActionReading, AGENT_BREAKER, AGENT_BREAKER_KEY, suspendedAgents, syncAgentBreaker, agentRoster, rosterLines, variantName, agentStatuses, agentContext, agentPlans, agentCatalog, finishPlan, slimPlan, strategyAgentsMode
 } from "../src/strategy-agents.mjs";
 import { tradeLevels, planForDirection } from "../src/strategy-engine.mjs";
 import { PATTERN_CATALOG } from "../src/chart-patterns.mjs";
@@ -254,6 +254,8 @@ test("the breaker: a live agent with a negative record over enough setups goes b
   const m = new Map(), sent = [];
   const env = { ...LIVE, SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } } };
   const send = async (t) => { sent.push(t); };
+  // The roster as told before (Track A PR 3), so only the breaker speaks here.
+  m.set(AGENT_BREAKER_KEY, JSON.stringify({ ids: [], roster: agentRoster(env) }));
   assert.deepEqual(await syncAgentBreaker(env, [rec("range_fade", 5, -1)], { send }), { status: "unchanged", suspended: [] });
   const first = await syncAgentBreaker(env, records, { send });
   assert.deepEqual([first.status, first.suspended, sent.length], ["changed", ["sweep_reversal"], 1]);
@@ -264,7 +266,11 @@ test("the breaker: a live agent with a negative record over enough setups goes b
   const back = await syncAgentBreaker(env, [rec("sweep_reversal", 40, 0.05)], { send });
   assert.deepEqual([back.status, back.suspended], ["changed", []]);
   assert.match(sent[1], /Sweep reversal is live again/);
-  assert.deepEqual(await syncAgentBreaker({ SIGNAL_CACHE: env.SIGNAL_CACHE }, records, { send }), { status: "unchanged", suspended: [] }, "not set live by the switches: nothing to tell");
+  // Not set live by the switches: nothing from the breaker; the roster says once that the switches moved them.
+  const unset = await syncAgentBreaker({ SIGNAL_CACHE: env.SIGNAL_CACHE }, records, { send });
+  assert.deepEqual([unset.status, unset.suspended, unset.roster?.told], ["unchanged", [], AGENT_IDS.length - 1]);
+  assert.match(sent.at(-1), /^XAUUSD STRATEGY AGENTS\nSweep reversal moves from live to shadow\./);
+  assert.doesNotMatch(sent.at(-1), /suspended|again/);
 });
 
 test("the council reads each strategy's record, overall and in the present market condition; a suspended agent is not offered", () => {
@@ -391,6 +397,7 @@ test("the breaker per pattern: a pattern whose own trades lost is held back, its
   const m = new Map(), sent = [];
   const env = { STRATEGY_AGENTS_LIVE: "pattern_peaks", SIGNAL_CACHE: { get: async (k) => m.get(k) ?? null, put: async (k, v) => { m.set(k, v); } } };
   const send = async (t) => { sent.push(t); };
+  m.set(AGENT_BREAKER_KEY, JSON.stringify({ ids: [], roster: agentRoster(env) }));
   const first = await syncAgentBreaker(env, [rec], { send });
   assert.deepEqual([first.status, first.suspended], ["changed", ["pattern:pattern_peaks:triple_top"]]);
   assert.match(sent[0], /The triple top pattern \(Reversal tops and bottoms\) is held back: -0\.3R per setup over 15 setups of its own\. The rest of its family trades on\./);
