@@ -44,7 +44,7 @@ function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: 
           <span className={`mono w-11 text-[11px] font-semibold ${r.tone}`}>{r.k}</span>
           <span className="mono w-16 text-[12.5px] font-semibold text-fg">{r.price?.toFixed?.(2) ?? "—"}</span>
           <span className="min-w-0 flex-1 truncate text-[11px] text-fg-2" title={r.note}>{r.note}</span>
-          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-bull" : "text-late"}`}>{r.rr}R</span>}
+          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-ok" : "text-late"}`}>{r.rr}R</span>}
         </div>
       ))}
       <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-muted">

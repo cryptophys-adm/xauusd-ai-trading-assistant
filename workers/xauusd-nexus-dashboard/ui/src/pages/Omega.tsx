@@ -115,8 +115,8 @@ const INTENT_TONE: Record<string, "ok" | "fault" | "late" | "cyan" | "slate"> = 
   done: "ok",
   failed: "fault",
   expired: "late",
-  pending: "cyan",
-  sent: "cyan",
+  pending: "late",
+  sent: "late",
 };
 
 async function omegaJson(path: string, method = "GET", body?: unknown) {

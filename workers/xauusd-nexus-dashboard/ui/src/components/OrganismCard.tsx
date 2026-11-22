@@ -62,7 +62,7 @@ export default function OrganismCard() {
               <Dot tone={market === "open" ? "ok" : "off"} pulse={market === "open"} />
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-400">Market</div>
-                <div className="mono text-xs font-semibold uppercase text-cyan-300">{market}</div>
+                <div className={`mono text-xs font-semibold uppercase ${market === "open" ? "text-ok" : "text-off"}`}>{market}</div>
               </div>
             </div>
             <div className="text-right">

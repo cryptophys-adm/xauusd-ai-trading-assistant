@@ -223,19 +223,20 @@ const ownerPost = async (body: unknown) => {
 const STANCE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
   support: { text: "agree", tone: "green" }, oppose: { text: "disagree", tone: "red" }, amend: { text: "agree, with a change", tone: "amber" }, abstain: { text: "abstain", tone: "slate" }
 };
-const KIND: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
-  policy_parameter: { text: "knob change · shadow test first", tone: "green" }, repository_task: { text: "new code · built by Cryptophys", tone: "amber" }, no_change: { text: "no change", tone: "slate" }
+// A proposal's kind is a label, not a state or a direction: plain, and off for "no change".
+const KIND: Record<string, { text: string; tone: "plain" | "off" }> = {
+  policy_parameter: { text: "knob change · shadow test first", tone: "plain" }, repository_task: { text: "new code · built by Cryptophys", tone: "plain" }, no_change: { text: "no change", tone: "off" }
 };
 const PROPOSAL_STATE: Record<string, string> = {
   queued_shadow: "waiting for its shadow test", handoff_pending: "being sent to the platform", handed_off: "with the platform's evolution loop", closed: "recorded, nothing changes",
   shadow: "in its shadow test", live: "live", rolled_back: "rolled back by itself", rejected: "not applied", superseded: "replaced by a newer proposal on the same knob"
 };
 // The platform's state of a handed-off proposal (council.decisions.read, platform V3).
-const PLATFORM_STATE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
-  received: { text: "received", tone: "slate" }, queued: { text: "queued", tone: "slate" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "amber" },
-  in_progress: { text: "being built", tone: "amber" }, proposed: { text: "change proposed", tone: "amber" }, merged: { text: "merged", tone: "green" },
-  deployed: { text: "deployed", tone: "green" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "green" }, closed: { text: "closed", tone: "slate" },
-  rejected: { text: "rejected", tone: "red" }, refused: { text: "refused", tone: "red" }, unfit: { text: "unfit", tone: "red" }, reverted: { text: "reverted", tone: "red" }
+const PLATFORM_STATE: Record<string, { text: string; tone: "ok" | "fault" | "late" | "off" }> = {
+  received: { text: "received", tone: "off" }, queued: { text: "queued", tone: "off" }, waiting_external: { text: "waiting: repo not built by the platform yet", tone: "late" },
+  in_progress: { text: "being built", tone: "late" }, proposed: { text: "change proposed", tone: "late" }, merged: { text: "merged", tone: "ok" },
+  deployed: { text: "deployed", tone: "ok" }, deployed_unmeasured: { text: "deployed, not measured yet", tone: "ok" }, closed: { text: "closed", tone: "off" },
+  rejected: { text: "rejected", tone: "fault" }, refused: { text: "refused", tone: "fault" }, unfit: { text: "unfit", tone: "fault" }, reverted: { text: "reverted", tone: "fault" }
 };
 const ROUND: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 const STATE_TEXT: Record<string, string> = { positions: "the agents are giving their opinions…", rebuttals: "the agents are responding to each other…", synthesis: "the moderator is writing the options…", awaiting_owner: "waiting for your pick (in Cerebrum)", aborted: "stopped", decided: "decided", expired: "expired", closed: "closed" };
@@ -348,7 +349,7 @@ function Proposals({ tick }: { tick: number }) {
           <div className="mt-1 text-[11px] text-slate-400">{PROPOSAL_STATE[p.state] ?? p.state} · accepted {String(p.accepted_at).slice(0, 16).replace("T", " ")} UTC{p.note ? ` · ${p.note}` : ""}</div>
           {p.platform ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
-              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "slate"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
+              <span>Platform:</span><Badge tone={PLATFORM_STATE[p.platform.state]?.tone ?? "off"}>{PLATFORM_STATE[p.platform.state]?.text ?? p.platform.state}</Badge>
               <span>{String(p.platform.at).slice(0, 16).replace("T", " ")} UTC</span>
               {p.platform.reason ? <span className="w-full text-slate-500">{p.platform.reason}</span> : null}
               {p.platform.refs?.merge_sha ? <span className="mono text-slate-500">merge {String(p.platform.refs.merge_sha).slice(0, 7)}</span> : null}

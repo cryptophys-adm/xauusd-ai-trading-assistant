@@ -67,6 +67,16 @@ test("NR4 labels from keys keep acronyms in capitals (Councils evidence tables)"
 });
 
 test("NR5 status on the War Room cards is ok / late / fault / off, not the bull green", () => {
+  // Re-review of #518: legacy tone names inside a Record ("green" draws bull) are caught too.
+  const councils = src("pages/Councils.tsx");
+  for (const name of ["KIND", "PLATFORM_STATE"]) {
+    const block = councils.slice(councils.indexOf(`const ${name}:`), councils.indexOf("};", councils.indexOf(`const ${name}:`)));
+    assert.doesNotMatch(block, /tone: "(green|red|amber|cyan)"/, `${name} uses state tones, not legacy direction names`);
+  }
+  assert.match(councils, /merged: \{ text: "merged", tone: "ok" \}/);
+  assert.match(src("pages/Omega.tsx"), /pending: "late",\n  sent: "late",/, "an intent in flight is late, not done");
+  assert.match(src("components/GlobalDecision.tsx"), /r\.rr >= minRrr \? "text-ok" : "text-late"/, "the R check is pass/fail");
+  assert.match(src("components/OrganismCard.tsx"), /market === "open" \? "text-ok" : "text-off"/, "CLOSED is grey, like its dot");
   assert.match(src("components/AssistantPanel.tsx"), /<Badge tone=\{open \? "ok" : "off"\}>\{open \? "market open" : "market closed"\}<\/Badge>/);
   assert.match(src("components/FeedFallbackCard.tsx"), /<Dot tone=\{state\.active \? "late" : "ok"\}/);
   assert.match(src("components/ShadowSwitchCard.tsx"), /const tone = !known \? "off" : !state\?\.allowed \? "fault" : share >= 0\.8 \? "late" : "ok";/);
