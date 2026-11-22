@@ -9,7 +9,7 @@ XAUUSD decision support and execution on Cloudflare Workers. A Decision Engine d
 > Any other document that disagrees with these two is historical. The [document index](#documents) below gives each document's status.
 
 ## At a glance
-- **Workers:** exactly five, all deployed only by merging into `main` (never `wrangler deploy` by hand or from a VPS; a drift guard restores `main` if anything else is live).
+- **Workers:** exactly five, all deployed only by merging into `main` (never `wrangler deploy` by hand or from a VPS; the deploy drift guard restores `main` if anything else is live, unless the repository variable `DRIFT_AUTO_RESTORE` is `off`).
   - `xauusd-ai-trading-assistant`: webhooks, the three input lanes, the rooms, the Decision Engine, the read API and Telegram.
   - `xauusd-fundamental-news-ingestion`: the TradingView MCP grant, news and OHLCV.
   - `xauusd-tradingview-pull-adapter`: local computation of MizanLib, Prophet and GMI.
@@ -23,7 +23,7 @@ XAUUSD decision support and execution on Cloudflare Workers. A Decision Engine d
 - **TradingView OAuth (owner only):** `https://news.cryptophys.work/oauth/start`
 
 ## Documents
-**Canonical:** [docs/SSOT.md](docs/SSOT.md) (current state), [AGENTS.md](AGENTS.md) (rules), [docs/CHANGELOG.md](docs/CHANGELOG.md) (what changed), [docs/BACKLOG.md](docs/BACKLOG.md) (open work).
+**Canonical:** [docs/SSOT.md](docs/SSOT.md) (current state), [AGENTS.md](AGENTS.md) (rules), [docs/CHANGELOG.md](docs/CHANGELOG.md) (what changed). [docs/BACKLOG.md](docs/BACKLOG.md) is the older list of open work: it predates the queue the owner agreed on 2026-11-20 and is not yet reconciled with it.
 
 **In force** (they describe what runs; the SSOT wins where they differ):
 | Document | Status |
