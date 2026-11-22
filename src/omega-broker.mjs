@@ -1527,7 +1527,7 @@ export async function brokerStatus(env, { now = Date.now() } = {}) {
     live_armed: settings.settings?.live_armed === true,
     control_mode: killedByEnv ? "killed" : control.mode,
     control_reason: killedByEnv ? "env_kill_switch" : (control.reason ? String(control.reason).slice(0, 60) : null),
-    limit_fault: settings.limit_fault ? { why: typeof settings.limit_fault.why === "string" ? settings.limit_fault.why : "limit_fault" } : null,
+    limit_fault: settings.limit_fault ? { why: settings.limit_fault.why === LIMIT_FAULT_NO_ANSWER ? "no_answer" : settings.limit_fault.why === LIMIT_FAULT_NO_TICKET ? "no_ticket" : "limit_fault" } : null,
     account_mode: ["demo", "real", "contest"].includes(st?.account?.trade_mode) ? st.account.trade_mode : null,
     engine_enabled: engineEnvEnabled(env)
   };

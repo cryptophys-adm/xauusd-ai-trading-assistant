@@ -135,7 +135,9 @@ test("UI audit DEF-10: the badge's light status reads one bridge row and the set
   assert.ok(["demo", "real", "contest", null].includes(s.account_mode));
   assert.equal((await brokerStatus({ ...env, EA_SIGNALS_ENABLED: "false" }, { now: T0 + 10_000 })).control_mode, "killed", "the env kill switch reads as killed, as the engine treats it");
   await env.SIGNAL_CACHE.put("ea:control", JSON.stringify({ mode: "paused", reason: "owner pause", actor: "owner", at: T0 }));
+  await env.DB.prepare("UPDATE omega_settings SET limit_fault = ? WHERE id = 1").bind(JSON.stringify({ why: "the EA never answered", kind: "place_limit" })).run();
   const paused = await brokerStatus(env, { now: T0 + 10_000 });
+  assert.deepEqual(paused.limit_fault, { why: "no_answer" }, "a short code, never the sentence");
   assert.deepEqual([paused.control_mode, paused.control_reason], ["paused", "owner pause"]);
   assert.deepEqual(Object.keys(paused).sort(), ["account_mode", "armed", "broker", "connected", "control_mode", "control_reason", "engine_enabled", "limit_fault", "live_armed", "positions", "server", "synced_age_ms"], "existing fields unchanged, the new ones added");
 });
