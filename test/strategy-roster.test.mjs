@@ -89,6 +89,49 @@ test("SR4 it never throws, and no line carries a price", async () => {
   for (const l of all) assert.doesNotMatch(l, NO_PRICE, l);
 });
 
+test("SR4b a Telegram failure loses no notice: the stored value is unchanged and the next step sends the same lines", async () => {
+  const env = { STRATEGY_AGENTS_LIVE: "sweep_reversal" };
+  let up = false;
+  const sent = [];
+  const send = async (t) => { if (!up) throw new Error("HTTP 502"); sent.push(t); };
+  // The roster: the first run fails, nothing is stored, and the next step sends the roster.
+  const a = kv();
+  const down = await syncAgentBreaker({ ...env, SIGNAL_CACHE: a.SIGNAL_CACHE }, [], { send });
+  assert.deepEqual([down.status, down.error, down.roster], ["failed", "HTTP 502", { status: "failed", told: 0 }]);
+  assert.equal(a.m.get(AGENT_BREAKER_KEY), undefined, "nothing stored while the roster was not told");
+  up = true;
+  const back = await syncAgentBreaker({ ...env, SIGNAL_CACHE: a.SIGNAL_CACHE }, [], { send });
+  assert.deepEqual([back.status, back.roster], ["unchanged", { status: "changed", told: 1 }]);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /^XAUUSD STRATEGY AGENTS\nThe roster: /);
+  assert.deepEqual(JSON.parse(a.m.get(AGENT_BREAKER_KEY)).roster, agentRoster(env));
+  // The breaker: a suspension told during an outage is kept back and sent at the next step.
+  const b = kv();
+  const stored = JSON.stringify({ ids: [], roster: agentRoster(env), at: "2026-11-22T00:00:00.000Z" });
+  b.m.set(AGENT_BREAKER_KEY, stored);
+  up = false;
+  const records = [rec("sweep_reversal", 30, -0.2)];
+  const held = await syncAgentBreaker({ ...env, SIGNAL_CACHE: b.SIGNAL_CACHE }, records, { send });
+  assert.deepEqual([held.status, held.error, held.suspended], ["failed", "HTTP 502", []]);
+  assert.equal(b.m.get(AGENT_BREAKER_KEY), stored, "the stored value is unchanged");
+  up = true;
+  const told = await syncAgentBreaker({ ...env, SIGNAL_CACHE: b.SIGNAL_CACHE }, records, { send });
+  assert.deepEqual([told.status, told.suspended, told.told], ["changed", ["sweep_reversal"], 1]);
+  assert.match(sent.at(-1), /^XAUUSD STRATEGY AGENTS\nSweep reversal is suspended: -0\.2R per setup over 30 setups\./);
+  assert.deepEqual(JSON.parse(b.m.get(AGENT_BREAKER_KEY)).ids, ["sweep_reversal"]);
+  assert.equal((await syncAgentBreaker({ ...env, SIGNAL_CACHE: b.SIGNAL_CACHE }, records, { send })).status, "unchanged", "told once");
+  // Both at once: the roster goes, the breaker fails; only the roster is kept, the breaker lines come next step.
+  const c = kv();
+  let calls = 0;
+  const half = async (t) => { calls++; if (calls === 2) throw new Error("HTTP 502"); sent.push(t); };
+  const mixed = await syncAgentBreaker({ ...env, SIGNAL_CACHE: c.SIGNAL_CACHE }, records, { send: half });
+  assert.deepEqual([mixed.status, mixed.suspended, mixed.roster], ["failed", [], { status: "changed", told: 1 }]);
+  assert.deepEqual(JSON.parse(c.m.get(AGENT_BREAKER_KEY)), { ids: [], roster: agentRoster(env), at: JSON.parse(c.m.get(AGENT_BREAKER_KEY)).at });
+  const next = await syncAgentBreaker({ ...env, SIGNAL_CACHE: c.SIGNAL_CACHE }, records, { send: half });
+  assert.deepEqual([next.status, next.suspended, "roster" in next], ["changed", ["sweep_reversal"], false]);
+  assert.match(sent.at(-1), /Sweep reversal is suspended/);
+});
+
 test("SR5 variants: an agent's own label first, then the catalogue pattern's name", () => {
   // No agent declares variants yet (PR 7's opening ranges will); the catalogue path is unchanged.
   assert.ok(STRATEGY_AGENTS.every((a) => a.variants === undefined));

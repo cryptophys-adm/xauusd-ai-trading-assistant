@@ -390,10 +390,6 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
     const told = rosterLines(stored?.roster ?? null, roster);
     const idsSame = JSON.stringify(ids) === JSON.stringify([...before].sort());
     if (idsSame && !told.length) return { status: "unchanged", suspended: ids };
-    await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ids, roster, at: new Date(now).toISOString() }));
-    if (told.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...told].join("\n"));
-    const rosterOut = told.length ? { roster: { status: "changed", told: told.length } } : {};
-    if (idsSame) return { status: "unchanged", suspended: ids, ...rosterOut };
     const agentLabel = (id) => STRATEGY_AGENTS.find((a) => a.id === id)?.label ?? id;
     // "pattern:<agent>:<pattern>": a pattern is judged per agent (its breaks and its swings inside are different trades).
     // A variant of the agent's own (variants: { key: label }) is named by its label, before the catalogue's names.
@@ -403,12 +399,28 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
       const variant = STRATEGY_AGENTS.find((a) => a.id === agent)?.variants?.[pattern];
       return typeof variant === "string" ? `The ${variant} (${agentLabel(agent)})` : `The ${patternInfo(pattern)?.name ?? pattern} pattern (${agentLabel(agent)})`;
     };
-    const lines = [
+    const lines = idsSame ? [] : [
       ...held.filter((x) => !before.includes(x.id)).map((x) => `${label(x.id)} is suspended: ${x.mean_r}R per setup over ${x.setups} setups. It stays measured in shadow and returns by itself when its record is no longer negative.`),
       ...patterns.filter((x) => !before.includes(key(x))).map((x) => `${label(key(x))} is held back: ${x.mean_r}R per setup over ${x.setups} setups of its own. The rest of its family trades on.`),
       ...before.filter((id) => !ids.includes(id)).map((id) => `${label(id)} is ${id.startsWith("pattern:") ? "traded" : "live"} again: its record is no longer negative.`)
     ];
-    if (lines.length && typeof send === "function") await send(["XAUUSD STRATEGY AGENTS", ...lines].join("\n"));
+    // Send first, then keep only what was told (Track A PR 3 review): a send that fails leaves its part of the stored
+    // value as it was, so the next ledger step sends the same lines again. A crash between a send and the write can
+    // repeat a notice; it never loses one.
+    let error = null;
+    const tell = async (body) => {
+      if (!body.length || typeof send !== "function") return true;
+      try { await send(["XAUUSD STRATEGY AGENTS", ...body].join("\n")); return true; } catch (e) { error = String(e?.message ?? e).slice(0, 160); return false; }
+    };
+    const rosterTold = await tell(told);
+    const idsTold = await tell(lines);
+    const keep = { ids: idsTold ? ids : [...before].sort(), roster: rosterTold ? roster : (stored?.roster ?? null) };
+    if (JSON.stringify(keep.ids) !== JSON.stringify([...before].sort()) || JSON.stringify(keep.roster) !== JSON.stringify(stored?.roster ?? null)) {
+      await env?.SIGNAL_CACHE?.put?.(AGENT_BREAKER_KEY, JSON.stringify({ ...keep, at: new Date(now).toISOString() }));
+    }
+    const rosterOut = told.length ? { roster: { status: rosterTold ? "changed" : "failed", told: rosterTold ? told.length : 0 } } : {};
+    if (error) return { status: "failed", error, suspended: keep.ids, ...rosterOut };
+    if (idsSame) return { status: "unchanged", suspended: ids, ...rosterOut };
     return { status: "changed", suspended: ids, told: lines.length, ...rosterOut };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
