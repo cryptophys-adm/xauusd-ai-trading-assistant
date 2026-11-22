@@ -2,6 +2,8 @@
 
 Read `docs/SSOT.md` first. It is the only canonical description of this system. Any other document that disagrees with it is historical.
 
+These rules bind every agent on every machine: a cloud session, a local checkout and the owner's trading VPS alike (2026-11-21: an old checkout on the VPS deployed an old build of the AI Worker twice). The VPS runs the bridge and the EA only.
+
 ## Hard rules
 1. **Deploy only by merging a PR into `main`.** The GitHub Actions workflows deploy the five Workers.
 2. **Never run `wrangler deploy`, `wrangler delete` or `wrangler secret put` against production by hand or from a VPS.**
