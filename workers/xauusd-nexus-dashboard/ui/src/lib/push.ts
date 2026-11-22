@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { isReplay, localNow, nextSeq, pushTime, type PushArrival } from "./pollState";
+import { isReplay, localNow, nextSeq, pushTime, reconnectBackoff, type PushArrival } from "./pollState";
 
 /**
  * One topic's latest snapshot: its body, the hub's own time (`at`: when the hub published it, ms, the hub's clock; null
@@ -19,6 +19,10 @@ export type Snapshot<T = any> = PushArrival & { data: T };
  * which the hub answers without waking. `live` is true once every topic has delivered a snapshot on the open
  * socket: the page may then poll rarely. `snap` holds each topic's latest snapshot with its arrival (Snapshot), a
  * new object per message, so a replay of the same body is still an arrival the page judges (pushApplies).
+ *
+ * Follow-up of #520 (round 6): the pause is reset only once a socket has stayed open PUSH_STEADY_MS (5 s) or delivered
+ * a live (non-replay) snapshot (pollState.ts reconnectBackoff), never on the open itself: a hub that accepts the
+ * socket, replays and closes it keeps backing off (1 s, 2 s, 4 s … 60 s) instead of reconnecting every second.
  */
 export function usePushMany(topics: string[], path = "/api/stream") {
   const key = topics.join(",");
@@ -30,7 +34,7 @@ export function usePushMany(topics: string[], path = "/api/stream") {
     stop.current = false;
     const wanted = key.split(",").filter(Boolean);
     let ws: WebSocket | null = null;
-    let retry = 1000;
+    const backoff = reconnectBackoff();
     let ping: number | undefined;
     let timer: number | undefined;
     let seen = new Set<string>();
@@ -39,7 +43,7 @@ export function usePushMany(topics: string[], path = "/api/stream") {
       const url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${path}?topics=${encodeURIComponent(key)}`;
       try { ws = new WebSocket(url); } catch { schedule(); return; }
       ws.onopen = () => {
-        retry = 1000;
+        backoff.opened(localNow());
         seen = new Set();
         ping = window.setInterval(() => { try { ws?.send("ping"); } catch { /* reconnects on close */ } }, 30_000);
       };
@@ -53,6 +57,8 @@ export function usePushMany(topics: string[], path = "/api/stream") {
             // before the flag) the first snapshot of a topic on this socket is taken for the replay (isReplay).
             const arrival: PushArrival = { seq: nextSeq(), local: localNow(), at: pushTime(msg.at), replay: isReplay(msg.replay, !seen.has(msg.topic)) };
             setSnap((d) => ({ ...d, [msg.topic]: { data: msg.data, ...arrival } }));
+            // A live publish: the hub serves this socket, so the next close retries soon.
+            if (!arrival.replay) backoff.live();
             seen.add(msg.topic);
             if (seen.size === wanted.length) setLive(true);
           }
@@ -63,8 +69,7 @@ export function usePushMany(topics: string[], path = "/api/stream") {
     };
     const schedule = () => {
       if (stop.current) return;
-      timer = window.setTimeout(open, retry);
-      retry = Math.min(60_000, retry * 2);
+      timer = window.setTimeout(open, backoff.closed(localNow()));
     };
     open();
     return () => { stop.current = true; window.clearInterval(ping); window.clearTimeout(timer); try { ws?.close(); } catch { /* closed */ } };
