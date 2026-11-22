@@ -1,8 +1,8 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { get, type Dated } from "./api";
-import { readDated, usePoll, type Poll } from "./usePoll";
+import { readDated, usePoll, useWakeAt, type Poll } from "./usePoll";
 import { usePush } from "./push";
-import { isStale, localNow, pageServer, recoveryReads, shownFacts, shownSide, takePush, turnedLive, type PushSlots, type ReadSide } from "./pollState";
+import { checkingUntil, checkingWithin, isStale, localNow, pageServer, shownFacts, shownSide, takePush, turnedLive, type PushSlots, type ReadSide } from "./pollState";
 
 export type Room = any;
 /**
@@ -48,10 +48,11 @@ export function WarRoomProvider({ children }: { children: ReactNode }) {
   const readRef = useRef(read);
   readRef.current = read;
   const [slots, setSlots] = useState<PushSlots>(noPush);
-  // An errored read reads once at once when a replay arrives or the push turns live (the hub answers again), never
-  // beside its read in flight (recoveryReads, usePoll's nudge: single-flight).
+  // An errored read reads once when a replay arrives or the push turns live (the hub answers again), never beside its
+  // read in flight and never sooner than the fast cadence after the last such read (usePoll's nudge: single-flight,
+  // recoveryGate; follow-up of #520: a hub that opens, replays and closes the socket adds at most one read per 10 s).
   const recover = useRef(() => {});
-  recover.current = () => { if (recoveryReads([WAR_ROOM_PATH], () => war.error != null, () => !!war.busy).length) war.nudge(); };
+  recover.current = () => { if (war.error != null) war.nudge(); };
   useEffect(() => {
     const snap = push.snap;
     if (!snap?.data) return;
@@ -65,14 +66,18 @@ export function WarRoomProvider({ children }: { children: ReactNode }) {
   }, [push.live]);
   const shown = shownSide(read, slots.pushed);
   const latest = (shown.data ?? null) as any;
-  // Checking (fifth review): a replay of unknown age while the read's own first try is in flight (none has settled).
-  const firstPending = war.loading && war.lastOk == null && war.lastFail == null;
+  // Checking (fifth review): a replay of unknown age while the read's own first try is in flight (none has settled),
+  // for at most CHECKING_MS from its send (follow-up of #520: checkingWithin); one render at its end (useWakeAt).
+  const now = localNow();
+  const firstPending = war.loading && war.lastOk == null && war.lastFail == null && checkingWithin(war.firstSentAt, now);
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useWakeAt(firstPending ? checkingUntil(war.firstSentAt) : null, rerender);
   const f = shownFacts({ error: war.error, lastOk: war.lastOk, lastFail: war.lastFail, failSeq: war.failSeq, failures: war.failures }, slots.push, shown.push, pageServer.offset(), firstPending);
   const poll: Poll = {
     ...war, ...f, data: latest,
     replayed: f.replayed ?? false, replayAt: f.replayAt ?? null, checking: f.checking ?? false,
     loading: !latest && war.loading,
-    stale: isStale({ hasData: latest != null, ...f, intervalMs: war.intervalMs }, localNow()),
+    stale: isStale({ hasData: latest != null, ...f, intervalMs: war.intervalMs }, now),
   };
   const value: Ctx = {
     room: latest?.room ?? null,

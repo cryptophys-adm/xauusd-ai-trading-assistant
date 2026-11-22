@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type ReactNode } from "react";
 import { errorText, type ApiError } from "./api";
-import { readDated, useSchedule, type Poll } from "./usePoll";
+import { readDated, useSchedule, useWakeAt, type Poll } from "./usePoll";
 import { usePushMany } from "./push";
-import { STALE_TICK_MS, cadenceOf, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, pageServer, recoveryReads, routeFacts, routePushed, routeSent, routeSettled, turnedLive, type Cadence, type ReadOutcome, type RouteState } from "./pollState";
+import { STALE_TICK_MS, cadenceOf, emptyRoute, isStale, joinsInFlight, localNow, nextSeq, pageServer, recoveryGate, routeCheckingUntil, routeFacts, routePushed, routeSent, routeSettled, turnedLive, type Cadence, type ReadOutcome, type RouteState } from "./pollState";
 
 /** While the push hub delivers the rooms and the decision, their read is a fallback every 5 minutes (ADR-0015). */
 const POLL_LIVE_MS = 300_000;
@@ -105,6 +105,13 @@ function shownOf(path: string, body: any): unknown {
  * - each path's next read is at max(now, its last send + its cadence) (useSchedule, dueReads): a cadence change
  *   keeps the phase, so a socket that flaps every 1–4 minutes still gets its fallback reads;
  * - a replay that lands before the path's first dated read settles is "checking" (routeFacts, firstPending).
+ *
+ * Follow-up of #520 (round 6):
+ * - a recovery read (a replay, the push turning live) goes only when the path's last recovery read is at least the
+ *   fast cadence (60 s) ago (recoveryGate), so the push turning live still reads at once, and a hub that opens,
+ *   replays and closes the socket, with a fast 502, adds at most one read a minute per path to the regular ones;
+ * - "checking" lasts at most CHECKING_MS from the path's first send (firstPending): a render is armed for its end
+ *   (useWakeAt), so a hung first read turns a replay of unknown age stale, with the plan hidden.
  */
 export function MarketProvider({ children }: { children: ReactNode }) {
   // ADR-0015 phase 1: the rooms and the global decision come from the push hub as they conclude; their read
@@ -124,8 +131,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   // data as it was (routeSettled never sets it to null); a read overtaken by a newer settled one is dropped.
   const read = (path: string): Promise<void> => {
     const id = nextSeq();
-    routes.current[path] = routeSent(route(path), id);
-    sentAt.current[path] = localNow();
+    const at = localNow();
+    routes.current[path] = routeSent(route(path), id, at);
+    sentAt.current[path] = at;
     const settle = (r: ReadOutcome) => { routes.current[path] = routeSettled(route(path), id, r); bump(); };
     const p = readDated(path).then(
       (r) => settle({ ok: true, data: r.data, at: localNow(), date: r.date }),
@@ -145,7 +153,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
   // The stale verdicts follow the clock: a coarse tick (and the tab coming back) renders when one of them changed.
   const staleOf = (path: string, t: number) => {
-    const f = routeFacts(route(path), pageServer.offset());
+    const f = routeFacts(route(path), pageServer.offset(), t);
     return isStale({ hasData: shownOf(path, route(path).data) != null, ...f, intervalMs: intervalOf(path) }, t);
   };
   const staleSig = (t: number) => ALL_PATHS.map((p) => (staleOf(p, t) ? "1" : "0")).join("");
@@ -173,32 +181,43 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   // A push: each room and the decision, by its arrival (routePushed; the hub's `at` only keeps a replay out).
   const threadsSnap = push.snap.threads ?? null;
   const decisionSnap = push.snap.decision ?? null;
-  // A replay means the hub answers again: each errored path it carries reads once at once (recoveryReads).
+  // A recovery read: each errored path of `paths` whose read is not in flight and whose last recovery read is at least
+  // the fast cadence ago (recoveryGate: never more than one recovery read per path per POLL_MS, whatever the socket does).
+  const gate = useRef(recoveryGate());
+  const recover = (paths: readonly string[]) => {
+    for (const p of gate.current.take(paths, errored, inFlight, POLL_MS, localNow())) void read(p);
+  };
+  // A replay means the hub answers again: each errored path it carries reads once (recover).
   useEffect(() => {
     if (!threadsSnap) return;
     for (const c of TF_CHARTS) routes.current[threadPath(c)] = routePushed(route(threadPath(c)), threadsSnap.data?.[c] ?? null, threadsSnap);
-    if (threadsSnap.replay) for (const p of recoveryReads(TF_CHARTS.map(threadPath), errored, inFlight)) void read(p);
+    if (threadsSnap.replay) recover(TF_CHARTS.map(threadPath));
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadsSnap]);
   useEffect(() => {
     if (!decisionSnap) return;
     routes.current[GLOBAL_PATH] = routePushed(route(GLOBAL_PATH), decisionSnap.data, decisionSnap);
-    if (decisionSnap.replay) for (const p of recoveryReads([GLOBAL_PATH], errored, inFlight)) void read(p);
+    if (decisionSnap.replay) recover([GLOBAL_PATH]);
     bump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decisionSnap]);
-  // The push turned live (the network is back): every errored path reads once at once, never beside its read in flight.
+  // The push turned live (the network is back): every errored path reads once (recover), never beside its read in flight.
   const wasLive = useRef(false);
   useEffect(() => {
-    if (turnedLive(wasLive.current, push.live)) for (const p of recoveryReads(ALL_PATHS, errored, inFlight)) void read(p);
+    if (turnedLive(wasLive.current, push.live)) recover(ALL_PATHS);
     wasLive.current = push.live;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [push.live]);
 
+  // The end of a "checking" (CHECKING_MS from a path's first send): one render then, so a hung first read turns a
+  // replay of unknown age stale (the plan hidden) even though no read settles.
+  const checkingEnds = ALL_PATHS.map((p) => routeCheckingUntil(route(p), now)).filter((t): t is number => t != null);
+  useWakeAt(checkingEnds.length ? Math.min(...checkingEnds) : null, bump);
+
   const pollOf = (path: string): Poll => {
     const s = route(path);
-    const f = routeFacts(s, pageServer.offset());
+    const f = routeFacts(s, pageServer.offset(), now);
     const data = shownOf(path, s.data);
     const intervalMs = intervalOf(path);
     return {
