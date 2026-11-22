@@ -12,7 +12,7 @@ export default function SystemIssues() {
   if (!issues.length) return null;
   return (
     <a href="/#/status" className="glass block border-rose-400/20 p-4 transition hover:border-rose-300/40">
-      <div className="eyebrow mb-2 flex items-center gap-2"><AlertTriangle className="h-3 w-3 text-rose-300" />System issues</div>
+      <div className="panel-title mb-2 flex items-center gap-2"><AlertTriangle className="h-3 w-3 text-rose-300" />System issues</div>
       <div className="space-y-1.5">
         {issues.map((i) => (
           <div key={i.key} className="flex items-start gap-2 text-[11.5px]">

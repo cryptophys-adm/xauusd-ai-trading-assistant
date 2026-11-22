@@ -75,7 +75,7 @@ export default function ShadowSwitchCard() {
 
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-2 flex items-center gap-2"><Power className="h-3 w-3 text-rose-300" />Shadow mode · kill switch</div>
+      <div className="panel-title mb-2 flex items-center gap-2"><Power className="h-3 w-3 text-rose-300" />Shadow mode · kill switch</div>
       {state ? (
         <div className="space-y-2 text-[11.5px]">
           <div className="flex items-center gap-2">

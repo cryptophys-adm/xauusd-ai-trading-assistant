@@ -5,8 +5,8 @@ import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 
 const chg = (x: number | null | undefined, unit: string) => (x == null ? "n/a" : `${x > 0 ? "+" : ""}${x}${unit === "bp" ? " bp" : "%"}`);
-const tone = (x?: number | null) => (x == null ? "text-slate-500" : x > 0 ? "text-emerald-300" : x < 0 ? "text-rose-300" : "text-slate-300");
-const corrTone = (c?: number | null) => (c == null ? "text-slate-500" : c >= 0.5 ? "text-emerald-300" : c <= -0.5 ? "text-rose-300" : "text-slate-300");
+const tone = (x?: number | null) => (x == null ? "text-muted" : x > 0 ? "text-bull" : x < 0 ? "text-bear" : "text-slate-300");
+const corrTone = (c?: number | null) => (c == null ? "text-muted" : c >= 0.5 ? "text-bull" : c <= -0.5 ? "text-bear" : "text-slate-300");
 const corrWord = (c?: number | null) => (c == null ? "not enough bars" : Math.abs(c) < 0.2 ? "unrelated" : `${Math.abs(c) >= 0.6 ? "strongly " : ""}${c > 0 ? "with gold" : "against gold"}`);
 const when = (t?: string | null) => (t ? t.slice(5, 16).replace("T", " ") : "");
 
@@ -43,7 +43,7 @@ function MacroRoom() {
         <div className="space-y-3">
           <Empty>No session yet.</Empty>
           <div>
-            <div className="eyebrow mb-1.5 text-[10px]">Agents</div>
+            <div className="eyebrow mb-1.5">Agents</div>
             <div className="grid gap-2 md:grid-cols-2">
               {ROSTER.map(([name, role]) => (
                 <div key={name} className="glass-inner px-3 py-2">
@@ -65,8 +65,8 @@ function MacroRoom() {
             {!c ? <p className="text-[12px] text-slate-400">No conclusion yet.</p> : (
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                 <div className="flex shrink-0 flex-col gap-1 sm:w-36">
-                  <span className="eyebrow text-[9px]">Macro bias</span>
-                  <div className={`mono whitespace-nowrap text-[24px] font-extrabold leading-none ${stanceColor(c.bias)}`} style={{ textShadow: "0 0 18px currentColor" }}>{c.bias}</div>
+                  <span className="eyebrow">Macro bias</span>
+                  <div className={`mono whitespace-nowrap text-[24px] font-bold leading-none ${stanceColor(c.bias)}`}>{c.bias}</div>
                   <div className="mono text-[11px] text-slate-400">confidence {pc(c.confidence)}</div>
                   <div className="text-[10px] text-slate-500">{c.horizon}</div>
                 </div>
@@ -79,7 +79,7 @@ function MacroRoom() {
             )}
           </div>
           <div>
-            <div className="eyebrow mb-1.5 text-[10px]">Communication bus</div>
+            <div className="eyebrow mb-1.5">Communication bus</div>
             <div className="grid gap-2 md:grid-cols-2">
               {m.openings.map((o: any) => (
                 <div key={o.agent} className="glass-inner px-3 py-2">
@@ -91,7 +91,7 @@ function MacroRoom() {
           </div>
           {m.debate?.some((d: any) => d.status === "ok") ? (
             <div>
-              <div className="eyebrow mb-1.5 text-[10px]">Consensus Discussion</div>
+              <div className="eyebrow mb-1.5">Consensus Discussion</div>
               <div className="space-y-2">
                 {m.debate.filter((d: any) => d.status === "ok").map((d: any) => (
                   <div key={d.agent} className="glass-inner px-3 py-2">
@@ -117,7 +117,7 @@ export default function Correlations() {
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <MacroRoom />
-      {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-rose-300">Unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
+      {loading && !data ? <Panel><Skeleton rows={4} /></Panel> : error && !data ? <Panel><p className="text-[12px] text-fault">Unavailable: {error}</p></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
         <Panel title="Correlations · 4h" icon={<GitCompareArrows className="h-3.5 w-3.5 text-cyan-300" />} hint={hint}>
           <div className="table-wrap">
             <table className="tbl">

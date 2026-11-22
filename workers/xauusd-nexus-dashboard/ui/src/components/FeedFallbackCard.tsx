@@ -63,7 +63,7 @@ export default function FeedFallbackCard() {
 
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-2 flex items-center gap-2"><RadioTower className="h-3 w-3 text-cyan-300" />Data source · MT5 fallback</div>
+      <div className="panel-title mb-2 flex items-center gap-2"><RadioTower className="h-3 w-3 text-cyan-300" />Data source · MT5 fallback</div>
       {state ? (
         <div className="space-y-1.5 text-[11.5px]">
           <div className="flex items-center gap-2">

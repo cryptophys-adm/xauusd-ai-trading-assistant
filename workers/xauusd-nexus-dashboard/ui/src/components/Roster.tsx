@@ -39,7 +39,7 @@ export default function Roster() {
   const list = room?.roster ?? [];
   return (
     <div className="glass p-4">
-      <div className="eyebrow mb-3 flex items-center gap-2"><Bot className="h-3 w-3 text-cyan-300" />{tab === "NEWS" ? "News desk" : `${tabLabel(tab)} agents`}</div>
+      <div className="panel-title mb-3 flex items-center gap-2"><Bot className="h-3 w-3 text-cyan-300" />{tab === "NEWS" ? "News desk" : `${tabLabel(tab)} agents`}</div>
       {busy ? <Skeleton rows={5} /> : tab === "NEWS" ? (
         news?.tldr?.status === "ok"
           ? <Agent name="News Analyst" stance={news.tldr.stance} cal={`24h · confidence ${pct(news.tldr.confidence)}`} />

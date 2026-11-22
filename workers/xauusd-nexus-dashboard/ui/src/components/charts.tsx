@@ -1,10 +1,23 @@
 import { useId } from "react";
 import { motion } from "framer-motion";
+import { T } from "../lib/tokens";
 
-/** Palette shared with the obsidian theme (Tailwind emerald-400, rose-400, amber-300, cyan-400, slate-500). */
-export const C = { bull: "#34d399", bear: "#fb7185", wait: "#fcd34d", cyan: "#22d3ee", violet: "#a78bfa", muted: "#64748b", track: "rgba(255,255,255,0.07)" };
-export const STANCE_COLOR: Record<string, string> = { BUY: C.bull, BULLISH: C.bull, SELL: C.bear, BEARISH: C.bear, WAIT: C.wait, HOLD: C.wait, CLOSE: C.cyan, NEUTRAL: C.muted };
-export const leanColor = (v: number | null | undefined) => (v == null || Math.abs(v) < 0.1 ? C.muted : v > 0 ? C.bull : C.bear);
+/**
+ * The chart palette, read from the Nexus tokens (lib/tokens.ts): bull, bear and neutral are the text values (for
+ * labels and numbers), the *Fill values are for bars, arcs and swatches. NEUTRAL is amber, never grey; grey
+ * (muted) means no data.
+ */
+export const C = {
+  bull: T.bull, bear: T.bear, wait: T.neutral, neutral: T.neutral,
+  bullFill: T.bullFill, bearFill: T.bearFill, neutralFill: T.neutralFill,
+  cyan: T.okFill, violet: T.shadowFill, muted: T.muted, text: T.fg, track: T.track,
+};
+/** Stance fills for bars and swatches. CLOSE is an action, not a direction: the text colour. */
+export const STANCE_COLOR: Record<string, string> = { BUY: C.bullFill, BULLISH: C.bullFill, SELL: C.bearFill, BEARISH: C.bearFill, WAIT: C.neutralFill, HOLD: C.neutralFill, CLOSE: C.text, NEUTRAL: C.neutralFill };
+/** A lean's text colour: no data muted, |lean| < 0.15 neutral amber (where leanLabel says "neutral"), else bull or bear. */
+export const leanColor = (v: number | null | undefined) => (v == null ? C.muted : Math.abs(v) < 0.15 ? C.neutral : v > 0 ? C.bull : C.bear);
+/** A lean's fill colour, for bars. */
+export const leanFill = (v: number | null | undefined) => (v == null ? C.muted : Math.abs(v) < 0.15 ? C.neutralFill : v > 0 ? C.bullFill : C.bearFill);
 
 const polar = (cx: number, cy: number, r: number, deg: number) => {
   const a = ((deg - 90) * Math.PI) / 180;
@@ -30,7 +43,7 @@ export function SentimentGauge({ value, label }: { value: number | null; label: 
     <svg viewBox="0 0 200 122" className="w-full" role="img" aria-label={`Sentiment ${label}`}>
       <defs>
         <linearGradient id={gid} gradientUnits="userSpaceOnUse" x1="20" y1="0" x2="180" y2="0">
-          <stop offset="0%" stopColor={C.bear} /><stop offset="50%" stopColor={C.wait} /><stop offset="100%" stopColor={C.bull} />
+          <stop offset="0%" stopColor={C.bearFill} /><stop offset="50%" stopColor={C.neutralFill} /><stop offset="100%" stopColor={C.bullFill} />
         </linearGradient>
       </defs>
       <path d={arc(100, 100, 80, -90, 90)} stroke={C.track} strokeWidth="14" fill="none" strokeLinecap="round" />
@@ -38,12 +51,12 @@ export function SentimentGauge({ value, label }: { value: number | null; label: 
       {[-90, -45, 0, 45, 90].map((t) => { const [a, b] = polar(100, 100, 92, t), [c, d] = polar(100, 100, 97, t); return <line key={t} x1={a} y1={b} x2={c} y2={d} stroke={C.muted} strokeWidth="1.5" />; })}
       {value != null && (
         <motion.line x1="100" y1="100" initial={{ x2: 100, y2: 34 }} animate={{ x2: nx, y2: ny }} transition={{ type: "spring", stiffness: 60, damping: 12 }}
-          stroke="#e2e8f0" strokeWidth="3" strokeLinecap="round" />
+          stroke={C.text} strokeWidth="3" strokeLinecap="round" />
       )}
-      <circle cx="100" cy="100" r="6" fill="#e2e8f0" />
-      <text x="22" y="118" textAnchor="middle" fontSize="8" fill={C.bear} letterSpacing="1.5">BEAR</text>
-      <text x="178" y="118" textAnchor="middle" fontSize="8" fill={C.bull} letterSpacing="1.5">BULL</text>
-      <text x="100" y="119" textAnchor="middle" fontSize="11" fill="#cbd5e1"><tspan className="mono" fontWeight="800" fill={leanColor(value)}>{value == null ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}`}</tspan>{` · ${label}`}</text>
+      <circle cx="100" cy="100" r="6" fill={C.text} />
+      <text x="22" y="118" textAnchor="middle" fontSize="8" fill={C.bear}>BEAR</text>
+      <text x="178" y="118" textAnchor="middle" fontSize="8" fill={C.bull}>BULL</text>
+      <text x="100" y="119" textAnchor="middle" fontSize="11" fill={T.fg2}><tspan className="mono" fontWeight="800" fill={leanColor(value)}>{value == null ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}`}</tspan>{` · ${label}`}</text>
     </svg>
   );
 }
@@ -62,8 +75,8 @@ export function Donut({ parts, center, sub, size = 96 }: { parts: { label: strin
         start += sweep;
         return el;
       })}
-      {center && <text x="50" y={sub ? 50 : 55} textAnchor="middle" className="mono" fontSize="17" fontWeight="800" fill="#e2e8f0">{center}</text>}
-      {sub && <text x="50" y="64" textAnchor="middle" fontSize="8" fill="#94a3b8">{sub}</text>}
+      {center && <text x="50" y={sub ? 50 : 55} textAnchor="middle" className="mono" fontSize="17" fontWeight="800" fill={C.text}>{center}</text>}
+      {sub && <text x="50" y="64" textAnchor="middle" fontSize="8" fill={T.fg2}>{sub}</text>}
     </svg>
   );
 }
@@ -77,7 +90,7 @@ export function DivergingBar({ value, max = 1, height = 8 }: { value: number | n
       <div className="absolute inset-y-0 left-1/2 w-px bg-white/25" />
       {value != null && (
         <motion.div className="absolute inset-y-0 rounded-full" initial={{ width: 0 }} animate={{ width: `${w}%` }} transition={{ duration: 0.6, ease: "easeOut" }}
-          style={{ [v >= 0 ? "left" : "right"]: "50%", background: leanColor(value), boxShadow: `0 0 10px ${leanColor(value)}66` }} />
+          style={{ [v >= 0 ? "left" : "right"]: "50%", background: leanFill(value) }} />
       )}
     </div>
   );
@@ -114,8 +127,8 @@ export function RegimeRadar({ axes, size = 220, color = C.cyan }: { axes: { key:
         const [x, y] = at(i, 1.2);
         const anchor = Math.abs(x - cx) < 6 ? "middle" : x > cx ? "start" : "end";
         return (
-          <text key={a.key} x={x} y={y + 3} textAnchor={anchor} fontSize="8.5" fill="#94a3b8">
-            {a.label}<tspan className="mono" fill={a.value == null ? C.muted : "#e2e8f0"}>{a.value == null ? " –" : ` ${Math.round(a.value * 100)}`}</tspan>
+          <text key={a.key} x={x} y={y + 3} textAnchor={anchor} fontSize="8.5" fill={T.fg2}>
+            {a.label}<tspan className="mono" fill={a.value == null ? C.muted : C.text}>{a.value == null ? " –" : ` ${Math.round(a.value * 100)}`}</tspan>
           </text>
         );
       })}

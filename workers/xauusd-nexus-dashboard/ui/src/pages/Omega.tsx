@@ -22,6 +22,7 @@ import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitCon
 import OmegaWhy from "../components/OmegaWhy";
 import { get } from "../lib/api";
 import { C } from "../components/charts";
+import { CANDLE, T, volumeColor } from "../lib/tokens";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
 import { KeyZoneBands } from "../lib/keyZoneBands";
 import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
@@ -133,7 +134,7 @@ async function omegaJson(path: string, method = "GET", body?: unknown) {
   return data;
 }
 
-const KEY_ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
+const KEY_ROLE_COLOR: Record<string, string> = { support: C.bullFill, resistance: C.bearFill, "at price": C.cyan };
 const KEY_ROLE_SHORT: Record<string, string> = { support: "S", resistance: "R", "at price": "at price" };
 // Transparent blocks (owner 2026-11-12): the fill's opacity by strength, the label's readable.
 const KEY_STRENGTH_FILL: Record<string, number> = { strong: 0.2, medium: 0.13, weak: 0.08 };
@@ -220,8 +221,8 @@ function Mt5ChartCanvas({
     const chart = createChart(el, {
       autoSize: true,
       layout: {
-        background: { color: "#060a12" },
-        textColor: "#8b9bb4",
+        background: { color: T.ground },
+        textColor: T.fg2,
         fontFamily: "ui-monospace, JetBrains Mono, monospace",
       },
       grid: {
@@ -233,12 +234,7 @@ function Mt5ChartCanvas({
       timeScale: { borderColor: "rgba(255,255,255,0.09)", timeVisible: true, secondsVisible: false },
     });
     const series = chart.addCandlestickSeries({
-      upColor: "#3fb950",
-      downColor: "#f85149",
-      borderUpColor: "#3fb950",
-      borderDownColor: "#f85149",
-      wickUpColor: "#3fb950",
-      wickDownColor: "#f85149",
+      ...CANDLE,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
     const vol = chart.addHistogramSeries({
@@ -276,7 +272,7 @@ function Mt5ChartCanvas({
       sorted.map((c) => ({
         time: c.time as UTCTimestamp,
         value: c.volume ?? 0,
-        color: c.close >= c.open ? "rgba(63,185,80,0.28)" : "rgba(248,81,73,0.28)",
+        color: volumeColor(c.close >= c.open, 0.28),
       }))
     );
 
@@ -337,23 +333,23 @@ function Mt5ChartCanvas({
       return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: withAlpha(base, 0.85), label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
     }) : []);
     if (showBidAsk) {
-      addLine(bid, "BID", "#3fb950", LineStyle.Solid, 1);
-      addLine(ask, "ASK", "#f85149", LineStyle.Solid, 1);
+      addLine(bid, "BID", T.bullFill, LineStyle.Solid, 1);
+      addLine(ask, "ASK", T.bearFill, LineStyle.Solid, 1);
     }
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
     if (hasClearDecision) {
-      addLine(signal.entry, `PLAN ${signal.side}`, "#22d3ee", LineStyle.Dashed, 1);
-      addLine(signal.stop, "PLAN SL", "#fb7185", LineStyle.Dashed, 1);
-      addLine(signal.tp1, "PLAN TP1", "#34d399", LineStyle.Dashed, 1);
+      addLine(signal.entry, `PLAN ${signal.side}`, T.okFill, LineStyle.Dashed, 1);
+      addLine(signal.stop, "PLAN SL", T.bearFill, LineStyle.Dashed, 1);
+      addLine(signal.tp1, "PLAN TP1", T.bullFill, LineStyle.Dashed, 1);
     }
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
         const entryPrice = p.open_price ?? p.entry;
         const isBuy = p.side === "BUY";
-        addLine(entryPrice, `#${p.ticket} ${p.side} ${num(p.volume, 2)}`, isBuy ? "#3fb950" : "#f85149", LineStyle.Solid, 2);
-        addLine(p.sl, `#${p.ticket} SL`, "#fb7185", LineStyle.Dotted, 1);
-        addLine(p.tp, `#${p.ticket} TP`, "#34d399", LineStyle.Dotted, 1);
+        addLine(entryPrice, `#${p.ticket} ${p.side} ${num(p.volume, 2)}`, isBuy ? T.bullFill : T.bearFill, LineStyle.Solid, 2);
+        addLine(p.sl, `#${p.ticket} SL`, T.bearFill, LineStyle.Dotted, 1);
+        addLine(p.tp, `#${p.ticket} TP`, T.bullFill, LineStyle.Dotted, 1);
       }
     }
   }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, keyZones, showKeyLevels, digits]);
@@ -362,7 +358,7 @@ function Mt5ChartCanvas({
 
   return (
     // Fills the whole chart column (owner 2026-11-12: "tidak ada space kosong dibawah sumbu waktu"); at least 430 px.
-    <div className="relative h-full min-h-[430px] w-full flex-1 bg-[#060a12]">
+    <div className="relative h-full min-h-[430px] w-full flex-1 bg-ground">
       {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
       <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded-sm bg-black/55 px-2.5 py-1.5 backdrop-blur-xs border border-white/5">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -880,7 +876,7 @@ export default function Omega() {
       {/* Separated Workspace Mode Bar: MT5 Terminal vs Setup & Configuration Center */}
       <div
         id="omega-mode-bar"
-        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-cyan-500/25 bg-[#09101d] px-3.5 py-2.5 shadow-lg"
+        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-cyan-500/25 bg-panel px-3.5 py-2.5 shadow-lg"
       >
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -889,11 +885,11 @@ export default function Omega() {
             onClick={() => setViewMode("terminal")}
             className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
               viewMode === "terminal"
-                ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+                ? "border-white/30 bg-white/8 text-fg"
                 : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
             }`}
           >
-            <Terminal className="h-3.5 w-3.5 text-cyan-300" />
+            <Terminal className="h-3.5 w-3.5 text-fg-2" />
             Terminal
           </button>
           <button
@@ -902,11 +898,11 @@ export default function Omega() {
             onClick={() => setViewMode("setup")}
             className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
               viewMode === "setup"
-                ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.18)]"
+                ? "border-white/30 bg-white/8 text-fg"
                 : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
             }`}
           >
-            <Sliders className="h-3.5 w-3.5 text-emerald-300" />
+            <Sliders className="h-3.5 w-3.5 text-fg-2" />
             Setup
             {profileAttention ? <span id="setup-attention" className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-black" title={profileAttention}>1</span> : null}
           </button>
@@ -931,9 +927,9 @@ export default function Omega() {
         {/* =====================================================================
             WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
            ===================================================================== */}
-        <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-[#070b13] shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
+        <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-panel shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
         {/* Windows MT5 Application Title Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-linear-to-r from-[#0d1526] via-[#0a101d] to-[#0d1526] px-3.5 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3.5 py-2">
           <div className="flex items-center gap-2.5">
             <div className="flex h-6 w-6 items-center justify-center rounded-sm bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
               <Terminal className="h-3.5 w-3.5" />
@@ -959,7 +955,7 @@ export default function Omega() {
         </div>
 
         {/* MT5 Standard Top Toolbar (Algo Trading, Timeframes, Overlay Toggles, Live Account Strip) */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0b111e] px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
             {/* Algo Trading Master Direct Toggle Button */}
             <button
@@ -1158,12 +1154,12 @@ export default function Omega() {
         <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr]">
           {/* Left Dock: Market Watch + Contract Spec + Navigator */}
           <button type="button" onClick={() => setDockOpen((v) => !v)} aria-expanded={dockOpen} id="omega-dock-toggle"
-            className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300 lg:hidden">
+            className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300 lg:hidden">
             <span>Market Watch · {symbolName}</span><span>{dockOpen ? "▴" : "▾"}</span>
           </button>
-          <div className={`${dockOpen ? "flex" : "hidden"} flex-col border-b border-white/10 bg-[#080d18] lg:flex lg:border-b-0 lg:border-r`}>
+          <div className={`${dockOpen ? "flex" : "hidden"} flex-col border-b border-white/10 bg-panel lg:flex lg:border-b-0 lg:border-r`}>
             {/* Market Watch Header */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
               <span className="flex items-center gap-1.5">
                 <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
                 Market Watch · {symbolName}
@@ -1295,7 +1291,7 @@ export default function Omega() {
             </div>
 
             {/* MT5 Navigator Tree (Ctrl+N) */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-[#0d1525] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
               <span className="flex items-center gap-1.5">
                 <Layers className="h-3.5 w-3.5 text-cyan-300" />
                 Navigator
@@ -1371,9 +1367,9 @@ export default function Omega() {
         {/* =================================================================
             MT5 BOTTOM DOCK — TOOLBOX (Ctrl+T): Trade | History | Intents | Experts | Journal
            ================================================================= */}
-        <div className="border-t border-white/10 bg-[#080d18]">
+        <div className="border-t border-white/10 bg-panel">
           {/* Toolbox Tab Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#0d1525] px-3 py-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3 py-1.5">
             <div className="flex flex-wrap items-center gap-1">
               {(
                 [
@@ -1405,7 +1401,7 @@ export default function Omega() {
           {toolboxTab === "trade" ? (
             <div>
               {/* Delegate (owner 2026-11-19): manual positions handed to Omega, one by one or every new one. */}
-              <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-[#090f1b] px-3.5 py-1.5 text-[11px]">
+              <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-bar px-3.5 py-1.5 text-[11px]">
                 <label className="inline-flex items-center gap-2 text-slate-300" title="Every manual position opened while this is on is handed to Omega: a stop from the plan when it has none, break-even, the TP ladder, the Position Manager and the closes on an opposite signal. Omega never adds to it or reverses it.">
                   <input type="checkbox" className="accent-cyan-400" disabled={hitlBusy || !delegation?.supported} checked={delegation?.mode?.on === true} onChange={(e) => delegateMode(e.target.checked)} />
                   Delegate my next manual entries to Omega
@@ -1577,8 +1573,8 @@ export default function Omega() {
               </div>
 
               {ordersList.length > 0 && (
-                <div className="border-t border-white/10 bg-[#060a12]">
-                  <div className="border-b border-white/5 bg-[#090f1b] px-3.5 py-1 text-[11px] font-semibold text-slate-400">
+                <div className="border-t border-white/10 bg-ground">
+                  <div className="border-b border-white/5 bg-bar px-3.5 py-1 text-[11px] font-semibold text-slate-400">
                     Pending Orders ({ordersList.length})
                   </div>
                   <div className="table-wrap max-h-[160px] overflow-y-auto">
@@ -1669,7 +1665,7 @@ export default function Omega() {
               )}
 
               {entryOrder.mode && entryOrder.mode !== "market" && entryOrder.recent?.length ? (
-                <div className="border-t border-white/10 bg-[#060a12] px-3.5 py-1.5 text-[11px] text-slate-400" aria-label="Omega limit events">
+                <div className="border-t border-white/10 bg-ground px-3.5 py-1.5 text-[11px] text-slate-400" aria-label="Omega limit events">
                   <span className="font-semibold text-slate-300">Limit ({entryOrder.mode}):</span>{" "}
                   {entryOrder.recent.slice(0, 4).map((x: any, i: number) => (
                     <span key={`${x.ms}-${i}`} className="mono mr-3">{timeUtc(x.ms).slice(11)} {x.action}{x.ticket ? ` #${x.ticket}` : ""}{x.reason ? ` · ${x.reason}` : ""}{x.gap_r != null ? ` · gap ${x.gap_r}R` : ""}</span>
@@ -1678,7 +1674,7 @@ export default function Omega() {
               ) : null}
 
               {/* Classic Windows MT5 Gray/Obsidian Account Summary Footer Row */}
-              <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#0c1322] px-3.5 py-2 text-[11.5px]">
+              <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-bar px-3.5 py-2 text-[11.5px]">
                 <div className="flex flex-wrap items-center gap-4">
                   <span>
                     <strong className="text-slate-400">Balance:</strong>{" "}
@@ -1996,7 +1992,7 @@ export default function Omega() {
               </div>
 
               {/* Autonomous Self-Healing Audit Trail Card */}
-              <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3.5">
+              <div className="rounded-lg border border-white/10 bg-bar p-3.5">
                 <div className="flex items-center justify-between border-b border-white/10 pb-2">
                   <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
                     <ShieldCheck className="h-4 w-4 text-emerald-400" />
@@ -2042,7 +2038,7 @@ export default function Omega() {
               </div>
 
               {/* Collapsible Raw State JSON Inspector */}
-              <div className="rounded-lg border border-white/10 bg-[#0c1424] p-3">
+              <div className="rounded-lg border border-white/10 bg-bar p-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
@@ -2444,7 +2440,7 @@ export default function Omega() {
             sub={`${x?.trades ?? 0} trade${x?.trades === 1 ? "" : "s"} · win rate ${
               x?.win_rate != null ? Math.round(x.win_rate * 100) + "%" : "—"
             } · PF ${x?.profit_factor ?? "—"} · max DD ${num(x?.max_drawdown)}`}
-            color={typeof x?.net === "number" && x.net < 0 ? "#f85149" : "#3fb950"}
+            color={typeof x?.net === "number" && x.net < 0 ? T.bear : T.bull}
             icon={<Activity className="h-3 w-3" />}
           />
         ))}
@@ -2458,12 +2454,12 @@ export default function Omega() {
          ===================================================================== */}
       <div
         id="setup-center-section"
-        className="flex flex-col gap-4 rounded-xl border border-emerald-400/45 bg-[#08111e] p-3.5 shadow-[0_18px_50px_rgba(16,185,129,0.12)] transition sm:p-4"
+        className="flex flex-col gap-4 rounded-xl border border-white/10 bg-panel p-3.5 transition sm:p-4"
       >
         <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Setup sections">
           {([["engine", "Engine"], ["profile", "Risk profile"], ["connection", "Connection & EA"]] as const).map(([key, label]) => (
             <button key={key} type="button" role="tab" aria-selected={setupTab === key} id={`setup-tab-${key}`} onClick={() => setSetupTab(key)}
-              className={`rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${setupTab === key ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-100" : "border-white/10 bg-black/30 text-slate-400 hover:text-slate-200"}`}>
+              className={`rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${setupTab === key ? "border-white/30 bg-white/8 text-fg" : "border-white/10 bg-black/30 text-fg-2 hover:text-fg"}`}>
               {label}
               {key === "profile" && profileAttention ? <span className="ml-1 rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-black">1</span> : null}
             </button>
@@ -2544,7 +2540,7 @@ export default function Omega() {
                   disabled={configLocked}
                   value={goldPair}
                   onChange={(ev) => setGoldPair(ev.target.value)}
-                  className={`mt-1 w-full rounded-md border border-amber-400/30 bg-[#0b1320] px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-hidden ${
+                  className={`mt-1 w-full rounded-md border border-amber-400/30 bg-black/20 px-2.5 py-1.5 text-[12px] text-amber-100 focus:border-amber-400 focus:outline-hidden ${
                     configLocked ? "cursor-not-allowed opacity-50 bg-black/40" : ""
                   }`}
                 >
