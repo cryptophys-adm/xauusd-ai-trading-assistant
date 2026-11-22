@@ -55,7 +55,7 @@ export function StatusStrip({ room, omega, omegaActive, navigate }: { room: Cell
 }
 
 /** Phone (below sm): the same three cells as a row under the logo, in short codes. */
-const SHORT: Record<string, string> = { OFFLINE: "OFF", CLOSED: "CLSD", READY: "RDY", "NO BRIDGE": "NO BR" };
+const SHORT: Record<string, string> = { OFFLINE: "OFF", CLOSED: "CLSD", READY: "RDY", "NO BRIDGE": "NO BR", ARMED: "ARM", KILLED: "KILL", PAUSED: "PAUS" };
 export function StatusRow({ room, omega, omegaActive, navigate }: { room: Cell; omega: OmegaCell; omegaActive: boolean; navigate: Nav }) {
   const c = clockParts(useNow());
   const roomCode = room.code === "BEHIND" ? `LATE${room.detail ? ` ${room.detail}` : ""}` : SHORT[room.code] ?? room.code;

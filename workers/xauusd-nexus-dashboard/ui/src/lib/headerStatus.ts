@@ -29,16 +29,37 @@ export function roomCell({ barMs, hasRoom, error, closed, now = Date.now() }: { 
 }
 
 /**
- * `armed` in /omega/api/status is the engine toggle (settings.enabled) only: not the typed LIVE arm, the control
- * mode (paused, killed) or a limit fault. So the cell says ON, never "armed" (review of #515, 2026-11-22).
+ * The Omega cell from /omega/api/status (owner 2026-11-22: "Ya status sebenarnya"). `armed` there is only the engine
+ * toggle; the execution state needs the fields of xauusd #516 (live_armed, control_mode, limit_fault, account_mode,
+ * engine_enabled). Without them (an older Omega) the cell never claims ARMED: it says ON.
+ *   KILLED  red    control killed (or EA_SIGNALS_ENABLED false)
+ *   PAUSED  amber  control paused
+ *   STOP    red    engine on, entries stopped fail-closed by a limit fault
+ *   NO BRIDGE red  engine on, bridge not connected
+ *   ARMED   cyan   engine on, bridge connected, and a real account live-armed or a demo/contest account
+ *   ON      amber  engine on, bridge connected, a real account not live-armed (or the state unknown)
+ *   READY   cyan   bridge connected, engine off;  OFF grey: neither;  — : unreadable
  */
 export function omegaCell(s: OmegaStatus | null): OmegaCell {
   if (!s) return { code: "—", detail: null, tone: "off", title: "Omega status could not be read", positions: null, broker: null, filled: false };
-  const broker = s.broker || null;
-  if (s.connected && s.armed) return { code: "ON", detail: null, tone: "ok", title: "Bridge connected, Omega engine toggle on", positions: s.positions, broker, filled: true };
-  if (s.connected) return { code: "READY", detail: null, tone: "ok", title: "Bridge connected, Omega engine toggle off", positions: s.positions > 0 ? s.positions : null, broker, filled: false };
-  if (s.armed) return { code: "NO BRIDGE", detail: null, tone: "fault", title: "Omega engine toggle on, but the bridge is not connected", positions: null, broker: null, filled: true };
-  return { code: "OFF", detail: null, tone: "off", title: "Bridge not connected, Omega engine toggle off", positions: null, broker: null, filled: false };
+  const broker = s.connected ? s.broker || null : null;
+  const pos = s.positions > 0 ? s.positions : null;
+  const why = s.control_reason ? ` (${s.control_reason})` : "";
+  const acct = s.account_mode ? `, ${s.account_mode} account` : "";
+  if (s.control_mode === "killed") return { code: "KILLED", detail: null, tone: "fault", title: `Omega killed${why}`, positions: pos, broker, filled: true };
+  if (s.control_mode === "paused") return { code: "PAUSED", detail: null, tone: "late", title: `Omega paused${why}`, positions: pos, broker, filled: true };
+  const engineOn = s.armed && s.engine_enabled !== false;
+  if (engineOn && s.limit_fault) return { code: "STOP", detail: null, tone: "fault", title: `Entries stopped fail-closed: ${s.limit_fault.why}`, positions: pos, broker, filled: true };
+  if (engineOn && !s.connected) return { code: "NO BRIDGE", detail: null, tone: "fault", title: "Omega engine on, but the bridge is not connected", positions: null, broker: null, filled: true };
+  if (engineOn) {
+    const armed = s.live_armed === true || s.account_mode === "demo" || s.account_mode === "contest";
+    return armed
+      ? { code: "ARMED", detail: null, tone: "ok", title: `Engine on, bridge connected${acct}${s.live_armed ? ", LIVE armed" : ""}`, positions: s.positions, broker, filled: true }
+      : { code: "ON", detail: null, tone: "late", title: s.account_mode === "real" ? "Engine on, real account not LIVE armed" : "Engine on; the live arm is not known", positions: s.positions, broker, filled: false };
+  }
+  const offWhy = s.armed && s.engine_enabled === false ? " (OMEGA_ENGINE_ENABLED off)" : "";
+  if (s.connected) return { code: "READY", detail: null, tone: "ok", title: `Bridge connected, Omega engine off${offWhy}`, positions: pos, broker, filled: false };
+  return { code: "OFF", detail: null, tone: "off", title: `Bridge not connected, Omega engine off${offWhy}`, positions: null, broker: null, filled: false };
 }
 
 /** UTC to the second, then the viewer's local time and its offset ("GMT+7"; "local" when the viewer is on UTC). */
