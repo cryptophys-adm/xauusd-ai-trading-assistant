@@ -247,10 +247,10 @@ export function validateCorrection(c) {
   if (label === "owner_correction" && c.category === null && c.text === null) errors.push("owner_correction_without_content");
   if (label === "owner_decision" && c.text === null) errors.push("owner_decision_without_reason");
   if (c.category_raw !== undefined) {
-    if (c.category !== "other" || typeof c.category_raw !== "string" || !c.category_raw.trim() || c.category_raw.length > CATEGORY_RAW_MAX) errors.push("category_raw");
+    if (c.category !== "other" || typeof c.category_raw !== "string" || c.category_raw.length > CATEGORY_RAW_MAX) errors.push("category_raw");
     else {
       if (secretInText(c.category_raw)) errors.push("category_raw_carries_secret");
-      if (PRICE.test(c.category_raw)) errors.push("category_raw_carries_price");
+      if (PRICE.test(normalizeText(c.category_raw))) errors.push("category_raw_carries_price");
     }
   }
   if (c.invalid_refs !== undefined && !(Number.isInteger(c.invalid_refs) && c.invalid_refs > 0)) errors.push("invalid_refs");

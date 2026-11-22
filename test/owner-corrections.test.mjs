@@ -161,7 +161,7 @@ test("OC7 nothing that leaves carries a price or a secret: the raw category is m
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "SL at 4095.5" }), ["category_raw_carries_price"]);
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "Bearer abcdefghijklmnopqrstuvwxyz" }), ["category_raw_carries_secret"]);
   assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "x".repeat(CATEGORY_RAW_MAX + 1) }), ["category_raw"]);
-  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "  " }), ["category_raw"]);
+  assert.deepEqual(validateCorrection({ ...r.correction, category_raw: "  " }), [], "no blank rule: one contract with the platform");
   assert.deepEqual(payloadLeaks({ text: "the 4,095 level", evidence_refs: ["ev:xauusd/card/d:15:1795211100000:0"], target: { ref: "ev:xauusd/card/d:15:1795211100000:0" } }), ["text"]);
   resetOwnerCorrectionsSchemaForTests();
   const env = { OWNER_CORRECTIONS: "on", DB: d1(), AGENTS: { syscall: async () => ({ outcome: "succeeded", result: {} }) } };
