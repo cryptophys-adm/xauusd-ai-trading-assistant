@@ -21,7 +21,7 @@ import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgen
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
-import { roomContextLine } from "./lens-steps.mjs";
+import { roomContextLine, roomConditionsLine } from "./lens-steps.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
 import { buildCrowdLine, finalEntries, crowdRule, roomReputation, quorumAllows, quorumRule } from "./reputation.mjs";
@@ -501,7 +501,13 @@ function rebuttalMessages(agent, own, bus, unanimous, roomBias = null) {
   ]);
 }
 
-function conclusionMessages(bus, debate, crowd = null, learned = null) {
+/**
+ * B16: lens B's liquidity conditions for the risk desk and the moderator (src/lens-steps.mjs roomConditionsLine): context,
+ * not a vote, outside the quorum and the crowd; plain words, no sweep, no price. Absent (null): the prompts as before.
+ */
+export const LIQUIDITY_CONDITIONS_LABEL = "LIQUIDITY CONDITIONS (broker M1 context, outside the quorum and the crowd line: an argument, not a vote):";
+
+function conclusionMessages(bus, debate, crowd = null, learned = null, conditions = null) {
   return chatMessages([
     "You are the moderator of the XAUUSD Live War Room (15m). The Consensus Discussion is closed. Write the conclusion for the main panel from this timeframe's statements only.",
     ...(crowd ? [crowdRule(crowd)] : []),
@@ -512,6 +518,7 @@ function conclusionMessages(bus, debate, crowd = null, learned = null) {
     DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one statement holding it.",
     "Weigh statements by their metrics and their evidence, not by their number: a statement built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each entry states which). No repetition: the summary states the conclusion once, each reason adds something new. In the summary and reasons name the metrics that decided, never an agent or a role; dissent lists the # references of statements whose stance or bias still differs from yours. Never discuss calibration itself.",
     `Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["#n"],"metrics":["<the metrics that decided>"]}`,
+    ...(conditions ? [`${LIQUIDITY_CONDITIONS_LABEL} ${conditions}`] : []),
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "CONSENSUS DISCUSSION:",
@@ -529,7 +536,7 @@ async function seriesOf15(env) {
   } catch { return []; }
 }
 
-function agentData(agent, evidence, hud, confirmations, desk15, projection = null) {
+function agentData(agent, evidence, hud, confirmations, desk15, projection = null, conditions = null) {
   switch (agent) {
     case "projection": return projection ?? { available: false };
     case "m15": return { timeframe: "15 minutes", reading: desk15.reading, approved_by_parity: desk15.approved_by_parity };
@@ -538,7 +545,8 @@ function agentData(agent, evidence, hud, confirmations, desk15, projection = nul
     case "risk": {
       const c = evidence.m15.candles;
       const ranges = c.map(x => Math.round((x.h - x.l) * 100) / 100);
-      return { candles_15m: c, ranges_15m: ranges, confirmations };
+      // B16: lens B's liquidity conditions (plain words, no sweep, no price), only while the room reads them.
+      return { candles_15m: c, ranges_15m: ranges, confirmations, ...(conditions ? { liquidity_conditions: conditions } : {}) };
     }
     default: return { hud: HUD_NAMES[agent], timeframe: "15 minutes", reading: hudEvidenceLines(hud?.readings?.[agent]) };
   }
@@ -635,14 +643,18 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // The bundled pack plus the notes promoted autonomously (src/learned-live.mjs); read only when the notes are on.
   const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
+  // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §4.3): context, not on the
+  // roster, so outside the quorum and the crowd; no price. B16: the risk desk and the moderator read lens B's conditions
+  // from it, as the brief stores them (a retried bar reads the same line).
+  let lensContext = existing.get("brief")?.context ?? null;
   if (!existing.has("brief")) {
-    // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §4.3): context, not on the
-    // roster, so outside the quorum and the crowd; no price.
-    let lensContext = null;
-    try { lensContext = await roomContextLine(env, "M15"); } catch { lensContext = null; }
+    lensContext = null;
+    try { lensContext = await roomContextLine(env, "M15", { now: clock() }); } catch { lensContext = null; }
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: { roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations, independent: true, m15_close: evidence.m15.candles.at(-1) ?? null, news: evidence.news, ...(lensContext ? { context: lensContext } : {}),
       ...(learnedKnowledgeEnabled(env) ? { learned_pack: learnedPackInfo(env, { roster, ...learnedCtx, pack: learnedPack }) } : {}) } });
   }
+
+  const conditions = roomConditionsLine(env, "M15", lensContext);
 
   // One budget for the bar, shared by every parallel step (and its correction call).
   const roomEnv = env;
@@ -664,7 +676,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const metricLive = new Set(metricLiveAgents(env));
   const verifiedFor = (agent) => (agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]));
   const openingOpts = (agent) => {
-    const data = agentData(agent, evidence, hud, confirmations, desk15, projection);
+    const data = agentData(agent, evidence, hud, confirmations, desk15, projection, conditions);
     if (metricLive.has(agent)) {
       // The prompt tested in shadow; the answer is turned into a room opening (its readings as the claim).
       const menu = metricMenu(data);
@@ -730,7 +742,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   const crowd = buildCrowdLine(finalEntries(answered, debate), w15.reputation, { quorumShare: w15.quorumShare, weighting: w15.weighting, regime: w15.regime });
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   const concludeOpts = {
-    messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd, learnedFor("moderator")),
+    messages: conclusionMessages(anonBus, debate.map(m => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), crowd, learnedFor("moderator"), conditions),
     schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateConclusion(o, null, busAgents, null, { supportStances: new Set([...answered.map(m => m.stance), ...debate.map(m => m.stance)]), supportBiases: new Set([...answered.map(biasOf), ...debate.map(biasOf)]), roomBias, crowd, forbiddenNames: deskNames(), refs }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map(r => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
@@ -747,7 +759,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
       return runShadowCalls(env, {
         calls: plan, candleKey: m15KeyForClose(barTime), statementClose: barTime, clock, schema: OPENING_SCHEMA, schemaName: "war_room_opening", maxTokens: BUS_MAX_TOKENS.agent,
         // Like for like: the live opening's prompt (its learned notes included) plus the note under test.
-        messagesFor: (agent, note) => openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection), learnedFor(agent), note),
+        messagesFor: (agent, note) => openingMessages(agent, agentData(agent, evidence, hud, confirmations, desk15, projection, conditions), learnedFor(agent), note),
         validate: (o, agent) => validateOpening(o, agent, { verifiedLines: agent === "m15" ? (desk15.approved_by_parity ? null : 0) : calibration[agent]?.total_lines == null ? null : calibratedLines(calibration[agent]), forbiddenNames: forbiddenNamesFor(agent, roster) })
       });
     }]);
@@ -756,7 +768,7 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
   // opened answers again from the same data as metric readings, compared with its live stance on this bar.
   // A2: then, on every fourth bar, the agents that rebutted live answer those metric openings in metric form.
   if (metricShadowEnabled(env)) {
-    const dataFor = (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection);
+    const dataFor = (agent) => agentData(agent, evidence, hud, confirmations, desk15, projection, conditions);
     jobs.push(["metrics", async () => {
       // A promoted agent already opened in metric form: no shadow copy of it (its control would be itself).
       const openings = await runMetricShadow(env, { room: "M15", barTime, clock, agents: answered.filter((m) => !metricLive.has(m.agent)).map((m) => ({ agent: m.agent, stance: m.stance })), dataFor, roleFor: openingRole });

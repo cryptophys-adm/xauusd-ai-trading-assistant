@@ -162,6 +162,11 @@
     // only: never in the quorum, the guardrails or the witness weights. "off": no card, no decision.liquidity, the
     // council's prompt as before.
     "LIQUIDITY_WITNESS": "on",
+    // Lens B in the 15m and 1H rooms (B16, src/lens-steps.mjs lensRoomLine): "conditions" | "brief". "conditions": the
+    // risk desk's data and the moderator's prompt also read lens B's liquidity conditions (plain words, no sweep, no
+    // price) while lens B is on, above its floor and fresh, and the brief stores them. "brief": the brief's line only,
+    // the prompts byte for byte as before. No model call is added either way.
+    "LENS_ROOM_LINE": "conditions",
     "MACRO_ROOM_ENABLED": "true",
     "MACRO_ROOM_MAX_CALLS_PER_HOUR": "30",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.

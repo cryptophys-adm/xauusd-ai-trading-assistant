@@ -81,8 +81,14 @@ test("LV1. the fixture is the view's answer: keys and types, the outcomes and st
   assert.deepEqual([down.levels, down.sweeps], [[], []]);
   assert.equal(down.state.on, false, "no facts, so lens B is off for the signal");
   assert.ok(down.management.every((z) => z.source === "key_level"));
-  // B16 (conditions) and B17/B19 (level_moves) are null until they merge.
-  for (const f of [main, down, v]) assert.deepEqual([f.conditions, f.effects.level_moves], [null, null]);
+  // B17/B19 (level_moves) are null until they merge.
+  for (const f of [main, down, v]) assert.equal(f.effects.level_moves, null);
+  // B16: the conditions the 15m and 1H rooms read (liquidityConditions), filled from the latest state; none without
+  // available facts.
+  assert.deepEqual(v.conditions, main.conditions);
+  assert.deepEqual(Object.keys(main.conditions).sort(), ["activity", "at_ms", "baseline", "baseline_weeks", "depth", "in_rooms", "levels", "line", "mode", "room_line", "session", "spread", "stale"]);
+  assert.deepEqual([main.conditions.in_rooms, main.conditions.room_line, main.conditions.stale, main.conditions.at_ms], [true, "conditions", false, main.state.at_ms]);
+  for (const f of [down, (await view({ available: false })).v]) assert.equal(f.conditions, null);
   // B15: the card and the quorum with liquidity come from the latest decision's decision.liquidity; with no recent broker
   // bar the seeded decision had none, so both are null there.
   assert.deepEqual(Object.keys(main.card).sort(), ["agreeing", "at_ms", "bar_close", "counts", "lean", "lean_reason", "lens_weight", "side", "stale", "state_at_ms", "summary", "sweep", "sweep_age_min", "weight"]);
@@ -149,6 +155,7 @@ test("LV4. the view reads only: SELECT statements, no KV write, no DDL; a table 
   assert.equal(cold.DB.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get().n, 0, "no table created");
   assert.deepEqual([c.facts, c.line, c.levels, c.readings, c.sweeps, c.management, c.effects.blocks, c.effects.skips, c.effects.deferrals, c.effects.pm_actions], [null, null, [], [], [], [], [], [], [], []]);
   assert.deepEqual([c.state.baseline, c.state.backfill.status, c.state.on, c.baseline.status, c.baseline.hours.length], ["unavailable", "unavailable", false, "unavailable", 168]);
+  assert.equal(c.conditions, null, "B16: no state, no conditions");
   // A D1 failure that is not a missing table reaches the route (500 liquidity_unavailable).
   const broken = await seedLiquidityEnv();
   const prepare = broken.DB.prepare;

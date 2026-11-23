@@ -10,7 +10,8 @@ import {
 import { positioningNow, scorePositioning, cotFreshness, positioningLine, positioningLean, positioningPackFact } from "./positioning-lens.mjs";
 import {
   LIQUIDITY_BASELINE_WEEKS, LIQUIDITY_STATE_KEY, LIQUIDITY_SPIKE_KEY, baselineKey, baselineIdentity, buildBaseline, finishBaseline, hourBaseline, eligibleMinutes,
-  nyHourOfWeek, readBrokerBars, backfillBrokerBars, markBackfillRebuilt, SWEEP_SCORE_BARS_15M, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine
+  nyHourOfWeek, readBrokerBars, backfillBrokerBars, markBackfillRebuilt, SWEEP_SCORE_BARS_15M, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine,
+  liquidityConditions, liquidityConditionsOn
 } from "./liquidity-lens.mjs";
 
 const M1 = 60_000, HOUR = 3_600_000, DAY = 86_400_000, WEEK = 7 * DAY;
@@ -396,9 +397,28 @@ export const LENS_REPORT_LAST_KEY = "lens:report:last";
 // ---------------------------------------------------------------- the rooms' context line (RFC §2, §3.5, §4.3)
 
 /**
+ * B16: what the 15m and 1H rooms read of lens B. "conditions" (the default): the brief's line plus lens B's conditions
+ * (liquidityConditions), which the room's risk desk (its data) and moderator (its prompt) read, while lens B is on, above
+ * its floor and fresh. "brief": the brief's line only, the prompts byte for byte as before B16. Env LENS_ROOM_LINE.
+ */
+export const LENS_ROOM_LINES = Object.freeze(["conditions", "brief"]);
+export function lensRoomLine(env) {
+  return String(env?.LENS_ROOM_LINE ?? "conditions").trim().toLowerCase() === "brief" ? "brief" : "conditions";
+}
+/** The 15m and 1H rooms' charts, the only ones that read lens B (and its conditions). */
+export const LIQUIDITY_ROOM_CHARTS = Object.freeze(["M15", "H1"]);
+/** Pure: the conditions line a room's prompts read, from its stored brief's context (null: today's prompts). */
+export function roomConditionsLine(env, chart, context) {
+  if (lensRoomLine(env) !== "conditions" || !LIQUIDITY_ROOM_CHARTS.includes(chart)) return null;
+  return context?.lens === "liquidity" && typeof context.conditions === "string" && context.conditions ? context.conditions : null;
+}
+
+/**
  * The analyst's line in a room's brief: lens A in the 4H and 1D rooms, lens B in the 15m and 1H rooms. Built from the
  * facts by a template (no model call), with its bias, outside the room's quorum and the crowd (it is not on the roster).
- * No price. Null when the lens is switched off or has nothing to say.
+ * No price. Null when the lens is switched off or has nothing to say. B16: lens B's line also carries `conditions`
+ * (liquidityConditions' plain words, no sweep, no price) while LENS_ROOM_LINE is "conditions" and lens B is on, above
+ * its floor and its state fresh (liquidityConditionsOn, the LIQUIDITY card's gates).
  */
 export async function roomContextLine(env, chart, { now = Date.now() } = {}) {
   try {
@@ -417,7 +437,13 @@ export async function roomContextLine(env, chart, { now = Date.now() } = {}) {
       const st = await readLiquidityState(env);
       if (!st?.facts) return null;
       const sw = st.facts.sweep && st.facts.sweep.age_min <= 15 ? st.facts.sweep.side : null;
-      return { analyst: LENS_NAME, lens: "liquidity", line: liquidityLine(st.facts), bias: sw === "sell_side" ? "BULLISH" : sw === "buy_side" ? "BEARISH" : "NEUTRAL", baseline: st.facts.baseline ?? st.baseline ?? "insufficient", outside_quorum: true };
+      const out = { analyst: LENS_NAME, lens: "liquidity", line: liquidityLine(st.facts), bias: sw === "sell_side" ? "BULLISH" : sw === "buy_side" ? "BEARISH" : "NEUTRAL", baseline: st.facts.baseline ?? st.baseline ?? "insufficient", outside_quorum: true };
+      if (lensRoomLine(env) === "conditions") {
+        const knobs = lensKnobs("liquidity", await modeNow(env), { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: st.baseline ?? null });
+        const c = liquidityConditionsOn(st, knobs, now) ? liquidityConditions(st.facts, { knobs, stateAtMs: st.at_ms, now }) : null;
+        if (c) out.conditions = c.line;
+      }
+      return out;
     }
   } catch { /* no line */ }
   return null;

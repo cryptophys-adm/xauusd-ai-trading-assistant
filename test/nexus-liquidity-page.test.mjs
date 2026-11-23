@@ -125,7 +125,9 @@ test("LQ4 the page renders over B8's contract and its unavailable case, each top
 
 test("LQ5 the B15-B19 fields null: the not-yet Empties; filled: the card, the quorum with liquidity and the level moves", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
-  assert.equal(LIQ.conditions, null, "conditions null until B16");
+  // B16 filled conditions (lens B's liquidity conditions, the rooms' line, no price); the unavailable case keeps it null.
+  assert.ok(LIQ.conditions && typeof LIQ.conditions.line === "string", "conditions filled since B16");
+  assert.equal(UNAV.conditions, null);
   assert.equal(LIQ.effects.level_moves, null);
   // B15 filled the card and the quorum with liquidity in the contract (the latest decision's decision.liquidity); the
   // launch Empties are read with both null, as /api/liquidity answers for a decision without decision.liquidity.
