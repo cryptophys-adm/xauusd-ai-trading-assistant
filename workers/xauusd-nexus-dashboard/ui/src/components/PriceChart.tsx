@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type TickMarkType, type Time, type UTCTimestamp } from "lightweight-charts";
 import { CandlestickChart, Link2, Unlink2 } from "lucide-react";
 import clsx from "clsx";
-import { Panel } from "./ui";
+import { ChartCredit, Panel } from "./ui";
 import { CHART_READ, get } from "../lib/api";
 import { GLOBAL_PATH, useMarket } from "../lib/market";
 import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
@@ -168,7 +168,8 @@ export default function PriceChart() {
     if (!el.current) return;
     const c = createChart(el.current, {
       autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace" },
+      // No library logo (its <style> is blocked by the CSP): the footer's "Charts by TradingView" link is the attribution.
+      layout: { background: { color: "transparent" }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace", attributionLogo: false },
       grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
       timeScale: {
@@ -423,6 +424,7 @@ export default function PriceChart() {
         <span>{head.error ? <span className="text-fault">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"} · feed scale`}</span>
         <span className="normal-case tracking-normal">{plane ? `GMI levels from the ${PLANE_LABEL[planeTf]} snapshot` : "GMI levels: waiting for the chart plane"}</span>
         {head.closed && <span className="mono normal-case tracking-normal">last closed bar {new Date(head.closed).toISOString().replace("T", " ").slice(0, 16)} UTC · {gmt7ClockOf(Date.parse(head.closed))} GMT+7</span>}
+        <ChartCredit />
       </div>
     </Panel>
   );
