@@ -1,4 +1,5 @@
 import { Badge } from "./ui";
+import { EZ_CODES, gmt7ClockOf, plannerDetail } from "../lib/entryZone";
 
 // Why Omega is or is not entering right now (owner 2026-11-13: "pastikan semua ada visualisasi, sehingga
 // owner/user mengetahui dan memahami"). The planner (src/omega-engine.mjs planIntents) leaves short codes on
@@ -63,8 +64,16 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   lot_capped_5m: { kind: "adjust", text: "The lot is capped because the 5m stop is tighter than the plan's." },
   lot_capped_daily_budget: { kind: "adjust", text: "The lot is capped by the day's remaining risk budget." },
   vol_regime_high: { kind: "info", text: "Volatility is high." },
-  vol_regime_low: { kind: "info", text: "Volatility is low." }
+  vol_regime_low: { kind: "info", text: "Volatility is low." },
+  // EZ1 and EZ1b (owner 2026-11-23, the approved mockup): where the limit rests in the decision's entry zone (broker
+  // scale), or why it does not. A placement is "adjust" (the order's price differs from the plan's); a refusal "block".
+  limit_in_zone: { kind: "adjust", text: "Limit in the entry zone: the plan's level was through price (or inside the stops level); stop and TP1 kept." },
+  limit_zone_edge: { kind: "adjust", text: "Limit at the zone's near edge: the plan's level is out of the placement band; stop and TP1 kept." },
+  zone_passed: { kind: "block", text: "Refused: price already passed the entry zone." },
+  zone_tight: { kind: "block", text: "Refused: zone too tight. A limit inside it keeps under half the plan's risk." },
+  zone_rr: { kind: "block", text: "Refused: R:R below the minimum. A limit inside the zone pays under 1R to TP1." }
 };
+const EZ = new Set<string>(EZ_CODES);
 // In the status tones; info is ok, as severityTone (owner 2026-11-22).
 const TONE: Record<Kind, "fault" | "late" | "ok"> = { block: "fault", adjust: "late", info: "ok" };
 
@@ -75,24 +84,24 @@ export function omegaReason(code: string) {
 /** The planner's current notes as a short list; `sinceMs` is when they last changed. */
 export default function OmegaWhy({ codes, sinceMs, details }: { codes: string[] | null | undefined; sinceMs?: number | null; details?: Record<string, string> | null }) {
   if (!codes?.length) return <p className="text-[11px] text-slate-500">No planner notes yet.</p>;
-  const items = codes.map((c) => ({ code: c, ...omegaReason(c) }));
+  const items = codes.filter((c) => typeof c === "string" && c !== "").map((c) => ({ code: c, ...omegaReason(c) }));
   const blocked = items.some((i) => i.kind === "block");
   return (
     <div className="space-y-1.5" aria-label="Why Omega is or is not entering now">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <Badge tone={blocked ? "late" : "ok"}>{blocked ? "NOT ENTERING" : "READY / MANAGING"}</Badge>
-        {sinceMs ? <span className="text-slate-500">since {new Date(sinceMs).toISOString().slice(11, 16)} UTC</span> : null}
+        {sinceMs ? <span className="mono text-slate-500">since {new Date(sinceMs).toISOString().slice(11, 16)} UTC · {gmt7ClockOf(sinceMs)} GMT+7</span> : null}
       </div>
       <ul className="space-y-1">
-        {items.map((i) => (
+        {items.map((i) => { const detail = plannerDetail(i.code, details?.[i.code]); return (
           <li key={i.code} className="flex items-start gap-2 text-[11.5px] text-slate-300">
             <span className="mt-0.5"><Badge tone={TONE[i.kind]}>{i.kind === "block" ? "why" : i.kind}</Badge></span>
             <span className="min-w-0 flex-1">
               {i.text} <span className="mono text-[10px] text-slate-600">{i.code}</span>
-              {details?.[i.code] ? <span className="block text-[11px] text-slate-400">{details[i.code]}</span> : null}
+              {detail ? <span className={EZ.has(i.code) ? "mono mt-0.5 block text-[10.5px] text-fg-2" : "block text-[11px] text-slate-400"}>{detail}</span> : null}
             </span>
           </li>
-        ))}
+        ); })}
       </ul>
     </div>
   );

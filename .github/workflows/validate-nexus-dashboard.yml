@@ -9,6 +9,7 @@ on:
       - ".github/workflows/validate-nexus-dashboard.yml"
       - ".github/workflows/deploy-nexus-dashboard.yml"
       - "test/fixtures/nexus-intel/**"
+      - "test/fixtures/nexus-ez1/**"
 
 permissions:
   contents: read
@@ -32,7 +33,7 @@ jobs:
           npm run build
 
       - name: Render check of the Nexus pages
-        # Each pure page view over its fixture (test/fixtures/nexus-intel), the not_found bodies, each path nulled and
+        # Each pure page view over its fixture (test/fixtures/nexus-intel, nexus-ez1), the not_found bodies, each path nulled and
         # each array emptied: no throw, "NaN", "undefined" or "[object Object]" (ui/scripts/render-check.mjs).
         working-directory: workers/xauusd-nexus-dashboard/ui
         run: npm run render-check

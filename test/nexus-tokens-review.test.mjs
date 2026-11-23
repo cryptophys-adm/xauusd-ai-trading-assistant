@@ -79,7 +79,7 @@ test("NR5 status on the War Room cards is ok / late / fault / off, not the bull 
   }
   assert.match(councils, /merged: \{ text: "merged", tone: "ok" \}/);
   assert.match(src("pages/Omega.tsx"), /pending: "late",\n  sent: "late",/, "an intent in flight is late, not done");
-  assert.match(src("components/GlobalDecision.tsx"), /r\.rr >= minRrr \? "text-ok" : "text-late"/, "the R check is pass/fail");
+  assert.match(src("components/PlanLadder.tsx"), /r\.rr >= minRrr \? "text-ok" : "text-late"/, "the R check is pass/fail (the plan ladder, moved from GlobalDecision.tsx with EZ1)");
   assert.match(src("components/OrganismCard.tsx"), /market === "open" \? "text-ok" : "text-off"/, "CLOSED is grey, like its dot");
   assert.match(src("components/AssistantPanel.tsx"), /<Badge tone=\{open \? "ok" : "off"\}>\{open \? "market open" : "market closed"\}<\/Badge>/);
   assert.match(src("components/FeedFallbackCard.tsx"), /<Dot tone=\{state\.active \? "late" : "ok"\}/);
