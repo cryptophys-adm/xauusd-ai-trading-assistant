@@ -4,6 +4,11 @@ export function runSignalLedger(env: unknown, options?: { now?: number; readStra
 export function readLedger(env: unknown, options?: { days?: number; now?: number }): Promise<Record<string, unknown>>;
 export function ensureLedgerSchema(db: unknown): Promise<void>;
 export function ingestStrategy(env: unknown, strategy: any, options?: { now?: number }): Promise<number>;
-export function ingestDecision(env: unknown, decision: any, options?: { now?: number }): Promise<number>;
+export function ingestDecision(env: unknown, decision: any, options?: { now?: number; maxAgeMs?: number }): Promise<number>;
+export const HOLD_REASONS: Readonly<{ pending: string; open: string }>;
+export function omegaEntryWindowEnd(row: any, options?: { maxAgeMs?: number }): number;
+export function blocksNewDecision(row: any, atMs: number, options?: { maxAgeMs?: number }): "pending" | "open" | null;
+export const LH1_REINGEST: Readonly<{ key: string; from: string; to: string }>;
+export function reingestHeldOnce(env: unknown, options?: { now?: number; evaluate?: (() => Promise<unknown>) | null; window?: { key: string; from: string; to: string } }): Promise<{ status: string; items?: Array<{ decision_key: string; side: string; reingested: boolean; reason: string | null }>; error?: string }>;
 export function readExecutionReport(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function activeSetups(env: unknown, options?: { now?: number; limit?: number }): Promise<any[]>;
