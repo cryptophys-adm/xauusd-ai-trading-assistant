@@ -11,7 +11,9 @@
 //              blackout (a news blackout), daily_loss_limit (the equity at the profile's daily loss floor),
 //              profile_downgrade (ADR-0020 A7: a downgrade, to Safe or one step), pending_expired, decision_against
 //              (a later decision on the other side), quorum_share_drop (its side's share of the 15m quorum,
-//              quorum.long_share or short_share, fell by more than cancel_share_drop from the placing decision);
+//              quorum.long_share or short_share, fell by more than cancel_share_drop from the placing decision;
+//              with CH1's token `limit` on, by at least cancel_share_drop of the mode, scalp 0.10, intraday and
+//              range 0.10, swing 0.15, outside scalp on the decision before too, as the live pendingDeleteReason);
 //          and it is never placed when:
 //            - limit_through_price: price is already through the level at placement (a missed entry, never a market
 //              fallback);
@@ -29,6 +31,7 @@ import { effectiveLimits } from "./account-spec.mjs";
 import { signalEntryZone, zoneLimit, zoneEdgeLimit } from "./omega-engine.mjs";
 import { LIMIT_KNOB_START, LIMIT_KNOB_BOUNDS, LIMIT_KNOB_FACTS, LIMIT_KNOBS_SOURCE, limitKnobs } from "./omega-limit-knobs.mjs";
 import { TRADING_MODES, ensureLedgerSchema, ledgerSeries, OMEGA_LIMIT_VERSION } from "./signal-ledger.mjs";
+import { changeTokens, changeOn, pendingShareFall } from "./change-thresholds.mjs";
 
 export { OMEGA_LIMIT_VERSION };
 export const OMEGA_LIMIT_CHECKPOINT_KEY = "ledger:omega-limit:checkpoint:v1";
@@ -64,7 +67,11 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
     const other = pending.side === "BUY" ? "SELL" : "BUY";
     if (decision.stance === other) return "decision_against";
     const share = Number(decision.quorum?.[pending.side === "BUY" ? "long_share" : "short_share"]);
-    if (finite(pending.share0) && finite(share) && pending.share0 - share > pending.knobs.cancel_share_drop + 1e-9) return "quorum_share_drop";
+    if (changeOn(changeTokens(settings), "limit")) {
+      // CH1 (as the live pendingDeleteReason): the decision before this one, from its history, confirms outside scalp.
+      const h = decision.decision_history?.prev ?? null;
+      if (pendingShareFall({ mode: pending.mode, threshold: pending.knobs.cancel_share_drop, share0: pending.share0, share, sharePrev: h ? h[pending.side === "BUY" ? "long_share" : "short_share"] : null, prevMs: h?.close_ms ?? null, currentMs: decision.close_ms, placedDecisionMs: pending.close_ms })) return "quorum_share_drop";
+    } else if (finite(pending.share0) && finite(share) && pending.share0 - share > pending.knobs.cancel_share_drop + 1e-9) return "quorum_share_drop";
   }
   return null;
 }
@@ -76,7 +83,7 @@ export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_
  * The limit entry policy for replayOmega4 (`entry`). `state` is the checkpoint's `entry` of the run before. `knobsFor(mode)`
  * gives a mode's knobs (limitKnobs by default).
  */
-export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m) } = {}) {
+export function limitEntryPolicy({ state = null, knobsFor = (m, settings) => limitKnobs(m, null, { changes: changeTokens(settings ?? {}) }) } = {}) {
   let pending = state?.pending && typeof state.pending === "object" ? JSON.parse(JSON.stringify(state.pending)) : null;
   const decided = new Map(Array.isArray(state?.decided) ? state.decided.filter((x) => Array.isArray(x) && typeof x[0] === "string" && finite(x[1])) : []);
   const outcomes = new Map();  // decision key -> the outcome this run reached (missed, or resting at its end)
@@ -115,11 +122,11 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
       const zsym = { ...sym, bid: bid0, ask: ask0, spread_points: Math.round(spread / OMEGA4_SIM.point), point: OMEGA4_SIM.point };
       const away0 = buy ? ask0 - level : level - bid0;
       if (zone && !(away0 > 0)) {
-        zoned = zoneLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
+        zoned = zoneLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode, input.settings), from: level });
         if (zoned.ok) level = zoned.price;
-      } else if (zone && signal.entry_zone_edge === true && away0 > knobsFor(signal.trading_mode).placement_band * planStop + 1e-9) {
+      } else if (zone && signal.entry_zone_edge === true && away0 > knobsFor(signal.trading_mode, input.settings).placement_band * planStop + 1e-9) {
         // EZ1b (as the live limitPlacement): out of the band, the zone's near edge when it is inside it.
-        zoned = zoneEdgeLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
+        zoned = zoneEdgeLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode, input.settings), from: level });
         if (zoned?.ok) level = zoned.price;
       }
       // planIntents' own gates and sizing, as if filled at the limit: the symbol shows the level as the price it enters at.
@@ -130,7 +137,7 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
       let it = out.intents.find((x) => x.kind === "open");
       if (!it) { notes.set(entryKey, { gate: out.notes.at(-1)?.code ?? "no_note", last_ms: now }); return; }
       if (zoned?.ok) it = { ...it, sl: zoned.sl, tp: zoned.tp, r_dist: r2(Math.abs(level - zoned.sl)), zone_from: zoned.from };
-      const knobs = knobsFor(signal.trading_mode);
+      const knobs = knobsFor(signal.trading_mode, input.settings);
       const away = buy ? ask0 - level : level - bid0;
       const p = {
         key: entryKey, side: signal.side, issued_ms: signal.issued_ms, close_ms: finite(decision?.close_ms) ? decision.close_ms : signal.issued_ms,

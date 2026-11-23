@@ -16,12 +16,22 @@
 //            kept (keep_no_reason). A silent council cancels the order at that close (council_unavailable).
 // The spend shares the Position Manager's daily cap (POSITION_COUNCIL_DAILY_USD, RFC §11). Prices stay in D1 and the
 // model's messages; nothing here reaches Aether or the platform.
+// CH1, change thresholds (owner 2026-11-23: "supaya tidak terlalu dini, perubahan confluence dan confidence perlu
+// threshold atau ambang perubahan"; "Live semua (Rekomendasi)"; src/change-thresholds.mjs), with the Omega setting
+// change_thresholds' tokens (the runner passes `changes`; absent, today's facts and choices):
+//   conf    the confidence reasons need a change of at least 0.05;
+//   skip    a skip needs a measured skip reason that holds under "limit" as under "council" (else the limit is placed,
+//           rule skip_no_measured_reason), with confidence_drop and quorum_share_drop by measuredFall's thresholds
+//           (the take_profit_weakening rule: scalp 0.10 or 0.05 on one decision, intraday and range on 2, swing the
+//           share 0.15 on 2);
+//   stance  a pending order's "the decision is <the other side>" needs that stance on 2 consecutive closed decisions.
 import { callBusModel } from "./model-call.mjs";
 import { confidenceTrend } from "./agent-confidence.mjs";
 import { atr } from "./strategy-engine.mjs";
 import { omegaPendingOrders, brokerKeyLevels } from "./omega-engine.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { recordLensReading } from "./lens-policy.mjs";
+import { changeTokens, changeOn, trendFor, sideReadings, measuredFall, stanceAgainstConfirmed } from "./change-thresholds.mjs";
 
 export const ENTRY_COUNCIL_METER = "entry_council";
 /** A stored pending action older than this is not applied (as the Position Manager's ACTION_TTL_MS). */
@@ -80,7 +90,7 @@ export function entryCouncilSchema(entryOrder) {
  * record (stance, confidence, summary, reasons, quorum with quorum_prev, agent confidence now and 15 minutes before),
  * `rooms` the 1H, 4H and 1D rooms' latest readings ({ room, bias, at, reasons }).
  */
-export function entryFacts({ request, decision = null, rooms = [] }) {
+export function entryFacts({ request, decision = null, rooms = [], changes = undefined }) {
   const buy = request.side === "BUY", k = buy ? "long" : "short";
   const agent = request.agent || "zone_pullback";
   const conf = decision?.agent_confidence?.[agent]?.[k], prev = decision?.agent_confidence_prev?.[agent]?.[k];
@@ -88,12 +98,16 @@ export function entryFacts({ request, decision = null, rooms = [] }) {
   const sharePrev = buy ? decision?.quorum_prev?.long_share : decision?.quorum_prev?.short_share;
   const against = buy ? "BEARISH" : "BULLISH", withSide = buy ? "BULLISH" : "BEARISH";
   const htf = rooms.map((r) => ({ room: r.room, bias: String(r.bias ?? "").toUpperCase() || null, at: r.at ?? null, reasons: (r.reasons ?? []).slice(0, 3) }));
+  const ch = Array.isArray(changes) && changes.length ? changes : null;
+  const trend = ch ? trendFor(conf, prev, ch) : confidenceTrend(conf, prev);
+  // CH1 token skip: the skip reasons by measuredFall's thresholds of the request's mode, over the decisions before.
+  const fall = changeOn(ch, "skip") ? measuredFall({ mode: request.mode, side: request.side, agent, ...((h) => ({ share: h.share, share_prev: h.share_prev, share_prev2: h.share_prev2, conf: h.conf, conf_prev: h.conf_prev, conf_prev2: h.conf_prev2 }))(sideReadings(decision, request.side, agent)) }) : null;
   return {
     side: request.side, entry_order: request.entry_order, mode: request.mode ?? null, agent, action: request.action ?? null,
     plan: request.plan ?? null, market: request.market ?? null, limit: request.limit ?? null,
     decision: decision ? { stance: decision.stance ?? null, confidence: isNum(decision.confidence) ? decision.confidence : null, summary: String(decision.summary ?? "").slice(0, 400), reasons: (Array.isArray(decision.reasons) ? decision.reasons : []).slice(0, 5).map((x) => String(x).slice(0, 240)) } : null,
     measured: {
-      agent_confidence_now: isNum(conf) ? conf : null, agent_confidence_15m_ago: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
+      agent_confidence_now: isNum(conf) ? conf : null, agent_confidence_15m_ago: isNum(prev) ? prev : null, agent_trend: trend,
       quorum_share_with_side: isNum(share) ? share : null, quorum_share_15m_ago: isNum(sharePrev) ? sharePrev : null
     },
     htf,
@@ -103,13 +117,15 @@ export function entryFacts({ request, decision = null, rooms = [] }) {
       ...(request.liquidity ? { liquidity_thin: request.liquidity.thin === true, liquidity_sweep_with: request.liquidity.sweep === "with", liquidity_sweep_against: request.liquidity.sweep === "against" } : {}),
       htf_against: htf.some((r) => r.bias === against),
       htf_with: htf.some((r) => r.bias === withSide) && !htf.some((r) => r.bias === against),
-      confidence_drop: confidenceTrend(conf, prev) === "drop",
-      confidence_rising: confidenceTrend(conf, prev) === "rising",
-      quorum_share_drop: isNum(share) && isNum(sharePrev) && sharePrev - share > ENTRY_SHARE_DROP,
+      confidence_drop: fall ? fall.conf != null : trend === "drop",
+      confidence_rising: trend === "rising",
+      quorum_share_drop: fall ? fall.share != null : isNum(share) && isNum(sharePrev) && sharePrev - share > ENTRY_SHARE_DROP,
       price_away_from_level: request.limit?.price != null && isNum(request.limit?.away_r) && request.limit.away_r >= PULLBACK_MIN_R,
       // EZ1: a zone passed is the through-price case (a missed level).
       price_at_level: request.limit?.refused === "limit_through_price" || request.limit?.refused === "zone_passed" || (isNum(request.limit?.away_r) && request.limit.away_r < PULLBACK_MIN_R)
-    }
+    },
+    // CH1: the tokens on, only when any is (entryChoice reads `skip`); otherwise the facts are today's.
+    ...(ch ? { changes: [...ch] } : {})
   };
 }
 
@@ -143,6 +159,12 @@ export function entryChoice(f, council, { silentRule = "council_failed" } = {}) 
   if (!council) return { status: "silent", choice: null, rule: silentRule, reason: null };
   if (f.entry_order !== "council") {
     const choice = council.answer === "place" ? "place_limit" : "skip";
+    // CH1 token skip: under "limit" too, a skip stands only with a measured skip reason that holds; else the limit is placed.
+    if (choice === "skip" && changeOn(f.changes, "skip")) {
+      const held = council.measured.filter((m) => ENTRY_REASONS[m] === "skip" && f.holds[m] === true);
+      if (!held.length) return { status: "answered", choice: "place_limit", rule: "skip_no_measured_reason", reason: `skip without a measured reason that holds: the limit is placed; ${council.reason}`.slice(0, 240) };
+      return { status: "answered", choice, rule: `council_skip:${held.join("+")}`, reason: council.reason };
+    }
     return { status: "answered", choice, rule: choice === "place_limit" ? "council_place" : "council_skip", reason: council.reason };
   }
   const held = council.measured.filter((m) => ENTRY_REASONS[m] === council.answer && f.holds[m] === true);
@@ -167,7 +189,7 @@ export const PENDING_COUNCIL_SCHEMA = Object.freeze({
  * 15m bars (`atr15`, a range: the same on the feed's and the broker's scale) and the broker key levels it may move to:
  * the near edges between the order and price, within move_max_atr x ATR of the order, with the broker's stop level.
  */
-export function pendingFacts({ order, meta = {}, decision = null, sym = {}, atr15 = null, levels = [], now = Date.now() }) {
+export function pendingFacts({ order, meta = {}, decision = null, sym = {}, atr15 = null, levels = [], now = Date.now(), changes = undefined }) {
   const buy = order.type === "BUY_LIMIT", side = buy ? "BUY" : "SELL", k = buy ? "long" : "short";
   const knobs = meta?.knobs && isNum(meta.knobs.move_max_atr) ? meta.knobs : limitKnobs(meta?.mode);
   const level = Number(order.price_open), price = buy ? sym.ask : sym.bid;
@@ -183,17 +205,21 @@ export function pendingFacts({ order, meta = {}, decision = null, sym = {}, atr1
     .filter((x) => !(isNum(meta?.entry_zone?.low) && isNum(meta?.entry_zone?.high)) || (x >= meta.entry_zone.low - point / 2 && x <= meta.entry_zone.high + point / 2))
     .sort((a, b) => (buy ? a - b : b - a));
   const awayAtr = isNum(atr15) && atr15 > 0 && isNum(price) ? r3(Math.abs(price - level) / atr15) : null;
-  const against = decision?.stance === (buy ? "SELL" : "BUY");
+  const ch = Array.isArray(changes) && changes.length ? changes : null;
+  const trend = ch ? trendFor(conf, prev, ch) : confidenceTrend(conf, prev);
+  // CH1 token stance: the decision against the order's side counts only on 2 consecutive closed decisions.
+  const stanceOn = changeOn(ch, "stance");
+  const against = stanceOn ? stanceAgainstConfirmed(side, decision?.stance, sideReadings(decision, side, agent).stance_prev) : decision?.stance === (buy ? "SELL" : "BUY");
   return {
     ticket: order.ticket, side, level, sl: Number(order.sl) || null, tp: Number(order.tp) || null, lot: Number(order.volume_current ?? order.volume_initial) || null,
     placed_ms: Number(order.placed_ms) || Number(meta?.placed_ms) || null, age_min: Number(order.placed_ms) > 0 ? Math.round((now - Number(order.placed_ms)) / 60_000) : null,
     entry_order: meta?.entry_order ?? null, mode: knobs.mode ?? meta?.mode ?? null, agent, price: isNum(price) ? price : null, atr15: isNum(atr15) ? r2(atr15) : null, away_atr: awayAtr,
     move_max_atr: knobs.move_max_atr, max_move: maxMove, candidates,
     stance: decision?.stance ?? null, share: isNum(share) ? share : null, share0: isNum(meta?.share0) ? meta.share0 : null,
-    agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
+    agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: trend,
     reasons: [
-      ...(against ? [`the decision is ${decision.stance}`] : []),
-      ...(confidenceTrend(conf, prev) === "drop" ? [`the ${agent} confidence dropped ${prev} to ${conf}`] : []),
+      ...(against ? [stanceOn ? `the decision is ${decision.stance} on 2 decisions` : `the decision is ${decision.stance}`] : []),
+      ...(trend === "drop" ? [`the ${agent} confidence dropped ${prev} to ${conf}`] : []),
       ...(awayAtr != null && awayAtr > knobs.move_max_atr + 1e-9 ? [`price is ${awayAtr} x ATR(14) 15m from the order, more than ${knobs.move_max_atr}`] : [])
     ]
   };
@@ -339,6 +365,8 @@ export async function runLimitCouncil(env, { now = Date.now(), call = callBusMod
     if (settings === undefined) { try { settings = parse((await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first())?.settings, {}); } catch { settings = {}; } }
     const entryOrder = settings?.entry_order === "limit" || settings?.entry_order === "council" ? settings.entry_order : "market";
     if (entryOrder === "market") return { status: "off" };
+    // CH1: the change_thresholds tokens of the stored settings (never stored: the default, all on).
+    const changes = changeTokens(settings);
     await ensureLimitCouncilSchema(db);
     const pm = await import("./position-manager.mjs");
     const cap = isNum(capUsd) ? capUsd : pm.dailyCapUsd(env);
@@ -362,7 +390,7 @@ export async function runLimitCouncil(env, { now = Date.now(), call = callBusMod
       const request = parse(row.facts, null);
       if (!request) continue;
       rooms ??= roomsIn !== undefined ? roomsIn : await htfRoomReadings(db);
-      const f = entryFacts({ request: { ...request, entry_order: entryOrder }, decision, rooms });
+      const f = entryFacts({ request: { ...request, entry_order: entryOrder }, decision, rooms, changes });
       const a = await ask(entryCouncilMessages(f), entryCouncilSchema(entryOrder));
       const council = a.obj ? cleanEntryCouncil(a.obj, entryOrder) : null;
       const c = entryChoice(f, council, { silentRule: a.rule });
@@ -397,7 +425,7 @@ export async function runLimitCouncil(env, { now = Date.now(), call = callBusMod
         const id = `lc:${o.ticket}:${Math.floor(close / 60_000)}`;
         if (await db.prepare("SELECT id FROM limit_council WHERE id = ?").bind(id).first()) continue;
         const meta = metaOf(o);
-        const f = pendingFacts({ order: o, meta: { ...meta, entry_order: entryOrder }, decision, sym: executor?.symbol ?? {}, atr15, levels, now });
+        const f = pendingFacts({ order: o, meta: { ...meta, entry_order: entryOrder }, decision, sym: executor?.symbol ?? {}, atr15, levels, now, changes });
         const a = await ask(pendingCouncilMessages(f), PENDING_COUNCIL_SCHEMA);
         const council = a.obj ? cleanPendingCouncil(a.obj) : null;
         const act = pendingAction(f, council);

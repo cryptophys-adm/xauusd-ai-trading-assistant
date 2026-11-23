@@ -18,7 +18,8 @@
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
 import { cellGateText } from "./htf-cells.mjs";
-import { confidenceTrend, parseConfidences } from "./agent-confidence.mjs";
+import { confidenceTrend, parseConfidences, CONFIDENCE_CHANGE_MIN } from "./agent-confidence.mjs";
+import { changeTokens, changeOn, normalizeChangeThresholds, pendingShareFall, CHANGE_THRESHOLDS_ALL } from "./change-thresholds.mjs";
 import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
 import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES, CUSTOM_CAPS } from "./account-spec.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
@@ -69,7 +70,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // SLG1, one profit-lock gate (owner 2026-11-23; src/profit-lock-gate.mjs): "on", no stop moves into profit until the
   // position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; "legacy", today's locks byte for
   // byte. The owner's switch on the Omega page only; Aether's policy never writes it.
-  profit_lock_gate: "on"
+  profit_lock_gate: "on",
+  // CH1, change thresholds (owner 2026-11-23: "supaya tidak terlalu dini, perubahan confluence dan confidence perlu
+  // threshold atau ambang perubahan"; "Live semua (Rekomendasi)"; src/change-thresholds.mjs): the tokens conf, tpw,
+  // limit, skip and stance, all on; "off" (or a token left out) is today's rule for that trigger byte for byte. The
+  // owner's switch only; Aether's policy never writes it.
+  change_thresholds: CHANGE_THRESHOLDS_ALL
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -185,6 +191,11 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
     }
     out.profit_lock_gate = body.profit_lock_gate;
   }
+  if (body.change_thresholds !== undefined) {
+    const v = normalizeChangeThresholds(body.change_thresholds);
+    if (v == null) return { error: "change_thresholds must be 'off' or a comma-separated list of conf, tpw, limit, skip, stance" };
+    out.change_thresholds = v;
+  }
   if (body.entry_order !== undefined) {
     if (!ENTRY_ORDERS.includes(body.entry_order)) return { error: "entry_order must be 'market', 'limit' or 'council'" };
     // A switch to "limit" or "council" needs OmegaExecutor 1.21 on the terminal (`ea_version`, its self-report); the value
@@ -291,13 +302,19 @@ export function pendingDeleteReason({ settings = OMEGA_DEFAULTS, signal = null, 
   if (!order) return null;
   if (!meta || typeof meta !== "object") return "pending_unrecorded";
   const buy = order.type === "BUY_LIMIT";
-  const knobs = meta.knobs && finite(meta.knobs.max_pending_life) ? meta.knobs : limitKnobs(meta.mode);
+  const knobs = meta.knobs && finite(meta.knobs.max_pending_life) ? meta.knobs : limitKnobs(meta.mode, null, { changes: changeTokens(settings) });
   const was = PROFILE_RANK[meta.profile], is = PROFILE_RANK[account?.profile];
   if (was != null && is != null && is < was) return "profile_downgrade";
   if ((buy ? signal?.veto_long : signal?.veto_short) === true) return "de_veto";
   // The current 15m decision against the placing one: its side's share of the weighted quorum.
   const share = Number(buy ? signal?.quorum_long_share : signal?.quorum_short_share), share0 = Number(meta.share0);
-  if (finite(signal?.power_ms) && finite(meta.decision_ms) && signal.power_ms > meta.decision_ms && share >= 0 && share0 >= 0 && share0 - share > knobs.cancel_share_drop + 1e-9) return "quorum_share_drop";
+  if (changeOn(changeTokens(settings), "limit")) {
+    // CH1 (owner 2026-11-23, token `limit`): a fall of at least cancel_share_drop (scalp 0.10, intraday and range 0.10,
+    // swing 0.15, recorded at placement), outside scalp on the decision before this one too (both after the placing one).
+    const sharePrev = Number(buy ? signal?.quorum_long_share_prev : signal?.quorum_short_share_prev);
+    if (finite(signal?.power_ms) && finite(meta.decision_ms) && signal.power_ms > meta.decision_ms
+      && pendingShareFall({ mode: meta.mode, threshold: knobs.cancel_share_drop, share0, share, sharePrev, prevMs: Number(signal?.decision_prev_ms), currentMs: signal.power_ms, placedDecisionMs: meta.decision_ms })) return "quorum_share_drop";
+  } else if (finite(signal?.power_ms) && finite(meta.decision_ms) && signal.power_ms > meta.decision_ms && share >= 0 && share0 >= 0 && share0 - share > knobs.cancel_share_drop + 1e-9) return "quorum_share_drop";
   const placed = positive(order.placed_ms) ? order.placed_ms : Number(meta.placed_ms);
   if ((finite(placed) && now >= placed + knobs.max_pending_life * 60_000) || (finite(meta.expiry_ms) && now >= meta.expiry_ms)) return "pending_expired";
   return null;
@@ -936,7 +953,13 @@ export function a8Intent({ a, p, sym, bar, a8, point = 0.01, digits = 2, floorPx
 
 export const LEAN_BAND = 0.15;
 export const DEFAULT_POSITION_AGENT = "zone_pullback";
-export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [] } = {}) {
+/**
+ * CH1 (owner 2026-11-23), `changes` the change_thresholds tokens (planIntents passes them; absent: today's rules): with
+ * `conf` on, confidence_drop and the extend gate need a change of at least CONFIDENCE_CHANGE_MIN, and an "unknown"
+ * trend reads as the last known one for the extend gate (the decision before's own trend, the signal's agent_conf_last
+ * and agent_conf_last_prev), so a missing reading no longer blocks it. lean_flip is unchanged.
+ */
+export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [], changes = null } = {}) {
   const intents = [];
   const extendOf = () => true;
   if (signal?.strategy_execution !== true) return { intents, extendOf };
@@ -945,7 +968,16 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
   const bar = Math.floor(signal.power_ms / 60_000);
   const conf = parseConfidences(signal.agent_conf), prev = parseConfidences(signal.agent_conf_prev);
   const agentOf = (p) => (typeof agents?.[p.intent_id] === "string" && agents[p.intent_id]) || DEFAULT_POSITION_AGENT;
-  const trendOf = (p) => { const a = agentOf(p), k = p.side === "BUY" ? "long" : "short"; return confidenceTrend(conf[a]?.[k], prev[a]?.[k]); };
+  const confOn = changeOn(changes, "conf");
+  const band = confOn ? { min: CONFIDENCE_CHANGE_MIN } : undefined;
+  const trendOf = (p) => { const a = agentOf(p), k = p.side === "BUY" ? "long" : "short"; return confidenceTrend(conf[a]?.[k], prev[a]?.[k], band); };
+  const last = confOn ? parseConfidences(signal.agent_conf_last) : null, lastPrev = confOn ? parseConfidences(signal.agent_conf_last_prev) : null;
+  const extendTrend = (p) => {
+    const t = trendOf(p);
+    if (!confOn || t !== "unknown") return t;
+    const a = agentOf(p), k = p.side === "BUY" ? "long" : "short";
+    return confidenceTrend(last[a]?.[k], lastPrev[a]?.[k], band);
+  };
   const skip = new Set(skipTickets.filter((t) => t != null));
   for (const p of positions) {
     if (p?.ticket == null || skip.has(p.ticket) || (p.side !== "BUY" && p.side !== "SELL") || !isOmegaOwned(p)) continue;
@@ -960,7 +992,7 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
     const armedOk = !signal.armed || String(signal.armed).split(",").includes(agentOf(p));
     if (move > 0 && armedOk && trendOf(p) === "drop") intents.push({ id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) });
   }
-  return { intents, extendOf: (p) => ["stable", "rising"].includes(trendOf(p)) };
+  return { intents, extendOf: (p) => ["stable", "rising"].includes(extendTrend(p)) };
 }
 
 /* ---------- live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §2-§6, stage 3) ---------- */
@@ -1040,13 +1072,13 @@ export function zoneLimit({ signal, sym = {}, zone, digits = 2, planStopDist, mi
  * placement_band x the plan's stop distance away, and at least the broker's stop level. Never on a netting account
  * (the fill's position ticket must be the order's).
  */
-export function limitPlacement({ signal, sym = {}, account = {}, planStopDist, minDist = 0 }) {
+export function limitPlacement({ signal, sym = {}, account = {}, planStopDist, minDist = 0, changes = null }) {
   const buy = signal?.side === "BUY";
   if (account?.margin_mode !== "hedging") return { ok: false, code: "netting_account", detail: `margin mode ${account?.margin_mode ?? "unknown"}` };
   if (signal?.feed_basis_known !== true || !finite(signal?.feed_basis)) return { ok: false, code: "basis_unknown" };
   const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
   const price = roundTo(Number(signal.entry) + signal.feed_basis, digits);
-  const knobs = limitKnobs(signal.trading_mode);
+  const knobs = limitKnobs(signal.trading_mode, null, { changes });
   const away = roundTo(buy ? sym.ask - price : price - sym.bid, digits + 2);
   const awayR = planStopDist > 0 ? round3(away / planStopDist) : null;
   const out = { price, away, away_r: awayR, knobs };
@@ -1297,7 +1329,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
   const account = executor.account ?? {}, sym = executor.symbol ?? {};
   // The strategy agents' exits and the confidence gate on extending (owner 2026-11-16).
-  const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket) });
+  const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket), changes: changeTokens(S) });
   if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
   intents.push(...exits.intents);
   // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.
@@ -1476,7 +1508,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // is silent. The deterministic refusals of a limit come first, so no council is asked for an order that cannot rest.
   let route = "market", lim = null;
   if (limitMode && !leg) {
-    lim = limitPlacement({ signal, sym, account, planStopDist, minDist });
+    lim = limitPlacement({ signal, sym, account, planStopDist, minDist, changes: changeTokens(S) });
     const council = entryCouncil && entryCouncil.id === id ? entryCouncil : null;
     const request = () => {
       // The sync files this for the entry council (src/limit-council.mjs, the 5-minute ledger step); planIntents never

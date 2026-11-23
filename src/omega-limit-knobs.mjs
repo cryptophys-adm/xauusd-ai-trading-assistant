@@ -1,7 +1,8 @@
 // The limit entry's knobs (docs/RFC_OMEGA_LIMIT_ENTRY.md §7, owner 2026-11-20): one table for the live engine
 // (src/omega-engine.mjs, stage 3) and the ledger's limit policy (src/ledger-omega-limit.mjs, stage 2). Start values per
 // mode, clamped to ADR-0020 Amendment 7's doctrine bounds. No reader of the platform's omega.limit_* facts exists yet
-// (stage 4), so the start values hold. Pure; imports nothing.
+// (stage 4), so the start values hold. Pure; imports only CH1's share thresholds.
+import { SHARE_FALL_MIN, changeOn } from "./change-thresholds.mjs";
 
 const MODES = Object.freeze(["scalp", "intraday", "swing", "range"]);
 
@@ -12,7 +13,8 @@ export const LIMIT_KNOB_START = Object.freeze({
   swing: Object.freeze({ max_pending_life: 240, move_max_atr: 0.5, cancel_share_drop: 0.05, placement_band: 0.35 }),
   range: Object.freeze({ max_pending_life: 60, move_max_atr: 0.25, cancel_share_drop: 0.05, placement_band: 0.35 })
 });
-const shared = { move_max_atr: Object.freeze({ min: 0, max: 0.5 }), cancel_share_drop: Object.freeze({ min: 0.03, max: 0.1 }), placement_band: Object.freeze({ min: 0.1, max: 0.6 }) };
+// CH1 (owner 2026-11-23): cancel_share_drop's bound rises to 0.20 (min 0.03), room for the per-mode change thresholds.
+const shared = { move_max_atr: Object.freeze({ min: 0, max: 0.5 }), cancel_share_drop: Object.freeze({ min: 0.03, max: 0.2 }), placement_band: Object.freeze({ min: 0.1, max: 0.6 }) };
 /** The doctrine bounds per mode (ADR-0020 A7, cryptophys-cloud-platform ed43279): minutes, × ATR(14) 15m, share, × stop. */
 export const LIMIT_KNOB_BOUNDS = Object.freeze({
   scalp: Object.freeze({ max_pending_life: Object.freeze({ min: 15, max: 60 }), ...shared }),
@@ -25,12 +27,20 @@ export const LIMIT_KNOB_FACTS = Object.freeze({ max_pending_life: "omega.limit_l
 export const LIMIT_KNOBS_SOURCE = "start_values";
 
 /**
- * Pure: the knobs of `mode` (an unknown mode reads as intraday): the start values, or the numbers in `overrides`, each
- * clamped to its doctrine bound. `source` says where they came from.
+ * CH1 (owner 2026-11-23, the Omega setting change_thresholds' token `limit`): cancel_share_drop's start value per mode,
+ * scalp 0.10, intraday and range 0.10, swing 0.15 (src/change-thresholds.mjs SHARE_FALL_MIN); outside scalp the fall
+ * must hold on 2 consecutive closed decisions (pendingShareFall). Token off: LIMIT_KNOB_START's 0.05, today's rule.
  */
-export function limitKnobs(mode, overrides = null) {
+export const LIMIT_CANCEL_SHARE_DROP_CH1 = SHARE_FALL_MIN;
+
+/**
+ * Pure: the knobs of `mode` (an unknown mode reads as intraday): the start values, or the numbers in `overrides`, each
+ * clamped to its doctrine bound. `source` says where they came from. `changes` (CH1's token list): with `limit` on,
+ * cancel_share_drop starts at LIMIT_CANCEL_SHARE_DROP_CH1 of the mode.
+ */
+export function limitKnobs(mode, overrides = null, { changes = null } = {}) {
   const m = MODES.includes(mode) ? mode : "intraday";
-  const start = LIMIT_KNOB_START[m], bounds = LIMIT_KNOB_BOUNDS[m];
+  const start = changeOn(changes, "limit") ? { ...LIMIT_KNOB_START[m], cancel_share_drop: LIMIT_CANCEL_SHARE_DROP_CH1[m] } : LIMIT_KNOB_START[m], bounds = LIMIT_KNOB_BOUNDS[m];
   const out = { mode: m };
   let overridden = false;
   for (const k of Object.keys(start)) {

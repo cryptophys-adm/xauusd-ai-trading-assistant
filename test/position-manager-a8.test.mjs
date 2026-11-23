@@ -44,7 +44,8 @@ test("A8-1 the switch: off by default, a boolean, owner-only on the page; Aether
 
 test("A8-2 switch off: positionFacts, positionAction, the council's messages and schema and Omega's intents are byte for byte the same", () => {
   // SLG1 (2026-11-23): the code at ad21475 had no profit-lock gate; profit_lock_gate "legacy" is that code byte for byte.
-  const o = pmOffOutputs({ profitLockGate: "legacy" });
+  // CH1 (2026-11-23): neither had the change thresholds; change_thresholds "off" is that code byte for byte.
+  const o = pmOffOutputs({ profitLockGate: "legacy", changeThresholds: "off" });
   // Taken from the code at ad21475 (before the amendment) with test/fixtures/pm-a8-off.mjs.
   assert.equal(h(o.facts), "51d837cdc426341bb7791239493dbbb6770f8e70ab4e68b9f9fbd3151b740ae8");
   assert.equal(h(o.actions), "5b45c5488e77feb12cd5377958940f329b1b323febe2eddb4e12f3a3e600caac");

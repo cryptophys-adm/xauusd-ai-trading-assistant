@@ -10,6 +10,7 @@ import {
   replayOmegaLimit, limitKnobs, limitCancelReason, runOmegaLimit, LIMIT_KNOB_START, LIMIT_KNOB_BOUNDS, LIMIT_KNOBS_SOURCE, OMEGA_LIMIT_CHECKPOINT_KEY, OMEGA_LIMIT_VERSION
 } from "../src/ledger-omega-limit.mjs";
 import { planIntents, OMEGA_DEFAULTS, LIMIT_ENTRY_AVAILABLE } from "../src/omega-engine.mjs";
+import { changeTokens } from "../src/change-thresholds.mjs";
 import { makerTaker, limitStats, executionReport, limitReport, readLedger, readExecutionReport, runOmega4Step, resetLedgerSchemaCacheForTests, EXECUTION_REPORT_SCHEMA, REPORT_FORBIDDEN_KEYS } from "../src/signal-ledger.mjs";
 import { DECISION_SCHEMA_SQL } from "../src/decision-engine.mjs";
 
@@ -73,7 +74,8 @@ test("L1. a limit fills when a bar reaches the level, then v4 manages it: the TP
   assert.equal(j.version, OMEGA_LIMIT_VERSION);
   // Placed at the first minute after the decision (decided at C + 2), its gates passed.
   assert.deepEqual([j.entry_policy.placed_at, j.entry_policy.wait_min, j.entry_policy.away_r], [new Date(C + 2 * M1).toISOString(), 5, 0.1]);
-  assert.deepEqual(j.entry_policy.knobs, limitKnobs("scalp"));
+  // CH1 (2026-11-23): the knobs recorded are the change thresholds' (token limit on by default: cancel_share_drop 0.10).
+  assert.deepEqual(j.entry_policy.knobs, limitKnobs("scalp", null, { changes: changeTokens(OMEGA_DEFAULTS) }));
   // v4's management after the fill: the planIntents ladder lock on a closed M5 candle, then the locked stop.
   const lock = trace.filter((s) => s.now > C + 7 * M1).flatMap((s) => s.output.intents.map((it) => ({ ...it, at: s.now }))).find((it) => /^ladder_lock_tp0/.test(String(it.reason)));
   assert.ok(lock, "the ladder's lock is planned on the filled position");
@@ -140,18 +142,20 @@ test("L4. limit_out_of_band: the level further than placement_band x the plan's 
 });
 
 test("L5. a cancel on the quorum share drop: the SELL side's share falls by more than cancel_share_drop from the placing decision", () => {
+  // CH1 (2026-11-23): today's rule, with the change thresholds off (their token limit: test/change-thresholds.test.mjs).
+  const OFF = { ...OMEGA_DEFAULTS, enabled: true, change_thresholds: "off" };
   const pts = [[C + 3 * M1, 1998], [C + 120 * M1, 1997]];
   // Intraday (60 minutes of life): the next 15m decision, a WAIT, holds short_share 0.7 against the placing 0.8.
   const drop = sellCase(pts, { mode: "intraday", later: [decision({ close: C + M15, stance: "WAIT", decidedAfter: M1, shares: [0.3, 0.7], mode: "intraday" })], to: C + 120 * M1 });
-  const r = replayOmegaLimit({ ...base(), ...drop }).records[key(C)];
+  const r = replayOmegaLimit({ ...base({ settings: OFF }), ...drop }).records[key(C)];
   assert.deepEqual([r.limit_status, r.limit_gate], ["missed", "quorum_share_drop"]);
   assert.equal(JSON.parse(r.limit_json).ended_at, new Date(C + M15 + M1).toISOString(), "at the minute the decision is made");
   // A drop of 0.03 is no reason (and a WAIT alone never is): the order rests to its life.
   const small = sellCase(pts, { mode: "intraday", later: [decision({ close: C + M15, stance: "WAIT", decidedAfter: M1, shares: [0.23, 0.77], mode: "intraday" })], to: C + 120 * M1 });
-  assert.equal(replayOmegaLimit({ ...base(), ...small }).records[key(C)].limit_gate, "pending_expired");
+  assert.equal(replayOmegaLimit({ ...base({ settings: OFF }), ...small }).records[key(C)].limit_gate, "pending_expired");
   // The pure reason, at the knob's edge: more than 0.05 cancels, exactly 0.05 does not.
   const pending = { side: "SELL", close_ms: C, placed_ms: C + 3 * M1, share0: 0.8, profile: "aggressive", knobs: limitKnobs("intraday") };
-  const at = (share) => limitCancelReason({ pending, now: C + 20 * M1, decision: { close_ms: C + M15, stance: "WAIT", quorum: { short_share: share } } });
+  const at = (share) => limitCancelReason({ pending, now: C + 20 * M1, decision: { close_ms: C + M15, stance: "WAIT", quorum: { short_share: share } }, settings: OFF });
   assert.deepEqual([at(0.74), at(0.75), at(0.8)], ["quorum_share_drop", null, null]);
 });
 
@@ -187,7 +191,8 @@ test("L7. the knobs: the RFC's start values per mode, every value clamped to ADR
   const low = limitKnobs("scalp", { max_pending_life: 5, move_max_atr: -1, cancel_share_drop: 0, placement_band: 0 });
   assert.deepEqual([low.max_pending_life, low.move_max_atr, low.cancel_share_drop, low.placement_band, low.source], [15, 0, 0.03, 0.1, "overrides_clamped"]);
   const high = limitKnobs("swing", { max_pending_life: 5000, move_max_atr: 2, cancel_share_drop: 0.5, placement_band: 1 });
-  assert.deepEqual([high.max_pending_life, high.move_max_atr, high.cancel_share_drop, high.placement_band], [720, 0.5, 0.1, 0.6]);
+  // CH1 (owner 2026-11-23): cancel_share_drop's bound is 0.20 (it was 0.10), room for swing's 0.15.
+  assert.deepEqual([high.max_pending_life, high.move_max_atr, high.cancel_share_drop, high.placement_band], [720, 0.5, 0.2, 0.6]);
   assert.equal(limitKnobs("range", { max_pending_life: 1000 }).max_pending_life, 240);
   assert.equal(limitKnobs(null).mode, "intraday", "an unknown mode reads as intraday");
   assert.equal(limitKnobs("intraday", { placement_band: "x" }).placement_band, 0.35, "a value that is not a number keeps the start value");

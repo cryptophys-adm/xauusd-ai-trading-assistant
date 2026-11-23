@@ -11,20 +11,31 @@
 //            docs/RFC_POSITIONING_LIQUIDITY.md §5-§6.
 //   gate     planIntents over the hand inputs with every position's profit-lock gate open (SLG1, the gate on), and v4's
 //            replay of a peak past the gate that pulls back inside the band (the gate as the break-even's trigger).
+//   change   CH1's cases (test/fixtures/change-thresholds.mjs): the Position Manager's rules over decision histories that
+//            confirm or do not confirm a change, Omega's confidence exits and extend gate, a resting limit's share
+//            cancel. Written with the change thresholds on only (with "off" the text is the engine's before CH1).
 // Only outputs are written, never the inputs: a new switch added to OMEGA_DEFAULTS at its default leaves the text as is.
 // `profitLockGate` (SLG1, 2026-11-23) sets profit_lock_gate on every input after the defaults check: "legacy" gives the
 // text of the engine before the gate byte for byte (its hash is the old ENGINE_BEHAVIOUR_HASH, test V14b).
+// `changeThresholds` (CH1, 2026-11-23) sets change_thresholds on every input the same way (and the Position Manager's
+// facts get the tokens as the runner passes them): "" or "off" gives the text of the engine before CH1 byte for byte
+// (SLG1's 94e6f50c… with the gate on; test/change-thresholds.test.mjs).
 import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
 import { pmOffOutputs } from "./pm-a8-off.mjs";
 import { v4ReplayScenarios, base, retraceCase } from "./omega-v4-replay.mjs";
+import { changeLines } from "./change-thresholds.mjs";
 
 const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
   if (on.length) throw new Error(`${name}: a behaviour switch is on (${on.join(", ")}); the fingerprint is taken with every switch at its default`);
 };
-const withGate = (settings, gate) => (gate ? { ...settings, profit_lock_gate: gate } : settings);
+let changeOverride = null;
+const withGate = (settings, gate) => {
+  const s = gate ? { ...settings, profit_lock_gate: gate } : settings;
+  return changeOverride != null ? { ...s, change_thresholds: changeOverride } : s;
+};
 const replayLines = (group, scenarios, gate = null) => {
   const lines = [];
   for (const s of scenarios) {
@@ -39,14 +50,18 @@ const replayLines = (group, scenarios, gate = null) => {
 };
 
 /** The text ENGINE_BEHAVIOUR_HASH is taken of (sha256Hex of it). */
-export function engineBehaviourSource({ profitLockGate = null } = {}) {
+export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null } = {}) {
+  changeOverride = changeThresholds == null ? null : changeThresholds === "" ? "off" : changeThresholds;
+  try { return behaviourText(profitLockGate); } finally { changeOverride = null; }
+}
+function behaviourText(profitLockGate) {
   const lines = [];
   for (const [name, input] of handInputs()) {
     atDefaults(`market/${name}`, input.settings);
     lines.push(`market/hand/${name}=${JSON.stringify(planIntents({ ...input, settings: withGate(input.settings, profitLockGate) }))}`);
   }
   lines.push(...replayLines("market/replay", replayScenarios().filter((s) => !eraSwitches(s.opts.settings).length), profitLockGate));
-  const pm = pmOffOutputs(profitLockGate ? { profitLockGate } : {});
+  const pm = pmOffOutputs({ ...(profitLockGate ? { profitLockGate } : {}), ...(changeOverride != null ? { changeThresholds: changeOverride } : {}) });
   for (const part of ["facts", "actions", "messages", "schema", "cleaned", "intents", "plans"]) lines.push(`pm/${part}=${JSON.stringify(pm[part])}`);
   lines.push(...replayLines("v4", v4ReplayScenarios(), profitLockGate));
   for (const [ratio, tag] of [[3, "spike"], [1, "calm"]]) {
@@ -70,5 +85,7 @@ export function engineBehaviourSource({ profitLockGate = null } = {}) {
     // The gate as the break-even's trigger (#535 review): a peak past the gate, back inside the band at the next run.
     lines.push(...replayLines("gate/retrace", [{ name: "retrace", opts: { ...base(), ...retraceCase() } }], profitLockGate));
   }
+  // CH1 (2026-11-23): the change thresholds' own cases, only with them on (they are absent from the text before CH1).
+  if (changeOverride !== "off") lines.push(...changeLines(changeOverride ?? undefined));
   return lines.join("\n");
 }

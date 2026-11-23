@@ -33,6 +33,17 @@
 // without the council, or waits as lock_waits_room while the price leaves no room for it. take_profit_weakening,
 // cut_loss and lock_tp1's level are unchanged. "legacy" (no `gate`): the rules as they were.
 //
+// CH1, change thresholds (owner 2026-11-23: "supaya tidak terlalu dini, perubahan confluence dan confidence perlu
+// threshold atau ambang perubahan"; "Live semua (Rekomendasi)"; src/change-thresholds.mjs), with the Omega setting
+// change_thresholds' tokens (the runner passes `changes` into positionFacts; absent, today's facts and rules):
+//   conf    the agent's trend needs a change of at least 0.05 (cut_loss's confidence reason, A8's confidence reasons);
+//   tpw     take_profit_weakening closes only with a measured reason (measuredFall: scalp the share fell >= 0.10 or the
+//           confidence dropped >= 0.05; intraday and range the same on 2 consecutive closed 15m decisions; swing the
+//           share >= 0.15 on 2 decisions); without one the rules below it run (the gate, lock_tp1, the break-even);
+//   stance  cut_loss's "the decision is <the other side>" needs that stance on 2 consecutive closed decisions.
+// cut_loss's share reason (SHARE_DROP 0.05, one bar, no minimum age) is unchanged. A close today's rule would make that
+// a token holds back says so in the action's why (heldText), which the brake counts (src/ledger-omega4.mjs).
+//
 // Guardrails (owner): only close, or a stop moved in the position's favour (never widened), or the take-profit
 // moved out to TP2; never an add, a reversal or an open. Inputs are measured: the strategy agent's confidence on the
 // position's side against the bar before, the quorum's shares, the decision's stance. Never the council's own
@@ -54,6 +65,7 @@ import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords } from "./omega-engine.m
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
+import { changeTokens, changeOn, trendFor, sideReadings, measuredFall, stanceAgainstConfirmed, changeRule, decisionHistory, heldText } from "./change-thresholds.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -101,7 +113,7 @@ export const pipsOf = (dist) => r1(dist / PIP);
  * reads as closed, unmeasured); the facts then carry `gate` { open, mfe_r, mfe_atr, ..., be } with `be` the gate's
  * first lock. Absent ("legacy"): the facts are today's.
  */
-export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null, gate = undefined }) {
+export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null, gate = undefined, changes = undefined }) {
   if (!p || (p.side !== "BUY" && p.side !== "SELL") || !isNum(sym?.bid) || !isNum(sym?.ask)) return null;
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), sl = Number(p.sl), tp = Number(p.tp);
@@ -123,7 +135,7 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
     tp1, tp2: beyond ? (buy ? beyond.low : beyond.high) : null, spread: spreadPx, point,
     pips, beyond_tp1_pips: pipsOf(dir * (price - tp1)),
     band_pips: band.pips, band_r: band.r, mode: band.mode, r_dist_pips: band.r_dist_pips, r: band.r_dist_pips ? Math.round((pips / band.r_dist_pips) * 100) / 100 : null,
-    agent, agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: confidenceTrend(conf, prev),
+    agent, agent_conf: isNum(conf) ? conf : null, agent_conf_prev: isNum(prev) ? prev : null, agent_trend: Array.isArray(changes) ? trendFor(conf, prev, changes) : confidenceTrend(conf, prev),
     stance: decision.stance, with_decision: decision.stance === p.side, against_decision: decision.stance === (buy ? "SELL" : "BUY"),
     share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null,
     // Under the TP ladder an outward target waits until the stop locks the ladder's TP1 (ADR-0020 Amendment 4).
@@ -138,6 +150,12 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   if (gate !== undefined) {
     const g = gate && typeof gate === "object" ? gate : GATE_UNMEASURED;
     out.gate = { ...g, open: g.open === true, be: gateBreakEven({ open, dir, spread: spreadPx, atrM5: gateAtrM5(signal, sym), digits: Number.isInteger(sym.digits) ? sym.digits : 2 }) };
+  }
+  // CH1: only with a token on (`changes`, the runner's and v4's change_thresholds); otherwise the facts are today's.
+  if (Array.isArray(changes) && changes.length) {
+    const h = sideReadings(decision, p.side, agent);
+    out.ch = { on: [...changes], rule: changeRule(band.mode), share_prev2: h.share_prev2, conf_prev2: h.conf_prev2, stance_prev: h.stance_prev,
+      against_confirmed: stanceAgainstConfirmed(p.side, decision.stance, h.stance_prev), agent_trend_legacy: confidenceTrend(conf, prev) };
   }
   return out;
 }
@@ -190,8 +208,23 @@ export function positionAction(f, council) {
   return council ? a8Action(f, council, held) : held;
 }
 
-/** Pure: the fixed rules of today (before ADR-0020 Amendment 8), as positionAction gave them. */
+/**
+ * Pure: the fixed rules of today (before ADR-0020 Amendment 8), as positionAction gave them. With CH1's tokens on
+ * (`f.ch`), a close today's rule would make that a token holds back says so at the end of the action's why.
+ */
 export function ruleAction(f, council) {
+  const held = [];
+  const a = ruleCore(f, council, held);
+  return held.length ? { ...a, why: `${a.why}; ${held.join("; ")}` } : a;
+}
+
+/** Pure, CH1 token tpw: the measured reason behind a weakening close (measuredFall of the position's mode), or null. */
+export function weakeningReason(f) {
+  return measuredFall({ mode: f.mode, side: f.side, agent: f.agent, share: f.share, share_prev: f.share_prev, share_prev2: f.ch?.share_prev2 ?? null, conf: f.agent_conf, conf_prev: f.agent_conf_prev, conf_prev2: f.ch?.conf_prev2 ?? null }).text;
+}
+
+/** Pure: ruleAction's rules; `held` collects what a CH1 token held back (ruleAction appends it to the why). */
+export function ruleCore(f, council, held = []) {
   if (!f) return { action: "none", rule: "inputs_missing", why: "an input the rules need is missing" };
   const better = (x) => f.sl == null || (f.dir > 0 ? x > f.sl + f.point / 2 : x < f.sl - f.point / 2);
   const room = (x) => (f.dir > 0 ? x < f.price - f.spread : x > f.price + f.spread);
@@ -214,9 +247,15 @@ export function ruleAction(f, council) {
   // SLG1: the gate open, the stop not yet past the entry and its first lock tighter than the stop: the lock is due.
   const gateLock = G != null && G.open === true && !pastEntry && better(G.be);
   const lockWaitsRoom = () => ({ action: "hold", rule: "lock_waits_room", why: `the profit-lock gate is open (${gateText(G)}) but the price leaves no room for the stop at ${G.be} (break-even plus the spread and 0.1 x ATR(M5)): the lock waits` });
+  // CH1 token tpw: the council's weakening closes only with a measured reason; without one the rules below it run.
+  const tpwOn = changeOn(f.ch?.on, "tpw");
+  const weakWhy = tpwOn && council?.momentum === "weakening" ? weakeningReason(f) : null;
+  const weakHeld = () => held.push(`${heldText("tpw", "close")}: the council reads the momentum weakening, but no measured change holds (${f.ch.rule.mode}: the share's fall at least ${f.ch.rule.share_fall}${f.ch.rule.conf_drop != null ? ` or the confidence's drop at least ${f.ch.rule.conf_drop}` : ""}${f.ch.rule.confirm >= 2 ? `, on ${f.ch.rule.confirm} consecutive decisions` : ""})`);
   // Beyond TP1 by 30 pips: the stop locks TP1, or the position closes when the council reads the momentum weakening.
   if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) {
-    if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
+    if (council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
+    if (council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1, the momentum is weakening and ${weakWhy}: closed instead of locking TP1` };
+    if (council?.momentum === "weakening") weakHeld();
     if (shut) return waits("lock_waits_gate", `${f.beyond_tp1_pips} pips beyond TP1: the TP1 lock`);
     return mfe({ action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` });
   }
@@ -245,12 +284,15 @@ export function ruleAction(f, council) {
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
   const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
   if (f.pips >= band) {
-    if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
+    if (council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
+    if (council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${at(1)}, the momentum is weakening and ${weakWhy}: closed without waiting for TP1` };
+    if (council?.momentum === "weakening") weakHeld();
     // SLG1: with the gate on, the break-even waits for it and is then the gate's first lock.
     const be = G ? G.be : f.open + f.dir * f.spread;
     if (better(be) && room(be) && !pastEntry) {
       if (shut) return waits("lock_waits_gate", `${at(1)}: the break-even`);
-      return mfe({ action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}${reading}` });
+      // CH1: a weakening tpw held back is not "still strong" (today a weakening never reaches this line).
+      return mfe({ action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council && council.momentum !== "weakening" ? " and still strong" : ""}: stop to break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}${reading}` });
     }
     if (gateLock && !room(G.be)) return lockWaitsRoom();
     if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
@@ -259,15 +301,24 @@ export function ruleAction(f, council) {
   if (f.pips <= -band) {
     if (f.agent_conf == null || f.agent_conf_prev == null || f.share == null) return { action: "none", rule: "inputs_missing", why: "the agent's confidence or the quorum is missing: the stop stays" };
     const shareDrop = f.share_prev != null && f.share_prev - f.share > SHARE_DROP;
+    // CH1 token stance: the decision on the other side counts only on 2 consecutive closed decisions.
+    const stanceOn = changeOn(f.ch?.on, "stance");
+    const againstReason = f.against_decision && (!stanceOn || f.ch.against_confirmed === true);
     // Measured reasons only. A WAIT decision is not one (owner 2026-11-19): it is said beside one, never alone.
     const reasons = [
-      ...(f.against_decision ? [`the decision is ${f.stance}`] : []),
+      ...(againstReason ? [stanceOn ? `the decision is ${f.stance} on 2 decisions` : `the decision is ${f.stance}`] : []),
       ...(f.agent_trend === "drop" ? [`the ${f.agent} confidence dropped ${f.agent_conf_prev} to ${f.agent_conf}`] : []),
       ...(shareDrop ? [`the quorum's ${f.side === "BUY" ? "bullish" : "bearish"} share fell ${Math.round(f.share_prev * 100)}% to ${Math.round(f.share * 100)}%`] : []),
       // The liquidity lens (RFC §6): a measured reason beside the others; the cut still needs the council's thesis.
       ...(f.liquidity?.sweep === "against" ? [sweepAgainstText(f)] : [])
     ];
     const wait = !f.with_decision && !f.against_decision ? `the decision is ${f.stance}` : null;
+    if (!reasons.length && f.ch && council && council.thesis !== "intact") {
+      // CH1: the reasons today's rule would have cut on, and the tokens that held them back.
+      const lost = [...(f.against_decision && !againstReason ? [["stance", `the decision is ${f.stance} on this decision only (the one before: ${f.ch.stance_prev ?? "none"})`]] : []),
+        ...(f.ch.agent_trend_legacy === "drop" && f.agent_trend !== "drop" ? [["conf", `the ${f.agent} confidence moved ${f.agent_conf_prev} to ${f.agent_conf}, under 0.05`]] : [])];
+      for (const [token, what] of lost) held.push(`${heldText(token, "cut")}: ${what}`);
+    }
     if (!reasons.length) return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} but no measured reason to cut${wait ? ` (${wait}, not a reason alone)` : ""}: held to the original stop` };
     // The cut goes through the council: without its answer, or with the thesis intact, the position holds.
     if (!council) return { action: "none", rule: "council_unavailable", why: `${at(-1)} and ${reasons.join("; ")}, but the council did not answer: the stop stays` };
@@ -553,8 +604,8 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);
     const levels = brokerLevels(signal);
     // The TP ladder setting (Omega's settings, default on): TP2 waits for its TP1 lock (positionFacts ladder_hold).
-    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false, lockGate = profitLockGateOn(OMEGA_DEFAULTS);
-    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
+    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false, lockGate = profitLockGateOn(OMEGA_DEFAULTS), changes = changeTokens(OMEGA_DEFAULTS);
+    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); changes = changeTokens({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
     // SLG1 (owner 2026-11-23): with profit_lock_gate "on", each position's profit-lock gate, measured as Omega's sync
     // measures it (src/omega-broker.mjs profitLockGates: the broker's M1 corpus since the fill, the terminal's ATR(14,
     // M15), the decision's ATR(H1)); a position without facts reads as closed. "legacy": none, today's rules.
@@ -588,7 +639,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     for (const p of positions) {
       const id = `pm:${p.ticket}:${bar}`;
       if (await db.prepare("SELECT id FROM position_actions WHERE id = ?").bind(id).first()) continue;
-      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}), ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}) });
+      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}), ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}) });
       let council = null, councilNote = null;
       if (f && spent < capUsd) {
         try {
@@ -647,14 +698,18 @@ export async function loosenInputs(env, db, { positions = [], openIntents = {}, 
     loosened: Boolean(records[String(p.ticket)]), from_sl: records[String(p.ticket)]?.from_sl ?? null, unreadable, release, delegated: p.delegated === true });
 }
 
-/** The latest decision with the quorum of the bar before (quorum_prev), or null. */
+/**
+ * The latest decision with the quorum of the bar before (quorum_prev), or null. CH1 (2026-11-23): with the two decision
+ * rows before it as `decision_history` (src/change-thresholds.mjs decisionHistory), so a change confirmed on 2
+ * consecutive closed decisions is counted per decision, the same way v4 reads its decision rows.
+ */
 export async function latestDecisions(db) {
   try {
-    const rows = (await db.prepare("SELECT decision_json FROM engine_decisions ORDER BY bar_close DESC LIMIT 2").all()).results ?? [];
-    const [d, prev] = rows.map((r) => JSON.parse(r.decision_json));
+    const rows = (await db.prepare("SELECT decision_json FROM engine_decisions ORDER BY bar_close DESC LIMIT 3").all()).results ?? [];
+    const [d, prev, prev2] = rows.map((r) => JSON.parse(r.decision_json));
     if (!d) return null;
     const fresh = prev && Date.parse(d.bar_close) - Date.parse(prev.bar_close) === 15 * 60_000;
-    return { ...d, quorum_prev: fresh ? prev.quorum ?? null : null };
+    return { ...d, quorum_prev: fresh ? prev.quorum ?? null : null, decision_history: decisionHistory(d, prev ?? null, prev2 ?? null) };
   } catch { return null; }
 }
 

@@ -411,7 +411,9 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds"]);
+  // The change thresholds (CH1) are all on by default: a token turned off starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, change_thresholds: "off" }), ["change_thresholds=off"]);
   // The profit-lock gate (SLG1) is on by default: "legacy" starts a new era.
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, profit_lock_gate: "legacy" }), ["profit_lock_gate=legacy"]);
   // The lens switches are on by default: at their defaults they add nothing; a lens switched off starts a new era.

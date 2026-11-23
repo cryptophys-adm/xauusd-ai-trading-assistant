@@ -406,7 +406,8 @@ test("SLG1-18 the gate is the break-even's trigger: open, the first lock goes in
 });
 
 test("SLG1-15 legacy is byte for byte the engine before the gate: the old behaviour hash, and gates are never read", async () => {
-  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy" })), OLD_BEHAVIOUR_HASH);
+  // CH1 (2026-11-23): the engine before the gate had no change thresholds either ("off" is today's rules byte for byte).
+  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy", changeThresholds: "" })), OLD_BEHAVIOUR_HASH);
   assert.notEqual(ENGINE_BEHAVIOUR_HASH, OLD_BEHAVIOUR_HASH, "the gate on is a new era (SLG1, a recorded exception)");
   assert.equal(await sha256Hex(engineBehaviourSource()), ENGINE_BEHAVIOUR_HASH);
   // "legacy" ignores any gate facts given.

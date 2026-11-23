@@ -78,7 +78,9 @@ Then Omega asks the **entry council** (under `"council"`, the same call answers 
 - **What it reads:** the 15m decision with its reasons, and the 1H, 4H and 1D rooms' latest readings and biases.
 - **What it answers:** `place` or `skip`, with its reasons.
 - `skip` or no answer means **no order**. There is no market fallback: in limit mode a missed limit is a missed trade, and the
-  ledger counts it (§8).
+  ledger counts it (§8). Since CH1 (owner 2026-11-23, docs/SSOT.md, the change threshold `skip` on by default) a skip
+  needs a measured skip reason that holds, as under `"council"`; one that does not places the limit
+  (`skip_no_measured_reason`).
 
 **The limit price**
 - It is the decision's level (`signal.entry`, OANDA scale) plus the feed→broker basis measured at placement:
@@ -146,7 +148,8 @@ A WAIT stance alone is never a reason. Without a measured reason the order is ke
 **Deterministic cancels, with no council involved (A7):** the order is deleted at once when
 - its side's quorum share (`quorum.long_share` for a buy, `quorum.short_share` for a sell) fell by more than
   `cancel_share_drop` from the placing decision to the current 15m decision (`quorum_share_drop`; this was a council reason
-  before A7);
+  before A7). Since CH1 (owner 2026-11-23, docs/SSOT.md, the change threshold `limit` on by default): by at least
+  `cancel_share_drop`, and outside scalp on the decision before the current one too (2 consecutive closed decisions);
 - the Decision Engine vetoes its side (`de_veto`);
 - the profile is downgraded to Safe (`profile_downgrade`);
 - the account is disarmed (`disarmed`) or killed (`kill`);
@@ -232,7 +235,7 @@ Policy Engine's prohibited filter refuses them; platform test K2):
 |---|---|---|---|---|
 | `max_pending_life` (min) | 15–60, start 30 | 30–240, start 60 | 60–720, start 240 | 30–240, start 60 |
 | `move_max_atr` (× ATR(14) 15m) | 0–0.5, start 0.25 | 0–0.5, start 0.5 | 0–0.5, start 0.5 | 0–0.5, start 0.25 |
-| `cancel_share_drop` (share) | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 | 0.03–0.10, start 0.05 |
+| `cancel_share_drop` (share) | 0.03–0.20, start 0.10 (CH1; 0.05 with `limit` off) | 0.03–0.20, start 0.10 on 2 decisions (CH1; 0.05) | 0.03–0.20, start 0.15 on 2 decisions (CH1; 0.05) | 0.03–0.20, start 0.10 on 2 decisions (CH1; 0.05) |
 | `placement_band` (× stop distance) | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 | 0.1–0.6, start 0.35 |
 
 - `placement_band` stays well under 1.0: at 1.0 the limit would sit on the stop and the sizing breaks. The platform allows a
@@ -369,7 +372,10 @@ Policy Engine's prohibited filter refuses them; platform test K2):
      - **The measured reasons of the entry council** are a fixed list the code verifies against the facts: `htf_against`,
        `confidence_drop`, `quorum_share_drop` for skip; `price_away_from_level` (at least 0.1 x the stop from price) for
        place_limit; `price_at_level`, `htf_with`, `confidence_rising` for enter_market. Under "council" an answer without
-       one that holds is the market entry (`no_measured_reason`). Under "limit" place and skip stand as answered (§3).
+       one that holds is the market entry (`no_measured_reason`). Under "limit" place and skip stand as answered (§3); since
+       CH1 (2026-11-23) with the change threshold `skip` on, a skip stands only with a skip reason that holds, else the
+       limit is placed (`skip_no_measured_reason`), and `confidence_drop` and `quorum_share_drop` hold by the
+       `take_profit_weakening` thresholds of the mode (docs/SSOT.md).
      - **The conversion's market leg** follows the current signal: it is planned once the delete is answered and the
        order is gone from the terminal's report, only while the current signal is on the order's side, under the id
        `<the order's open id>:m` (one per signal), through every gate of today with the current signal's plan. A signal
