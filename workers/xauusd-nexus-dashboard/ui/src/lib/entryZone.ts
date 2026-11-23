@@ -101,26 +101,22 @@ export const zoneToBroker = (z: Zone | null, basis: number | null): Zone | null 
 /** The basis as signed text: "+0.420". */
 export const basisText = (b: number, digits = 3): string => `${b >= 0 ? "+" : "−"}${Math.abs(b).toFixed(digits)}`;
 
-/**
- * OM-LEAN (the reviewer's ruling: feed-price labels to match the axis; the caption states the basis once): Omega's own
- * lines on the feed chart carry one price each. With a known basis that price is the feed's (broker − basis); without
- * one the line stays at the broker's price and its label says "broker", so the chart never mixes scales unlabelled.
- */
-/** The resting limit's label: "Limit #50131 2684.22" (feed), or "Limit #50131 2684.64 broker" without a basis. */
-export function limitTitle(ticket: unknown, price: number, basisKnown: boolean, digits = 2): string {
-  const t = ticket != null && ticket !== "" ? ` #${ticket}` : "";
-  return `Limit${t} ${price.toFixed(digits)}${basisKnown ? "" : " broker"}`;
+/** A bid or ask line's title on the feed chart: "bid broker 2684.64 · feed 2684.22". */
+export const quoteTitle = (kind: "bid" | "ask", broker: number, feed: number, digits = 2): string => `${kind} broker ${broker.toFixed(digits)} · feed ${feed.toFixed(digits)}`;
+/** The resting limit's title on the feed chart: "LIMIT · broker 2684.64 (feed 2684.22)". */
+export const limitTitle = (broker: number, feed: number, digits = 2): string => `LIMIT · broker ${broker.toFixed(digits)} (feed ${feed.toFixed(digits)})`;
+/** The entry zone's label on the feed chart: "Entry zone · broker A–B (feed C–D)"; on a phone "zone · feed C–D (broker +0.42)". */
+export function chartZoneLabel(broker: Zone, feed: Zone, basis: number, phone = false): string {
+  return phone ? `zone · feed ${zoneText(feed)} (broker ${basisText(basis, 2)})` : `Entry zone · broker ${zoneText(broker)} (feed ${zoneText(feed)})`;
 }
-/** The entry zone's label: "zone 2684.20–2685.60" (feed), or "zone 2684.62–2686.02 broker" without a basis. */
-export const chartZoneLabel = (z: Zone, basisKnown: boolean, digits = 2): string => `zone ${zoneText(z, digits)}${basisKnown ? "" : " broker"}`;
 
-/** One open position's line on the feed chart: its price on the chart's scale and its label. */
+/** One open position's line on the feed chart: its price on the chart's scale and its title. */
 export type PositionLine = { kind: "entry" | "sl" | "tp"; price: number; title: string };
 /**
- * An open position's entry, SL and TP lines on the feed chart: with a known basis each broker price converted
- * (broker − basis) and labelled with that feed price ("#50128 BUY 0.10 2685.60", "#50128 SL 2680.40"); without one at
- * the broker's price, labelled "… broker". The words are the page's own: "#ticket SIDE lot", "#ticket SL", "#ticket TP".
- * A missing or zero price (no SL or TP) draws no line.
+ * An open position's entry, SL and TP lines on the feed chart (the reviewer's addition to EZ1): with a known basis each
+ * broker price converted (broker − basis) and titled "<words> · broker X · feed Y"; without one at the broker's price,
+ * titled "<words> · broker", so the chart never mixes scales unlabelled. The words are the page's own: "#ticket SIDE lot",
+ * "#ticket SL", "#ticket TP". A missing or zero price (no SL or TP) draws no line.
  */
 export function positionLines(p: any, basis: number | null, digits = 2): PositionLine[] {
   if (!p || typeof p !== "object") return [];
@@ -135,26 +131,25 @@ export function positionLines(p: any, basis: number | null, digits = 2): Positio
     if (!isNum(broker) || broker <= 0) continue;
     if (isNum(basis)) {
       const feed = brokerToFeed(broker, basis, digits);
-      if (feed != null) out.push({ kind, price: feed, title: `${words[kind]} ${feed.toFixed(digits)}` });
-    } else out.push({ kind, price: broker, title: `${words[kind]} ${broker.toFixed(digits)} broker` });
+      if (feed != null) out.push({ kind, price: feed, title: `${words[kind]} · broker ${broker.toFixed(digits)} · feed ${feed.toFixed(digits)}` });
+    } else out.push({ kind, price: broker, title: `${words[kind]} · broker` });
   }
   return out;
 }
 
 /**
  * Omega's resting limit (broker scale): its own pending BUY_LIMIT or SELL_LIMIT at the broker (not a manual order),
- * else the newest place_limit intent still pending or sent. The zone is that intent's entry_zone (broker), if any; the
- * ticket is the order's (null for an intent not yet at the broker).
+ * else the newest place_limit intent still pending or sent. The zone is that intent's entry_zone (broker), if any.
  */
-export function restingLimit(orders: any[], intents: any[]): { price: number; side: Side | null; zone: Zone | null; intent: any; ticket: number | null } | null {
+export function restingLimit(orders: any[], intents: any[]): { price: number; side: Side | null; zone: Zone | null; intent: any } | null {
   const own = (orders ?? []).find((o: any) => (o?.type === "BUY_LIMIT" || o?.type === "SELL_LIMIT") && !(o.source === "manual" || o.magic === 0) && isNum(o.price_open) && o.price_open > 0);
   const live = (intents ?? []).filter((i: any) => i?.kind === "place_limit" && (i.status === "pending" || i.status === "sent" || i.status === "done"));
   if (own) {
     const it = live.find((i: any) => i.id === own.comment || Number(i?.result?.ticket) === Number(own.ticket)) ?? null;
-    return { price: own.price_open, side: own.type === "BUY_LIMIT" ? "BUY" : "SELL", zone: intentZoneOf(it), intent: it, ticket: isNum(Number(own.ticket)) && Number(own.ticket) > 0 ? Number(own.ticket) : null };
+    return { price: own.price_open, side: own.type === "BUY_LIMIT" ? "BUY" : "SELL", zone: intentZoneOf(it), intent: it };
   }
   const pend = live.filter((i: any) => i.status !== "done" && isNum(i.entry) && i.entry > 0).sort((a: any, b: any) => (b.created_ms ?? 0) - (a.created_ms ?? 0))[0];
-  return pend ? { price: pend.entry, side: pend.side === "BUY" || pend.side === "SELL" ? pend.side : null, zone: intentZoneOf(pend), intent: pend, ticket: null } : null;
+  return pend ? { price: pend.entry, side: pend.side === "BUY" || pend.side === "SELL" ? pend.side : null, zone: intentZoneOf(pend), intent: pend } : null;
 }
 
 // ---------------------------------------------------------------- the planner's notes
