@@ -68,3 +68,15 @@ Why: scalp stops are small and its ATR noisy, so it needs more expansion and giv
 - **`ENGINE_CODE_HASH` changes** (new functions and the changed `positionAction`, `positionManagerIntents`, `manageIntents`, `planIntents`, `isProtected`, `settingsFrom`, `OMEGA_DEFAULTS`). The era now follows `ENGINE_BEHAVIOUR_HASH` and the switch signature (docs/SSOT.md, v4 parity era). With the switch off the behaviour hash is unchanged (A8-2), so the stage 3 era carries over at the deploy; `pm_loosen_enabled` turned on starts a new era at the settings' `updated_ms` ("switch on: pm_loosen_enabled"), and turned off again another.
 
 Tests: test/position-manager-a8.test.mjs A8-1 to A8-15; the fixture test/fixtures/pm-a8-off.mjs.
+
+## 8. PM-1M: the 1m fast-protect layer beside the council (2026-11-23)
+
+Provenance: owner 2026-11-23, relayed by the orchestrator: "deploy semuanya live. Tf 1m diperlukan position manager untuk antisipasi TP lebih cepat dan mengurangi kerugian. Meski concern dengan noise perlu penanganan." Live on merge, behind the Omega setting `pm_fast_1m` ("on" by default, "off" is the engine before it byte for byte). The canonical description is docs/SSOT.md ("The 1m fast-protect layer"); this section records how it sits beside Amendment 8.
+
+- **A layer, not a re-base.** Amendment 8's knobs (`atr_expand`, `back_share`, ATR(14, 15m) from the terminal), the R band (`pmBand`) and Omega's buffers keep their calibrations and their ATRs. The layer reads its own ATR1m(14) from the broker's closed M1 bars (`broker_bars_1m`) and never feeds it to them. No council: fixed rules, every closed broker minute, on Omega's bridge sync (no new cron).
+- **Only tighter.** It locks profit, brings the target nearer, tightens a stop or closes early in the loss branch; it never loosens (Amendment 8's loosening stays the council's alone) and never moves a target further. After a council loosening its stop waits until it is tighter than the stop before the loosening, as every lock does (§3).
+- **The profit-lock gate (SLG1).** A fast lock into profit waits for the gate; before it the TP anticipation brings the target nearer instead (not a stop into profit). A stop tightened in the loss branch that stays in loss is not gated.
+- **One manager per 5m bar.** Once the council's Position Manager sent an action for a position in a 5m bar, the layer holds that position for the rest of the bar; its own rate limit (one action per 3 minutes) and hysteresis (no other-trigger action within 10 minutes) bind only its own actions.
+- **Records.** `position_actions` rows `pm1:<ticket>:<bar minute>` (rule `pm_fast_tp` or `pm_fast_cut`, `council` null), Omega's intent under the same id (`fastIntent`), the Position Manager's Telegram line.
+
+Tests: test/pm-fast.test.mjs F1 to F12; the fixture test/fixtures/pm-fast.mjs.

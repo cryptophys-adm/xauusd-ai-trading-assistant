@@ -35,9 +35,11 @@ export async function markPositionActions(db, ids, status) {
 
 
 /** Pure: the stored action id ("pm:<ticket>:<bar>") of a Position Manager intent id ("pm:<ticket>:<c|s|t>:<bar>", with
- * an attempt suffix ":<n>" or the delegated prefix "d:"), or null for any other intent. */
+ * an attempt suffix ":<n>" or the delegated prefix "d:"), or null for any other intent. A PM-1M fast intent
+ * ("pm1:<ticket>:<bar minute>", src/pm-fast.mjs) carries its stored action's id itself. */
 export function actionIdOfIntent(intentId) {
   const parts = String(intentId ?? "").replace(/^d:/, "").split(":");
+  if (parts[0] === "pm1") return (parts.length === 3 || parts.length === 4) && parts.slice(1).every((x) => /^\d+$/.test(x)) ? `pm1:${parts[1]}:${parts[2]}` : null;
   if (parts[0] !== "pm" || parts.length < 4 || !/^\d+$/.test(parts[1]) || !["c", "s", "t"].includes(parts[2]) || !/^\d+$/.test(parts[3])) return null;
   return `pm:${parts[1]}:${parts[3]}`;
 }
@@ -75,7 +77,10 @@ export function actionMessage(row, outcome = { applied: true }) {
   // ADR-0020 Amendment 8: the council's loosening and target moves have their own heads ("Stop loosened", "TP moved").
   const rule = String(row.rule ?? "");
   const a8 = rule.startsWith("loosen_") ? `Stop loosened to ${row.sl}` : /^tp_(nearer|further)_/.test(rule) ? `TP moved ${rule.startsWith("tp_nearer_") ? "nearer" : "further"} to ${row.tp}` : null;
-  const what = a8 ?? { close: "close", sl: `stop to ${row.sl}`, tp: row.sl != null ? `target to ${row.tp} and stop to ${row.sl}` : `target to ${row.tp}` }[row.action] ?? row.action;
+  // PM-1M (src/pm-fast.mjs): the 1m layer's own heads.
+  const fast = rule === "pm_fast_tp" || rule === "pm_fast_cut"
+    ? { close: "1m early close", sl: rule === "pm_fast_tp" ? `1m lock: stop to ${row.sl}` : `1m stop tightened to ${row.sl}`, tp: `1m TP nearer to ${row.tp}` }[row.action] ?? null : null;
+  const what = a8 ?? fast ?? { close: "close", sl: `stop to ${row.sl}`, tp: row.sl != null ? `target to ${row.tp} and stop to ${row.sl}` : `target to ${row.tp}` }[row.action] ?? row.action;
   const pips = row.pips == null ? "" : ` · ${row.pips >= 0 ? "+" : ""}${row.pips} pips`;
   const head = outcome?.applied === true ? `${what} · applied at the broker` : `${what} · NOT applied: ${outcome?.reason || "unknown"}`;
   return `XAUUSD POSITION MANAGER · #${row.ticket} ${row.side}${pips} · ${head}\n${row.why}${row.council ? `\nCouncil: ${row.council}` : ""}`;

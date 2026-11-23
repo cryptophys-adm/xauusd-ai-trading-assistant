@@ -391,8 +391,9 @@ test("SLG1-18 the gate is the break-even's trigger: open, the first lock goes in
   // v4: the peak past the gate, back inside the band at the next run: locked at the gate's first lock, out in profit;
   // the same path before this rule (and legacy) rode it to the full stop.
   const trace = [], legacyTrace = [];
-  const run = replayOmega4({ ...base(), ...retraceCase(), trace });
-  const old = replayOmega4({ ...base({ settings: { ...OMEGA_DEFAULTS, enabled: true, profit_lock_gate: "legacy" } }), ...retraceCase(), trace: legacyTrace });
+  // PM-1M (2026-11-23): the 1m fast layer off (the engine before it), so the lock here is the Position Manager's.
+  const run = replayOmega4({ ...base({ settings: { ...OMEGA_DEFAULTS, enabled: true, pm_fast_1m: "off" } }), ...retraceCase(), trace });
+  const old = replayOmega4({ ...base({ settings: { ...OMEGA_DEFAULTS, enabled: true, profit_lock_gate: "legacy", pm_fast_1m: "off" } }), ...retraceCase(), trace: legacyTrace });
   const lock = firstLock(trace);
   assert.ok(lock, "a lock after the retrace");
   assert.equal(lock.reason, "pm_breakeven");
@@ -407,7 +408,8 @@ test("SLG1-18 the gate is the break-even's trigger: open, the first lock goes in
 
 test("SLG1-15 legacy is byte for byte the engine before the gate: the old behaviour hash, and gates are never read", async () => {
   // CH1 (2026-11-23): the engine before the gate had no change thresholds either ("off" is today's rules byte for byte).
-  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy", changeThresholds: "" })), OLD_BEHAVIOUR_HASH);
+  // PM-1M (2026-11-23): nor the 1m fast layer ("off" is the engine before it byte for byte).
+  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy", changeThresholds: "", pmFast: "off" })), OLD_BEHAVIOUR_HASH);
   assert.notEqual(ENGINE_BEHAVIOUR_HASH, OLD_BEHAVIOUR_HASH, "the gate on is a new era (SLG1, a recorded exception)");
   assert.equal(await sha256Hex(engineBehaviourSource()), ENGINE_BEHAVIOUR_HASH);
   // "legacy" ignores any gate facts given.

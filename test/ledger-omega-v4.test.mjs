@@ -106,7 +106,10 @@ test("V4. the Position Manager's break-even lock applies as the mechanical fallb
 test("V5. a cut loss needs a measured reason and the council's recorded verdict; the re-entry cooldown then skips the next SELL", () => {
   // The SELL goes 9 against (band 6.0). The 13:15 SELL decision carries the agent's short confidence dropping 0.85 to
   // 0.70 (a measured reason); the council's recorded verdict for that position and 5m bar reads the thesis broken.
-  const { bars, decisions, to, councils, settings } = cutLossCase();
+  // PM-1M (2026-11-23): the 1m fast layer off (the engine before it): its impulse rule tightens this stop first
+  // (test/pm-fast.test.mjs replays the same fixture with the layer on).
+  const { bars, decisions, to, councils, settings: settings0 } = cutLossCase();
+  const settings = { ...settings0, pm_fast_1m: "off" };
   const trace = [];
   const run = replayOmega4({ ...base({ settings }), bars, decisions, to, trace, councils });
   const r = run.records[key(C)];
@@ -408,10 +411,12 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   // The three fixture sets, outputs only.
   const names = text.split("\n").map((l) => l.slice(0, l.indexOf("=")));
   assert.ok(names.filter((n) => n.startsWith("market/hand/")).length >= 60);
-  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records"]);
+  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records", "fast/v4/cut_loss/records", "fast/v4/tp_anticipation/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m"]);
+  // The 1m fast-protect layer (PM-1M) is on by default: "off" starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, pm_fast_1m: "off" }), ["pm_fast_1m=off"]);
   // The change thresholds (CH1) are all on by default: a token turned off starts a new era.
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, change_thresholds: "off" }), ["change_thresholds=off"]);
   // The profit-lock gate (SLG1) is on by default: "legacy" starts a new era.

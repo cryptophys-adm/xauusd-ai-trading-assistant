@@ -435,7 +435,8 @@ export const OMEGA4_RULES = Object.freeze({
     "the Position Council's recorded verdict for that position and 5m bar where the live account had one, else no answer: the mechanical fallback (locks apply, nothing is cut or closed on weakening)",
     "the M15 ATR (atr_value), the 5m structure (structureOf) and the ladder's closed candles rebuilt from the feed's 1m bars",
     "the Omega settings as stored now (their history is not kept); the engine switch and the live arm taken as on; the EA control (pause, kill) from ea_control_events; the news blackout from the week's calendar",
-    "the account's balance rebuilt from its last known balance and its deals: deposits, withdrawals and the owner's daily-loss resets are not told apart"
+    "the account's balance rebuilt from its last known balance and its deals: deposits, withdrawals and the owner's daily-loss resets are not told apart",
+    "the 1m fast-protect layer (PM-1M) on the feed's 1m bars at every minute: no reconnect quarantine (the bars carry no receipt time) and no spread-spike hold (no live spread)"
   ],
   not_reconstructable: {
     strategy_arm: "the arm state as it is now, applied to every replayed decision (its history is not stored)",

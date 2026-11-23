@@ -16,6 +16,8 @@
 //   PM          positionFacts and positionAction (src/position-manager.mjs) at 3 minutes past each 5m close (the live
 //               cron runs about 2.5 minutes past), with the council's recorded verdict for that position and bar where
 //               the live account had one (D1 position_actions.council), else none: the mechanical fallback;
+//   PM-1M       fastProtect (src/pm-fast.mjs) at every minute with a position, after the Position Manager, on these 1m
+//               bars (the live sync evaluates each closed broker minute), while pm_fast_1m is "on";
 //   broker      the stop and the target at the broker, inside each minute (a gap at the open exits at the open; within
 //               the minute the stop first), a SELL closing at the ask (the bid plus the fixed spread).
 // It never feeds a room, a prompt or a decision, and nothing here is sent to Aether or the platform. R is the unit:
@@ -51,6 +53,8 @@ import * as liquidityLens from "./liquidity-lens.mjs";
 import * as profitLockGate from "./profit-lock-gate.mjs";
 import * as changeThresholds from "./change-thresholds.mjs";
 import { decisionHistory, changeTokens, CHANGE_TOKENS, heldTag } from "./change-thresholds.mjs";
+import { fastProtect, fastMeta, fastId, pmFastOn, PM_FAST_1M } from "./pm-fast.mjs";
+import * as pmFast from "./pm-fast.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -229,6 +233,8 @@ export function replayOmega4({
   const decs = sorted.map((d, i) => ({ ...d, decision_history: decisionHistory(d, i > 0 ? sorted[i - 1] : null, i > 1 ? sorted[i - 2] : null) }));
   // CH1: the change_thresholds tokens the Position Manager reads (planIntents reads them from S itself).
   const changes = changeTokens(S);
+  // PM-1M (2026-11-23, src/pm-fast.mjs): the 1m fast layer, at every minute with a position, on these 1m bars.
+  const fastOn = pmFastOn(S);
   const start = finite(from) ? from : (m1.length ? m1[0].t + OMEGA4_SIM.warmup_ms : Infinity);
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
@@ -422,6 +428,25 @@ export function replayOmega4({
           }
         }
       }
+      // PM-1M: the fast layer on the closed 1m bars before this minute (the live sync evaluates each newly closed broker
+      // minute about two seconds after its close), after the Position Manager of this minute: a position it acted on in
+      // this 5m bar is held, as live. The feed's bars carry v4's fixed spread and no receipt time (no reconnect batch),
+      // and v4 has no live spread (no spread-spike deferral).
+      const fastActs = [];
+      if (fastOn && positions.length) {
+        const recentBars = m1.slice(Math.max(lo125, k - PM_FAST_1M.intraday.warmup_bars - 70), k).map((b) => ({ ...b, s: spreadPts }));
+        const pmBar5 = Math.floor(now / M5);
+        for (const p of positions) {
+          p.fast = (Array.isArray(p.fast) ? p.fast : []).filter((h) => h.bar_ms > now - PM_FAST_1M.intraday.hysteresis_ms - 2 * M1);
+          const pmHere = p.pm_bar === pmBar5 || pmActions.some((a) => a.ticket === p.ticket);
+          const f = fastProtect({ position: execPos(p), meta: fastMeta(p.open_intent), bars: recentBars, now, sym, gate: gates ? gates[String(p.ticket)] ?? null : undefined, spike: false, history: p.fast, pmBar: pmHere, atrSource: "feed_m1" });
+          if (f.status !== "act") continue;
+          const id = fastId(p.ticket, f.bar_ms);
+          fastActs.push({ id, ticket: p.ticket, branch: f.branch, bar_ms: f.bar_ms });
+          pmActions.push({ id, ticket: p.ticket, action: f.action, rule: f.rule, sl: f.sl ?? null, tp: f.tp ?? null, at_ms: now });
+          tradeOf(p).pm.push({ at: iso(now), rule: f.rule, council: "none_1m" });
+        }
+      }
 
       const agents = {}, positionMeta = {};
       for (const p of positions) {
@@ -438,6 +463,20 @@ export function replayOmega4({
       const out = plan(input);
       plans += 1;
       if (trace) trace.push({ now, input, output: out });
+      // PM-1M: a fast action that became an intent counts for the rate limit and the hysteresis, and a Position Manager
+      // action that did holds the fast layer for the rest of its 5m bar (live: the actions applied).
+      if (fastOn) {
+        for (const it of out.intents) {
+          if (!/^pm:\d+:[cst]:\d+$/.test(String(it.id))) continue;
+          const q = positions.find((x) => x.ticket === it.ticket);
+          if (q) q.pm_bar = Math.floor(now / M5);
+        }
+      }
+      for (const fa of fastActs) {
+        if (!out.intents.some((it) => it.id === fa.id)) continue;
+        const q = positions.find((x) => x.ticket === fa.ticket);
+        if (q) q.fast = [...(q.fast ?? []), { bar_ms: fa.bar_ms, branch: fa.branch }];
+      }
 
       let opened = false;
       for (const it of out.intents) {
@@ -559,7 +598,9 @@ export const ENGINE_CODE = Object.freeze({
     // ADR-0020 Amendment 8 (2026-11-20): Omega's check of the council's loosening and target moves, and the loosenings sent.
     "a8Intent", "loosenRecords",
     // SLG1 (2026-11-23): the MFE each lock records.
-    "stampGate"]],
+    "stampGate",
+    // PM-1M (2026-11-23): Omega's check of the 1m layer's actions.
+    "fastIntent"]],
   // CH1 (2026-11-23): the change thresholds (their tokens, per-mode thresholds, the decision history, the measured falls).
   "change-thresholds": [changeThresholds, ["normalizeChangeThresholds", "changeTokens", "changeOn", "changeRule", "trendFor", "decisionHistory", "sideReadings", "measuredFall", "stanceAgainstConfirmed", "pendingShareFall", "heldText", "heldTag", "CHANGE_TOKENS", "CHANGE_THRESHOLDS_ALL", "CHANGE_THRESHOLDS_OFF", "SHARE_FALL_MIN", "CONFIRM_DECISIONS", "CONFIDENCE_CHANGE_MIN"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
@@ -588,6 +629,8 @@ export const ENGINE_CODE = Object.freeze({
   // fields and levels, the spread-spike entry gate and the modification deferral planIntents applies.
   // SLG1 (2026-11-23): the one profit-lock gate (its rules per mode, its facts, the first lock at it).
   "profit-lock-gate": [profitLockGate, ["profitLockGateOn", "gateMode", "gateAtrM5", "gateBreakEven", "stopInProfit", "gateFacts", "gatesFor", "gateReadSince", "gateText", "PROFIT_LOCK_GATE", "PROFIT_LOCK_GATE_MODES", "GATE_BE_ATR_M5", "GATE_LOOKBACK_MIN", "GATE_UNMEASURED"]],
+  // PM-1M (2026-11-23): the 1m fast-protect layer (its table, noise rules, triggers and the live step).
+  "pm-fast": [pmFast, ["pmFastOn", "fastMode", "fastId", "isFastId", "fastBars", "atr1m", "fastNoise", "fastProtect", "fastMeta", "spikeHolds", "runFastProtect", "PM_FAST_1M", "PM_FAST_RULES", "PM_FAST_MODES", "PM_FAST_READ_MIN", "PM_FAST_RETRY_MS"]],
   "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
 });
 
@@ -616,7 +659,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "4fd189bd5234601781415f496580612f1c1fefccb35c060a524000b7e254cd71";
+export const ENGINE_CODE_HASH = "5b9db4dcfbded3a9a55686dbed866e7980569837f19ee3217ed91a5c5af3b3ae";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -637,10 +680,15 @@ export const ENGINE_CODE_HASH = "4fd189bd5234601781415f496580612f1c1fefccb35c060
  * it from 94e6f50cb1d0f913fa332d43874b3622e1746dad7bce388eecb438ec73d3088e, a new era at its deploy; with
  * change_thresholds "off" on every input the fixtures still give that hash byte for byte (test/change-thresholds.test.mjs
  * CH1-12), and with "legacy" too the one before SLG1.
+ * PM-1M (owner 2026-11-23, "deploy semuanya live", a recorded exception): the 1m fast-protect layer on by default moved
+ * it from 169243f2ba3780a7aa6d404d1227090fcbd5617a4b6f2a09dbb44883e5eafe28, a new era at its deploy; with pm_fast_1m
+ * "off" on every input the fixtures still give that hash byte for byte (test/pm-fast.test.mjs F10). The fingerprint
+ * also covers the layer's own cases (test/fixtures/pm-fast.mjs: its triggers, noise rules, Omega's check and two v4
+ * replays), written with it on only.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "169243f2ba3780a7aa6d404d1227090fcbd5617a4b6f2a09dbb44883e5eafe28";
+export const ENGINE_BEHAVIOUR_HASH = "d0def5bb1a982e391d9491ff1e7a8e13289f700db5e8a0490c2f8ffccff55120";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
@@ -655,7 +703,9 @@ export const ENGINE_BEHAVIOUR_HASH = "169243f2ba3780a7aa6d404d1227090fcbd5617a4b
 // change_thresholds (CH1, owner 2026-11-23) is every token on by default: its era starts with this behaviour hash at
 // the deploy; the owner turning a token off writes e.g. "change_thresholds=conf,limit,skip,stance" (or "=off") and
 // starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds"]);
+// pm_fast_1m (PM-1M, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
+// owner setting it to "off" writes "pm_fast_1m=off" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
