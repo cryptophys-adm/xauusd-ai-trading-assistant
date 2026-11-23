@@ -192,13 +192,31 @@ Otherwise Omega:
 **A pending order counts as a position and as used risk:**
 - `max_positions` counts Omega's pending order;
 - `openRiskAtStops` adds its risk at the stop;
-- `same_side_unprotected` treats it as unprotected until filled and locked.
+- `same_side_unprotected` treats it as unprotected until filled and locked; since SS1 (owner 2026-11-23, docs/SSOT.md,
+  `limit_supersede` on by default) not a resting limit of an older signal on the new signal's side, which a newer
+  same-side signal supersedes (below).
 
 **The platform cap (ADR-0020 A7):** pending orders count toward the platform's cap of 3 open positions per account, together
 with the open positions. The profile's own `max_positions` (Safe 1, Conservative 2, Aggressive 3) stays the tighter one.
 
 **Only one pending Omega order at a time.** A second signal while one is pending is `pending_order_exists`; the council may
 still move the existing one.
+
+**A newer same-side signal supersedes it (SS1, owner 2026-11-23: "Ya, sinyal baru menggantikan (Rekomendasi)";
+`src/limit-supersede.mjs`; the Omega setting `limit_supersede`, "on" by default, "off" the rule above byte for byte).** On
+the 2026-11-23 14:00 and 14:15 BUYs the older signal's limit (resting at its zone's edge, never filled) held the newer one
+back (`same_side_unprotected`) while price ran up. Now, at each sync, a resting Omega limit on the current signal's side
+whose placing signal is older than the current one is deleted (`delete_order`, reason `superseded_by_signal`), and the
+current signal goes through every gate of §3 and §6 in the same plan as if that order were gone (the council, the band, the
+entry zone, the caps):
+- **delete first, then place:** no entry is planned while the superseded order is still in the terminal's report (its delete
+  not done yet, or refused and sent again a minute later) or a `superseded_by_signal` delete is unanswered
+  (`superseded_delete_waiting`); the next sync places it once the delete is done;
+- **refused:** if the new signal is refused (council skip or silence, out of band, expired, …), the old order is cancelled
+  all the same; the plan's note `superseded_by_signal` ends with the new signal's refusal code;
+- **unchanged:** an open position (a filled limit too) keeps `same_side_unprotected`; a resting order of the other side, or
+  of the same signal, keeps `pending_order_exists` / `already_opened`; a council action on a superseded order is dropped;
+- **its risk** still counts in the fill guard and A8's budget until the order is gone.
 
 **Deleted at once, with no council involved:**
 - pause, kill (`close_all` already deletes every order) and Omega switched off;
@@ -283,7 +301,9 @@ Policy Engine's prohibited filter refuses them; platform test K2):
 - **Missed:** `limit_through_price`, `zone_passed`, `zone_tight`, `zone_rr` (EZ1: the replay places inside the signal's entry zone as
   the live `zoneLimit` does), `limit_out_of_band` (at placement); `pending_expired` (at `max_pending_life`);
   `decision_against`, `quorum_share_drop`, `blackout`, `daily_loss_limit`, `profile_downgrade`, `kill`, `paused` (checked
-  at every minute's open while it rests). One resting order at a time (`pending_order_exists`).
+  at every minute's open while it rests), `superseded_by_signal` (SS1: the current signal on its side and newer, also at the
+  minute's open; the new signal is then placed in that minute). One resting order at a time (`pending_order_exists`, the
+  other side's and the same signal's).
 - **Knobs:** the start values of §7, clamped to A7's bounds; no reader of the `omega.limit_*` facts exists yet.
   `move_max_atr` is recorded but moves nothing (no council in a replay).
 - **Not modelled:** the council's place, keep and move; `de_veto` and disarm (the replay keeps the arm on, as v4); the
