@@ -217,7 +217,7 @@ test("CPV8. pure parts: a plan matched by pattern and chart, the calibration's k
   const p = { tf: "15", id: "rectangle_top", direction: 1, target_up: 3 };
   assert.equal(patternPlan(p, plans), null, "another chart's pattern");
   assert.equal(patternPlan({ ...p, tf: "60", direction: -1 }, plans), null, "the other side");
-  assert.deepEqual(patternPlan({ ...p, tf: "60" }, plans), { agent: "pattern_lines", side: "BUY", status: "live", at_level: true, entry: 1, stop: 0.5, tp1: 2, tp2: 3, rrr: { tp1: 2, tp2: 4 }, far_target: 3, reach: null });
+  assert.deepEqual(patternPlan({ ...p, tf: "60" }, plans), { agent: "pattern_lines", side: "BUY", status: "live", at_level: true, entry: 1, entry_low: null, entry_high: null, stop: 0.5, tp1: 2, tp2: 3, rrr: { tp1: 2, tp2: 4 }, far_target: 3, reach: null });
   assert.equal(patternPlan(p, null), null);
   assert.deepEqual(viewCalibration(null), { version: null, computed_at: null, base_rate: null, resolved: null, pending: null, patterns: null, by_tf: null, open: null });
 });
