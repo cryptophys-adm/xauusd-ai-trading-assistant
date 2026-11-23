@@ -248,9 +248,9 @@ test("CH1-11 stance: the other side on 2 consecutive closed decisions; a flip th
 test("CH1-12 each token off is today's rule for its trigger byte for byte; all off is the engine before CH1", async () => {
   // All off: SLG1's fingerprint (94e6f50c…) byte for byte; with "legacy" too, the one before SLG1.
   // PM-1M (2026-11-23): with the 1m fast layer off too (the engine before it); RE1 (2026-11-23): and the 1m re-entry.
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", pmFast: "off", reentry: "off" })), SLG1_HASH);
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "off", pmFast: "off", reentry: "off" })), SLG1_HASH);
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", profitLockGate: "legacy", pmFast: "off", reentry: "off" })), PRE_SLG1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", pmFast: "off", reentry: "off", limitSupersede: "off" })), SLG1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "off", pmFast: "off", reentry: "off", limitSupersede: "off" })), SLG1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", profitLockGate: "legacy", pmFast: "off", reentry: "off", limitSupersede: "off" })), PRE_SLG1_HASH);
   // One token off: its trigger's outputs are the all-off outputs (the other tokens stay on).
   const parse = (lines, name) => JSON.parse(lines.find((l) => l.startsWith(`${name}=`)).slice(name.length + 1));
   const off = changeLines("off");

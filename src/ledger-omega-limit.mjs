@@ -21,7 +21,11 @@
 //          Once filled it is a v4 trade: planIntents, the TP ladder and the Position Manager manage it from the fill
 //          (replayOmega4 with this module's entry policy; nothing of v4's machinery is copied here).
 // One resting order at a time (RFC §6): a second signal while one rests is pending_order_exists; the resting order counts
-// toward max_positions and risk in the only way it can, by holding every other entry back.
+// toward max_positions and risk in the only way it can, by holding every other entry back. SS1 (owner 2026-11-23,
+// src/limit-supersede.mjs; limit_supersede "on"): a signal on the resting order's side issued after the order's own ends
+// it at the minute's open (missed, gate superseded_by_signal), and the new signal is placed on planIntents' gates in the
+// same minute (live, the delete goes first and the place follows at the next sync, seconds later); the other side, and
+// the same signal, keep pending_order_exists. "off": as before.
 // Not modelled (no council in a replay): the council's place/keep/move; move_max_atr is clamped and recorded but moves
 // nothing; the Decision Engine veto (de_veto) and disarm (the replay keeps the arm on, as v4); the fill-time re-check of
 // the hard guards (the daily loss floor is checked every minute while the order rests).
@@ -32,6 +36,7 @@ import { signalEntryZone, zoneLimit, zoneEdgeLimit } from "./omega-engine.mjs";
 import { LIMIT_KNOB_START, LIMIT_KNOB_BOUNDS, LIMIT_KNOB_FACTS, LIMIT_KNOBS_SOURCE, limitKnobs } from "./omega-limit-knobs.mjs";
 import { TRADING_MODES, ensureLedgerSchema, ledgerSeries, OMEGA_LIMIT_VERSION } from "./signal-ledger.mjs";
 import { changeTokens, changeOn, pendingShareFall } from "./change-thresholds.mjs";
+import { limitSupersedeOn, SUPERSEDE_REASON } from "./limit-supersede.mjs";
 
 export { OMEGA_LIMIT_VERSION };
 export const OMEGA_LIMIT_CHECKPOINT_KEY = "ledger:omega-limit:checkpoint:v1";
@@ -77,7 +82,7 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
 }
 
 /** The reasons a limit entry was missed (never filled): at placement, then while it rested. */
-export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap"]);
+export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap", "superseded_by_signal"]);
 
 /**
  * The limit entry policy for replayOmega4 (`entry`). `state` is the checkpoint's `entry` of the run before. `knobsFor(mode)`
@@ -101,11 +106,13 @@ export function limitEntryPolicy({ state = null, knobsFor = (m, settings) => lim
     stats, outcomes,
     get pending() { return pending; },
     busy: () => pending != null,
-    atOpen({ now, decision, mode, blackout, executor, profile, settings }) {
+    atOpen({ now, decision, mode, blackout, executor, profile, settings, signal = null }) {
       lastMs = now;
       if (!pending) return;
       const gate = limitCancelReason({ pending, now, decision, mode, blackout, equity: executor?.account?.equity, dayStart: executor?.account?.day_start_balance, profile, settings });
-      if (gate) end(gate, now);
+      if (gate) { end(gate, now); return; }
+      // SS1: a newer signal on the order's side supersedes it (as the live planIntents deletes it, superseded_by_signal).
+      if (limitSupersedeOn(settings) && signal && signal.side === pending.side && finite(signal.issued_ms) && finite(pending.issued_ms) && signal.issued_ms > pending.issued_ms) end(SUPERSEDE_REASON, now);
     },
     afterPlan({ now, signal, decision, entryKey, entryLive, input, plan, executorFor, sym, bid0, ask0, spread, notes, trades, recentIntentIds }) {
       lastMs = now;

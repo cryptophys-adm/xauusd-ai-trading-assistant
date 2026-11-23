@@ -60,6 +60,7 @@ import { fastProtect, fastMeta, fastId, pmFastOn, PM_FAST_1M } from "./pm-fast.m
 import * as pmFast from "./pm-fast.mjs";
 import { reentryOn, reentrySetup, reentryCheck, isReentryId, REENTRY_1M } from "./reentry-1m.mjs";
 import * as reentry1m from "./reentry-1m.mjs";
+import * as limitSupersede from "./limit-supersede.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -414,7 +415,8 @@ export function replayOmega4({
     const profile = profileAt(now);
     const account = profile ? { profile, spec_status: "validated" } : null;
     // Another entry policy's resting order: its deterministic cancels at the minute's open.
-    if (entry) entry.atOpen({ now, decision: d, decisions: decs, mode, blackout, executor, profile, settings: S });
+    // SS1: with the minute's signal, whose newer same side supersedes a resting order of an older signal.
+    if (entry) entry.atOpen({ now, decision: d, decisions: decs, mode, blackout, executor, profile, settings: S, signal });
     if (!restingOnly) {
       // SLG1, the profit-lock gate (src/profit-lock-gate.mjs), only while profit_lock_gate is "on": each position's
       // facts from the 1m bars since its fill (at most GATE_LOOKBACK_MIN minutes back, the minute it is in excluded),
@@ -640,6 +642,8 @@ export const ENGINE_CODE = Object.freeze({
     "fastIntent"]],
   // RE1 (2026-11-23): the 1m re-entry after a profit-lock stop (its table, the setup, the check, the live step).
   "reentry-1m": [reentry1m, ["reentryOn", "reentryId", "isReentryId", "isEntryIntentId", "reentrySetup", "reentryCheck", "liveSetup", "runReentry", "recordReentry", "isLockRule", "REENTRY_1M", "REENTRY_LOCK_PATTERN", "REENTRY_RULE", "REENTRY_MODES", "REENTRY_READ_MIN", "REENTRY_RETRY_MS"]],
+  // SS1 (2026-11-23): a newer same-side signal supersedes a resting limit (the switch, the orders it ends, the deletes read back).
+  "limit-supersede": [limitSupersede, ["limitSupersedeOn", "orderSignalMs", "supersededOrders", "supersedeDeletes", "LIMIT_SUPERSEDE_MODES", "SUPERSEDE_REASON", "SUPERSEDE_READ_MS"]],
   // CH1 (2026-11-23): the change thresholds (their tokens, per-mode thresholds, the decision history, the measured falls).
   "change-thresholds": [changeThresholds, ["normalizeChangeThresholds", "changeTokens", "changeOn", "changeRule", "trendFor", "decisionHistory", "sideReadings", "measuredFall", "stanceAgainstConfirmed", "pendingShareFall", "heldText", "heldTag", "CHANGE_TOKENS", "CHANGE_THRESHOLDS_ALL", "CHANGE_THRESHOLDS_OFF", "SHARE_FALL_MIN", "CONFIRM_DECISIONS", "CONFIDENCE_CHANGE_MIN"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
@@ -698,7 +702,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "38aa8e6fd3abd23a5ab220a06be4df7d33cdcf303276182fbb8a7c9b2c6eb2c6";
+export const ENGINE_CODE_HASH = "7b23836a792b70b1a133ab2b7b6aba59ea120b33b09fc7301a24da3aeeabb0c7";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -729,10 +733,17 @@ export const ENGINE_CODE_HASH = "38aa8e6fd3abd23a5ab220a06be4df7d33cdcf303276182
  * era at its deploy; with reentry_1m "off" on every input the fixtures still give that hash byte for byte
  * (test/reentry-1m.test.mjs R13). The fingerprint also covers the re-entry's own cases (test/fixtures/reentry-1m.mjs: the
  * eligibility of exits, its guards, its triggers through planIntents and a v4 replay), written with it on only.
+ * SS1 (owner 2026-11-23, "Ya, sinyal baru menggantikan (Rekomendasi)", a recorded exception): a newer same-side signal
+ * superseding a resting limit, on by default, moved it from
+ * 39c10287e884bba0469ee4557bada444601c5a7d6a209e3231471336a841c4f1, a new era at its deploy; with limit_supersede "off"
+ * on every input the fixtures still give that hash byte for byte (test/limit-supersede.test.mjs SS1-9). The market
+ * fixtures cannot move it (no limit rests there): the fingerprint covers the supersede's own cases
+ * (test/fixtures/limit-supersede.mjs: planIntents under entry_order "limit" and "council", and the limit counterfactual
+ * beside v4), written with it on only.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "39c10287e884bba0469ee4557bada444601c5a7d6a209e3231471336a841c4f1";
+export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
@@ -751,7 +762,9 @@ export const ENGINE_BEHAVIOUR_HASH = "39c10287e884bba0469ee4557bada444601c5a7d6a
 // owner setting it to "off" writes "pm_fast_1m=off" and starts a new era at that time.
 // reentry_1m (RE1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
 // owner setting it to "off" writes "reentry_1m=off" and starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m"]);
+// limit_supersede (SS1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
+// owner setting it to "off" writes "limit_supersede=off" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the

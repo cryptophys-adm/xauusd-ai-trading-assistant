@@ -28,6 +28,7 @@ import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./li
 import { profitLockGateOn, gateBreakEven, gateAtrM5, stopInProfit, gateText, GATE_UNMEASURED, PROFIT_LOCK_GATE_MODES } from "./profit-lock-gate.mjs";
 import { isFastId, PM_FAST_MODES } from "./pm-fast.mjs";
 import { reentryOn, isReentryId, REENTRY_MODES, REENTRY_RULE, REENTRY_1M } from "./reentry-1m.mjs";
+import { limitSupersedeOn, supersededOrders, orderSignalMs, LIMIT_SUPERSEDE_MODES, SUPERSEDE_REASON } from "./limit-supersede.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -87,7 +88,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // src/reentry-1m.mjs): "on", one re-entry of a setup a break-even or lock stop closed, when a closed broker 1m bar
   // closes back beyond the lock; "off", today's engine byte for byte. The owner's switch only; Aether's policy never
   // writes it.
-  reentry_1m: "on"
+  reentry_1m: "on",
+  // SS1, a newer same-side signal supersedes a resting, unfilled Omega limit (owner 2026-11-23: "Ya, sinyal baru
+  // menggantikan (Rekomendasi)"; src/limit-supersede.mjs): "on", the older signal's limit is deleted
+  // (superseded_by_signal) and the new signal goes through every gate, placed once the delete is done; "off", today's
+  // engine byte for byte. The owner's switch only; Aether's policy never writes it.
+  limit_supersede: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -210,6 +216,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.reentry_1m !== undefined) {
     if (typeof body.reentry_1m !== "string" || !REENTRY_MODES.includes(body.reentry_1m)) return { error: "reentry_1m must be 'on' or 'off'" };
     out.reentry_1m = body.reentry_1m;
+  }
+  if (body.limit_supersede !== undefined) {
+    if (typeof body.limit_supersede !== "string" || !LIMIT_SUPERSEDE_MODES.includes(body.limit_supersede)) return { error: "limit_supersede must be 'on' or 'off'" };
+    out.limit_supersede = body.limit_supersede;
   }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
@@ -1238,7 +1248,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null, supersede = [] } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -1282,7 +1292,16 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     intents.splice(0, intents.length, ...d.intents);
     note("liquidity_modify_deferred", d.deferred.map((it) => it.id).join(",").slice(0, 200));
   };
-  const done = () => { finish(); return extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped }; };
+  // SS1 (src/limit-supersede.mjs): the plan's superseded_by_signal note, which ends with what became of the new signal.
+  let ssNote = null, ssSaid = false;
+  const ssOutcome = () => {
+    if (!ssNote || ssSaid) return;
+    ssSaid = true;
+    const last = notes.at(-1);
+    const entered = intents.some((it) => it.kind === "place_limit" || it.kind === "open");
+    ssNote.detail = `${ssNote.detail}; the new signal: ${entered ? "entered" : last && last !== ssNote ? last.code : "no entry"}`;
+  };
+  const done = () => { ssOutcome(); finish(); return extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped }; };
 
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
@@ -1334,15 +1353,46 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
     pendingKept = kept;
   }
+  // SS1 (owner 2026-11-23, src/limit-supersede.mjs; limit_supersede "on"): a resting limit of an OLDER signal on the
+  // current signal's side is deleted (superseded_by_signal) and holds nothing of the new signal back (same side, max
+  // positions, the platform cap, the budget); the new signal goes through every gate below and enters only once the
+  // delete is done (superseded_delete_waiting). Open positions, the other side and the same signal's limit: as today.
+  // The superseded order's risk still counts where a stop or a fill is checked (A8's budget, the fill guard) until gone.
+  const ss1 = limitMode && limitSupersedeOn(S);
+  let superseded = [];
+  if (ss1 && pendingKept.length) {
+    superseded = supersededOrders({ orders: pendingKept, pendingMeta, signal });
+    for (const o of superseded) {
+      const d = { ...deleteOrderIntent(o.ticket, SUPERSEDE_REASON, now), side: o.type === "BUY_LIMIT" ? "BUY" : "SELL", signal_issued_ms: orderSignalMs(o, pendingMeta?.[o.ticket] ?? null), superseded_by: signal.issued_ms };
+      if (!recent.has(d.id)) intents.push(d);
+    }
+    if (superseded.length) {
+      ssNote = { code: SUPERSEDE_REASON, detail: superseded.map((o) => `#${o.ticket} (signal ${orderSignalMs(o, pendingMeta?.[o.ticket] ?? null)}) by signal ${signal.issued_ms}`).join(", ") };
+      notes.push(ssNote);
+    }
+  }
+  const isSuperseded = (o) => superseded.some((x) => Number(x.ticket) === Number(o?.ticket));
   if (limitMode && limitActions.length) {
     // The council's keep, move, cancel or convert at the 15m close (src/limit-council.mjs), checked again here.
-    const la = limitActionIntents({ orders: pendingKept, sym: executor.symbol ?? {}, actions: limitActions, entryOrder: S.entry_order, meta: pendingMeta });
+    const la = limitActionIntents({ orders: superseded.length ? pendingKept.filter((o) => !isSuperseded(o)) : pendingKept, sym: executor.symbol ?? {}, actions: limitActions, entryOrder: S.entry_order, meta: pendingMeta });
     for (const it of la.intents) if (!recent.has(it.id)) intents.push(it);
     if (la.intents.length) note("limit_council", la.intents.map((it) => `${it.ticket}:${it.reason}`).join(","));
     pendingKept = pendingKept.filter((o) => !la.removed.includes(o.ticket));
     extra.limit_used.push(...la.used);
-    extra.limit_dropped.push(...la.dropped);
+    // SS1: an action on a superseded order is dropped (the order goes as superseded_by_signal).
+    const ssTickets = new Set(superseded.map((o) => Number(o.ticket)));
+    extra.limit_dropped.push(...(ssTickets.size ? la.dropped.map((d) => (ssTickets.has(Number(limitActions.find((a) => a.id === d.id)?.ticket)) ? { ...d, reason: "the order is superseded by a newer signal (superseded_by_signal)" } : d)) : la.dropped));
   }
+  // What the new signal's gates count as resting: every kept order but the superseded ones (SS1; off, every kept one).
+  const pendingGate = superseded.length ? pendingKept.filter((o) => !isSuperseded(o)) : pendingKept;
+  // SS1, delete first: no entry while a superseded order is still reported (its delete not done yet, or refused and
+  // sent again) or a superseded_by_signal delete waits for the terminal's answer (`supersede`, from omega_intents).
+  const ssWaiting = ss1 ? [...superseded.map((o) => Number(o.ticket)), ...(Array.isArray(supersede) ? supersede : []).filter((d) => d && d.deleted === null).map((d) => Number(d.ticket))] : [];
+  const deleteFirst = () => {
+    if (!ssWaiting.length) return false;
+    note("superseded_delete_waiting", [...new Set(ssWaiting)].map((t) => `#${t}`).join(","));
+    return true;
+  };
   if (limitMode && limitFills.length) {
     // A limit that filled (its position's ticket is the order's, RFC §5): the hard guards once more, before anything else.
     const acct = executor.account ?? {}, sym0 = executor.symbol ?? {};
@@ -1372,7 +1422,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
         intents.push({ id: `cl:${p.ticket}:rev`, kind: "close", ticket: p.ticket, reason: "mean_reversal" });
       }
     }
-    if (intents.length) {
+    // SS1: a superseded order's delete is not a reversal's close.
+    if (intents.filter((it) => !(it.kind === "delete_order" && it.reason === SUPERSEDE_REASON)).length) {
       note("mean_reversal_exit");
       return done();
     }
@@ -1483,7 +1534,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   const re1 = reentry1m && reentryOn(S) && !leg && reentry1m.side === side && isReentryId(reentry1m.id) && positive(reentry1m.sl) && positive(reentry1m.tp)
     && (recent.has(id) || positions.some((p) => p.intent_id === id) || now >= signal.expires_ms || now - decided0 > S.max_signal_age_ms) ? reentry1m : null;
   if (re1) id = re1.id;
-  const sameSide = [...positions, ...pendingKept.map(pendingAsPosition)].filter((p) => p.side === side);
+  const sameSide = [...positions, ...pendingGate.map(pendingAsPosition)].filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
   const armLive = signal.arm_mode === "armed" || signal.arm_mode === "auto";
@@ -1521,9 +1572,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [signal.paused === true || control?.mode === "paused", "paused"],
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
-    [positions.length - closing + pendingKept.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
+    [positions.length - closing + pendingGate.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
     // RE1: a re-entry also counts against the platform's cap of open positions and pending orders (ADR-0020 A7).
-    [re1 != null && positions.length - closing + pendingKept.length >= PLATFORM_MAX_OPEN, "platform_cap"],
+    [re1 != null && positions.length - closing + pendingGate.length >= PLATFORM_MAX_OPEN, "platform_cap"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
     // Lens B (RFC §5.1): no new entry while the live spread is at or above the mode's spread_widen times the hour of
     // the week's median bar spread; the absolute gate above stays. It also holds a limit's placement.
@@ -1545,8 +1596,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // Stage 3's own gates, after every gate of today (RFC §6): one pending Omega order at a time (any still reported,
     // a delete included), the platform's cap of 3 open positions and pending orders per account (ADR-0020 A7), and
     // OmegaExecutor 1.21 on the terminal.
-    if (omegaPendingOrders(executor).length) { note("pending_order_exists"); return done(); }
-    if (positions.length - closing + pendingKept.length >= PLATFORM_MAX_OPEN) { note("platform_cap"); return done(); }
+    // SS1: a superseded order is not "another" pending order (deleteFirst holds the entry until it is gone).
+    if (omegaPendingOrders(executor).filter((o) => !isSuperseded(o)).length) { note("pending_order_exists"); return done(); }
+    if (positions.length - closing + pendingGate.length >= PLATFORM_MAX_OPEN) { note("platform_cap"); return done(); }
     if (!versionAtLeast(executor.executor?.version ?? null, LIMIT_EA_MIN_VERSION)) { note("ea_1_21_required"); return done(); }
     if (leg && leg.deleted !== true) { note("conversion_waiting_cancel", String(leg.ticket ?? "")); return done(); }
   }
@@ -1557,7 +1609,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   if (account.equity <= lossFloor) { note("daily_loss_limit"); return done(); }
   // Daily risk budget (owner 2026-11-12): what the day can still lose is the equity above the daily
   // loss floor less what the open positions would lose at their stops; a new entry risks at most that.
-  const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - pendingRiskAtStops(pendingKept, sym) - lossFloor;
+  const budget = account.equity - openRiskAtStops(positions.filter((p) => !intents.some((it) => it.kind === "close" && it.ticket === p.ticket)), sym) - pendingRiskAtStops(pendingGate, sym) - lossFloor;
   if (!(budget > 0)) { note("daily_risk_budget"); return done(); }
 
   const buy = side === "BUY";
@@ -1749,6 +1801,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     it.reentry_of = re1.ticket;
     it.reentry_lock = re1.lock;
     if (typeof re1.lock_rule === "string") it.reentry_rule = re1.lock_rule;
+    if (deleteFirst()) return done();
     note("reentry_1m", `re-entering #${re1.ticket} ${side} at ${price}: stop ${sl}, TP1 ${tp}`);
     intents.push(it);
     return done();
@@ -1778,6 +1831,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     if (zone) it.entry_zone = zone;
     if (lim.edge === true) { it.zone_from = lim.from; it.entry_basis = "zone_edge"; note("limit_zone_edge", JSON.stringify(lim.edge_detail)); }
     else if (lim.moved === true) { it.zone_from = lim.from; note("limit_in_zone", `${lim.from} -> ${price}`); }
+    if (deleteFirst()) return done();
     intents.push(it);
     return done();
   }
@@ -1807,6 +1861,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     openIntent.entry_order = S.entry_order;
     if (leg) openIntent.converted_from = leg.ticket ?? null;
   }
+  if (deleteFirst()) return done();
   intents.push(openIntent);
   return done();
 }
