@@ -1,0 +1,85 @@
+{
+  "status": "ok",
+  "generated_at": "2026-11-23T15:00:00.000Z",
+  "window_days": 7,
+  "record_days": 30,
+  "version": "cryptophys.neuron-allocation.v1",
+  "days": [
+    "2026-11-17",
+    "2026-11-18",
+    "2026-11-19",
+    "2026-11-20",
+    "2026-11-21",
+    "2026-11-22",
+    "2026-11-23"
+  ],
+  "total_neurons": 0,
+  "neurons_per_day": 0,
+  "agents": [
+    {
+      "agent": "projection",
+      "status": "live",
+      "shadow_rooms": [
+        "H4"
+      ],
+      "rooms": [
+        "D1",
+        "H1",
+        "H4",
+        "M15"
+      ],
+      "models": [
+        "@cf/meta/llama-3.1-8b-instruct"
+      ],
+      "calls": 672,
+      "tokens": 1008000,
+      "neurons": 0,
+      "neurons_per_day": 0,
+      "share": null,
+      "unpriced_tokens": 1008000,
+      "hit_rate": 0.571,
+      "hits": 4,
+      "misses": 3,
+      "scored": 7,
+      "by_timeframe": {
+        "15": {
+          "hit": 3,
+          "miss": 1,
+          "hit_rate": 0.75
+        },
+        "60": {
+          "hit": 1,
+          "miss": 2,
+          "hit_rate": 0.333
+        }
+      },
+      "neurons_per_hit": 0,
+      "grounding_rate": null,
+      "trend": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "rooms_by_day": [],
+  "rules": {
+    "demote_below": 0.45,
+    "promote_at": 0.5,
+    "min_scored": 60,
+    "shadow_every": 4,
+    "min_live": 4,
+    "exempt": [
+      "moderator"
+    ]
+  },
+  "changes": [],
+  "metric_shadow": null,
+  "memo": null,
+  "prompt_cache": null,
+  "model_arena": null
+}

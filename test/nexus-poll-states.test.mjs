@@ -53,7 +53,8 @@ test("PS5 ApiError carries the route, the status and the server's code; the mess
   const e = new ApiError("/api/ledger?days=30", 502, null);
   assert.deepEqual([e.message, e.route, e.path, e.status, e.code, e instanceof Error], ["/api/ledger 502", "/api/ledger", "/api/ledger?days=30", 502, null, true]);
   assert.equal(new ApiError("/api/calendar", 503, "not_configured").message, "/api/calendar 503 not_configured");
-  assert.equal(new ApiError("/api/x", 500, "a_very_long_server_error_code_indeed").code.length, 24, "the code is cut at 24 characters");
+  assert.equal(new ApiError("/api/x", 500, "a_very_long_server_error_code_indeed_and_more").code.length, 32, "the code is cut at 32 characters");
+  assert.equal(new ApiError("/api/chart-patterns", 500, "chart_patterns_unavailable").message, "/api/chart-patterns 500 chart_patterns_unavailable", "C3: the whole code");
   assert.equal(errorText(new ApiError("/api/ledger", 0)), "/api/ledger net", "offline");
   assert.equal(errorText("plain"), "plain");
 
@@ -131,7 +132,7 @@ test("PS9 market.tsx keeps the per-read catch and exposes which routes failed; t
 });
 
 test("PS10 the listed pages print the shared error line, never the raw \"Unavailable: HTTP …\"", () => {
-  const pages = ["pages/Performance.tsx", "pages/Calendar.tsx", "pages/Correlations.tsx", "pages/Alerts.tsx", "pages/Audit.tsx", "pages/Status.tsx", "pages/Scorecards.tsx", "pages/Shadow.tsx", "pages/Neurons.tsx", "pages/Strategy.tsx", "pages/Councils.tsx", "pages/Model.tsx", "components/ThreadsPanel.tsx", "pages/Liquidity.tsx", "components/IntelChart.tsx"];
+  const pages = ["pages/Performance.tsx", "pages/Calendar.tsx", "pages/Correlations.tsx", "pages/Alerts.tsx", "pages/Audit.tsx", "pages/Status.tsx", "pages/Scorecards.tsx", "pages/Shadow.tsx", "pages/Neurons.tsx", "pages/Strategy.tsx", "pages/Councils.tsx", "pages/Model.tsx", "components/ThreadsPanel.tsx", "pages/Liquidity.tsx", "components/IntelChart.tsx", "pages/Patterns.tsx"];
   for (const f of pages) {
     const s = src(f);
     assert.doesNotMatch(s, /Unavailable: HTTP|HTTP \$\{r\.status\}\)? *<|Failed to load: \{/, `${f}: no raw HTTP text`);
