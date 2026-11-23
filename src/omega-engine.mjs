@@ -908,6 +908,8 @@ const round3 = (v) => Math.round(v * 1000) / 1000;
  * first target, as TP1-KZ's floor (TP1_MIN_R).
  */
 export const ZONE_MIN_RR = 1;
+/** The least share of the plan's risk (its stop distance) a limit moved inside the entry zone keeps (zone_tight). */
+export const ZONE_MIN_RISK_SHARE = 0.5;
 /**
  * Pure: the signal's entry zone on the broker's scale ({ low, high }, entry_zone_low/high + feed_basis), or null: none
  * sent, or one that no longer holds the signal's entry or reaches its stop (a grid adaptation moved them).
@@ -922,7 +924,8 @@ export function signalEntryZone(signal, digits = 2) {
  * Pure: a limit inside the entry zone where the plan's own level cannot rest (through price, or within the stop level):
  * the level nearest the plan's inside the zone that is at least max(the stop level, 1 spread) from price on the
  * correct side (above the bid for a SELL, below the ask for a BUY). The stop and the target stay the plan's (broker
- * scale); the moved limit must still pay ZONE_MIN_RR to the target, with both at least the stop level away (zone_rr).
+ * scale); the moved limit keeps at least ZONE_MIN_RISK_SHARE of the plan's risk (zone_tight) and must still pay
+ * ZONE_MIN_RR to the target, with both at least the stop level away (zone_rr).
  * The whole zone passed (no such level inside it): zone_passed, a missed entry as limit_through_price is.
  */
 export function zoneLimit({ signal, sym = {}, zone, digits = 2, planStopDist, minDist = 0, knobs, from }) {
@@ -940,6 +943,9 @@ export function zoneLimit({ signal, sym = {}, zone, digits = 2, planStopDist, mi
   if (!finite(price) || (buy ? price < zone.low - step / 2 : price > zone.high + step / 2)) return { ok: false, code: "zone_passed", detail: `the entry zone ${zone.low}-${zone.high} is passed`, ...out };
   const sl = roundTo(Number(signal.stop) + signal.feed_basis, digits), tp = roundTo(Number(signal.tp1) + signal.feed_basis, digits);
   const risk = buy ? price - sl : sl - price, reward = buy ? tp - price : price - tp;
+  // A move inside the zone never cuts the plan's risk below half (a stop that tight is hit far more often): zone_tight.
+  const floor = Math.max(minDist, ZONE_MIN_RISK_SHARE * planStopDist);
+  if (!(risk >= floor - 1e-9)) return { ok: false, code: "zone_tight", detail: `a limit at ${price} leaves ${round3(risk)} of risk to the plan's stop, under ${round3(floor)} (${ZONE_MIN_RISK_SHARE} x the plan's ${round3(planStopDist)})`, ...out };
   if (!(risk > minDist) || !(reward > minDist) || !(reward / risk >= ZONE_MIN_RR - 1e-9)) return { ok: false, code: "zone_rr", detail: `a limit at ${price} pays ${risk > 0 ? round3(reward / risk) : "no"} R to the target, under ${ZONE_MIN_RR}`, ...out };
   return { ok: true, moved: true, sl, tp, rr: round3(reward / risk), ...out };
 }

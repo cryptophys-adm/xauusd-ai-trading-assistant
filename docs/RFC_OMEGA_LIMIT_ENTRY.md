@@ -100,7 +100,8 @@ Then Omega asks the **entry council** (under `"council"`, the same call answers 
   stays short of its stop (`signalEntryZone`; a grid adaptation that moved them drops it). Where the plan's own level is
   through price or within the stop level, `limitPlacement` asks `zoneLimit`: the level nearest the plan's inside the zone
   (broker scale, + `feed_basis`) at least max(the stop level, 1 spread) from price on the correct side. The order keeps
-  the plan's stop and target where the plan put them (not their distances), pays at least `ZONE_MIN_RR` = 1R to the
+  the plan's stop and target where the plan put them (not their distances), keeps at least `ZONE_MIN_RISK_SHARE` = half
+  of the plan's risk (max of that and the stop level, else `zone_tight`), pays at least `ZONE_MIN_RR` = 1R to the
   target or is refused (`zone_rr`), and its lot is capped at `tight_stop_max_lot_factor` x the lot at the plan's stop
   (`lot_capped_zone`). The whole zone passed is `zone_passed`, a missed entry like `limit_through_price` (the entry
   council's `price_at_level` holds for it). A placement away from price is today's, at the plan's entry: the entry lies
@@ -267,7 +268,7 @@ Policy Engine's prohibited filter refuses them; platform test K2):
   the limit (a probe call with the symbol priced at the level). It fills when a 1m bar's range reaches it (a buy when the
   ask's low does, a sell when the bid's high does). After the fill the position is a v4 trade: planIntents, the TP ladder
   and the Position Manager. v4's results and its `ENGINE_CODE_HASH` are unchanged.
-- **Missed:** `limit_through_price`, `zone_passed`, `zone_rr` (EZ1: the replay places inside the signal's entry zone as
+- **Missed:** `limit_through_price`, `zone_passed`, `zone_tight`, `zone_rr` (EZ1: the replay places inside the signal's entry zone as
   the live `zoneLimit` does), `limit_out_of_band` (at placement); `pending_expired` (at `max_pending_life`);
   `decision_against`, `quorum_share_drop`, `blackout`, `daily_loss_limit`, `profile_downgrade`, `kill`, `paused` (checked
   at every minute's open while it rests). One resting order at a time (`pending_order_exists`).

@@ -70,7 +70,7 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
 }
 
 /** The reasons a limit entry was missed (never filled): at placement, then while it rested. */
-export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap"]);
+export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap"]);
 
 /**
  * The limit entry policy for replayOmega4 (`entry`). `state` is the checkpoint's `entry` of the run before. `knobsFor(mode)`
@@ -108,7 +108,8 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
       let level = r2(Number(signal.entry));
       if (!(level > 0) || !(planStop > 0)) { notes.set(entryKey, { gate: "bad_input", last_ms: now }); return; }
       // EZ1 (as the live limitPlacement): a level through price may rest inside the signal's entry zone instead, the
-      // plan's stop and target kept; the whole zone passed is zone_passed, a moved level paying under 1R zone_rr.
+      // plan's stop and target kept; the whole zone passed is zone_passed, a moved level under half the plan's risk zone_tight, one paying under 1R
+      // zone_rr.
       let zoned = null;
       const zone = signalEntryZone(signal, 2);
       if (zone && !((buy ? ask0 - level : level - bid0) > 0)) {

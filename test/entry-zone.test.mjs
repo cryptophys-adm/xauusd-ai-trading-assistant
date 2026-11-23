@@ -9,7 +9,7 @@ import { entryZoneOf, entryZoneMode, tradeLevels, ENTRY_ZONE, STRATEGY_PARAMS } 
 import { finishPlan, agentContext, slimPlan } from "../src/strategy-agents.mjs";
 import { tradeFor } from "../src/decision-engine.mjs";
 import { eaSignalFromDecision, entryZoneFields } from "../src/ea-signal.mjs";
-import { planIntents, OMEGA_DEFAULTS, limitPlacement, limitActionIntents, signalEntryZone, zoneLimit, ZONE_MIN_RR, openId } from "../src/omega-engine.mjs";
+import { planIntents, OMEGA_DEFAULTS, limitPlacement, limitActionIntents, signalEntryZone, zoneLimit, ZONE_MIN_RR, ZONE_MIN_RISK_SHARE, openId } from "../src/omega-engine.mjs";
 import { limitKnobs } from "../src/omega-limit-knobs.mjs";
 import { entryFacts, pendingFacts } from "../src/limit-council.mjs";
 import { replayOmegaLimit } from "../src/ledger-omega-limit.mjs";
@@ -177,6 +177,30 @@ test("EZ5 the whole zone passed is zone_passed; a moved limit paying under 1R is
   // At exactly 1R it rests.
   const one = zoneLimit({ signal: { ...SIGNAL, tp1: 4104.2 }, sym: { ...EXECUTOR.symbol, bid: 4099.8, ask: 4100.0 }, zone: { low: 4099.2, high: 4101.2 }, digits: 2, planStopDist: 5, knobs: limitKnobs("intraday"), from: 4100.2 });
   assert.deepEqual([one.ok, one.rr], [true, 1]);
+});
+
+test("EZ5b zone_tight: a move inside the zone never cuts the plan's risk below half (the boundary at exactly half rests)", () => {
+  assert.equal(ZONE_MIN_RISK_SHARE, 0.5);
+  // A BUY at 4100 (stop 4095: the plan's risk 5), its zone reaching 4096 (broker 4096.2); the stop at the broker 4095.2.
+  const wide = { ...SIGNAL, entry_zone_low: 4096, entry_zone_high: 4101 };
+  // The ask at 4097.9: the limit one spread below, 4097.7, keeps 2.5 = half the risk: it rests.
+  const half = place(wide, { bid: 4097.7, ask: 4097.9 });
+  assert.deepEqual([half.ok, half.moved, half.price], [true, true, 4097.7]);
+  // One tick lower, 4097.69, keeps 2.49: zone_tight, not zone_rr.
+  const tight = place(wide, { bid: 4097.69, ask: 4097.89 });
+  assert.deepEqual([tight.ok, tight.code, tight.price], [false, "zone_tight", 4097.69]);
+  assert.match(tight.detail, /2\.49 of risk to the plan's stop, under 2\.5 \(0\.5 x the plan's 5\)/);
+  // A SELL moved up toward its stop the same way.
+  const sell = { ...SIGNAL, side: "SELL", entry: 4100, stop: 4110, tp1: 4080, entry_zone_low: 4099, entry_zone_high: 4108 };
+  // Its risk is 10 (broker stop 4110.2): a limit at 4105.2 keeps exactly half, one at 4105.21 does not.
+  const sHalf = place(sell, { bid: 4105.0, ask: 4105.2 });
+  assert.deepEqual([sHalf.ok, sHalf.price], [true, 4105.2]);
+  const sTight = place(sell, { bid: 4105.01, ask: 4105.21 });
+  assert.deepEqual([sTight.code, sTight.price], ["zone_tight", 4105.21]);
+  // The broker's stop level counts too: the floor is max(stop level, half the risk).
+  // A 3.0 stop level puts the limit at 4097.9, 2.7 of risk: above half (2.5) but under the stop level, so zone_tight.
+  const lvl = zoneLimit({ signal: wide, sym: { ...EXECUTOR.symbol, bid: 4100.7, ask: 4100.9 }, zone: { low: 4096.2, high: 4101.2 }, digits: 2, planStopDist: 5, minDist: 3, knobs: limitKnobs("intraday"), from: 4100.2 });
+  assert.deepEqual([lvl.code, lvl.price], ["zone_tight", 4097.9]);
 });
 
 test("EZ6 no zone, or a zone that no longer holds the signal: today's placement, result for result", () => {
