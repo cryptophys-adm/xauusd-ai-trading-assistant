@@ -63,7 +63,7 @@ function decisionRecord() {
   const t = TRADED, f = INSIDE;
   const plans = { long: {}, short: {} };
   plans.long.zone_pullback = { status: "live", entry: 4096.5, stop: 4093.9, tp1: 4101.2, tp2: 4104.8, at_level: false, rrr: { tp1: 1.81, tp2: 3.19 }, setup: "a pullback to the nearest candidate support" };
-  if (t) plans.long.pattern_lines = { status: "live", entry: t.upper, stop: Math.round((t.lower - 0.5) * 100) / 100, tp1: Math.round((t.upper + 2.1) * 100) / 100, tp2: t.target, at_level: true, rrr: { tp1: 1.05, tp2: 1.4 }, setup: `the Projection Agent's 15m ${t.name}, broken upward (on gold it reached its target 55% of 31 times)`, pattern: t.id };
+  if (t) plans.long.pattern_lines = { status: "live", entry: t.upper, entry_low: Math.round((t.upper - 0.4) * 100) / 100, entry_high: Math.round((t.upper + 0.4) * 100) / 100, stop: Math.round((t.lower - 0.5) * 100) / 100, tp1: Math.round((t.upper + 2.1) * 100) / 100, tp2: t.target, at_level: true, rrr: { tp1: 1.05, tp2: 1.4 }, setup: `the Projection Agent's 15m ${t.name}, broken upward (on gold it reached its target 55% of 31 times)`, pattern: t.id };
   if (f) plans.short.pattern_inside = { status: "shadow", entry: f.upper, stop: Math.round((f.upper + 1.2) * 100) / 100, tp1: Math.round(((f.upper + f.lower) / 2) * 100) / 100, tp2: Math.round((f.lower + 0.3) * 100) / 100, at_level: false, rrr: { tp1: 1.2, tp2: 2.1 }, setup: `the Projection Agent's forming 1H ${f.name}, not broken yet: a swing from its upper line toward its lower line`, pattern: f.id };
   return {
     decision_key: `OANDA:XAUUSD:15:${NOW}`, bar_close: iso(NOW), stance: "BUY", trading_mode: "intraday",

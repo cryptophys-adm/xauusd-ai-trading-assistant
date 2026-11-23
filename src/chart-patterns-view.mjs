@@ -103,7 +103,7 @@ export function patternPlan(p, plans) {
       if (p.direction && p.direction !== dir) continue;
       return {
         agent, side: dir > 0 ? "BUY" : "SELL", status: str(a.status), at_level: a.at_level === true,
-        entry: r2(a.entry), stop: r2(a.stop), tp1: r2(a.tp1), tp2: r2(a.tp2),
+        entry: r2(a.entry), entry_low: r2(a.entry_low), entry_high: r2(a.entry_high), stop: r2(a.stop), tp1: r2(a.tp1), tp2: r2(a.tp2),
         rrr: { tp1: num(a.rrr?.tp1), tp2: num(a.rrr?.tp2) }, far_target: r2(measuredIn(p, dir)), reach: null
       };
     }

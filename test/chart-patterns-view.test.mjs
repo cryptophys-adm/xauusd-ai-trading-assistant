@@ -74,6 +74,11 @@ test("CPV1. the fixture is the view's answer: keys and types, every chart, the p
   const planned = main.patterns.filter((p) => p.plan);
   assert.deepEqual(planned.map((p) => [p.tf, p.id, p.plan.agent, p.plan.side]).sort(), [["15", TRADED.id, "pattern_lines", "BUY"], ["60", INSIDE.id, "pattern_inside", "SELL"]].sort());
   for (const p of planned) assert.equal(p.plan.reach, null, "a later PR fills plan.reach");
+  // EZ1: the plan's entry zone on the feed scale, null without one (pattern_inside's plan has none here).
+  for (const p of planned) assert.ok("entry_low" in p.plan && "entry_high" in p.plan);
+  const lines = planned.find((p) => p.plan.agent === "pattern_lines").plan, inside = planned.find((p) => p.plan.agent === "pattern_inside").plan;
+  assert.ok(lines.entry_low < lines.entry && lines.entry < lines.entry_high, "the band holds the entry");
+  assert.deepEqual([inside.entry_low, inside.entry_high], [null, null]);
   // The seat: four rooms; today's basis is the bar; horizon_bars waits for A12.
   assert.deepEqual(Object.keys(main.seat.rooms), ["M15", "H1", "H4", "D1"]);
   assert.deepEqual([main.seat.judged_on, main.seat.horizon_bars], ["bar", null]);
