@@ -38,11 +38,11 @@ import {
   validateOpening, validateRebuttal, majorityStance, selectRebutters, BIAS_RULE, SUPPORT_RULE, stanceSupported,
   majorityBias, biasOfStance, biasSplitText, DECISION_BIAS_RULE, conclusionBiasErrors, agentIdsToNames,
   INDEPENDENCE_RULE, namesErrors, metricsErrors, forbiddenNamesFor, busRefs, anonymousBus, deskNames, inferredMetrics, normalizeAnswerText,
-  WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS
+  WAR_ROOM_OPENING_MS, WAR_ROOM_DEBATE_MS, WAR_ROOM_CONCLUSION_MS, LIQUIDITY_CONDITIONS_LABEL
 } from "./war-room.mjs";
 import { closedHtfCandleKeys, OBSERVED_PREFIX } from "./parity-sweep.mjs";
 import { newsDeskEvidence } from "./news-daily.mjs";
-import { roomContextLine } from "./lens-steps.mjs";
+import { roomContextLine, roomConditionsLine } from "./lens-steps.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { projectionReading, chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
@@ -274,7 +274,7 @@ export async function tfEvidence(env, chart, candleKey) {
   };
 }
 
-function agentData(agent, ev, spec) {
+function agentData(agent, ev, spec, conditions = null) {
   switch (agent) {
     case "h1": case "h4": case "d1": return { timeframe: spec.label, reading: ev.desk.reading, approved_by_parity: ev.desk.approved_by_parity };
     case "news": return ev.news;
@@ -283,7 +283,9 @@ function agentData(agent, ev, spec) {
     case "risk": return {
       timeframe: spec.label, ranges: ev.technical.candles.map((c) => round(c.h - c.l)), average_range_14: ev.technical.average_range_14,
       confirmations: ev.confirmations,
-      ...(ev.event_risk ? { economic_calendar: ev.event_risk } : {})
+      ...(ev.event_risk ? { economic_calendar: ev.event_risk } : {}),
+      // B16: lens B's liquidity conditions in the 1H room (plain words, no sweep, no price), only while the room reads them.
+      ...(conditions ? { liquidity_conditions: conditions } : {})
     };
     default: return { hud: HUD_NAMES[agent], timeframe: spec.label, reading: hudEvidenceLines(ev.hud?.readings?.[agent]) };
   }
@@ -335,7 +337,7 @@ function rebuttalMessages(agent, own, bus, spec, unanimous, confirmations, roomB
   ]);
 }
 
-function conclusionMessages(spec, bus, debate, confirmations, crowd = null, learned = null) {
+function conclusionMessages(spec, bus, debate, confirmations, crowd = null, learned = null, conditions = null) {
   return chatMessages([
     `You are the moderator of the XAUUSD ${spec.label} War Room. The Consensus Discussion is closed. Write the TLDR of the ${spec.label} Thread: the consensus of the room on this timeframe.${spec.tab === "1H" ? " The Reasoner writes the H1 decision after you, from this room's consensus." : ""}`,
     ROOM_RULES_INDEPENDENT,
@@ -346,6 +348,7 @@ function conclusionMessages(spec, bus, debate, confirmations, crowd = null, lear
     DECISION_BIAS_RULE + " A BULLISH or BEARISH bias needs at least one agent holding it.",
     "Weigh statements by their metrics and their evidence, not by their number: a statement built on data verified by parity, or computed from verified bars, outweighs one built on uncalibrated readings (each entry states which). No repetition: the summary states the conclusion once, each reason adds something new. In the summary and reasons name the metrics that decided, never an agent or a role, and never another timeframe's room; dissent lists the # references of statements whose stance or bias still differs from yours. Never discuss calibration itself.",
     'Required JSON: {"stance":"BUY|SELL|HOLD|WAIT|CLOSE","bias":"BULLISH|BEARISH|NEUTRAL","confidence":0..1,"summary":"<= 360 chars","reasons":["<= 160 chars", "at most 3"],"dissent":["#n"],"metrics":["<the metrics that decided>"]}',
+    ...(conditions ? [`${LIQUIDITY_CONDITIONS_LABEL} ${conditions}`] : []),
     "COMMUNICATION BUS:",
     JSON.stringify(bus),
     "CONSENSUS DISCUSSION:",
@@ -432,11 +435,13 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   // The bundled pack plus the notes promoted autonomously (src/learned-live.mjs); read only when the notes are on.
   const learnedPack = learnedKnowledgeEnabled(env) ? await effectiveLearnedPack(env) : undefined;
   const learnedFor = (agent) => learnedBlock(env, { agent, ...learnedCtx, pack: learnedPack });
+  // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §3.5, §4.3): lens A in the 4H and
+  // 1D rooms, lens B in the 1H room; context, not on the roster, so outside the quorum and the crowd; no price. B16: the
+  // 1H room's risk desk and moderator read lens B's conditions from it, as the brief stores them (4H and D1: never).
+  let lensContext = existing.get("brief")?.context ?? null;
   if (!existing.has("brief")) {
-    // The Positioning & Liquidity analyst's line (docs/RFC_POSITIONING_LIQUIDITY.md §2, §3.5, §4.3): lens A in the 4H and
-    // 1D rooms, lens B in the 1H room; context, not on the roster, so outside the quorum and the crowd; no price.
-    let lensContext = null;
-    try { lensContext = await roomContextLine(env, chart); } catch { lensContext = null; }
+    lensContext = null;
+    try { lensContext = await roomContextLine(env, chart, { now: clock() }); } catch { lensContext = null; }
     await writeMessage(db, { ...base("brief", "system"), ts: new Date(clock()).toISOString(), status: "info", body: {
       ...(lensContext ? { context: lensContext } : {}),
       chart, candle_key: candleKey, roster, ...(allocation.benched.length ? { benched: allocation.benched, shadow: allocation.shadow } : {}), calibration, confirmations: ev.confirmations, bar: ev.technical.candles.at(-1) ?? null,
@@ -446,6 +451,8 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
       independent: true, news: ev.news ? { consensus: ev.news.consensus } : null
     } });
   }
+
+  const conditions = roomConditionsLine(env, chart, lensContext);
 
   const roomEnv = env;
   const maxPerHour = Number(env.TF_THREADS_MAX_CALLS_PER_HOUR ?? 140);
@@ -462,7 +469,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   // Phase 1: the communication bus.
   const open = phase(WAR_ROOM_OPENING_MS);
   const openingOpts = (agent) => {
-    const data = agentData(agent, ev, spec);
+    const data = agentData(agent, ev, spec, conditions);
     return {
     messages: openingMessages(agent, data, spec, roster, null, learnedFor(agent)), schemaName: "tf_room_opening", schema: OPENING_SCHEMA,
     // A4, in shadow (src/room-memo.mjs): the memo key the agent's evidence would give: its metric menu and notes.
@@ -515,7 +522,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
   const crowd = await roomCrowd(env, db, chart, finalEntries(answered, debate), Date.parse(ev.bar_close));
   const conclude = phase(WAR_ROOM_CONCLUSION_MS);
   await conclude(base("conclusion", "moderator"), {
-    messages: conclusionMessages(spec, anonBus, debate.map((m) => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator")),
+    messages: conclusionMessages(spec, anonBus, debate.map((m) => ({ ref: refs.toRef.get(m.agent) ?? null, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, rebuts: (m.rebuts || []).map((r) => refs.toRef.get(r) ?? r), metrics: m.metrics ?? [], argument: m.argument })), ev.confirmations, crowd, learnedFor("moderator"), conditions),
     schemaName: "tf_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: BUS_MAX_TOKENS.moderator, effort: "low",
     validate: (o) => validateTfConclusion(o, { busAgents, crowd, forbiddenNames: deskNames(tfAgentName, Object.keys(TF_DESKS)), refs, supportStances: new Set([...answered.map((m) => m.stance), ...debate.map((m) => m.stance)]), supportBiases: new Set([...answered, ...debate].map((m) => m.bias || biasOfStance(m.stance))), roomBias }),
     toBody: (o) => ({ body: { summary: clip(o.summary, 400), bias: o.bias, reasons: o.reasons.slice(0, 3).map((r) => clip(r, 200)), dissent: [...new Set(o.dissent)], metrics: o.metrics, majority, majority_bias: roomBias, crowd }, refs: [] })
@@ -531,7 +538,7 @@ export async function runTimeframeThread(env, { chart, candleKey }, { clock = ()
         return runShadowCalls(env, {
           calls: plan, candleKey, statementClose: ev.bar_close, clock, schema: OPENING_SCHEMA, maxTokens: BUS_MAX_TOKENS.agent,
           // Like for like: the live opening's prompt (its bundled notes included) plus the note under test.
-          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec), spec, roster, note, learnedFor(agent)),
+          messagesFor: (agent, note) => openingMessages(agent, agentData(agent, ev, spec, conditions), spec, roster, note, learnedFor(agent)),
           validate: (o, agent) => validateOpening(normalizeTfNames(o, [agent]), agent)
         });
       }

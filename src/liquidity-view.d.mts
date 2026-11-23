@@ -11,3 +11,4 @@ export function backfillState(input?: { versions?: unknown; marker?: Record<stri
 export function readLiquidityView(env: unknown, options?: { now?: number; strategy?: Record<string, any> | null }): Promise<Record<string, any>>;
 export function viewCard(decision: unknown, now?: number): Record<string, any> | null;
 export function viewQuorumWithLiquidity(decision: unknown): Record<string, any> | null;
+export function viewConditions(state: unknown, options?: { knobs?: Record<string, any> | null; now?: number; roomLine?: "conditions" | "brief" }): Record<string, any> | null;
