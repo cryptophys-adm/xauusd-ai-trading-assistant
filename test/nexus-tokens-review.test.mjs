@@ -15,7 +15,9 @@ const REVIEW_FILES = [
   "components/FeedFallbackCard.tsx", "components/ShadowSwitchCard.tsx", "components/Roster.tsx", "components/OrganismCard.tsx",
   "components/KeyLevels.tsx", "pages/Omega.tsx", "pages/Performance.tsx", "pages/Councils.tsx", "lib/tokens.ts", "lib/format.ts",
   // Track C1: LensView, split from the polled LensPanel.
-  "components/LensPanel.tsx"
+  "components/LensPanel.tsx",
+  // Track C2: the Liquidity page, the Intelligence pages' chart and their helpers.
+  "pages/Liquidity.tsx", "components/IntelChart.tsx", "lib/intel.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {
