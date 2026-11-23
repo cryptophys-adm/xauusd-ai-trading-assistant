@@ -81,6 +81,20 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
   return null;
 }
 
+/**
+ * Pure: the fill price of a resting limit at `level` in the 1m bar `bar` ({ o, h, l } on the bid, `spread` added for the
+ * ask), or null when the bar does not reach it. The ask's low (bid low + spread) reaches a BUY limit; the bid's high a
+ * SELL limit. A gap through it at the minute's open fills at the open (the broker's better price). Shared with v3's limit
+ * entry (src/ledger-v3-limit.mjs, V3L).
+ */
+export function limitFillPrice({ side, level, bar, spread }) {
+  const buy = side === "BUY";
+  const reached = buy ? bar.l + spread <= level + 1e-9 : bar.h >= level - 1e-9;
+  if (!reached) return null;
+  const openPx = buy ? r2(bar.o + spread) : r2(bar.o);
+  return buy ? Math.min(level, openPx) : Math.max(level, openPx);
+}
+
 /** The reasons a limit entry was missed (never filled): at placement, then while it rested. */
 export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap", "superseded_by_signal"]);
 
@@ -162,13 +176,8 @@ export function limitEntryPolicy({ state = null, knobsFor = (m, settings) => lim
     inMinute({ now, bar, spread, fill }) {
       lastMs = now;
       if (!pending || pending.placed_ms > now) return;
-      const buy = pending.side === "BUY";
-      // The ask's low (bid low + spread) reaches a BUY limit; the bid's high a SELL limit. A gap through it at the
-      // minute's open fills at the open (the broker's better price); the stop and the target stay where they were placed.
-      const reached = buy ? bar.l + spread <= pending.level + 1e-9 : bar.h >= pending.level - 1e-9;
-      if (!reached) return;
-      const openPx = buy ? r2(bar.o + spread) : r2(bar.o);
-      const px = buy ? Math.min(pending.level, openPx) : Math.max(pending.level, openPx);
+      const px = limitFillPrice({ side: pending.side, level: pending.level, bar, spread });
+      if (px == null) return;
       const it = px === pending.it.entry ? pending.it : { ...pending.it, entry: px, r_dist: r2(Math.abs(px - pending.it.sl)) };
       fill({ key: pending.key, it, issuedMs: pending.issued_ms, mode: pending.mode, agent: pending.agent, equity: pending.equity, profile: pending.profile, noteCodes: pending.note_codes,
         extra: { policy: OMEGA_LIMIT_VERSION, placed_at: iso(pending.placed_ms), wait_min: Math.round((now - pending.placed_ms) / M1), away_r: pending.away_r, knobs: pending.knobs } });

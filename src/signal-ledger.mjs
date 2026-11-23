@@ -27,6 +27,7 @@
 import { keyLevelPlan, isProtected, strategyExits, OMEGA_DEFAULTS } from "./omega-engine.mjs";
 import { flatConfidences } from "./agent-confidence.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
+import { limitSupersedeOn } from "./limit-supersede.mjs";
 
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
 /** The ledger's own schedule (owner 2026-11-12): every 5 minutes, 2 minutes past each 5m close. */
@@ -147,6 +148,12 @@ export const OMEGA_POLICY_VERSION = "cryptophys.ledger-omega.v3";
 export const OMEGA4_VERSION = "cryptophys.ledger-omega.v4";
 /** "Omega with limit entry" (src/ledger-omega-limit.mjs, docs/RFC_OMEGA_LIMIT_ENTRY.md §8 stage 2): the maker counterfactual beside v4. */
 export const OMEGA_LIMIT_VERSION = "cryptophys.ledger-omega-limit.v1";
+/**
+ * V3L (owner 2026-11-23: "Make v3 follow the limit entry (Rekomendasi)"): v3's rows entered by a resting limit (the Omega
+ * setting entry_order "limit" or "council" at the decision, src/ledger-v3-limit.mjs) carry this in omega_json.version;
+ * market rows carry no version (OMEGA_POLICY_VERSION, unchanged).
+ */
+export const OMEGA_V3_LIMIT_VERSION = "cryptophys.ledger-omega.v3.1-limit";
 /** The latest v4 parity check against the live account (src/ledger-omega4.mjs runOmegaParity), in SIGNAL_CACHE. */
 export const OMEGA4_PARITY_KEY = "ledger:omega4:parity:v1";
 export const OMEGA_SIM = Object.freeze({ spread: 0.2, atr_period: 14, limit_pullback: 0.35, broker_day_utc: 22 });
@@ -225,15 +232,18 @@ export function omegaEntry(signal, bars, { now = Date.now(), maxAgeMs = OMEGA_DE
  * the engine's decisions oldest first ({ close_ms, stance, power, levels }); `gate` the account gate
  * at the fill ({ code } to skip, { size } to trade a fraction of 1R), decided once by the caller.
  */
-export function simulateOmega(signal, bars, { decisions = [], gate = null, now = Date.now(), holdMaxMs = HOLD_MAX_MS, atrBars = null, maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
-  const e = omegaEntry(signal, bars, { now, maxAgeMs });
+export function simulateOmega(signal, bars, { decisions = [], gate = null, now = Date.now(), holdMaxMs = HOLD_MAX_MS, atrBars = null, maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms, entry = null } = {}) {
+  // V3L: `entry` is an entry already decided (src/ledger-v3-limit.mjs limitEntry, a resting limit) with its own stop and
+  // target; without one, the market entry (omegaEntry) with the plan's distances from the fill, as before.
+  const e = entry ?? omegaEntry(signal, bars, { now, maxAgeMs });
   if (e.status !== "filled") return { omega_status: e.status, gate: e.gate ?? null };
   if (gate?.code) return { omega_status: "skipped", gate: gate.code, filled_at: e.filled_at };
   const size = finite(gate?.size) ? Math.max(0, Math.min(1, gate.size)) : 1;
   const dir = signal.side === "BUY" ? 1 : -1, buy = dir > 0;
-  const stopDist = Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
+  const placed = entry != null && finite(e.sl) && finite(e.tp);
+  const stopDist = placed ? Math.abs(e.fill - e.sl) : Math.abs(signal.entry - signal.stop), tpDist = Math.abs(signal.tp1 - signal.entry);
   const fill = e.fill, fillMs = toMs(e.filled_at), ownClose = decisionCloseMs(signal.candle_key);
-  let sl = fill - dir * stopDist, tp = fill + dir * tpDist;
+  let sl = placed ? e.sl : fill - dir * stopDist, tp = placed ? e.tp : fill + dir * tpDist;
   const R = (price) => r3((dir * (price - fill)) / stopDist);
   let protectedAt = null, slMoves = 0, tpMoves = 0, mfe = 0, mae = 0, band = null;
   const out = (exit, price, b, k) => ({
@@ -482,7 +492,7 @@ export function ledgerView(items, { days, omega4 = [] } = {}) {
     rules: {
       fill_window_hours: FILL_WINDOW_MS / 3600_000, hold_max_hours: HOLD_MAX_MS / 3600_000, same_bar: "stop first (conservative)", unit: "R, never money",
       bars: "1m where the 1m series reaches (about two days), else 15m, else 1H; followed every 5 minutes",
-      omega: { version: OMEGA_POLICY_VERSION, entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h; with the strategy execution rules, the lean flip, a winner's agent confidence drop, and the trailing TP only while that confidence holds", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" },
+      omega: { version: OMEGA_POLICY_VERSION, version_limit: OMEGA_V3_LIMIT_VERSION, entry_order: "the Omega setting entry_order in force at the decision (the settings' audited history): market as below; limit or council as entry_limit", entry_limit: "a resting limit as live: the entry council's recorded answer (a skip skips; none, placed), limitPlacement at each minute's open while the signal is live (the band, EZ1 zone, EZ1b edge, zone_*, limit_through_price, limit_out_of_band), then the counterfactual's cancels (pending_expired, decision_against, quorum_share_drop) and SS1's superseded_by_signal; filled when a 1m bar reaches the level, the stop and target where it was placed; unfilled rows are skipped with that code", entry: "market the minute after the decision (a limit plan waits up to the signal's age for price within 0.35 x the stop distance)", management: "every minute: key levels by quorum power (SL+, trailing TP, close on a reversed power), the opposite decision once made, 72 h; with the strategy execution rules, the lean flip, a winner's agent confidence drop, and the trailing TP only while that confidence holds", gates: "daily loss limit and risk budget in R, max positions, no stacking", approximations: "feed bars, fixed spread, no 5m or adaptive stop, no 5m entry trigger, no scale-out" },
       omega4: OMEGA4_RULES,
       limit: OMEGA_LIMIT_RULES
     },
@@ -633,10 +643,11 @@ const atOrBefore = (v, at) => finite(tms(v)) && tms(v) <= at;
  * mode's max_pending_life from the decision (src/omega-limit-knobs.mjs); a market entry has until the next close or
  * `maxAgeMs` after the decision, as omegaEntry. NaN without the times.
  */
-export function omegaEntryWindowEnd(row, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
+export function omegaEntryWindowEnd(row, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms, limitEntry = false } = {}) {
   const opened = tms(row?.opened_at);
   if (!finite(opened)) return NaN;
-  if (row.entry_action === "ENTER_LIMIT") return opened + limitKnobs(row.trading_mode).max_pending_life * 60_000;
+  // V3L: under entry_order "limit" or "council" (`limitEntry`) every entry rests as a limit for the mode's life.
+  if (row.entry_action === "ENTER_LIMIT" || limitEntry) return opened + limitKnobs(row.trading_mode).max_pending_life * 60_000;
   const closeMs = decisionCloseMs(row.candle_key);
   if (!finite(closeMs)) return opened + maxAgeMs;
   return Math.min(closeMs + M15, Math.max(closeMs, opened) + maxAgeMs);
@@ -651,9 +662,12 @@ export function omegaEntryWindowEnd(row, { maxAgeMs = OMEGA_DEFAULTS.max_signal_
  *   - Omega's side not filled yet: a hold only inside Omega's entry window (omegaEntryWindowEnd);
  *   - a row without Omega's side (before the Omega policy): the TP policy's state, open and unprotected, or pending
  *     inside the entry window.
+ * V3L: `limitEntry` (entry_order "limit" or "council" at `atMs`) makes every entry window the mode's max_pending_life;
+ * with `supersede` too (SS1's limit_supersede on), a row Omega has not filled holds nothing back (the newer signal
+ * supersedes its resting limit, as live). The defaults are LH1's rule exactly.
  * The TP-policy row's own fill window and result are unchanged.
  */
-export function blocksNewDecision(row, atMs, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
+export function blocksNewDecision(row, atMs, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms, limitEntry = false, supersede = false } = {}) {
   if (!row || !atOrBefore(row.opened_at, atMs)) return null;
   // Today's rule on the row's current state (before LH1): a pending row, or an open one without TP1 or SL+.
   const legacy = () => (row.status === "pending" ? "pending" : row.status === "open" && row.tp1_closed_at == null && Number(row.sl_plus_triggered || 0) === 0 ? "open" : null);
@@ -667,7 +681,10 @@ export function blocksNewDecision(row, atMs, { maxAgeMs = OMEGA_DEFAULTS.max_sig
   // Omega's side not filled yet. A TP-policy row already open keeps today's rule (held only while unprotected); a
   // pending one holds only inside Omega's entry window.
   if (row.status === "open") return legacy();
-  if (atMs < omegaEntryWindowEnd(row, { maxAgeMs })) return "pending";
+  // V3L: under a limit entry with SS1 on (`limitEntry`, `supersede`), Omega's resting, unfilled limit of an older signal
+  // is superseded by the newer same-side signal (deleted, the new one placed): it holds nothing back.
+  if (limitEntry && supersede) return null;
+  if (atMs < omegaEntryWindowEnd(row, { maxAgeMs, limitEntry })) return "pending";
   // Past Omega's entry window: a row Omega's simulation has already read (closed, skipped or filled would have
   // returned above) holds nothing back; one still "pending" there has not been simulated yet (the 5-minute ledger run
   // reads it next) and keeps today's rule until it is.
@@ -690,8 +707,15 @@ export async function ingestDecision(env, d, { now = Date.now(), maxAgeMs = OMEG
   // entry window, or a position Omega still holds unprotected. The TP-policy row keeps its own fill window for its
   // own result; on 2026-11-23 its 8-hour window held back six BUYs after Omega's side of the row had closed.
   const atMs = finite(toMs(d.decided_at)) ? toMs(d.decided_at) : now;
+  // V3L: Omega's entry in force at the decision (entry_order from the settings' history) and SS1's switch.
+  let hold = { maxAgeMs };
+  try {
+    const v3l = await import("./ledger-v3-limit.mjs");
+    const limitEntry = v3l.isLimitEntry((await v3l.loadEntryOrders(env))(atMs));
+    hold = { maxAgeMs, limitEntry, supersede: limitEntry && v3l.ruleActive("ss1", atMs) && limitSupersedeOn(await omegaSettings(env)) };
+  } catch { hold = { maxAgeMs }; }
   const rows = (await env.DB.prepare("SELECT id, status, opened_at, filled_at, closed_at, candle_key, trading_mode, entry_action, tp1_closed_at, sl_plus_triggered, sl_plus_at, omega_status, omega_filled_at, omega_closed_at, omega_json FROM signal_ledger WHERE source = 'decision' AND side = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ? OR omega_closed_at IS NULL OR omega_closed_at > ?) ORDER BY opened_at DESC LIMIT 20").bind(s.side, iso(atMs), iso(atMs), iso(atMs)).all()).results || [];
-  const blocking = rows.map((r) => ({ r, why: blocksNewDecision(r, atMs, { maxAgeMs }) })).find((x) => x.why);
+  const blocking = rows.map((r) => ({ r, why: blocksNewDecision(r, atMs, hold) })).find((x) => x.why);
   if (blocking) {
     await env.DB.prepare("INSERT OR IGNORE INTO signal_ledger_held (decision_key, side, held_at, blocking_id, reason) VALUES (?, ?, ?, ?, ?)").bind(String(d.decision_key), s.side, d.decided_at ?? iso(atMs), String(blocking.r.id), HOLD_REASONS[blocking.why]).run();
     return 0;
@@ -707,10 +731,13 @@ export async function ingestDecision(env, d, { now = Date.now(), maxAgeMs = OMEG
 export async function loadDecisionStream(env, sinceIso) {
   let rows = [];
   try {
-    rows = (await env.DB.prepare("SELECT decision_key, stance, decided_at, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action, json_extract(decision_json, '$.trade.agent') AS agent, json_extract(decision_json, '$.strategy_execution') AS sx, json_extract(decision_json, '$.agent_confidence') AS conf, json_extract(decision_json, '$.agent_confidence_prev') AS conf_prev FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
+    rows = (await env.DB.prepare("SELECT decision_key, stance, decided_at, json_extract(decision_json, '$.quorum.score') AS power, json_extract(decision_json, '$.key_levels') AS levels, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.trade.action') AS action, json_extract(decision_json, '$.trade.agent') AS agent, json_extract(decision_json, '$.strategy_execution') AS sx, json_extract(decision_json, '$.agent_confidence') AS conf, json_extract(decision_json, '$.agent_confidence_prev') AS conf_prev, json_extract(decision_json, '$.quorum.long_share') AS long_share, json_extract(decision_json, '$.quorum.short_share') AS short_share, json_extract(decision_json, '$.trade.entry_low') AS entry_low, json_extract(decision_json, '$.trade.entry_high') AS entry_high, json_extract(decision_json, '$.entry_zone_mode') AS zone_mode FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close").bind(sinceIso).all()).results || [];
   } catch { return []; }
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
   return rows.map((r) => ({ key: r.decision_key, close_ms: decisionCloseMs(r.decision_key), at_ms: finite(toMs(r.decided_at)) ? toMs(r.decided_at) : null, stance: r.stance, power: r.power == null || !Number.isFinite(Number(r.power)) ? null : Number(r.power), levels: decisionLevels(r.levels), mode: TRADING_MODES.includes(r.mode) ? r.mode : null, action: r.action ?? null,
-    agent: typeof r.agent === "string" && r.agent ? r.agent : null, strategy_execution: r.sx === 1 || r.sx === true, agent_confidence: parseJson(r.conf), agent_confidence_prev: parseJson(r.conf_prev) }))
+    agent: typeof r.agent === "string" && r.agent ? r.agent : null, strategy_execution: r.sx === 1 || r.sx === true, agent_confidence: parseJson(r.conf), agent_confidence_prev: parseJson(r.conf_prev),
+    // V3L (src/ledger-v3-limit.mjs): what the limit entry reads (the quorum's shares for its cancels, the plan's entry zone).
+    quorum: { long_share: num(r.long_share), short_share: num(r.short_share) }, entry_low: num(r.entry_low), entry_high: num(r.entry_high), entry_zone_mode: typeof r.zone_mode === "string" ? r.zone_mode : null }))
     .filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
 }
 
@@ -727,36 +754,65 @@ const bookOf = (r) => { const j = parseJson(r.omega_json) || {}; return { id: r.
 /**
  * The Omega policy of the decision rows `rows` (oldest first) on the closed 15m bars. Each trade's
  * account gate is decided once, at its fill, from the other Omega trades, and kept in omega_json.
+ * V3L: the entry follows the Omega setting entry_order in force at each decision (the settings' audited history,
+ * src/ledger-v3-limit.mjs loadEntryOrders): "market" as before, byte for byte; "limit" or "council" a resting limit
+ * (limitEntry), its rows tagged OMEGA_V3_LIMIT_VERSION in omega_json. `fresh` (the one-shot recompute) decides every
+ * row's gate again and keeps the row's earlier v3 values in omega_json.prev (never overwriting a prev already there).
  */
-export async function evaluateOmega(env, rows, bars, { now = Date.now(), m15 = null } = {}) {
+export async function evaluateOmega(env, rows, bars, { now = Date.now(), m15 = null, fresh = false } = {}) {
   if (!rows.length) return 0;
   const atrBars = m15 ?? bars.filter((b) => spanMs(b) === M15);
   const since = Math.min(...rows.map((r) => toMs(r.opened_at)).filter(finite));
   if (!finite(since)) return 0;
   const decisions = await loadDecisionStream(env, iso(since - 2 * M15));
   const settings = await omegaSettings(env);
+  const v3l = await import("./ledger-v3-limit.mjs");
+  const entryOrderAt = await v3l.loadEntryOrders(env);
   const ctx = (await env.DB.prepare("SELECT id, side, omega_filled_at, omega_closed_at, r_omega, omega_size, omega_json FROM signal_ledger WHERE source = 'decision' AND omega_filled_at IS NOT NULL AND omega_filled_at >= ?").bind(iso(brokerDayStart(since) - HOLD_MAX_MS)).all()).results || [];
   const book = new Map(ctx.map((r) => [r.id, bookOf(r)]));
+  // A recompute decides these rows again in order: their earlier results are not part of the account before them.
+  if (fresh) for (const r of rows) book.delete(r.id);
   const byKey = new Map(decisions.map((d) => [d.key, d]));
+  let limitDecisions = null, verdicts = null;
   let changed = 0;
   for (const s of rows.slice().sort((a, b) => toMs(a.opened_at) - toMs(b.opened_at))) {
     const own = byKey.get(s.candle_key);
     const sig = { ...s, trading_mode: s.trading_mode || own?.mode || null, entry_action: s.entry_action || own?.action || null, agent: own?.agent ?? null };
     const stored = parseJson(s.omega_json);
-    let gate = stored?.gate ?? null;
+    const entryOrder = entryOrderAt(toMs(s.opened_at));
+    const limitMode = v3l.isLimitEntry(entryOrder);
+    let entry = null;
+    if (limitMode) {
+      limitDecisions ??= v3l.withDecisionHistory(decisions);
+      verdicts ??= await v3l.loadEntryVerdicts(env, { sinceMs: since - 2 * M15 });
+      const verdict = verdicts.get(v3l.entryOpenId(decisionCloseMs(s.candle_key), s.side)) ?? null;
+      // "council" with the council's enter_market: v3's own market entry (omegaEntry), else the limit.
+      if (v3l.councilRoute(entryOrder, verdict) !== "market") entry = v3l.limitEntry(sig, bars, { now, decisions: limitDecisions, settings, own, verdict, entryOrder });
+    }
+    // A gate is reused only from a run of the same entry (a limit row's from a limit run, a market row's as before).
+    const reuse = !fresh && (limitMode ? stored?.version === OMEGA_V3_LIMIT_VERSION : stored?.version == null);
+    let gate = reuse ? stored?.gate ?? null : null;
     if (!gate) {
-      const e = omegaEntry(sig, bars, { now, maxAgeMs: settings.max_signal_age_ms });
+      const e = entry ?? omegaEntry(sig, bars, { now, maxAgeMs: settings.max_signal_age_ms });
       if (e.status === "filled") gate = omegaGate({ side: s.side, fillMs: toMs(e.filled_at), others: [...book.values()].filter((o) => o.id !== s.id), settings });
     }
-    const o = simulateOmega(sig, bars, { decisions, gate, now, atrBars, maxAgeMs: settings.max_signal_age_ms });
+    const o = simulateOmega(sig, bars, { decisions, gate, now, atrBars, maxAgeMs: settings.max_signal_age_ms, entry });
     const traded = o.omega_status === "open" || o.omega_status === "closed";
     book.set(s.id, { id: s.id, side: s.side, filled_at: traded ? o.filled_at : null, closed_at: o.omega_status === "closed" ? o.closed_at : null, r: o.r ?? null, size: o.size ?? null, protected_at: o.protected_at ?? null });
-    const json = { gate, protected_at: o.protected_at ?? null, sl_moves: o.sl_moves ?? 0, tp_moves: o.tp_moves ?? 0, mfe_r: o.mfe_r ?? null, mae_r: o.mae_r ?? null, open_r: o.open_r ?? null, band: o.band ?? null, bars: o.bars ?? null };
+    const prev = stored?.prev ?? (fresh ? v3Snapshot(s, stored, now) : null);
+    const json = { ...(limitMode ? { version: OMEGA_V3_LIMIT_VERSION, entry_order: entryOrder } : {}), gate, protected_at: o.protected_at ?? null, sl_moves: o.sl_moves ?? 0, tp_moves: o.tp_moves ?? 0, mfe_r: o.mfe_r ?? null, mae_r: o.mae_r ?? null, open_r: o.open_r ?? null, band: o.band ?? null, bars: o.bars ?? null,
+      ...(limitMode ? { limit: entry?.limit ?? null } : {}), ...(prev ? { prev } : {}) };
     await env.DB.prepare("UPDATE signal_ledger SET trading_mode = ?, entry_action = ?, omega_status = ?, omega_gate = ?, omega_filled_at = ?, omega_closed_at = ?, omega_exit = ?, r_omega = ?, omega_size = ?, omega_json = ?, updated_at = ? WHERE id = ?")
       .bind(sig.trading_mode, sig.entry_action, o.omega_status, o.gate ?? null, traded ? o.filled_at : null, o.omega_status === "closed" ? o.closed_at : null, o.exit ?? null, o.omega_status === "closed" ? o.r : null, traded ? o.size : null, JSON.stringify(json), iso(now), s.id).run();
     if (o.omega_status !== s.omega_status) changed += 1;
   }
   return changed;
+}
+
+/** V3L: a row's v3 values before a recompute (omega_json.prev): its columns, its omega_json and the version it ran. */
+function v3Snapshot(s, stored, now) {
+  const { prev: _drop, ...json } = stored && typeof stored === "object" ? stored : {};
+  return { version: typeof json.version === "string" ? json.version : OMEGA_POLICY_VERSION, kept_at: iso(now), omega_status: s.omega_status ?? null, omega_gate: s.omega_gate ?? null, omega_filled_at: s.omega_filled_at ?? null, omega_closed_at: s.omega_closed_at ?? null, omega_exit: s.omega_exit ?? null, r_omega: s.r_omega ?? null, omega_size: s.omega_size ?? null, omega_json: stored ? json : null };
 }
 
 /** Re-simulates every pending or open signal on the latest closed bars. */
@@ -817,9 +873,12 @@ export async function runSignalLedger(env, { now = Date.now(), readStrategy = nu
   // LH1's one-shot re-ingest of the decisions the old hold-back held on 2026-11-23 (owner: "Ya, masukkan 6").
   let reingest = null;
   try { reingest = await reingestHeldOnce(env, { now, evaluate: () => evaluateOpenSignals(env, { now, bars: loaded.bars, m15: loaded.m15 }) }); } catch (e) { reingest = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
+  // V3L's one-shot recompute of the rows since limit entries went live (the entry_order in force at each decision).
+  let v3l = null;
+  try { v3l = await recomputeV3LimitOnce(env, { now, bars: loaded.bars, m15: loaded.m15 }); } catch (e) { v3l = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
   const changed = await evaluateOpenSignals(env, { now, bars: loaded.bars, m15: loaded.m15 });
   const omega4 = omega4Enabled(env) ? await runOmega4Step(env, { now, bars: loaded.bars }) : { replay: { status: "off" }, parity: null };
-  return { status: "ok", added, changed, omega4, ...(reingest && reingest.status !== "done" ? { reingest } : {}) };
+  return { status: "ok", added, changed, omega4, ...(reingest && reingest.status !== "done" ? { reingest } : {}), ...(v3l && v3l.status !== "done" ? { v3_recompute: v3l } : {}) };
 }
 
 /**
@@ -860,6 +919,63 @@ export async function reingestHeldOnce(env, { now = Date.now(), evaluate = null,
   return { status: "ran", items: report };
 }
 
+/**
+ * V3L's one-shot recompute (owner 2026-11-23: "Make v3 follow the limit entry (Rekomendasi)"): every decision row since
+ * limit entries went live is simulated again under the entry_order in force at its decision (evaluateOmega `fresh`: its
+ * gate decided again, in time order, its earlier v3 values kept in omega_json.prev). The start is the first audited save
+ * of the Omega settings with entry_order off "market" (omega_events "settings" at 2026-11-20 11:46:03Z, "council"; then
+ * "limit" from 13:40:51Z, "council" 13:43:53Z, "limit" from 16:29:22Z on). The bars are the ledger's, with the D1 1m
+ * archive (ledger_bars_1m) before the KV 1m series, so the rows of the first days enter on 1m bars too. Bounded (at most
+ * `max_rows` rows a run, oldest first; a row with omega_json.prev is never taken again) and idempotent; once no row is
+ * left, the KV marker keeps the report ({ at, from, rows, before, after }: closed rows and their sized R) and it never
+ * runs again.
+ */
+export const V3L_RECOMPUTE = Object.freeze({ key: "ledger:v3l:recompute:v1", from: "2026-11-20T11:46:03.243Z", max_rows: 400 });
+export async function recomputeV3LimitOnce(env, { now = Date.now(), bars = null, m15 = null, window = V3L_RECOMPUTE } = {}) {
+  const kv = env?.SIGNAL_CACHE, db = env?.DB;
+  if (!db || !kv?.get || !kv?.put) return { status: "unavailable" };
+  if (await kv.get(window.key)) return { status: "done" };
+  const pick = "FROM signal_ledger WHERE source = 'decision' AND opened_at >= ? AND omega_status IS NOT NULL AND (omega_json IS NULL OR json_extract(omega_json, '$.prev') IS NULL)";
+  const rows = (await db.prepare(`SELECT * ${pick} ORDER BY opened_at LIMIT ?`).bind(window.from, window.max_rows).all()).results || [];
+  if (rows.length) {
+    const series = await withMinuteArchive(env, bars ? { bars, m15 } : await ledgerSeries(env), Date.parse(window.from) - 4 * 3600_000);
+    await evaluateOmega(env, rows, series.bars, { now, m15: series.m15, fresh: true });
+  }
+  const left = Number((await db.prepare(`SELECT COUNT(*) AS n ${pick}`).bind(window.from).first())?.n) || 0;
+  if (left) return { status: "partial", rows: rows.length, left };
+  const done = (await db.prepare("SELECT omega_status, r_omega, omega_size, json_extract(omega_json, '$.prev.omega_status') AS p_status, json_extract(omega_json, '$.prev.r_omega') AS p_r, json_extract(omega_json, '$.prev.omega_size') AS p_size FROM signal_ledger WHERE source = 'decision' AND opened_at >= ?").bind(window.from).all()).results || [];
+  const sum = (list, st, r, z) => { const c = list.filter((x) => x[st] === "closed" && finite(x[r])); return { closed: c.length, r: r3(c.reduce((a, x) => a + x[r] * (finite(x[z]) ? x[z] : 1), 0)) }; };
+  const report = { at: iso(now), from: window.from, rows: done.length, before: sum(done, "p_status", "p_r", "p_size"), after: sum(done, "omega_status", "r_omega", "omega_size") };
+  await kv.put(window.key, JSON.stringify(report), { expirationTtl: 90 * 86_400 });
+  return { status: "ran", ...report };
+}
+
+/**
+ * The ledger's bars ({ bars, m15 }) with the D1 1m archive (src/ledger-omega4.mjs readArchivedBars) from `fromMs` up to
+ * the KV 1m series, and the archive's 15m bars before the KV 15m series (the ATR's). Never throws: the bars as they are.
+ */
+async function withMinuteArchive(env, loaded, fromMs) {
+  try {
+    const kvM1 = loaded.bars.filter((b) => spanMs(b) === 60_000);
+    const m1Start = kvM1.length ? toMs(kvM1[0].open_time) : Date.now();
+    if (!(fromMs < m1Start)) return loaded;
+    const { readArchivedBars } = await import("./ledger-omega4.mjs");
+    const arch = (await readArchivedBars(env, fromMs, m1Start)).map((b) => ({ open_time: iso(b.t), close_time: iso(b.t + 60_000), open: b.o, high: b.h, low: b.l, close: b.c }));
+    if (!arch.length) return loaded;
+    const m15Start = loaded.m15?.length ? toMs(loaded.m15[0].open_time) : Infinity;
+    const agg = new Map();
+    for (const b of arch) {
+      const t = Math.floor(toMs(b.open_time) / M15) * M15;
+      if (t + M15 > m15Start) continue;
+      const g = agg.get(t);
+      if (!g) agg.set(t, { open_time: iso(t), close_time: iso(t + M15), open: b.open, high: b.high, low: b.low, close: b.close });
+      else { g.high = Math.max(g.high, b.high); g.low = Math.min(g.low, b.low); g.close = b.close; }
+    }
+    const m15 = [...agg.values(), ...(loaded.m15 ?? [])];
+    return { bars: stitchBars({ m1: [...arch, ...kvM1], m15 }), m15 };
+  } catch { return loaded; }
+}
+
 /** LEDGER_OMEGA4 "off" stops the v4 replay and its parity check (default on). */
 export const omega4Enabled = (env) => String(env?.LEDGER_OMEGA4 ?? "on").trim().toLowerCase() !== "off";
 
@@ -873,7 +989,14 @@ export async function readLedger(env, { days = 30, now = Date.now() } = {}) {
   const omega4 = (await env.DB.prepare("SELECT decision_key, side, issued_ms, trading_mode, agent, omega4_status, omega4_gate, omega4_filled_at, omega4_closed_at, omega4_exit, r_omega4, omega4_size, regime, limit_status, limit_gate, limit_filled_at, limit_closed_at, limit_exit, r_limit FROM ledger_omega4 WHERE issued_ms >= ? ORDER BY issued_ms").bind(now - days * 86_400_000).all()).results || [];
   let parity = null;
   try { parity = JSON.parse((await env.SIGNAL_CACHE?.get?.(OMEGA4_PARITY_KEY)) || "null"); } catch { parity = null; }
-  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days, omega4 }), held: { count: Number(heldCount?.n) || 0, items: held }, parity };
+  // V3L: v3's trade/no-trade against the live account's, per UTC day (src/ledger-v3-limit.mjs v3LiveParity).
+  let parityV3 = null;
+  try {
+    const v3l = await import("./ledger-v3-limit.mjs");
+    const sinceMs = now - days * 86_400_000;
+    parityV3 = v3l.v3LiveParity(rows, await v3l.loadLiveEntries(env, { sinceMs: sinceMs - 2 * 3600_000 }), { sinceMs, days });
+  } catch { parityV3 = null; }
+  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days, omega4 }), held: { count: Number(heldCount?.n) || 0, items: held }, parity, parity_v3: parityV3 };
 }
 
 // ---------------------------------------------------------------------------
