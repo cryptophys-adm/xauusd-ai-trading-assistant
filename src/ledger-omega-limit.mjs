@@ -232,6 +232,21 @@ export function replayOmegaLimit({ state = null, knobsFor, ...opts } = {}) {
 // ---------------------------------------------------------------------------
 // D1, KV and the cron.
 
+/**
+ * The decision rows' EZ1b switch (`entry_zone_mode`, "edge" beside a zone), which v4's DECISION_SQL does not extract:
+ * without it eaSignalFromDecision never sets `entry_zone_edge`, so this replay never rested a limit at the zone's near
+ * edge as the live limitPlacement does (found by V3L, 2026-11-23). v4's own DECISION_SQL stays as it is (v4 is the market
+ * replay; the steady state hands this replay v4's decisions), so the switch is read here and joined by decision key.
+ */
+export const LIMIT_ZONE_MODE_SQL = "SELECT decision_key, json_extract(decision_json, '$.entry_zone_mode') AS zone_mode FROM engine_decisions WHERE bar_close >= ? AND json_extract(decision_json, '$.entry_zone_mode') IS NOT NULL";
+/** The decisions this replay reads: v4's DECISION_SQL with the decision's entry_zone_mode (LIMIT_ZONE_MODE_SQL's column). */
+export const LIMIT_DECISION_SQL = DECISION_SQL.replace(" FROM engine_decisions WHERE", ", json_extract(decision_json, '$.entry_zone_mode') AS zone_mode FROM engine_decisions WHERE");
+/** Pure: `decisions` (decisionFromRow's) with each one's entry_zone_mode from `rows` ({ decision_key, zone_mode }); the others as they are. */
+export function withZoneModes(decisions = [], rows = []) {
+  const mode = new Map((Array.isArray(rows) ? rows : []).filter((r) => typeof r?.zone_mode === "string" && r.zone_mode).map((r) => [r.decision_key, r.zone_mode]));
+  return decisions.map((d) => (d && mode.has(d.decision_key) && d.entry_zone_mode !== mode.get(d.decision_key) ? { ...d, entry_zone_mode: mode.get(d.decision_key) } : d));
+}
+
 const UPSERT_SQL = `INSERT INTO ledger_omega4 (decision_key, side, issued_ms, trading_mode, agent, omega4_status, regime, limit_status, limit_gate, limit_filled_at, limit_closed_at, limit_exit, r_limit, limit_json, updated_at)
   VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(decision_key) DO UPDATE SET regime = excluded.regime, limit_status = excluded.limit_status, limit_gate = excluded.limit_gate, limit_filled_at = excluded.limit_filled_at,
@@ -277,8 +292,14 @@ export async function runOmegaLimit(env, { now = Date.now(), bars = null, maxMin
     }
     const from = cp ? cp.at_ms : earliest;
     if (!reuse) {
-      decisions = ((await env.DB.prepare(DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []).map(decisionFromRow).filter(Boolean);
+      const rows = (await env.DB.prepare(LIMIT_DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? [];
+      decisions = withZoneModes(rows.map(decisionFromRow).filter(Boolean), rows);
       ctx = await loadOmega4Context(env, { sinceMs: from, now });
+    } else {
+      // v4's decisions (its DECISION_SQL has no entry_zone_mode): EZ1b's switch joined in, v4's own list left untouched.
+      let zm = [];
+      try { zm = (await env.DB.prepare(LIMIT_ZONE_MODE_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []; } catch { zm = []; }
+      decisions = withZoneModes(decisions, zm);
     }
     const run = replayOmegaLimit({ bars: m1, decisions, from, to: until, state: cp, maxSteps: maxMinutes, ...ctx });
     const keys = Object.keys(run.records);
