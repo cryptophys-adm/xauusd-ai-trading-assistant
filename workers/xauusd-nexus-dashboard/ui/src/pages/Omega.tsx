@@ -90,6 +90,8 @@ async function buildEnvelope(publicKeySpkiBase64: string, kid: string, creds: { 
 const num = (v?: number | null, d = 2) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "—");
 const money = (v?: number | null, cur = "") =>
   typeof v === "number" && Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}${cur ? " " + cur : ""}` : "—";
+/** A P&L in its direction's colour: a loss red, a gain green, zero in the text colour; no value (its "—") muted. */
+const pnlColor = (v?: number | null) => (typeof v !== "number" || !Number.isFinite(v) ? T.muted : v < 0 ? T.bear : v > 0 ? T.bull : T.fg);
 const balFmt = (v?: number | null, cur = "") =>
   typeof v === "number" && Number.isFinite(v)
     ? `${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`
@@ -954,7 +956,7 @@ export default function Omega() {
               <Terminal className="h-3.5 w-3.5" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[12.5px] font-bold tracking-wide text-slate-100">
+              <span className="text-[12.5px] font-bold text-slate-100">
                 MT5 Terminal
               </span>
               <span className="mono rounded-sm bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
@@ -988,11 +990,11 @@ export default function Omega() {
               className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition disabled:opacity-40 ${
                 eEnabled
                   ? "border-ok-fill/40 bg-ok-fill/15 text-ok hover:bg-ok-fill/25"
-                  : "border-fault-fill/35 bg-fault-fill/10 text-fault hover:bg-fault-fill/20"
+                  : "border-off-fill/35 bg-off-fill/8 text-off hover:bg-off-fill/15"
               }`}
               title="Toggle algo trading"
             >
-              <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-ok-fill animate-pulse" : "bg-fault-fill"}`} />
+              <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-ok-fill animate-pulse" : "bg-off-fill"}`} />
               Algo Trading: {eEnabled ? "ON" : "OFF"}
             </button>
 
@@ -1173,12 +1175,12 @@ export default function Omega() {
         <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr]">
           {/* Left Dock: Market Watch + Contract Spec + Navigator */}
           <button type="button" onClick={() => setDockOpen((v) => !v)} aria-expanded={dockOpen} id="omega-dock-toggle"
-            className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300 lg:hidden">
+            className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 lg:hidden text-[11px] font-semibold text-fg-2">
             <span>Market Watch · {symbolName}</span><span>{dockOpen ? "▴" : "▾"}</span>
           </button>
           <div className={`${dockOpen ? "flex" : "hidden"} flex-col border-b border-white/10 bg-panel lg:flex lg:border-b-0 lg:border-r`}>
             {/* Market Watch Header */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold text-fg-2">
               <span className="flex items-center gap-1.5">
                 <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
                 Market Watch · {symbolName}
@@ -1192,11 +1194,11 @@ export default function Omega() {
             {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
             <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
               <div className="rounded-lg border border-bear-fill/30 bg-linear-to-b from-bear-fill/15 to-bear-fill/5 px-2.5 py-2 text-center">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-bear">BID (SELL)</div>
+                <div className="text-[11px] font-medium text-bear">BID (SELL)</div>
                 <div className="mono mt-0.5 text-lg font-extrabold text-bear">{num(br.bid, digits)}</div>
               </div>
               <div className="rounded-lg border border-bull-fill/30 bg-linear-to-b from-bull-fill/15 to-bull-fill/5 px-2.5 py-2 text-center">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-bull">ASK (BUY)</div>
+                <div className="text-[11px] font-medium text-bull">ASK (BUY)</div>
                 <div className="mono mt-0.5 text-lg font-extrabold text-bull">{num(br.ask, digits)}</div>
               </div>
             </div>
@@ -1205,7 +1207,7 @@ export default function Omega() {
             <div className="border-b border-white/10 px-2.5 py-2">
               <table className="w-full text-left text-[11px]">
                 <thead>
-                  <tr className="border-b border-white/10 text-[10px] uppercase text-slate-500">
+                  <tr className="border-b border-white/10 text-[11px] font-medium text-muted">
                     <th className="pb-1">Symbol</th>
                     <th className="pb-1 text-right">Bid</th>
                     <th className="pb-1 text-right">Ask</th>
@@ -1234,29 +1236,29 @@ export default function Omega() {
 
             {/* Symbol Contract Specification */}
             <div className="border-b border-white/10 px-3 py-2">
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1.5 text-[11px] font-medium text-muted">
                 Specification
               </div>
               <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
-                <dt className="text-slate-500">Digits / Point</dt>
+                <dt className="text-slate-500">Digits / point</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.digits ?? "—"} / {br.point ?? "—"}
                 </dd>
-                <dt className="text-slate-500">Tick Size / Val</dt>
+                <dt className="text-slate-500">Tick size / val</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.tick_size ?? "—"} / {br.tick_value != null ? num(br.tick_value, 2) : "—"}
                 </dd>
-                <dt className="text-slate-500">Volume Min / Max</dt>
+                <dt className="text-slate-500">Volume min / max</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.volume_min ?? "—"} / {br.volume_max ?? "—"}
                 </dd>
-                <dt className="text-slate-500">Volume Step</dt>
+                <dt className="text-slate-500">Volume step</dt>
                 <dd className="mono text-right text-slate-300">{br.volume_step ?? "—"}</dd>
-                <dt className="text-slate-500">Stops Level</dt>
+                <dt className="text-slate-500">Stops level</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
                 </dd>
-                <dt className="text-slate-500">Profit ccy / Contract</dt>
+                <dt className="text-slate-500">Profit ccy / contract</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.symbol_check?.currency_profit ?? "—"} / {br.symbol_check?.contract_size != null ? `${br.symbol_check.contract_size} oz` : "—"}
                 </dd>
@@ -1277,7 +1279,7 @@ export default function Omega() {
               ) : null}
               {/* Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md): the broker spec gate and the stored profile. */}
               <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
-                <dt className="text-slate-500">Leverage / Margin</dt>
+                <dt className="text-slate-500">Leverage / margin</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.leverage == null
                     ? "—"
@@ -1287,7 +1289,7 @@ export default function Omega() {
                 </dd>
                 <dt className="text-slate-500">Margin / lot</dt>
                 <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
-                <dt className="text-slate-500">Freeze / Trade mode</dt>
+                <dt className="text-slate-500">Freeze / trade mode</dt>
                 <dd className="mono text-right text-slate-300">
                   {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
                 </dd>
@@ -1310,7 +1312,7 @@ export default function Omega() {
             </div>
 
             {/* MT5 Navigator Tree (Ctrl+N) */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold text-fg-2">
               <span className="flex items-center gap-1.5">
                 <Layers className="h-3.5 w-3.5 text-cyan-300" />
                 Navigator
@@ -1318,7 +1320,7 @@ export default function Omega() {
             </div>
             <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Accounts</div>
+                <div className="text-[11px] font-medium text-muted">Accounts</div>
                 <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
                   <span className="mono text-slate-200 truncate">{accountLabel}</span>
                   <Badge tone={br.terminal_connected ? "ok" : "fault"}>
@@ -1327,7 +1329,7 @@ export default function Omega() {
                 </div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expert Advisors</div>
+                <div className="text-[11px] font-medium text-muted">Expert Advisors</div>
                 <div className="mt-1 space-y-1">
                   <div className="flex items-center justify-between rounded-sm bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
                     <span className="mono flex items-center gap-1.5 text-cyan-200">
@@ -1347,7 +1349,7 @@ export default function Omega() {
                 </div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Decision Engine</div>
+                <div className="text-[11px] font-medium text-muted">Decision Engine</div>
                 <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
                   <span className="text-slate-300">Signal</span>
                   <span
@@ -1507,8 +1509,8 @@ export default function Omega() {
                               ) : null}
                             </td>
                             <td className="mono">{num(p.entry ?? p.open_price, digits)}</td>
-                            <td className="mono text-bear">{p.sl ? num(p.sl, digits) : "—"}</td>
-                            <td className="mono text-bull">{p.tp ? num(p.tp, digits) : "—"}</td>
+                            <td className={`mono ${p.sl ? "text-bear" : "text-muted"}`}>{p.sl ? num(p.sl, digits) : "—"}</td>
+                            <td className={`mono ${p.tp ? "text-bull" : "text-muted"}`}>{p.tp ? num(p.tp, digits) : "—"}</td>
                             <td className="mono text-slate-200">{num(curPrice, digits)}</td>
                             <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
                             {(() => {
@@ -1640,8 +1642,8 @@ export default function Omega() {
                               <td className="mono font-semibold text-amber-200">{o.type}</td>
                               <td className="mono">{num(o.volume_current ?? o.volume_initial, 2)}</td>
                               <td className="mono text-slate-200">{num(o.price_open, digits)}</td>
-                              <td className="mono text-bear">{o.sl ? num(o.sl, digits) : "—"}</td>
-                              <td className="mono text-bull">{o.tp ? num(o.tp, digits) : "—"}</td>
+                              <td className={`mono ${o.sl ? "text-bear" : "text-muted"}`}>{o.sl ? num(o.sl, digits) : "—"}</td>
+                              <td className={`mono ${o.tp ? "text-bull" : "text-muted"}`}>{o.tp ? num(o.tp, digits) : "—"}</td>
                               <td className="mono text-[11px] text-slate-400">{o.comment || "—"}</td>
                               <td className="mono text-[11px] text-slate-300" title={limitByTicket[String(o.ticket)]?.reason || undefined}>
                                 {limitByTicket[String(o.ticket)]?.status || (isManualOrd ? "—" : "resting")}
@@ -1712,7 +1714,7 @@ export default function Omega() {
                     <span className={`font-bold ${toneCls(br.day_realized_pl)}`}>{money(br.day_realized_pl, cur)}</span>
                   </span>
                   <span>
-                    <strong className="text-slate-400">Day Start:</strong>{" "}
+                    <strong className="text-slate-400">Day start:</strong>{" "}
                     <span className="text-slate-300">{balFmt(br.day_start_balance, cur)}</span>
                   </span>
                 </div>
@@ -1850,7 +1852,7 @@ export default function Omega() {
               {/* Header Banner: Autonomous System Architecture */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">Terminal watchdog</span>
+                  <span className="text-[12px] font-semibold text-fg">Terminal watchdog</span>
                   <Hint text="On each bridge sync the watchdog checks the terminal and sends a recovery directive when it is stuck, then waits the cooldown." />
                   <Badge tone={watchdog?.active ? "ok" : "slate"}>{watchdog?.active ? "ACTIVE" : "IDLE"}</Badge>
                 </div>
@@ -1870,7 +1872,7 @@ export default function Omega() {
                 <div className="flex flex-col justify-between rounded-lg border border-cyan-500/30 bg-black/40 p-3">
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
+                      <span className="text-[11px] font-medium text-muted">
                         Watchdog
                       </span>
                     </div>
@@ -1890,7 +1892,7 @@ export default function Omega() {
                 <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <span className="text-[11px] font-medium text-muted">
                         Bridge
                       </span>
                       <Badge tone={br.seen ? "ok" : "fault"}>
@@ -1917,7 +1919,7 @@ export default function Omega() {
                 <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <span className="text-[11px] font-medium text-muted">
                         Terminal
                       </span>
                       <Badge tone={br.state_age_ms != null && br.state_age_ms < 60000 ? "ok" : "fault"}>
@@ -1944,7 +1946,7 @@ export default function Omega() {
                 <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <span className="text-[11px] font-medium text-muted">
                         Broker
                       </span>
                       <Badge tone={br.terminal_connected && br.trade_allowed ? "ok" : "fault"}>
@@ -1983,10 +1985,10 @@ export default function Omega() {
                 <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <span className="text-[11px] font-medium text-muted">
                         Engine
                       </span>
-                      <Badge tone={c.mode === "killed" ? "fault" : eEnabled ? "ok" : "late"}>
+                      <Badge tone={c.mode === "killed" ? "fault" : eEnabled ? "ok" : "off"}>
                         {c.mode === "killed" ? "KILLED" : eEnabled ? "ARMED" : "IDLE"}
                       </Badge>
                     </div>
@@ -2013,7 +2015,7 @@ export default function Omega() {
               {/* Autonomous Self-Healing Audit Trail Card */}
               <div className="rounded-lg border border-white/10 bg-bar p-3.5">
                 <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                  <h4 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+                  <h4 className="flex items-center gap-1.5 text-[12px] font-semibold text-fg">
                     <ShieldCheck className="h-4 w-4 text-ok" />
                     Last recovery
                   </h4>
@@ -2022,25 +2024,25 @@ export default function Omega() {
                 {watchdog?.last_recovery ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Directive</div>
+                      <div className="text-[11px] font-medium text-muted">Directive</div>
                       <div className="mono mt-1 text-[12px] font-bold text-amber-300">
                         {watchdog.last_recovery.directive}
                       </div>
                     </div>
                     <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Reason</div>
+                      <div className="text-[11px] font-medium text-muted">Reason</div>
                       <div className="mono mt-1 text-[12px] font-bold text-slate-200">
                         {watchdog.last_recovery.reason}
                       </div>
                     </div>
                     <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Time</div>
+                      <div className="text-[11px] font-medium text-muted">Time</div>
                       <div className="mono mt-1 text-[12px] text-cyan-200">
                         {timeUtc(watchdog.last_recovery.ms)} ({agoMs(Date.now() - watchdog.last_recovery.ms)})
                       </div>
                     </div>
                     <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[10px] uppercase text-slate-500">Status</div>
+                      <div className="text-[11px] font-medium text-muted">Status</div>
                       <div className="mono mt-1 text-[12px] font-semibold text-ok">
                         {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
                       </div>
@@ -2060,7 +2062,7 @@ export default function Omega() {
               <div className="rounded-lg border border-white/10 bg-bar p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                    <span className="text-[12px] font-semibold text-fg">
                       Raw state
                     </span>
                   </div>
@@ -2121,7 +2123,7 @@ export default function Omega() {
               {/* Header Banner: Institutional Execution & TCA Quality */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">Execution quality</span>
+                  <span className="text-[12px] font-semibold text-fg">Execution quality</span>
                   <Hint text="Measured on Omega's fills: intent-to-fill latency and slippage against the requested price." />
                   <Badge tone={b?.tca?.samples_count ? "ok" : "slate"}>{b?.tca?.samples_count ? b.tca.quality : "NO FILLS"}</Badge>
                 </div>
@@ -2137,7 +2139,7 @@ export default function Omega() {
                 {/* 1. Transaction Cost Analysis (TCA) */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Slippage</span>
+                    <span className="text-[11px] font-medium text-muted">Slippage</span>
                     <span className="rounded-sm bg-ok-fill/20 px-1.5 py-0.5 text-[9.5px] font-bold text-ok">
                       {b?.tca?.samples_count ? b.tca.quality : "—"}
                     </span>
@@ -2165,7 +2167,7 @@ export default function Omega() {
                 {/* 2. Smart Order Router (SOR) & Failover */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Order route</span>
+                    <span className="text-[11px] font-medium text-muted">Order route</span>
                     <span className={`rounded-sm px-1.5 py-0.5 text-[9.5px] font-bold ${b?.route?.status === "trading" ? "bg-ok-fill/20 text-ok" : "bg-amber-500/20 text-amber-300"}`}>
                       {String(b?.route?.status ?? "unknown").replace(/_/g, " ").toUpperCase()}
                     </span>
@@ -2189,7 +2191,7 @@ export default function Omega() {
                 {/* 3. Adaptive Volatility & Dynamic ATR */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                    <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
                       Volatility &amp; stops
                       {b?.management ? <Hint text={`${b.management.key_levels}. ${b.management.fallback}; ${b.management.scale_out}.`} /> : null}
                     </span>
@@ -2220,7 +2222,7 @@ export default function Omega() {
                 {/* 4. Live Macro Risk & Economic Calendar Webhook */}
                 <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Event risk</span>
+                    <span className="text-[11px] font-medium text-muted">Event risk</span>
                     <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
                       b?.macro_risk?.blackout ? "bg-fault-fill/20 text-fault animate-pulse" : "bg-ok-fill/20 text-ok"
                     }`}>
@@ -2319,7 +2321,7 @@ export default function Omega() {
           </dl>
           {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
           <div className="mt-3 border-t border-white/5 pt-3">
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Entry status</div>
+            <div className="mb-1.5 text-[11px] font-medium text-muted">Entry status</div>
             <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} details={b?.planner?.details} />
           </div>
         </Panel>
@@ -2341,7 +2343,7 @@ export default function Omega() {
             <p className="mb-2 text-[11px] text-amber-200">Server kill switch is on; it overrides this control.</p>
           ) : null}
           <div className="space-y-2 border-t border-white/10 pt-3">
-            <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="reason">
+            <label className="block text-[11px] font-medium text-muted" htmlFor="reason">
               Reason
             </label>
             <input
@@ -2380,7 +2382,7 @@ export default function Omega() {
             </div>
             {killConfirmOpen ? (
               <div className="glass-inner space-y-2 p-2.5">
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-fault" htmlFor="confirm">
+                <label className="block text-[11px] font-medium text-fault" htmlFor="confirm">
                   Type KILL to close every EA position and stop the EA
                 </label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2459,7 +2461,7 @@ export default function Omega() {
             sub={`${x?.trades ?? 0} trade${x?.trades === 1 ? "" : "s"} · win rate ${
               x?.win_rate != null ? Math.round(x.win_rate * 100) + "%" : "—"
             } · PF ${x?.profit_factor ?? "—"} · max DD ${num(x?.max_drawdown)}`}
-            color={typeof x?.net === "number" && x.net < 0 ? T.bear : T.bull}
+            color={pnlColor(x?.net)}
             icon={<Activity className="h-3 w-3" />}
           />
         ))}
@@ -2488,7 +2490,7 @@ export default function Omega() {
         {/* The connected server (owner 2026-11-19, universal: no broker presets; the broker is what the terminal reports). */}
         {setupTab === "connection" ? (
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-cyan-300">Broker</span>
+            <span className="text-[12px] font-semibold text-fg">Broker</span>
             <span className="mono text-[11px] text-slate-400">
               {configLocked ? (
                 <span className="text-ok">Locked: <strong className="text-slate-100">{serverName}</strong></span>
@@ -2529,7 +2531,7 @@ export default function Omega() {
               ) : null}
 
               <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-server">
+                <label className="block text-[11px] font-medium text-muted" htmlFor="b-server">
                   Server {configLocked ? "(locked)" : ""}
                 </label>
                 <input
@@ -2549,7 +2551,7 @@ export default function Omega() {
               {/* Default Gold / XAUUSD Pairing Selector */}
               <div>
                 <div className="flex items-center gap-1.5">
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300" htmlFor="b-gold-pair">
+                  <label className="block text-[11px] font-medium text-muted" htmlFor="b-gold-pair">
                     Symbol {configLocked ? "(locked)" : ""}
                   </label>
                   <Hint text="Any broker, any symbol name: the EA scans every symbol on the server and keeps the one priced in USD, 1 to 100 oz a lot, within 2% of the reference gold price. A typed name is only tried first, under the same checks." />
@@ -2589,7 +2591,7 @@ export default function Omega() {
 
               <div>
                 <div className="flex items-center gap-1.5">
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-units-usd">
+                  <label className="block text-[11px] font-medium text-muted" htmlFor="b-units-usd">
                     Units per US dollar {configLocked ? "(locked)" : "(optional)"}
                   </label>
                   <Hint text="Leave empty for a USD account. For an account in another currency that has not traded yet, how many of its units make one US dollar (e.g. 100 for a cent account). Once it trades, its own trades measure it; a disagreement opens nothing." />
@@ -2608,7 +2610,7 @@ export default function Omega() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-login">
+                <label className="block text-[11px] font-medium text-muted" htmlFor="b-login">
                   Login {configLocked ? "(locked)" : ""}
                 </label>
                 <input
@@ -2629,7 +2631,7 @@ export default function Omega() {
 
               <div>
                 <div className="flex items-center justify-between">
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400" htmlFor="b-password">
+                  <label className="block text-[11px] font-medium text-muted" htmlFor="b-password">
                     Password {configLocked ? "(locked)" : ""}
                   </label>
                   {!configLocked ? (
@@ -2901,7 +2903,7 @@ export default function Omega() {
               </div>
               {liveConfirmOpen ? (
                 <div className="glass-inner space-y-2 p-2.5">
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-fault" htmlFor="e-live">
+                  <label className="block text-[11px] font-medium text-fault" htmlFor="e-live">
                     Type LIVE to let Omega trade a real account
                   </label>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2978,7 +2980,7 @@ export default function Omega() {
               <dt className="text-slate-500">Balance</dt><dd className="mono text-slate-200">{balFmt(br.balance, acctCur)}</dd>
               <dt className="text-slate-500">Equity</dt><dd className="mono text-slate-200">{balFmt(br.equity, acctCur)}</dd>
               <dt className="text-slate-500">Symbol</dt><dd className="mono text-slate-200">{br.symbol || "—"}</dd>
-              <dt className="text-slate-500">Bid / Ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
+              <dt className="text-slate-500">Bid / ask</dt><dd className="mono text-slate-200">{br.bid != null && br.ask != null ? `${num(br.bid, digits)} / ${num(br.ask, digits)}` : "—"}</dd>
               <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-200">{br.spread_points != null ? `${br.spread_points} pts` : "—"}</dd>
               <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{String((br.positions || []).length)}</dd>
               <dt className="text-slate-500">Bridge version</dt><dd className="mono text-slate-400">{br.bridge_version || "—"}</dd>

@@ -16,9 +16,6 @@ import { usePoll } from "../lib/usePoll";
 
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 const human = humanKey;
-const TYPE_TONE: Record<string, "cyan" | "amber" | "red" | "green" | "purple" | "slate"> = {
-  strategy: "cyan", risk: "red", engine: "purple", execution: "amber", news: "amber", data: "slate", cost: "slate", seat: "green", knowledge: "green", free: "slate"
-};
 const TYPE_TEXT: Record<string, string> = {
   strategy: "A strategy agent, one of its patterns, its exits or one market condition",
   seat: "A room or desk seat: its scored statements, crowd weight and compliance findings",
@@ -97,7 +94,7 @@ function Value({ v, depth = 0 }: { v: unknown; depth?: number }): JSX.Element {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3 xl:grid-cols-4">
           {scalars.map(([k, x]) => (
             <div key={k} className="min-w-0">
-              <div className="text-[9.5px] uppercase tracking-wider text-slate-500">{human(k)}</div>
+              <div className="text-[11px] font-medium text-muted">{human(k)}</div>
               <div className={`${num(x) ? "mono text-[13px] font-semibold" : "text-[11.5px]"} wrap-break-word text-slate-200`}>{fmtValue(k, x)}</div>
             </div>
           ))}
@@ -119,7 +116,7 @@ function SuggestionCard({ s, onPick, picked }: { s: any; onPick: (k: string) => 
   return (
     <div className={`glass-inner flex flex-col gap-1.5 p-3 ${picked ? "outline-solid outline-1 outline-cyan-400/50" : ""}`}>
       <div className="flex items-center justify-between gap-2">
-        <Badge tone={TYPE_TONE[s.type] ?? "slate"}>{s.type}</Badge>
+        {/* A session's type is a label, not a state or a direction (as KIND): plain. */}<Badge tone="plain">{s.type}</Badge>
         <span className="flex items-center gap-1">{s.active ? <Badge tone="amber">still firing</Badge> : <Badge tone="slate">quiet</Badge>}<Badge tone="slate">{s.status}</Badge></span>
       </div>
       <div className="mono break-all text-[12px] font-semibold text-slate-100">{s.topic_key}</div>
@@ -151,22 +148,22 @@ function Picker({ catalog, agents, onPick }: { catalog: any; agents: any[]; onPi
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Type
+        <label className="flex flex-col gap-1 text-[11px] font-medium text-muted">Type
           <select className={inputCls} value={type} onChange={(e) => setType(e.target.value)}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</select>
         </label>
         {type === "strategy" ? (
           <>
-            <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Strategy agent
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-muted">Strategy agent
               <select className={inputCls} value={agent} onChange={(e) => { setAgent(e.target.value); setFocus(""); }}>{agents.map((a) => <option key={a.id} value={a.id}>{a.label} ({a.status})</option>)}</select>
             </label>
-            <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Focus
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-muted">Focus
               <select className={inputCls} value={focus} onChange={(e) => setFocus(e.target.value)}>
                 <option value="">the whole agent</option>
                 <option value="exits">its exits</option>
                 {(agent_?.patterns ?? []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Market condition
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-muted">Market condition
               <select className={inputCls} value={context} onChange={(e) => setContext(e.target.value)}>
                 <option value="">every condition</option>
                 {(catalog?.strategy?.contexts ?? []).map((c: string) => <option key={c} value={c}>{c.replace("|", " · ")}</option>)}
@@ -174,11 +171,11 @@ function Picker({ catalog, agents, onPick }: { catalog: any; agents: any[]; onPi
             </label>
           </>
         ) : keys.length ? (
-          <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Topic
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-muted">Topic
             <select className={inputCls} value={key} onChange={(e) => setKey(e.target.value)}>{keys.map((k) => <option key={k} value={k}>{k}</option>)}</select>
           </label>
         ) : null}
-        <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500">Or a topic key
+        <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-[11px] font-medium text-muted">Or a topic key
           <input className={inputCls} maxLength={120} placeholder={catalog?.[type]?.free_form ?? "e.g. strategy:zone_pullback:exits"} value={typed} onChange={(e) => setTyped(e.target.value)} />
         </label>
         <button type="button" className="btn border-cyan-400/30 bg-cyan-400/10 text-cyan-200 disabled:opacity-40" disabled={!chosen} onClick={() => onPick(chosen)}>Build the evidence pack</button>
@@ -194,7 +191,7 @@ function Pack({ pack }: { pack: any }) {
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-3 text-[12px] sm:grid-cols-4">
         {[["Topic", <span key="t" className="mono">{pack.topic}</span>], ["Type", pack.type], ["As of", utc(pack.as_of)], ["sha256", <span key="s" className="mono" title={pack.sha256}>{String(pack.sha256).slice(0, 16)}…</span>]].map(([k, v]) => (
-          <div key={String(k)}><div className="text-[10px] uppercase tracking-wider text-slate-500">{k as string}</div><div className="break-all text-slate-200">{v as ReactNode}</div></div>
+          <div key={String(k)}><div className="text-[11px] font-medium text-muted">{k as string}</div><div className="break-all text-slate-200">{v as ReactNode}</div></div>
         ))}
       </div>
       {sections.map(([name, value]) => (
@@ -220,8 +217,9 @@ const ownerPost = async (body: unknown) => {
   if (!r.ok || d?.ok === false) throw new Error(d?.error || `HTTP ${r.status}`);
   return d;
 };
-const STANCE: Record<string, { text: string; tone: "green" | "red" | "amber" | "slate" }> = {
-  support: { text: "agree", tone: "green" }, oppose: { text: "disagree", tone: "red" }, amend: { text: "agree, with a change", tone: "amber" }, abstain: { text: "abstain", tone: "slate" }
+// An agent's answer to a proposal is a vote, not a market direction: agree ok, disagree fault, amend late, abstain off.
+const STANCE: Record<string, { text: string; tone: "ok" | "fault" | "late" | "off" }> = {
+  support: { text: "agree", tone: "ok" }, oppose: { text: "disagree", tone: "fault" }, amend: { text: "agree, with a change", tone: "late" }, abstain: { text: "abstain", tone: "off" }
 };
 // A proposal's kind is a label, not a state or a direction: plain, and off for "no change".
 const KIND: Record<string, { text: string; tone: "plain" | "off" }> = {
@@ -245,12 +243,12 @@ const TERMINAL = ["aborted", "expired", "decided", "closed"];
 /** One agent's opinion: who, the stance, what it thinks in its own words, what it would try; evidence behind a link. */
 function OpinionCard({ m }: { m: any }) {
   const [ev, setEv] = useState(false);
-  const st = STANCE[m.stance] ?? { text: m.stance ?? "", tone: "slate" as const };
+  const st = STANCE[m.stance] ?? { text: m.stance ?? "", tone: "off" as const };
   if (m.round === "notice") return (
-    <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3 text-[12px] text-amber-100"><div className="mb-1 text-[10.5px] uppercase tracking-wider text-amber-300">Could not answer</div>{m.opinion}</div>
+    <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-3 text-[12px] text-amber-100"><div className="mb-1 text-[11px] font-medium text-late">Could not answer</div>{m.opinion}</div>
   );
   if (m.round === "owner") return (
-    <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-3 text-[12px] text-slate-200"><div className="mb-1 text-[10.5px] uppercase tracking-wider text-cyan-300">You{m.reply_to?.length ? ` → ${m.reply_to.join(", ")}` : ""}</div>{m.opinion}</div>
+    <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-3 text-[12px] text-slate-200"><div className="mb-1 text-[11px] font-medium text-cyan-300">You{m.reply_to?.length ? ` → ${m.reply_to.join(", ")}` : ""}</div>{m.opinion}</div>
   );
   return (
     <div className="glass-inner p-3">
@@ -283,10 +281,10 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
     const what = o.kind === "policy_parameter" ? <>The knob <span className="mono text-ok">{o.knob}</span> moves from {o.from} to {o.value} only after a shadow test on the recorded decisions shows it does better; it then goes live by itself and rolls back by itself if it does worse.</>
       : o.kind === "repository_task" ? <>This needs new code. It is handed to the platform's evolution loop, so Cryptophys builds it, not an outside party. Nothing in trading changes until it is built and tested.</>
       : <>Nothing changes. The decision is recorded.</>;
-    if (!(await confirm({ title: `Accept "${o.title}"?`, body: <><p>{what}</p><p className="mt-2 text-slate-400">The session ends with this pick.</p></>, confirmLabel: "Accept", tone: "emerald" }))) return;
+    if (!(await confirm({ title: `Accept "${o.title}"?`, body: <><p>{what}</p><p className="mt-2 text-slate-400">The session ends with this pick.</p></>, confirmLabel: "Accept", tone: "ok" }))) return;
     setBusy(true); setErr(null); try { await ownerPost({ action: "accept", session_id: id, option_id: o.option_id }); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   const control = async (action: "close" | "reopen") => {
-    if (action === "close" && !(await confirm({ title: "Close this session?", body: "It ends here: no more answers and no pick. It frees a slot and does not count toward the 4 sessions a day.", confirmLabel: "Close session", tone: "amber" }))) return;
+    if (action === "close" && !(await confirm({ title: "Close this session?", body: "It ends here: no more answers and no pick. It frees a slot and does not count toward the 4 sessions a day.", confirmLabel: "Close session", tone: "late" }))) return;
     setBusy(true); setErr(null); try { const r = await ownerPost({ action, session_id: id }); if (action === "reopen" && r?.session_id) onOpen(r.session_id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); setTick((t) => t + 1); } };
   return (
     <div className="flex flex-col gap-3">
@@ -307,11 +305,11 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
           <button type="button" className="text-cyan-300 underline-offset-2 hover:underline" onClick={() => setShowOld((x) => !x)}>{showOld ? "Hide them" : "Show them"}</button></div>
       ) : null}
       {(!terminal || showOld) && rounds.map(([r, ms]) => (
-        <div key={r}><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">{ROUND[r]}</div>
+        <div key={r}><div className="mb-1.5 text-[11px] font-medium text-muted">{ROUND[r]}</div>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{ms.map((m: any) => <OpinionCard key={m.id} m={m} />)}</div></div>
       ))}
       {s.options && (!terminal || showOld || s.state === "decided") ? (
-        <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">The moderator's options (pick in Cerebrum)</div>
+        <div><div className="mb-1.5 text-[11px] font-medium text-muted">The moderator's options (pick in Cerebrum)</div>
           {s.options.summary ? <p className="mb-2 text-[12px] text-slate-300">{s.options.summary}</p> : null}
           <div className="grid gap-2 md:grid-cols-2">{(s.options.options ?? []).map((o: any) => (
             <div key={o.option_id} className="glass-inner flex flex-col gap-1 p-3 text-[12px]">
@@ -341,10 +339,10 @@ function Proposals({ tick }: { tick: number }) {
   const poll = usePoll(() => get("/api/council/proposals"), 30_000, [tick]);
   const rows = ((poll.data as any)?.proposals ?? []) as any[];
   const live = Object.entries(((poll.data as any)?.live_knobs ?? {}) as Record<string, number>);
-  if (phaseOf(poll) === "error") return <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div><ErrorLine error={poll.error ?? "read failed"} /></div>;
+  if (phaseOf(poll) === "error") return <div><div className="mb-1.5 text-[11px] font-medium text-muted">Accepted proposals</div><ErrorLine error={poll.error ?? "read failed"} /></div>;
   if (!rows.length && !live.length) return null;
   return (
-    <div><div className="mb-1.5 text-[10.5px] uppercase tracking-wider text-slate-500">Accepted proposals</div>
+    <div><div className="mb-1.5 text-[11px] font-medium text-muted">Accepted proposals</div>
       {live.length ? <div className="mb-2 text-[11.5px] text-ok">Live knob values (tested in shadow first; each rolls back by itself if it does worse): {live.map(([k, v]) => `${k} = ${v}`).join(" · ")}</div> : null}
       <div className="grid gap-2 md:grid-cols-2">{rows.map((p) => (
         <div key={p.id} className="glass-inner p-3 text-[12px]">
@@ -384,7 +382,7 @@ function Sessions({ topic }: { topic: string | null }) {
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-slate-400">
         <span>Sessions:</span>
         <span className={`rounded-md px-2 py-0.5 font-semibold ring-1 ${d?.enabled ? "bg-ok-fill/20 text-ok ring-ok-fill/40" : "bg-slate-700/60 text-slate-200 ring-slate-500/40"}`}>{!d ? "—" : d.enabled ? "On" : "Off"}</span>
-        <button type="button" disabled={busy || !d || d.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "rose" }))) return; act({ action: "switch", on: !d?.enabled }); }}
+        <button type="button" disabled={busy || !d || d.mode !== "on"} onClick={async () => { if (d?.enabled && !(await confirm({ title: "Turn council sessions off?", body: "Running sessions stop at their next step. You can turn them on again at any time.", confirmLabel: "Turn off", tone: "fault" }))) return; act({ action: "switch", on: !d?.enabled }); }}
           className="rounded-md px-2 py-0.5 text-slate-300 ring-1 ring-slate-600/50 hover:text-slate-100 disabled:opacity-40">{d?.enabled ? "Turn off" : "Turn on"}</button>
         <span>at most 6 agents and 16 calls a session, 4 sessions a day (closed sessions do not count)</span>
       </div>
@@ -423,7 +421,7 @@ export default function Councils() {
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Call for Councils" icon={<Users className="h-3.5 w-3.5 text-cyan-300" />}
         hint="The owner calls the relevant agents into a retrospective on a topic (suggested by the system or written by the owner). Each agent gives its own opinion; the evidence stays behind its refs."
-        right={s ? <Badge tone={s.mode === "off" ? "red" : "slate"}>mode {s.mode}</Badge> : null}>
+        right={s ? <Badge tone={s.mode === "off" ? "off" : "plain"}>mode {s.mode}</Badge> : null}>
         <div className="text-[12px] text-slate-300">
           Open a session below on a suggested topic or on your own words. The agents speak in turn; the evidence each one cites stays behind its card's link and in the evidence pack further down.
           No price is shown: every figure is in R, shares, counts, ATR multiples or times. A suggestion starts nothing; a session never changes trading by itself.

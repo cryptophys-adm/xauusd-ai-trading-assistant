@@ -65,7 +65,8 @@ const CODES: Record<string, { kind: Kind; text: string }> = {
   vol_regime_high: { kind: "info", text: "Volatility is high." },
   vol_regime_low: { kind: "info", text: "Volatility is low." }
 };
-const TONE: Record<Kind, "red" | "amber" | "cyan"> = { block: "red", adjust: "amber", info: "cyan" };
+// In the status tones; info is ok, as severityTone (owner 2026-11-22).
+const TONE: Record<Kind, "fault" | "late" | "ok"> = { block: "fault", adjust: "late", info: "ok" };
 
 export function omegaReason(code: string) {
   return CODES[code] ?? { kind: "info" as Kind, text: code.replace(/_/g, " ") };
@@ -79,7 +80,7 @@ export default function OmegaWhy({ codes, sinceMs, details }: { codes: string[] 
   return (
     <div className="space-y-1.5" aria-label="Why Omega is or is not entering now">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <Badge tone={blocked ? "amber" : "green"}>{blocked ? "NOT ENTERING" : "READY / MANAGING"}</Badge>
+        <Badge tone={blocked ? "late" : "ok"}>{blocked ? "NOT ENTERING" : "READY / MANAGING"}</Badge>
         {sinceMs ? <span className="text-slate-500">since {new Date(sinceMs).toISOString().slice(11, 16)} UTC</span> : null}
       </div>
       <ul className="space-y-1">

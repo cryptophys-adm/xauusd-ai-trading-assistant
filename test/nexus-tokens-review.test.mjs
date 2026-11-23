@@ -79,10 +79,11 @@ test("NR5 status on the War Room cards is ok / late / fault / off, not the bull 
   assert.match(src("components/OrganismCard.tsx"), /market === "open" \? "text-ok" : "text-off"/, "CLOSED is grey, like its dot");
   assert.match(src("components/AssistantPanel.tsx"), /<Badge tone=\{open \? "ok" : "off"\}>\{open \? "market open" : "market closed"\}<\/Badge>/);
   assert.match(src("components/FeedFallbackCard.tsx"), /<Dot tone=\{state\.active \? "late" : "ok"\}/);
-  assert.match(src("components/ShadowSwitchCard.tsx"), /const tone = !known \? "off" : !state\?\.allowed \? "fault" : share >= 0\.8 \? "late" : "ok";/);
+  // Follow-up of #518: OFF by the owner is off (grey, still); only the cost breaker's stop is a fault.
+  assert.match(src("components/ShadowSwitchCard.tsx"), /const tone = !known \? "off" : !state\?\.allowed \? \(breaker \? "fault" : "off"\) : share >= 0\.8 \? "late" : "ok";/);
   assert.match(src("components/Roster.tsx"), /verified \? "text-ok"/);
   assert.match(src("components/OrganismCard.tsx"), /<Dot tone=\{market === "open" \? "ok" : "off"\}/);
-  assert.match(src("components/KeyLevels.tsx"), /verified \? "text-ok" : "text-slate-500"/);
+  assert.match(src("components/KeyLevels.tsx"), /verified \? "text-ok" : "text-muted"/);
   const perf = src("pages/Performance.tsx");
   assert.match(perf, /Math\.abs\(itSlip\) <= 3 \? T\.ok :/, "intent slippage as the Disparity panel");
   assert.match(perf, /t\.same_exit \? T\.ok : undefined/, "same exit cyan, as the yes beside it");
@@ -94,8 +95,9 @@ test("NR5 status on the War Room cards is ok / late / fault / off, not the bull 
 test("NR7 one red and one green: SELL/BUY and SL/TP in the bear and bull text tokens", () => {
   const omega = src("pages/Omega.tsx"), perf = src("pages/Performance.tsx");
   assert.match(omega, /<td className=\{`mono font-bold \$\{isBuy \? "text-bull" : "text-bear"\}`\}>\{p\.side\}<\/td>/);
-  assert.match(omega, /<td className="mono text-bear">\{p\.sl \? num\(p\.sl, digits\) : "—"\}<\/td>/);
-  assert.match(omega, /<td className="mono text-bull">\{p\.tp \? num\(p\.tp, digits\) : "—"\}<\/td>/);
+  // Follow-up of #518: the "—" of a missing SL or TP is muted, not red or green.
+  assert.match(omega, /<td className=\{`mono \$\{p\.sl \? "text-bear" : "text-muted"\}`\}>\{p\.sl \? num\(p\.sl, digits\) : "—"\}<\/td>/);
+  assert.match(omega, /<td className=\{`mono \$\{p\.tp \? "text-bull" : "text-muted"\}`\}>\{p\.tp \? num\(p\.tp, digits\) : "—"\}<\/td>/);
   assert.match(perf, /\$\{t\.side === "BUY" \? "text-bull" : "text-bear"\}/, "the parity table");
   assert.match(perf, /\$\{h\.side === "BUY" \? "text-bull" : "text-bear"\}/, "the history table");
   assert.match(perf, /<td className="mono text-bear">\{px\(x\.stop\)\}<\/td>/);
@@ -138,5 +140,6 @@ test("NR10 the nits: the bar's colour from the scaled value, SL+ its own hue, th
   for (const t of ["Last sync", "Risk / trade", "Profit factor"]) assert.ok(perf.includes(t), t);
   for (const t of ["Last Sync", "Risk / Trade", "Profit Factor"]) assert.ok(!perf.includes(t), t);
   assert.match(src("components/AssistantPanel.tsx"), /<SectionToggle title="Decision & plan"/);
-  assert.match(src("components/GlobalDecision.tsx"), /<span className="w-36 shrink-0 whitespace-nowrap text-right text-\[11px\]" style=\{\{ color: leanColor\(r\.lean\) \}\}>/);
+  // Follow-up of #518: w-36 hid the lean bar beside a status tag; w-32, cut with its full text in the title.
+  assert.match(src("components/GlobalDecision.tsx"), /<span className="w-32 shrink-0 truncate text-right text-\[11px\]" style=\{\{ color: leanColor\(r\.lean\) \}\} title=\{leanText\(r\.lean\)\}>\{leanText\(r\.lean\)\}<\/span>/);
 });

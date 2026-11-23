@@ -71,7 +71,10 @@ export default function ShadowSwitchCard() {
   const share = Math.min(1, spend?.share_of_budget ?? 0);
   // Only what the server reports: an answer without the switch's state shows "unknown", never OFF.
   const known = typeof state?.allowed === "boolean";
-  const tone = !known ? "off" : !state?.allowed ? "fault" : share >= 0.8 ? "late" : "ok";
+  // Off by the owner (or held off by the SHADOW_MODE variable) is a choice: grey, still. Only the cost breaker's stop
+  // is a fault: red, pulsing.
+  const breaker = known && !state?.allowed && !state?.held_off_by_variable && state?.mode_source === "breaker";
+  const tone = !known ? "off" : !state?.allowed ? (breaker ? "fault" : "off") : share >= 0.8 ? "late" : "ok";
 
   return (
     <div className="glass p-4">
@@ -79,7 +82,7 @@ export default function ShadowSwitchCard() {
       {state ? (
         <div className="space-y-2 text-[11.5px]">
           <div className="flex items-center gap-2">
-            <Dot tone={tone} pulse={known && !state.allowed} />
+            <Dot tone={tone} pulse={breaker} />
             <span className="text-slate-100">
               {!known ? "State unknown" : state.allowed ? "Shadow calls running" : state.held_off_by_variable ? "Shadow held off by the SHADOW_MODE variable" : state.mode_source === "breaker" ? "Shadow OFF: stopped by the cost breaker" : "Shadow OFF"}
             </span>

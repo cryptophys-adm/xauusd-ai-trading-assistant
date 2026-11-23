@@ -11,7 +11,7 @@ import { TEXT, directionTone } from "../lib/tokens";
 const ROLE_COLOR: Record<string, string> = { support: C.bull, resistance: C.bear, "at price": C.cyan };
 const OPACITY: Record<string, number> = { strong: 0.55, medium: 0.35, weak: 0.18 };
 /** The four level readers of the chart plane (owner decision 2026-11-08, src/level-readers.mjs). */
-const READERS: [string, string, string][] = [["band", "Band", "#facc15"], ["liquidity", "Liquidity", "#22d3ee"], ["projection", "Projection", "#60a5fa"], ["session", "Session", "#c084fc"]];
+const READERS: [string, string][] = [["band", "Band"], ["liquidity", "Liquidity"], ["projection", "Projection"], ["session", "Session"]];
 const READER_NAME: Record<string, string> = { band: "Band Agent", liquidity: "Liquidity Agent", projection: "Projection Agent", session: "Session Agent" };
 const SETUP_LABEL: Record<string, string> = { continuation_pullback: "Pullback with the trend", reversal_sweep: "Reversal after a sweep" };
 const BAND_TEXT: Record<string, string> = {
@@ -169,11 +169,11 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
         <>
           {hasK && (
             <div className="mb-2 grid grid-cols-4 gap-1" aria-label="Level readers">
-              {READERS.map(([id, name, color]) => {
+              {READERS.map(([id, name]) => {
                 const n = k.readers?.[id]?.levels;
                 return (
                   <div key={id} className="glass-inner px-1.5 py-1 text-center" title={k.readers?.[id]?.role ?? READER_NAME[id]}>
-                    <div className="text-[9.5px] uppercase tracking-widest" style={{ color }}>{name}</div>
+                    <div className="text-[11px] font-medium text-muted">{name}</div>
                     <div className="mono text-[12px] text-slate-100">{typeof n === "number" ? n : "—"}</div>
                   </div>
                 );
@@ -188,23 +188,23 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
             if (!st || !g?.strategy?.direction || g.strategy.direction === "NONE") return null;
             return (
               <div className="glass-inner mb-2 px-2.5 py-1.5 text-[11px]">
-                <span className="text-[9.5px] uppercase tracking-[0.12em] text-slate-500">15m setup · {g.strategy.direction.toLowerCase()}</span>
+                <span className="text-[11px] font-medium text-muted">15m setup · {g.strategy.direction.toLowerCase()}</span>
                 <div className={st.type === "none" ? "text-slate-400" : `font-semibold ${TEXT[directionTone(g.strategy.direction)]}`}>{SETUP_LABEL[st.type] ?? "No setup"}</div>
                 {st.evidence?.length ? <div className="text-[10.5px] text-slate-400">{st.evidence.join(" · ")}</div> : null}
               </div>
             );
           })()}
           <div className="mb-1 flex flex-wrap items-center gap-1">
-            <span className="mr-1 text-[9.5px] uppercase tracking-[0.12em] text-slate-500">Camarilla</span>
+            <span className="mr-1 text-[11px] font-medium text-muted">Camarilla</span>
             {sets.length > 1 ? sets.map((s) => (
               <button key={s.tf} type="button" onClick={() => setPick(s.tf)}
                 className={`rounded-md border px-2 py-0.5 text-[10px] ${set && s.tf === set.tf ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-white/10 text-slate-400 hover:text-slate-200"}`}>{s.label}</button>
             )) : <span className="text-[10px] text-slate-400">{set?.label ?? "no snapshot"}</span>}
-            {levels && <span className={`ml-auto text-[9.5px] uppercase tracking-[0.12em] ${verified ? "text-ok" : "text-slate-500"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
+            {levels && <span className={`ml-auto text-[11px] font-medium ${verified ? "text-ok" : "text-muted"}`}>{verified ? "verified bars" : "uncalibrated"}</span>}
           </div>
-          <div className="mb-0.5 flex justify-between px-1 text-[9px] uppercase tracking-[0.12em] text-slate-600">
+          <div className="mb-0.5 flex justify-between px-1 text-[11px] font-medium text-muted">
             {/* Re-review of #520: no zones because the decision read failed is that read's error, not "No zones". */}
-            <span>Camarilla · pivots</span>{hasK ? <span>Zones</span> : readError ? <span className="mono normal-case tracking-normal text-fault">{readError}</span> : <span>No zones</span>}
+            <span>Camarilla · pivots</span>{hasK ? <span>Zones</span> : readError ? <span className="mono text-fault">{readError}</span> : <span>No zones</span>}
           </div>
           <KeyLevelMap k={hasK ? k : null} cam={set?.levels ?? null} close={levels?.close ?? null} daily={levels?.cpr?.daily} weekly={levels?.cpr?.weekly} />
           {set && (
@@ -221,7 +221,7 @@ export default function KeyLevels({ levels, loading: levelsLoading, tab }: { lev
                   <div className="glass-inner flex items-center gap-2 px-2.5 py-1.5 text-[11px]" title={memberLines(z)}>
                     <i className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: ROLE_COLOR[z.role] ?? C.muted }} />
                     <span className="mono w-32 shrink-0 text-slate-100">{range(z)}</span>
-                    <span className="w-16 shrink-0 text-[10px] uppercase tracking-[0.12em] text-slate-500">{z.strength}</span>
+                    <span className="w-16 shrink-0 text-[11px] text-muted">{z.strength}</span>
                     <span className="min-w-0 flex-1 truncate text-[10.5px] text-slate-400">{z.label}</span>
                   </div>
                 </Fragment>

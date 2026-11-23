@@ -242,14 +242,14 @@ test("PS16 item 1: the Decision Engine keeps its last decision on a failed read,
 
 test("PS17 item 2: Workers and lanes never says \"all nominal\" while /api/status failed or is stale", () => {
   const nominal = { bad: 0, warn: 0, status: "live", lane: "live" };
-  assert.deepEqual(overviewBadge(nominal), { tone: "green", text: "all nominal" });
-  assert.deepEqual(overviewBadge({ ...nominal, status: "error" }), { tone: "red", text: "status unknown" }, "/api/status 502, /api/local-lane ok");
-  assert.deepEqual(overviewBadge({ ...nominal, status: "stale" }), { tone: "amber", text: "status stale" }, "3 × the interval of 502s with data on screen");
-  assert.deepEqual(overviewBadge({ ...nominal, lane: "stale" }), { tone: "amber", text: "lane stale" });
-  assert.deepEqual(overviewBadge({ ...nominal, lane: "error" }), { tone: "red", text: "lane unknown" });
-  assert.deepEqual(overviewBadge({ ...nominal, status: "loading" }), { tone: "slate", text: "checking" });
-  assert.deepEqual(overviewBadge({ ...nominal, bad: 2, status: "error" }), { tone: "red", text: "2 down" });
-  assert.deepEqual(overviewBadge({ ...nominal, warn: 1, status: "stale" }), { tone: "amber", text: "1 need attention · stale" });
+  assert.deepEqual(overviewBadge(nominal), { tone: "ok", text: "all nominal" });
+  assert.deepEqual(overviewBadge({ ...nominal, status: "error" }), { tone: "fault", text: "status unknown" }, "/api/status 502, /api/local-lane ok");
+  assert.deepEqual(overviewBadge({ ...nominal, status: "stale" }), { tone: "late", text: "status stale" }, "3 × the interval of 502s with data on screen");
+  assert.deepEqual(overviewBadge({ ...nominal, lane: "stale" }), { tone: "late", text: "lane stale" });
+  assert.deepEqual(overviewBadge({ ...nominal, lane: "error" }), { tone: "fault", text: "lane unknown" });
+  assert.deepEqual(overviewBadge({ ...nominal, status: "loading" }), { tone: "off", text: "checking" });
+  assert.deepEqual(overviewBadge({ ...nominal, bad: 2, status: "error" }), { tone: "fault", text: "2 down" });
+  assert.deepEqual(overviewBadge({ ...nominal, warn: 1, status: "stale" }), { tone: "late", text: "1 need attention · stale" });
   for (const status of ["error", "stale", "loading", "idle"]) for (const lane of ["live", "error", "stale"]) {
     assert.notEqual(overviewBadge({ bad: 0, warn: 0, status, lane }).text, "all nominal", `${status}/${lane}`);
   }

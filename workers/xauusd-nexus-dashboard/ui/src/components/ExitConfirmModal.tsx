@@ -1,4 +1,5 @@
 import { AlertTriangle, ShieldAlert, X } from "lucide-react";
+import { CHIP, directionTone } from "../lib/tokens";
 
 export interface ExitTargetPosition {
   ticket: number;
@@ -32,7 +33,7 @@ export function ExitConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150">
       <div
-        className="relative w-full max-w-md rounded-2xl border border-rose-500/40 bg-linear-to-b from-[#0e1628] via-[#09101d] to-[#060a12] p-5 shadow-[0_0_60px_rgba(244,63,94,0.25)] ring-1 ring-white/10"
+        className="relative w-full max-w-md rounded-2xl border border-fault-fill/40 bg-linear-to-b from-panel to-ground p-5 shadow-[0_0_60px_rgba(239,68,68,0.22)] ring-1 ring-white/10"
         role="dialog"
         aria-modal="true"
         aria-labelledby="exit-modal-title"
@@ -40,11 +41,11 @@ export function ExitConfirmModal({
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]">
-              <ShieldAlert className="h-6 w-6 text-rose-400 animate-pulse" />
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-fault-fill/40 bg-fault-fill/10 text-fault">
+              <ShieldAlert className="h-6 w-6 text-fault animate-pulse" />
             </div>
             <div>
-              <h3 id="exit-modal-title" className="text-[15px] font-bold text-white tracking-wide">
+              <h3 id="exit-modal-title" className="text-[15px] font-bold text-fg">
                 Close position
               </h3>
             </div>
@@ -63,20 +64,16 @@ export function ExitConfirmModal({
         {/* Position Details Card */}
         <div className="mt-4 rounded-xl border border-white/10 bg-black/40 p-3.5 space-y-2 text-[12px]">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Ticket</span>
-            <span className="mono font-bold text-cyan-300">#{position.ticket}</span>
+            <span className="text-[11px] font-medium text-muted">Ticket</span>
+            <span className="mono font-bold text-fg">#{position.ticket}</span>
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Position</span>
+            <span className="text-[11px] font-medium text-muted">Position</span>
             <div className="flex items-center gap-2">
               <span className="mono font-semibold text-slate-200">{position.symbol || "gold"}</span>
               <span
-                className={`mono font-bold px-1.5 py-0.5 rounded text-[11px] border ${
-                  position.side === "BUY"
-                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-                    : "bg-rose-500/20 text-rose-300 border-rose-500/40"
-                }`}
+                className={`mono font-bold px-1.5 py-0.5 rounded text-[11px] border ${CHIP[directionTone(position.side)]}`}
               >
                 {position.side || "POSITION"} {position.volume ? `${position.volume} lots` : ""}
               </span>
@@ -85,17 +82,17 @@ export function ExitConfirmModal({
 
           {position.open_price != null && (
             <div className="flex items-center justify-between text-[11.5px]">
-              <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Open Price</span>
+              <span className="text-[11px] font-medium text-muted">Open price</span>
               <span className="mono text-slate-200">{Number(position.open_price).toFixed(2)}</span>
             </div>
           )}
 
           {position.profit != null && (
             <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
-              <span className="text-slate-400 text-[11px] uppercase tracking-wider font-semibold">Floating P&L</span>
+              <span className="text-[11px] font-medium text-muted">Floating P&L</span>
               <span
                 className={`mono font-extrabold text-[13px] ${
-                  position.profit >= 0 ? "text-emerald-300" : "text-rose-400"
+                  position.profit >= 0 ? "text-bull" : "text-bear"
                 }`}
               >
                 {position.profit >= 0 ? "+" : ""}${Number(position.profit).toFixed(2)} {position.currency || "USD"}
@@ -105,8 +102,8 @@ export function ExitConfirmModal({
         </div>
 
         {/* Warning Banner */}
-        <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200 leading-relaxed">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+        <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-late-fill/30 bg-late-fill/10 p-2.5 text-[11px] text-late leading-relaxed">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-late mt-0.5" />
           <span>
             Closes at market now. The position's SL and TP are cancelled.
           </span>
@@ -126,7 +123,7 @@ export function ExitConfirmModal({
             type="button"
             onClick={() => onConfirm(position.ticket)}
             disabled={isSubmitting}
-            className="inline-flex items-center gap-2 rounded-lg border border-rose-500/60 bg-linear-to-r from-rose-600 to-rose-700 px-4 py-2 text-[12px] font-bold text-white shadow-[0_0_20px_rgba(244,63,94,0.35)] hover:from-rose-500 hover:to-rose-600 active:scale-95 transition disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-fault-fill/60 bg-fault-fill/20 px-4 py-2 text-[12px] font-bold text-fault hover:bg-fault-fill/30 active:scale-95 transition disabled:opacity-50"
           >
             {isSubmitting ? (
               <>
