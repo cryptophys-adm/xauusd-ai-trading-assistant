@@ -123,8 +123,18 @@ test("NR10 the nits: the bar's colour from the scaled value, SL+ its own hue, th
   assert.match(pc, /line\(p\.progressive_stop, "SL\+", SL_PLUS, LineStyle\.Dashed\)/);
   assert.doesNotMatch(pc, /"SL\+", T\.neutralFill/, "not the KWW yellow");
   const perf = src("pages/Performance.tsx");
-  assert.match(perf, /style=\{\{ background: \(perf\?\.equity\?\.at\(-1\)\?\.r \?\? 0\) >= 0 \? C\.bull : C\.bear \}\} \/> Equity \(R\)/);
-  assert.match(perf, /const strokeColor = netPositive \? C\.bull : C\.bear;/, "the curve's own rule");
+  // Part B of "Nexus data states" moved the legend under the title; its swatch takes the curve's colour.
+  assert.match(perf, /const lineColor = \(last\?\.r \?\? 0\) >= 0 \? T\.bullFill : T\.bearFill;/);
+  assert.match(perf, /<Swatch color=\{lineColor\} \/>Equity/);
+  // Review of #526: the drawdown's line, area and marker in the bear fill, the card's Peak in the off grey.
+  const charts526 = perf.slice(perf.indexOf("function EquityDrawdownCharts"), perf.indexOf("type Policy ="));
+  assert.match(charts526, /<path d=\{m\.ddArea\} fill=\{T\.bearFill\} fillOpacity=\{0\.12\} \/>/, "the drawdown area");
+  assert.match(charts526, /<path d=\{m\.ddLine\} fill="none" stroke=\{T\.bearFill\} strokeWidth=\{2\} strokeLinejoin="round" className="chart-series" \/>/, "the drawdown line");
+  assert.match(charts526, /<circle cx=\{m\.ddMark\.x\} cy=\{m\.ddMark\.y\} r=\{4\} fill=\{T\.bearFill\}/, "the deepest point's marker");
+  assert.match(charts526, /<circle cx=\{ax\} cy=\{Yd\(row\.dd\)\} r=\{3\.5\} fill=\{T\.bearFill\}/, "the crosshair's drawdown point");
+  assert.match(charts526, /\["Peak", f\.peak, T\.off, 1, 0\.8\], \["Drawdown", f\.dd, T\.bearFill, 2, 1\]/, "the card: Peak grey, Drawdown red");
+  assert.match(charts526, /\["Equity", f\.equity, lineColor, 2, 1\]/);
+  assert.doesNotMatch(charts526, /emerald|rose|#fb7185|#34d399/i, "never emerald or rose");
   for (const t of ["Last sync", "Risk / trade", "Profit factor"]) assert.ok(perf.includes(t), t);
   for (const t of ["Last Sync", "Risk / Trade", "Profit Factor"]) assert.ok(!perf.includes(t), t);
   assert.match(src("components/AssistantPanel.tsx"), /<SectionToggle title="Decision & plan"/);
