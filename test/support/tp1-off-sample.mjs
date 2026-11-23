@@ -6,7 +6,7 @@ import { planForDirection } from "../../src/strategy-engine.mjs";
 import { agentContext, agentPlans, agentStatuses, AGENT_IDS } from "../../src/strategy-agents.mjs";
 import { agentPlanPasses } from "../../src/decision-engine.mjs";
 
-export function tp1OffSample({ n = 160, seed = 20261123 } = {}) {
+export function tp1OffSample({ n = 160, seed = 20261123, entryZone = false } = {}) {
   let s = seed;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const statuses = agentStatuses({ STRATEGY_AGENTS_LIVE: AGENT_IDS.join(",") });
@@ -23,8 +23,10 @@ export function tp1OffSample({ n = 160, seed = 20261123 } = {}) {
     const strategy = { price, atr_h1: atr, direction: rnd() < 0.5 ? "LONG" : "SHORT", plan: { at_level: rnd() < 0.3 }, setup: { type: "none" }, key_levels: { zones, patterns: [] } };
     for (const scalp of [false, true]) for (const dir of [1, -1]) {
       const g = { target_rule: scalp ? "nearest" : "rrr", min_rrr: scalp ? 0 : 1.5 };
-      const base = planForDirection(strategy, dir, { scalp, keyZone: false });
-      const plans = agentPlans(dir, agentContext({ strategy, bars, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone: false }) }), statuses);
+      // EZ1's check reuses the sample with the entry zone on (`entryZone`); off it is the call it always was.
+      const ez = entryZone ? { entryZone: true } : {};
+      const base = planForDirection(strategy, dir, { scalp, keyZone: false, ...ez });
+      const plans = agentPlans(dir, agentContext({ strategy, bars, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone: false, ...ez }), ...ez }), statuses);
       out.push({ k, scalp, dir, base, plans, passes: Object.fromEntries(Object.entries(plans).map(([id, a]) => [id, agentPlanPasses(a.plan, g)])) });
     }
   }

@@ -145,6 +145,9 @@
     "CHART_PATTERNS_MODE": "on",
     // TP1 at the nearest key zone, at least 1R (TP1-KZ, owner 2026-11-23; src/strategy-engine.mjs TP1_MIN_R): "on" | "off".
     "TP1_KEY_ZONE_MODE": "on",
+    // The entry zone beside the plan's entry (EZ1, owner 2026-11-23; src/strategy-engine.mjs ENTRY_ZONE): "on" | "off".
+    // Omega rests a limit inside it where the plan's level is through price; "off" sends no zone (today's limits).
+    "ENTRY_ZONE_MODE": "on",
     // The pattern calibration v2 fields (src/pattern-calibration.mjs, Track A PR 4): "on" | "off"; "off" strips
     // by_tf and open from the stored calibration on read (the pooled block and the factors are unchanged).
     "PATTERN_HORIZON_MODE": "on",

@@ -36,7 +36,7 @@
 // The server never sizes a position; prices come only from the key-level plan.
 
 import { goldClosedAt, nextGoldChange, SESSIONS, nyHour } from "./market-hours.mjs";
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr, TP1_MIN_R, tp1KeyZoneMode } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr, TP1_MIN_R, tp1KeyZoneMode, entryZoneMode } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -657,6 +657,8 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
   const market = entryType !== "limit" && plan.at_level === true;
   return {
     side, action: market ? "ENTER_MARKET" : "ENTER_LIMIT", entry: plan.entry, stop: plan.stop, target: t, tp: plan[t],
+    // EZ1: the plan's entry zone (feed scale), beside the entry, when it has one.
+    ...(isNum(plan.entry_low) && isNum(plan.entry_high) ? { entry_low: plan.entry_low, entry_high: plan.entry_high } : {}),
     tp1: plan.tp1, tp2: plan.tp2, risk: plan.risk, rrr: plan.rrr?.[t] ?? null, rrr_all: plan.rrr ?? null,
     progressive_stop: plan.progressive_stop ?? null,
     entry_note: plan.entry_note, stop_note: plan.stop_note, tp_note: plan[`${t}_note`] ?? null, at_level: plan.at_level === true,
@@ -1124,10 +1126,12 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // TP1-KZ (owner 2026-11-23): the agents' plans take TP1 at the nearest key zone, at least 1R; the guardrails keep
   // their own plan (planForDirection without keyZone) for their checks. "off": today's plans and gates.
   const keyZone = tp1KeyZoneMode(env) === "on";
+  // EZ1 (owner 2026-11-23): the agents' plans carry their entry zone (src/strategy-engine.mjs ENTRY_ZONE). "off": none.
+  const entryZone = entryZoneMode(env) === "on";
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
   const plansOf = (dir) => {
-    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone }), statuses); } catch { return {}; }
+    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone, entryZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone, entryZone }), statuses); } catch { return {}; }
   };
   const plans = { long: plansOf(1), short: plansOf(-1) };
   let consensus = null;

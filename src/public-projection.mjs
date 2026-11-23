@@ -16,7 +16,7 @@ export const DEFAULT_PUBLIC_DELAY_HOURS = 24;
 const SERIES_15M = "market-data:v2:series:OANDA:XAUUSD|15m";
 /** Keys a recap may never carry, at any depth. */
 export const PUBLIC_FORBIDDEN_KEYS = Object.freeze([
-  "entry", "entry_price", "entry_zone", "stop", "stop_loss", "sl", "take_profit", "tp", "tp1", "tp2", "target", "targets", "trade", "trade_plan",
+  "entry", "entry_price", "entry_zone", "entry_low", "entry_high", "entry_zone_low", "entry_zone_high", "stop", "stop_loss", "sl", "take_profit", "tp", "tp1", "tp2", "target", "targets", "trade", "trade_plan",
   "plan", "plans", "strategy_plans", "key_levels", "zones", "levels", "upper", "lower", "close", "price", "atr", "lots", "lot", "size",
   "position_size_pct", "balance", "equity", "margin", "account", "positions", "omega", "worker_version", "decision_json"
 ]);

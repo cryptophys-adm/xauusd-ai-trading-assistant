@@ -529,12 +529,14 @@ export const ENGINE_CODE = Object.freeze({
   "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE",
     // Live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3): the placement, the council's actions, the fill's re-check.
     "limitPlacement", "limitActionIntents", "fillGuard", "deleteOrderIntent", "pendingWithoutStop", "PROFILE_RANK", "ENTRY_ORDERS", "LIMIT_EA_MIN_VERSION", "PLATFORM_MAX_OPEN", "ENTRY_COUNCIL_WAIT_MS",
+    // EZ1 (2026-11-23): the limit inside the signal's entry zone.
+    "signalEntryZone", "zoneLimit", "ZONE_MIN_RR",
     // ADR-0020 Amendment 8 (2026-11-20): Omega's check of the council's loosening and target moves, and the loosenings sent.
     "a8Intent", "loosenRecords"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
     "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
-  "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate"]],
+  "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs",
     // Fail closed (2026-11-21): a limit intent the EA never answered or answered without a ticket sends Omega to market.
     "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER"]],
@@ -577,7 +579,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "e82185c2c48edea1573f0efe4a2d6a9e016bb4ae3384c6f9fccfef6a64770c77";
+export const ENGINE_CODE_HASH = "db148bb0a25b8f1732bdbb11fe0979dd601c8220efc518bc454889c46b99ded4";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

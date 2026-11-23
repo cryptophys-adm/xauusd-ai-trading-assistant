@@ -107,7 +107,8 @@ export function entryFacts({ request, decision = null, rooms = [] }) {
       confidence_rising: confidenceTrend(conf, prev) === "rising",
       quorum_share_drop: isNum(share) && isNum(sharePrev) && sharePrev - share > ENTRY_SHARE_DROP,
       price_away_from_level: request.limit?.price != null && isNum(request.limit?.away_r) && request.limit.away_r >= PULLBACK_MIN_R,
-      price_at_level: request.limit?.refused === "limit_through_price" || (isNum(request.limit?.away_r) && request.limit.away_r < PULLBACK_MIN_R)
+      // EZ1: a zone passed is the through-price case (a missed level).
+      price_at_level: request.limit?.refused === "limit_through_price" || request.limit?.refused === "zone_passed" || (isNum(request.limit?.away_r) && request.limit.away_r < PULLBACK_MIN_R)
     }
   };
 }
@@ -178,6 +179,8 @@ export function pendingFacts({ order, meta = {}, decision = null, sym = {}, atr1
   const minDist = (isNum(sym.stops_level_points) ? sym.stops_level_points : 0) * point;
   const candidates = maxMove == null || !isNum(price) ? [] : [...new Set(levels.map((z) => r2(buy ? z.low : z.high)))]
     .filter((x) => (buy ? x > level + point / 2 && x <= level + maxMove + 1e-9 && price - x > Math.max(minDist, point) : x < level - point / 2 && x >= level - maxMove - 1e-9 && x - price > Math.max(minDist, point)))
+    // EZ1: an order placed with an entry zone moves only to levels inside it.
+    .filter((x) => !(isNum(meta?.entry_zone?.low) && isNum(meta?.entry_zone?.high)) || (x >= meta.entry_zone.low - point / 2 && x <= meta.entry_zone.high + point / 2))
     .sort((a, b) => (buy ? a - b : b - a));
   const awayAtr = isNum(atr15) && atr15 > 0 && isNum(price) ? r3(Math.abs(price - level) / atr15) : null;
   const against = decision?.stance === (buy ? "SELL" : "BUY");

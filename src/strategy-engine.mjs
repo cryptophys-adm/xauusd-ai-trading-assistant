@@ -104,7 +104,7 @@ function roomLayer(key, room, now) {
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
-export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5, keyZone = false }) {
+export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5, keyZone = false, entryZone = false }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
   const near = nearAtr * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
   // How far beyond the entry the first target must lie (0.5 ATR; scalp 0.25 ATR, owner 2026-11-12).
@@ -135,14 +135,47 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   if (keyZone && Math.abs(tp1 - entry) / risk < TP1_MIN_R) return null;
   const tp2 = t2 ? targetEdge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk);
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
+  // EZ1 (entryZone): the band of the key zone the entry came from (at it, or a pullback to it), clipped around the entry;
+  // an entry at price with no key zone behind it (a demand or supply zone of the chart plane only) has none.
+  const zone = entryZone && nearest && (atZone || !atLevel) ? entryZoneOf({ dir, entry, stop, atrH1, band: [lo(nearest), hi(nearest)] }) : null;
   return {
     at_level: atLevel, entry: r2(entry), entry_note: entryNote,
+    ...(zone ?? {}),
     stop: r2(stop), stop_note: stopNote, risk: r2(risk),
     tp1: r2(tp1), tp1_note: t1 ? t1.label : "a 2R projection",
     tp2: r2(tp2), tp2_note: t2 ? t2.label : "a projection beyond the first target",
     progressive_stop: r2(entry),
     rrr: { tp1: rr(tp1), tp2: rr(tp2) }
   };
+}
+
+/**
+ * EZ1, the entry zone (owner 2026-11-23: "decision & signal harusnya memberi nilai zone bukan exact, sehingga omega tidak
+ * akan info limit through price"): beside the plan's `entry` (unchanged), the band Omega may place its limit in, on the
+ * feed's scale. Switch ENTRY_ZONE_MODE "on" (default) | "off" (no zone anywhere: today's plans, signals and limits).
+ *   band_max_atr    a key zone's band is clipped to at most this x ATR(1H) wide, centred on the entry;
+ *   structural_atr  a structural plan (sweep, breakout retest, patterns) takes the entry +/- this x ATR(1H);
+ *   stop_share      the edge on the stop's side lies at most this share of the way from the entry to the stop.
+ */
+export const ENTRY_ZONE = Object.freeze({ band_max_atr: 0.5, structural_atr: 0.15, stop_share: 0.5 });
+export function entryZoneMode(env) {
+  return String(env?.ENTRY_ZONE_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
+/**
+ * Pure: the entry zone { entry_low, entry_high } around `entry` (feed scale, 2 decimals), or null. With `band` [low,
+ * high] (a key zone) the band, widened to hold the entry and clipped to ENTRY_ZONE.band_max_atr x ATR(1H) centred on the
+ * entry; without one, entry +/- ENTRY_ZONE.structural_atr x ATR(1H). Either way the stop's side never reaches past
+ * ENTRY_ZONE.stop_share of the risk, so the zone never crosses to the stop's side. Null when no band of width remains.
+ */
+export function entryZoneOf({ dir, entry, stop, atrH1, band = null }) {
+  if (!(dir === 1 || dir === -1) || ![entry, stop, atrH1].every(isNum) || atrH1 <= 0 || !(dir * (entry - stop) > 0)) return null;
+  const half = band ? (ENTRY_ZONE.band_max_atr * atrH1) / 2 : ENTRY_ZONE.structural_atr * atrH1;
+  let low = entry - half, high = entry + half;
+  if (band && band.every(isNum)) { low = Math.max(low, Math.min(band[0], entry)); high = Math.min(high, Math.max(band[1], entry)); }
+  const toStop = ENTRY_ZONE.stop_share * Math.abs(entry - stop);
+  if (dir > 0) low = Math.max(low, entry - toStop); else high = Math.min(high, entry + toStop);
+  const zl = r2(low), zh = r2(high);
+  return zh > zl && zl <= r2(entry) && r2(entry) <= zh ? { entry_low: zl, entry_high: zh } : null;
 }
 
 /**
@@ -221,11 +254,11 @@ export const SCALP_TARGET = Object.freeze({ targetGapAtr: 0.25, qualified: true 
  * demand or supply zone) counts only when the strategy points the same way. Null without a price,
  * an ATR or a direction.
  */
-export function planForDirection(strategy, dir, { scalp = false, keyZone = false } = {}) {
+export function planForDirection(strategy, dir, { scalp = false, keyZone = false, entryZone = false } = {}) {
   if (!strategy || !(dir === 1 || dir === -1)) return null;
   const sameWay = (strategy.direction === "LONG" && dir > 0) || (strategy.direction === "SHORT" && dir < 0);
   const setupNote = sameWay && strategy.setup?.type && strategy.setup.type !== "none" ? `${strategy.setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${(strategy.setup.evidence || []).join(", ")}` : null;
-  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}), ...(keyZone ? { keyZone: true } : {}) });
+  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}), ...(keyZone ? { keyZone: true } : {}), ...(entryZone ? { entryZone: true } : {}) });
 }
 
 /**
@@ -385,12 +418,15 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   // location with the trade, like a demand or supply zone.
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
-  const base = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
+  // EZ1 (the switch travels in the inputs as modes.entryZone, as TP1-KZ's): the plan carries its entry zone.
+  const entryZone = modes?.entryZone !== "off" && entryZoneMode(env) === "on";
+  const ez = entryZone ? { entryZone: true } : {};
+  const base = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, ...ez }) : null;
   // TP1-KZ (owner 2026-11-23; the switch travels in the inputs as modes.tp1KeyZone): the strategy's plan takes TP1 at
   // the nearest key zone, at least 1R. Under 1R the plan stays today's for its location (the guardrails read its
   // at_level), and the decision waits (state LOW_REWARD): no trade comes from a first target under 1R.
   const keyZone = modes?.tp1KeyZone !== "off" && tp1KeyZoneMode(env) === "on";
-  const kz = keyZone && base ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, keyZone: true }) : null;
+  const kz = keyZone && base ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, keyZone: true, ...ez }) : null;
   const plan = keyZone && kz ? kz : base;
   const tp1Short = keyZone && base && !kz;
   const { vetoes, cautions, supports } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
@@ -498,7 +534,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env) },
     now
   };
 }
