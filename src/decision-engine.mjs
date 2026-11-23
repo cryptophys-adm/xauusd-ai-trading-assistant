@@ -1127,7 +1127,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // their own plan (planForDirection without keyZone) for their checks. "off": today's plans and gates.
   const keyZone = tp1KeyZoneMode(env) === "on";
   // EZ1 (owner 2026-11-23): the agents' plans carry their entry zone (src/strategy-engine.mjs ENTRY_ZONE). "off": none.
-  const entryZone = entryZoneMode(env) === "on";
+  const entryZone = entryZoneMode(env) !== "off";
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
   const plansOf = (dir) => {
@@ -1281,6 +1281,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
+    // EZ1b: the entry zone's switch at this decision ("edge": Omega may rest a limit at the zone's near edge), only
+    // when the zone is on; the signal carries it to Omega and v4 replays it from here.
+    ...(entryZoneMode(env) === "edge" && isNum(d.trade?.entry_low) ? { entry_zone_mode: "edge" } : {}),
     trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, ...(assessment?.positioning ? { positioning: assessment.positioning } : {}), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).

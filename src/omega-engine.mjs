@@ -921,6 +921,25 @@ export function signalEntryZone(signal, digits = 2) {
   return { low: roundTo(lo + signal.feed_basis, digits), high: roundTo(hi + signal.feed_basis, digits) };
 }
 /**
+ * Pure (EZ1b): the limit at the entry zone's near edge (a BUY's high, a SELL's low) when the plan's level is out of the
+ * placement band and that edge is inside it: the edge, moved away from price by the gap zoneLimit keeps (max of the
+ * stop level, 1 spread, 1 step) where it is that close, then the plan's stop and target kept, with zoneLimit's guards
+ * (zone_passed, zone_tight, zone_rr). Null when the edge is out of the band too (today's limit_out_of_band). Its note
+ * is limit_zone_edge with { plan_entry, edge, away_r_plan, away_r_edge }; the order records entry_basis "zone_edge".
+ */
+export function zoneEdgeLimit({ signal, sym = {}, zone, digits = 2, planStopDist, minDist = 0, knobs, from }) {
+  const buy = signal.side === "BUY";
+  const edge = buy ? zone.high : zone.low;
+  const awayEdge = roundTo(buy ? sym.ask - edge : edge - sym.bid, digits + 2);
+  if (!(planStopDist > 0) || awayEdge > knobs.placement_band * planStopDist + 1e-9) return null;
+  const awayPlan = roundTo(buy ? sym.ask - from : from - sym.bid, digits + 2);
+  // The zone's level nearest the plan that clears the gap from price: the edge itself unless price is that close.
+  const r = zoneLimit({ signal, sym, zone, digits, planStopDist, minDist, knobs, from: edge });
+  const detail = { plan_entry: from, edge, away_r_plan: round3(awayPlan / planStopDist), away_r_edge: round3(awayEdge / planStopDist) };
+  return r.ok ? { ...r, from, edge: true, entry_basis: "zone_edge", edge_detail: detail } : { ...r, from, edge_detail: detail };
+}
+
+/**
  * Pure: a limit inside the entry zone where the plan's own level cannot rest (through price, or within the stop level):
  * the level nearest the plan's inside the zone that is at least max(the stop level, 1 spread) from price on the
  * correct side (above the bid for a SELL, below the ask for a BUY). The stop and the target stay the plan's (broker
@@ -972,7 +991,15 @@ export function limitPlacement({ signal, sym = {}, account = {}, planStopDist, m
   if (zone && (!(away > 0) || (minDist > 0 && away < minDist))) return zoneLimit({ signal, sym, zone, digits, planStopDist, minDist, knobs, from: price });
   if (!(away > 0)) return { ok: false, code: "limit_through_price", ...out };
   if (minDist > 0 && away < minDist) return { ok: false, code: "limit_stops_level", ...out };
-  if (away > knobs.placement_band * planStopDist + 1e-9) return { ok: false, code: "limit_out_of_band", detail: `${awayR} x the stop from price, the band is ${knobs.placement_band}`, ...out };
+  if (away > knobs.placement_band * planStopDist + 1e-9) {
+    // EZ1b: with the signal's "edge" switch, the zone's near edge (a BUY's top, a SELL's bottom) rests the limit when it
+    // is inside the band (the plan's own level is not); the plan's stop and target kept, the zone's guards as EZ1's.
+    if (zone && signal.entry_zone_edge === true) {
+      const edge = zoneEdgeLimit({ signal, sym, zone, digits, planStopDist, minDist, knobs, from: price });
+      if (edge) return edge;
+    }
+    return { ok: false, code: "limit_out_of_band", detail: `${awayR} x the stop from price, the band is ${knobs.placement_band}`, ...out };
+  }
   return { ok: true, ...out };
 }
 
@@ -1551,7 +1578,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // EZ1: the entry zone (broker scale) the order may never be moved out of, and where a zone move put it from.
     const zone = signalEntryZone(signal, sym.digits);
     if (zone) it.entry_zone = zone;
-    if (lim.moved === true) { it.zone_from = lim.from; note("limit_in_zone", `${lim.from} -> ${price}`); }
+    if (lim.edge === true) { it.zone_from = lim.from; it.entry_basis = "zone_edge"; note("limit_zone_edge", JSON.stringify(lim.edge_detail)); }
+    else if (lim.moved === true) { it.zone_from = lim.from; note("limit_in_zone", `${lim.from} -> ${price}`); }
     intents.push(it);
     return done();
   }

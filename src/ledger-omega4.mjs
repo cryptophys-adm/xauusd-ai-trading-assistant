@@ -530,7 +530,7 @@ export const ENGINE_CODE = Object.freeze({
     // Live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3): the placement, the council's actions, the fill's re-check.
     "limitPlacement", "limitActionIntents", "fillGuard", "deleteOrderIntent", "pendingWithoutStop", "PROFILE_RANK", "ENTRY_ORDERS", "LIMIT_EA_MIN_VERSION", "PLATFORM_MAX_OPEN", "ENTRY_COUNCIL_WAIT_MS",
     // EZ1 (2026-11-23): the limit inside the signal's entry zone.
-    "signalEntryZone", "zoneLimit", "ZONE_MIN_RR", "ZONE_MIN_RISK_SHARE",
+    "signalEntryZone", "zoneLimit", "zoneEdgeLimit", "ZONE_MIN_RR", "ZONE_MIN_RISK_SHARE",
     // ADR-0020 Amendment 8 (2026-11-20): Omega's check of the council's loosening and target moves, and the loosenings sent.
     "a8Intent", "loosenRecords"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
@@ -579,7 +579,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "e89ec3b6c26ca7e846ffd4d62ad8273779a489c86b19b1fe0a6c4a1ada0f4043";
+export const ENGINE_CODE_HASH = "688f4b0981ac353255e4b004ac60910de9c0ee75380b6d56c1a7cfe5618969f2";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

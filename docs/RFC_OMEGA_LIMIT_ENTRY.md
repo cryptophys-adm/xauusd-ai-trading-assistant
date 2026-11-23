@@ -108,7 +108,16 @@ Then Omega asks the **entry council** (under `"council"`, the same call answers 
   inside the zone, nearer its best edge than its near edge is. The place_limit intent records `entry_zone` (broker
   scale) and, for a moved one, `zone_from` (note `limit_in_zone`); a council move never leaves the zone (Omega drops it,
   and the pending council is offered only levels inside it), and a conversion's market leg does not enter once the zone
-  is passed. Without a zone (`ENTRY_ZONE_MODE` "off", a decision made before EZ1) everything is as above, byte for byte.
+  is passed. **The zone's near edge (EZ1b, owner 2026-11-23: "setuju", after the 04:15 BUY whose level stood 0.353R from
+  price against a 0.35 band while its zone's top stood 0.24R).** With `ENTRY_ZONE_MODE` "edge" (the default) the decision
+  carries `entry_zone_mode: "edge"` beside a zone and the signal `entry_zone_edge: true`. Where the plan's level is out of
+  the placement band and the zone's near edge (a BUY's `entry_zone_high`, a SELL's `entry_zone_low`, broker scale) is
+  inside it, `zoneEdgeLimit` rests the limit at that edge (moved away from price by zoneLimit's gap only where it is that
+  close), the plan's stop and target kept and zoneLimit's guards applied (`zone_passed`, `zone_tight`, `zone_rr`; the lot
+  on the edge's risk, capped as above). Its note is `limit_zone_edge` with `{ plan_entry, edge, away_r_plan, away_r_edge }`
+  and the order records `entry_basis: "zone_edge"`; an edge out of the band too is today's `limit_out_of_band`. The
+  council stays the final gate; expiry and moves are unchanged. "on" is EZ1 alone (no edge). Without a zone
+  (`ENTRY_ZONE_MODE` "off", a decision made before EZ1) everything is as above, byte for byte.
 
 **Sizing at placement, as if filled**
 - The lot uses today's formula: risk_pct, the profile caps, `volume_below_min`, `tick_value_mismatch`, the open-risk cap and

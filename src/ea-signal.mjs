@@ -137,6 +137,8 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
     // EZ1 (src/strategy-engine.mjs ENTRY_ZONE): the plan's entry zone on the feed's scale, flat, only when it holds the
     // entry and stays on the entry's side of the stop. The EA never reads these keys (its needle is `"<key>":`).
     ...entryZoneFields(t, side),
+    // EZ1b: the decision's zone switch ("edge"), flat, only beside a zone. The EA never reads it.
+    ...(decision?.entry_zone_mode === "edge" && Object.keys(entryZoneFields(t, side)).length ? { entry_zone_edge: true } : {}),
     risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
     // A market entry triggered live by a later 5m candle is as fresh as that candle (Omega's signal-age gate).
     issued_ms: close, expires_ms: close + M15_MS, decided_ms: Number.isFinite(trigger.at_ms) && trigger.at_ms > decidedMs ? trigger.at_ms : decidedMs
