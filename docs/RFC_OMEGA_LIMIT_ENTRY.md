@@ -316,6 +316,25 @@ Policy Engine's prohibited filter refuses them; platform test K2):
   maker and taker R per trade, profit factor and total R, the pairs: n, maker better, taker better, mean ΔR). Nexus
   shows it as "Maker vs taker" on the Performance page.
 
+**The ledger's own Omega policy v3 follows the live entry (V3L, owner 2026-11-23, relayed by the orchestrator: "Make v3
+follow the limit entry (Rekomendasi)"; `src/ledger-v3-limit.mjs`, rows tagged `cryptophys.ledger-omega.v3.1-limit`):**
+- **Which entry.** The `entry_order` in force at each decision, from the settings' audited history (`omega_events`
+  `settings`); "market" keeps v3 byte for byte, "limit" and "council" rest a limit.
+- **The same functions, not a copy.** `limitPlacement` (the band, EZ1, EZ1b, `zone_*`), the counterfactual's
+  `limitCancelReason` (`pending_expired`, `decision_against`, `quorum_share_drop`) and `limitFillPrice` (now exported from
+  `src/ledger-omega-limit.mjs`, the counterfactual's own fill unchanged), SS1's `superseded_by_signal`.
+- **Where it differs from the counterfactual above, to follow live:** the live entry council's recorded answer (a skip
+  skips; under "council" `enter_market` or silence is v3's market entry); the placement tried at every minute while the
+  signal is live and not before the council answered (live tries at every sync), not once; EZ1, EZ1b and SS1 only from
+  their own live deploys (`V3L_RULES_FROM`); one ledger row at a time with v3's own account gate at the fill (no
+  `pending_order_exists`, no profile).
+- **The counterfactual's EZ1b switch.** Found here: v4's `DECISION_SQL` has no `entry_zone_mode`, so the counterfactual
+  above never rested at the zone's edge. It now reads `LIMIT_DECISION_SQL` / joins `LIMIT_ZONE_MODE_SQL`; v4 unchanged.
+- **Unfilled:** the row is skipped with the code (`omega_gate`). **Filled:** v3's own management from the fill, R on the
+  risk from the fill to the placed stop.
+- **Recompute and parity:** the rows since the first save off market (2026-11-20 11:46:03 UTC) once, the old values in
+  `omega_json.prev`; `GET /api/ledger` `parity_v3`, v3 against the live account per UTC day (docs/SSOT.md).
+
 ## 9. EA 1.21 (the owner installs it on the VPS; the bridge is unchanged)
 
 `intents.txt` keeps its format, `id;kind;side;volume;sl;tp;ticket`, so the bridge needs no change.

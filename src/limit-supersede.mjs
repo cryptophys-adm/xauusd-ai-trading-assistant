@@ -23,8 +23,9 @@
 //      sync places it once the delete is done.
 //   5. The ledgers: the limit counterfactual beside v4 (src/ledger-omega-limit.mjs) ends a resting order of an older
 //      signal when the current signal is on its side (missed, gate superseded_by_signal) and places the new one on
-//      planIntents' gates; v4 itself is the market replay (no resting order). The v3 Signal Ledger's Omega entry ends
-//      by the next 15m close, so an older row never rests at a newer decision (LH1's blocksNewDecision, unchanged).
+//      planIntents' gates; v4 itself is the market replay (no resting order). The v3 Signal Ledger follows the limit
+//      entry since V3L (src/ledger-v3-limit.mjs): its resting limit ends superseded_by_signal the same way, and LH1's
+//      blocksNewDecision no longer holds the newer decision back under a limit entry with this switch on.
 // Switch: the Omega setting `limit_supersede`, "on" (default) | "off"; "off" is today's engine byte for byte. The owner's
 // switch only (Aether's policy and its rollback never write it); it is in ERA_SWITCHES. No environment variable.
 
