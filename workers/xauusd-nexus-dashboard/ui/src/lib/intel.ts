@@ -127,12 +127,33 @@ export const atrDistance = (lo: number, hi: number, last: unknown, atr: unknown)
 
 // ---------------------------------------------------------------- the LIQUIDITY card (backend B15)
 
-/** The most weight the LIQUIDITY card carries in the council, whatever lens B's weight. */
+/** The most weight the LIQUIDITY card carries in the council (src/decision-engine.mjs LIQUIDITY_WITNESS.cap). */
 export const LIQUIDITY_CARD_MAX = 0.06;
-/** The LIQUIDITY card's weight: a tenth of lens B's council weight, at most 0.06 (0.36 gives 0.036). Council only, never counted. */
-export const liquidityCardWeight = (councilWeight: unknown): number | null => (num(councilWeight) && councilWeight >= 0 ? Math.min(LIQUIDITY_CARD_MAX, 0.1 * councilWeight) : null);
-/** The weight as shown: rounded to the cent with the exact value beside it, "0.04 (0.036)". */
-export const cardWeightText = (w: unknown): string => (num(w) ? `${w.toFixed(2)} (${Number(w.toFixed(3))})` : "—");
+/** Its share of lens B's council weight (LIQUIDITY_WITNESS.share). */
+export const LIQUIDITY_CARD_SHARE = 0.1;
+/** The LIQUIDITY card's weight rule: a tenth of lens B's council weight, at most 0.06 (0.36 gives 0.036). Council only, never counted. */
+export const liquidityCardWeight = (councilWeight: unknown): number | null => (num(councilWeight) && councilWeight >= 0 ? Math.min(LIQUIDITY_CARD_MAX, LIQUIDITY_CARD_SHARE * councilWeight) : null);
+/** A card weight as shown: two decimals, three when the third is not 0 ("0.03", "0.036"). */
+export const cardWeightText = (w: unknown): string => (num(w) ? (Math.abs(w * 100 - Math.round(w * 100)) < 1e-9 ? w.toFixed(2) : w.toFixed(3)) : "—");
+/** "H1", "H1 and M15", "H1, M15 and NEWS". */
+export const andList = (xs: string[]): string => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}` : xs[0] ?? "");
+/** The card's lean_reason codes (liquidityCard) in short words. */
+export const LEAN_REASON: Record<string, string> = {
+  sweep_with_agreeing_witness: "fresh sweep, a witness agrees",
+  no_agreeing_witness: "fresh sweep, no witness agrees",
+  sweep_stale: "sweep older than 15 min",
+  not_reclaimed: "sweep not reclaimed",
+  no_sweep: "no reclaimed sweep in 15 min"
+};
+/** A lean_reason in words; an agreeing sweep names its witnesses ("fresh sweep, H1 and M15 agree"). Unknown codes read as their words. */
+export function leanReasonText(code: unknown, agreeing: unknown = []): string {
+  const keys = arr(agreeing).filter((k): k is string => typeof k === "string" && k !== "");
+  if (code === "sweep_with_agreeing_witness" && keys.length) return `fresh sweep, ${andList(keys)} ${keys.length > 1 ? "agree" : "agrees"}`;
+  const c = str(code);
+  return c ? LEAN_REASON[c] ?? words(c) : "—";
+}
+/** The card's summary without its closing "Council only: …" sentence (the card says that once, from counts). */
+export const cardSummary = (s: unknown): string | null => str(typeof s === "string" ? s.replace(/\s*Council only:[^.]*\.\s*$/, "").trim() : null);
 
 // ---------------------------------------------------------------- scores
 

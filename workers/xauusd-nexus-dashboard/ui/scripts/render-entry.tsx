@@ -46,21 +46,39 @@ export function merged(base: any, add: any): any {
 }
 
 /**
- * The Liquidity page (Track C2) over its reads. /api/liquidity is backend B8's contract (test/fixtures/nexus-intel/
- * liquidity.json, and liquidity-unavailable.json: no recent broker bar), at launch: conditions, card,
- * quorum_with_liquidity and effects.level_moves null. LATER is the page's own stand-in for those four until backends
- * B15-B19 publish theirs (the mockup's "all backend PRs deployed" board); it is not a contract. The clock is the
- * fixture's (lens B's state 2 minutes old).
+ * The Liquidity page (Track C2) over its reads. /api/liquidity is the contract (test/fixtures/nexus-intel/
+ * liquidity.json, and liquidity-unavailable.json: no recent broker bar). Since B15 the fixture carries the LIQUIDITY
+ * card and the quorum with liquidity (the latest decision's decision.liquidity); conditions and effects.level_moves are
+ * still null. LATER is the page's own stand-in for those two until backends B16-B19 publish theirs (the mockup's "all
+ * backend PRs deployed" board); it is not a contract. The clock is the fixture's (lens B's state 2 minutes old, the
+ * card 13 minutes old).
  */
 export const LIQUIDITY_NOW = (liquidity as any).state.at_ms + 2 * 60_000;
 export const LATER = {
   conditions: {},
-  card: { at_ms: (liquidity as any).state.at_ms, weight: 0.036, lean: 0.6, sweep: "sweep_with" },
-  quorum_with_liquidity: { long_share: 0.48, short_share: 0.2, neutral_share: 0.32, share_needed_above: 0.5, met: false },
   effects: { level_moves: [{ at_ms: (liquidity as any).state.at_ms - 3_600_000, side: "BUY", action: "level", outcome: "hit" }] }
 };
 export const LIQUIDITY_FULL = merged(liquidity, LATER);
-/** /api/lens with lens B's intraday weight from Aether at 0.36: the card's weight is min(0.06, 0.036), "0.04 (0.036)". */
+/** The B15 fields null: the latest decision has no decision.liquidity (the switch off; lens B off, floored or stale; a decision before B15). */
+export const NO_CARD = { card: null, quorum_with_liquidity: null };
+const CARD = (liquidity as any).card;
+/**
+ * The card's other shapes, as src/decision-engine.mjs liquidityCard writes them (the fixture's card is the agreeing one):
+ * one per lean_reason, a bearish lean, and a stale card (the latest decision 22 minutes old).
+ */
+const NO_LEAN = { lean: 0, side: "NEUTRAL", agreeing: [] };
+export const CARD_REASONS: Record<string, any> = {
+  sweep_with_agreeing_witness: CARD,
+  no_agreeing_witness: { ...CARD, ...NO_LEAN, lean_reason: "no_agreeing_witness", summary: "A reclaimed sell-side sweep on a tick-volume spike 3 minutes ago on the broker's own bars, but no counting witness leans bullish: no lean. Council only: it never counts in the quorum." },
+  sweep_stale: { ...CARD, ...NO_LEAN, sweep: null, sweep_age_min: null, lean_reason: "sweep_stale", summary: "The last reclaimed sweep on the broker's tick volume is more than 15 minutes old: no lean. Council only: it never counts in the quorum." },
+  not_reclaimed: { ...CARD, ...NO_LEAN, sweep: null, sweep_age_min: null, lean_reason: "not_reclaimed", summary: "The last sweep on the broker's tick volume did not close back inside: no lean. Council only: it never counts in the quorum." },
+  no_sweep: { ...CARD, ...NO_LEAN, sweep: null, sweep_age_min: null, lean_reason: "no_sweep", summary: "No reclaimed sweep on the broker's tick volume in the last 15 minutes: no lean. Council only: it never counts in the quorum." }
+};
+export const CARD_BEARISH = { ...CARD, lean: -0.6, side: "BEARISH", sweep: "buy_side", sweep_age_min: 6, agreeing: ["M15"], summary: "A reclaimed buy-side sweep on a tick-volume spike 6 minutes ago on the broker's own bars, and 15m War Room leans bearish too: it leans bearish. Council only: it never counts in the quorum." };
+export const CARD_STALE = { ...CARD, at_ms: LIQUIDITY_NOW - 22 * 60_000, stale: true };
+/** quorum_with_liquidity with neither side's quorum check holding (liquidityQuorum at intraday: 0.5 and a lean of 0.15). */
+export const QUORUM_NOT_MET = { score: 0.08, bias: "NEUTRAL", long_share: 0.48, short_share: 0.2, neutral_share: 0.32, share_needed_above: 0.5, quorum_min: 0.5, long_met: false, short_met: false, met: false };
+/** /api/lens with lens B's intraday weight from Aether at 0.36 (the lens panel's Aether source; the LIQUIDITY card reads its own weight). */
 export const LENS_AETHER = merged(lens, { liquidity: { weights: { intraday: { weight: 0.36, source: "aether" } } } });
 export const LENS_OFF = merged(lens, { switches: { liquidity_enabled: false }, liquidity: { weights: { scalp: { weight: 0, source: "switch_off" }, intraday: { weight: 0, source: "switch_off" }, swing: { weight: 0, source: "switch_off" }, range: { weight: 0, source: "switch_off" } }, facts: null, line: null } });
 /**
@@ -143,10 +161,28 @@ export const VIEWS: Entry[] = [
   { name: "LensView", View: LensView, fixture: lens, shows: ["Lens A · Positioning (CFTC)", "Lens B · Liquidity (broker M1)", "at floor", "fresh", "insufficient"] },
   { name: "LensHeader", View: LensHeader, fixture: lens, shows: ["Intraday mode"] },
   {
-    name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: null, quorum_with_liquidity: null },
-    shows: [...PANELS, HINT, "lens B on", "No LIQUIDITY card yet", "Fills after backend B15 is deployed.", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
+    name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: liquidity,
+    shows: [...PANELS, HINT, "lens B on", "LIQUIDITY", "fresh 13m", "Council only: it never counts toward the quorum.", "0.03", "a tenth of lens B&#x27;s 0.30, at most 0.06", "▲ +0.60 bullish", "▲ sell-side", "3 min ago",
+      "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness", "made", "14:47 UTC", "lens B state", "14:46 UTC", "Quorum with liquidity", "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.", "▲ 0.67", "+0.17", "▲ long",
+      "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
+    hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted"],
     missing: [NOT_FOUND]
   },
+  {
+    name: "LiquidityViewNoCard", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), ...NO_CARD },
+    shows: ["No LIQUIDITY card in the latest decision", "None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).", "Quorum", "WAIT"],
+    hides: ["Quorum with liquidity", "Council only: it never counts toward the quorum."]
+  },
+  ...Object.entries(CARD_REASONS).filter(([code]) => code !== "sweep_with_agreeing_witness").map(([code, card]) => ({
+    name: `LiquidityViewReason_${code}`, View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card },
+    shows: [code, card.sweep ? "3 min ago" : "none", "· 0.00 neutral"], hides: ["▲ +0.60"]
+  })),
+  // The card and the quorum with liquidity as the varied body, so each of their paths is nulled (the page's variants are capped).
+  { name: "LiquidityViewCard", View: ({ d }) => <LiquidityView d={{ ...(liquidity as any), card: d }} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: CARD, shows: ["LIQUIDITY", "fresh sweep, H1 and M15 agree"] },
+  { name: "LiquidityViewQuorumWithLiquidity", View: ({ d }) => <LiquidityView d={{ ...(liquidity as any), quorum_with_liquidity: d }} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: (liquidity as any).quorum_with_liquidity, shows: ["Quorum with liquidity", "▲ long"] },
+  { name: "LiquidityViewCardBearish", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_BEARISH }, shows: ["▼ −0.60 bearish", "▼ buy-side", "6 min ago", "fresh sweep, M15 agrees"] },
+  { name: "LiquidityViewCardStale", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_STALE }, shows: ["stale 22m", "▲ +0.60 bullish", "14:38 UTC"], hides: ["fresh 13m"] },
+  { name: "LiquidityViewQuorumNotMet", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), quorum_with_liquidity: QUORUM_NOT_MET }, shows: ["Quorum with liquidity", "▲ 0.48", "+0.08"], hides: ["▲ long"] },
   {
     name: "LiquidityViewUnavailable", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: unavailable,
     shows: [...PANELS, HINT, "lens B off", "No recent broker bars", "No levels yet", "No sweep yet"],
@@ -154,7 +190,7 @@ export const VIEWS: Entry[] = [
   },
   {
     name: "LiquidityViewLater", View: ({ d }) => <LiquidityView d={d} lens={LENS_AETHER} decision={decision} now={LIQUIDITY_NOW} />, fixture: LIQUIDITY_FULL,
-    shows: [...PANELS, HINT, "LIQUIDITY", "0.04", "(0.036)", "Quorum with liquidity", "Level moves"],
+    shows: [...PANELS, HINT, "LIQUIDITY", "Quorum with liquidity", "Level moves"],
     missing: [NOT_FOUND]
   },
   {

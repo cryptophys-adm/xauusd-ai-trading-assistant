@@ -1,8 +1,9 @@
 // The Nexus Liquidity page (Track C2, "feat(nexus): Liquidity", as the owner-approved mockup): its route, its reads (GET
 // only, one poll each, one /api/lens read in the whole UI), its render over backend B8's contract
 // (test/fixtures/nexus-intel/liquidity.json and liquidity-unavailable.json), the not-yet states of the fields backends
-// B15-B19 fill, no order text or line, the bands only from *_feed values and none without a known basis, a scale on
-// every price, the LIQUIDITY card's weight rule and the states the mockup draws.
+// B16-B19 fill, no order text or line, the bands only from *_feed values and none without a known basis, a scale on
+// every price, the LIQUIDITY card and the quorum with liquidity from backend B15's contract, and the states the mockup
+// draws.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -27,7 +28,7 @@ async function ui() {
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -118,30 +119,31 @@ test("LQ4 the page renders over B8's contract and its unavailable case, each top
   assert.ok(html.includes("target moved") && html.includes("1 applied"), "the Position Manager's action, in words");
   // A registry entry for each fixture in the render check.
   const names = u.VIEWS.map((v) => v.name);
-  for (const n of ["LiquidityView", "LiquidityViewUnavailable", "LiquidityViewLater", "LiquidityViewPendingMaker", "LiquidityViewLensOff", "LiquidityViewLens", "LiquidityViewDecision"]) assert.ok(names.includes(n), n);
+  for (const n of ["LiquidityView", "LiquidityViewNoCard", "LiquidityViewCard", "LiquidityViewQuorumWithLiquidity", "LiquidityViewCardBearish", "LiquidityViewCardStale", "LiquidityViewQuorumNotMet",
+    "LiquidityViewReason_no_agreeing_witness", "LiquidityViewReason_sweep_stale", "LiquidityViewReason_not_reclaimed", "LiquidityViewReason_no_sweep",
+    "LiquidityViewUnavailable", "LiquidityViewLater", "LiquidityViewPendingMaker", "LiquidityViewLensOff", "LiquidityViewLens", "LiquidityViewDecision"]) assert.ok(names.includes(n), n);
   const entry = read("workers/xauusd-nexus-dashboard/ui/scripts/render-entry.tsx");
   for (const f of ["liquidity.json", "liquidity-unavailable.json", "lens.json", "engine-decision.json"]) assert.match(entry, new RegExp(`test/fixtures/nexus-intel/${f.replace(".", "\\.")}`), f);
 });
 
-test("LQ5 the B15-B19 fields null: the not-yet Empties; filled: the card, the quorum with liquidity and the level moves", { skip: NO_UI_DEPS }, async () => {
+test("LQ5 the B16-B19 fields null: the not-yet Empties; filled: the level moves; B15's card and quorum with liquidity null: one Empty", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
   assert.equal(LIQ.conditions, null, "conditions null until B16");
   assert.equal(LIQ.effects.level_moves, null);
-  // B15 filled the card and the quorum with liquidity in the contract (the latest decision's decision.liquidity); the
-  // launch Empties are read with both null, as /api/liquidity answers for a decision without decision.liquidity.
+  // B15 filled the card and the quorum with liquidity in the contract (the latest decision's decision.liquidity);
+  // /api/liquidity answers both null for a decision without decision.liquidity.
   assert.ok(LIQ.card && LIQ.quorum_with_liquidity, "card and quorum_with_liquidity filled since B15");
   assert.deepEqual([UNAV.card, UNAV.quorum_with_liquidity], [null, null]);
-  const filled = await page(LIQ);
-  clean(filled);
-  for (const t of ["LIQUIDITY", "council only", "never counted", "Quorum with liquidity", "sell side", "▲ +0.60"]) assert.ok(filled.includes(t), `B15's card: ${t}`);
-  const launch = await page({ ...LIQ, card: null, quorum_with_liquidity: null });
-  for (const t of ["No LIQUIDITY card yet", "Fills after backend B15 is deployed.", "Level moves", "Fills after backend B19 is deployed.", "Not scored yet", "Scored after backend B19 is deployed."]) assert.ok(launch.includes(t), t);
-  assert.ok(!launch.includes("Quorum with liquidity"), "the quorum with liquidity waits for B15");
+  const launch = await page({ ...LIQ, ...u.NO_CARD });
+  clean(launch);
+  for (const t of ["No LIQUIDITY card in the latest decision", "None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).", "Level moves", "Fills after backend B19 is deployed.", "Not scored yet", "Scored after backend B19 is deployed."]) assert.ok(launch.includes(t), t);
+  assert.ok(!launch.includes("Quorum with liquidity"), "no quorum with liquidity without decision.liquidity");
+  assert.ok(!launch.includes("Fills after backend B15"), "B15 is live: no not-yet wording for it");
   assert.ok(launch.includes("Quorum") && launch.includes("WAIT"), "the quorum beside it is unchanged");
   const later = await page(u.merged(LIQ, u.LATER), { lens: u.LENS_AETHER });
   clean(later);
-  for (const t of ["No LIQUIDITY card yet", "Fills after backend B15 is deployed.", "Fills after backend B19 is deployed."]) assert.ok(!later.includes(t), `filled: no "${t}"`);
-  for (const t of ["LIQUIDITY", "council only", "never counted", "Quorum with liquidity", "with ▲ long", "▲ +0.60"]) assert.ok(later.includes(t), t);
+  for (const t of ["No LIQUIDITY card in the latest decision", "Fills after backend B19 is deployed."]) assert.ok(!later.includes(t), `filled: no "${t}"`);
+  for (const t of ["LIQUIDITY", "Quorum with liquidity", "Level moves"]) assert.ok(later.includes(t), t);
 });
 
 test("LQ5b a pending maker or block is pending (plain, not yet scored), never a miss; empty kinds read \"none in 7 days\"", { skip: NO_UI_DEPS }, async () => {
@@ -232,25 +234,106 @@ test("LQ8 every price carries its scale (feed or broker)", { skip: NO_UI_DEPS },
   }
 });
 
-test("LQ9 the LIQUIDITY card's weight: min(0.06, 0.1 x lens B's council weight), shown \"0.04 (0.036)\" at 0.36; stale: no weight", { skip: NO_UI_DEPS }, async () => {
+/** The text of the LIQUIDITY card (from its name to the quorum beside it). */
+const cardOf = (html) => { const i = html.indexOf(">LIQUIDITY<"); return i < 0 ? "" : html.slice(i, html.indexOf(">Quorum<", i)); };
+/** The quorum with liquidity block. */
+const qwOf = (html) => { const i = html.indexOf("Quorum with liquidity"); return i < 0 ? "" : html.slice(i, html.indexOf("</section>", i) < 0 ? undefined : html.indexOf("</section>", i)); };
+
+test("LQ9 the LIQUIDITY card from B15's contract: its own weight, lean and side, sweep, reason in words with the code, counts in words, times in UTC and local", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
-  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-12, `${a} vs ${b}`);
-  close(u.liquidityCardWeight(0.36), 0.036);
-  close(u.liquidityCardWeight(0.3), 0.03);
-  close(u.liquidityCardWeight(0.6), 0.06);
-  close(u.liquidityCardWeight(0.8), 0.06);
-  assert.equal(u.LIQUIDITY_CARD_MAX, 0.06);
+  const c = LIQ.card;
+  // The contract's own numbers: the weight rule holds on the fixture (min(0.06, 0.1 x lens_weight)), lean +-0.6 or 0.
+  assert.deepEqual([c.counts, c.weight, c.lens_weight, c.lean, c.side, c.sweep, c.lean_reason, c.stale], [false, 0.03, 0.3, 0.6, "BULLISH", "sell_side", "sweep_with_agreeing_witness", false]);
+  assert.ok(Math.abs(u.liquidityCardWeight(c.lens_weight) - c.weight) < 1e-12, "the card's weight is the rule's");
+  assert.ok(Math.abs(u.liquidityCardWeight(0.36) - 0.036) < 1e-12 && u.liquidityCardWeight(0.8) === u.LIQUIDITY_CARD_MAX && u.LIQUIDITY_CARD_MAX === 0.06);
   for (const x of [null, undefined, -0.1, Number.NaN, "0.36"]) assert.equal(u.liquidityCardWeight(x), null);
-  assert.equal(u.cardWeightText(u.liquidityCardWeight(0.36)), "0.04 (0.036)");
-  const card = await page(u.merged(LIQ, u.LATER), { lens: u.LENS_AETHER });
-  assert.match(card, /0\.04 <span[^>]*>\(0\.036\)<\/span>/);
-  // A card above the rule is held to it; a stale one shows no weight and no lean colour.
-  const high = await page(u.merged(LIQ, u.merged(u.LATER, { card: { weight: 0.1 } })), { lens: u.LENS_AETHER });
-  assert.match(high, /0\.04 <span[^>]*>\(0\.036\)<\/span>/);
-  const old = u.merged(LIQ, u.merged(u.LATER, { state: { at_ms: u.LIQUIDITY_NOW - 22 * 60_000, fresh: false, on: false } }));
-  const stale = await page(old, { lens: u.LENS_AETHER });
-  assert.ok(stale.includes("stale 22m · Omega ignores it after 15m"));
-  assert.ok(!stale.includes("(0.036)") && !stale.includes("▲ +0.60"));
+  assert.deepEqual([0.03, 0.036, 0.06, 0.02, null].map(u.cardWeightText), ["0.03", "0.036", "0.06", "0.02", "—"]);
+  const html = await page(LIQ);
+  clean(html);
+  const card = cardOf(html);
+  assert.ok(card.length > 100, "the card renders");
+  const text = textOf(card);
+  for (const t of ["Council only: it never counts toward the quorum.", "weight", "0.03", "a tenth of lens B&#x27;s 0.30, at most 0.06", "lean", "sweep", "reason", "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness"]) assert.ok(text.includes(t), `the card: ${t}`);
+  assert.match(card, /<span class="text-bull">▲ \+0\.60 bullish<\/span>/, "a bullish lean in green");
+  assert.match(card, /<span class="text-bull">▲ sell-side<\/span><\/span><span class="text-balance text-\[11px\] text-muted">3 min ago<\/span>/, "a sell-side sweep reads bullish, its age below");
+  assert.match(card, /class="chip [^"]*text-ok">fresh 13m</, "fresh: the ok tone, aged by its own at_ms");
+  assert.match(card, /<span class="mono text-\[11px\] text-muted">sweep_with_agreeing_witness<\/span>/, "the code kept, small and mono");
+  // counts false in words, never a chip; no extra chip but the state's.
+  assert.doesNotMatch(card, /class="chip[^"]*">(?:council only|never counted)</);
+  assert.equal((card.match(/class="chip /g) ?? []).length, 1, "one chip: the state");
+  // The summary: words only, its closing council sentence left to the card's own line, kept out of the layout (a hint).
+  assert.equal(u.cardSummary(c.summary), "A reclaimed sell-side sweep on a tick-volume spike 3 minutes ago on the broker's own bars, and 1H War Room and 15m War Room lean bullish too: it leans bullish.");
+  assert.equal(u.cardSummary("No lean."), "No lean.");
+  assert.equal(u.cardSummary(null), null);
+  assert.ok(card.includes('role="note"') && card.includes("1H War Room and 15m War Room lean bullish too"), "the summary as the hint");
+  assert.equal((card.match(/never counts/g) ?? []).length, 1, "said once");
+  // Times: made (at_ms) and lens B state (state_at_ms) in UTC and local; the bar close only when it is not the panel's.
+  assert.ok(text.includes("made") && card.includes("14:47 UTC · ") && text.includes("lens B state") && card.includes("14:46 UTC · "));
+  assert.ok(!text.includes("decision"), "the card's bar close is the panel's decision: not repeated");
+  const other = cardOf(await page(LIQ, { decision: u.merged(decisionBody(), { decision: { bar_close: "2026-11-23T14:30:00.000Z" } }) }));
+  assert.ok(textOf(other).includes("decision") && other.includes("14:45 UTC · "), "a card from another decision names its bar");
+  // Bearish: red; no field the contract lacks (no price, no "with/against" reading, no lens weight from /api/lens).
+  const bear = cardOf(await page({ ...LIQ, card: u.CARD_BEARISH }));
+  assert.match(bear, /<span class="text-bear">▼ −0\.60 bearish<\/span>/);
+  assert.match(bear, /<span class="text-bear">▼ buy-side<\/span>/);
+  assert.ok(textOf(bear).includes("6 min ago"));
+  assert.ok(textOf(bear).includes("fresh sweep, M15 agrees"));
+  assert.doesNotMatch(card, /\d,\d{3}\.\d{2}|sweep_with<|sweep_against|with ▲ long/);
+  const noLens = cardOf(await page(LIQ, { lens: null }));
+  assert.ok(textOf(noLens).includes("0.03") && textOf(noLens).includes("a tenth of lens B&#x27;s 0.30, at most 0.06"), "the card reads its own weight, not /api/lens");
+});
+
+test("LQ9b each lean_reason in short words with its code; a lean of 0 reads neutral amber", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const WORDS = { sweep_with_agreeing_witness: "fresh sweep, H1 and M15 agree", no_agreeing_witness: "fresh sweep, no witness agrees", sweep_stale: "sweep older than 15 min", not_reclaimed: "sweep not reclaimed", no_sweep: "no reclaimed sweep in 15 min" };
+  assert.deepEqual(Object.keys(u.CARD_REASONS).sort(), Object.keys(WORDS).sort(), "every code liquidityCard writes");
+  // The codes are src/decision-engine.mjs liquidityCard's own.
+  const engine = read("src/decision-engine.mjs");
+  for (const code of Object.keys(WORDS)) assert.ok(engine.includes(`"${code}"`), code);
+  for (const [code, words] of Object.entries(WORDS)) {
+    const card = cardOf(await page({ ...LIQ, card: u.CARD_REASONS[code] }));
+    clean(card);
+    const text = textOf(card);
+    assert.ok(text.includes(words), `${code}: ${words}`);
+    assert.ok(text.includes(code), `${code}: the code shown`);
+    if (code !== "sweep_with_agreeing_witness") {
+      assert.match(card, /<span class="text-neutral">· 0\.00 neutral<\/span>/, `${code}: neutral amber`);
+      assert.ok(code === "no_agreeing_witness" ? text.includes("▲ sell-side") && text.includes("3 min ago") : text.includes("none") && !text.includes("min ago"), `${code}: the sweep`);
+    }
+  }
+  assert.equal(u.leanReasonText("sweep_with_agreeing_witness", []), "fresh sweep, a witness agrees");
+  assert.equal(u.leanReasonText("sweep_with_agreeing_witness", ["H1", "M15", "NEWS"]), "fresh sweep, H1, M15 and NEWS agree");
+  assert.equal(u.leanReasonText("some_new_code"), "some new code", "an unknown code in its words");
+  assert.equal(u.leanReasonText(null), "—");
+});
+
+test("LQ9c a stale card: the late tone, no direction colour; the quorum with liquidity met and not met, informational", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const stale = cardOf(await page({ ...LIQ, card: u.CARD_STALE }));
+  clean(stale);
+  assert.match(stale, /class="chip [^"]*text-late">stale 22m</, "stale: the late (amber) tone");
+  assert.doesNotMatch(stale, /text-bull|text-bear|text-ok/, "no direction or ok colour while stale");
+  assert.ok(textOf(stale).includes("▲ +0.60 bullish") && stale.includes("14:38 UTC · "), "its values and time kept");
+  // Stale by this clock too: the contract's flag false but its time 16 minutes old.
+  const aged = cardOf(await page(LIQ, { now: LIQ.card.at_ms + 16 * 60_000 }));
+  assert.match(aged, /text-late">stale 16m</);
+  // Met: long (green), not met (no), both sides.
+  const met = qwOf(await page(LIQ));
+  const said = "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.";
+  assert.ok(met.includes(said), "informational, in plain text");
+  assert.doesNotMatch(met, /class="chip/, "no chip");
+  assert.match(met, /needs above<\/span><span[^>]*>0\.50</, "needs above: the mode's quorum_min, the check met reads");
+  assert.match(met, /met<\/span><span[^>]*><span class="text-bull">▲ long<\/span><\/span><span[^>]*>score <span class="mono text-bull">\+0\.17</, "met, with the score below in its bias's tone");
+  assert.ok(textOf(met).includes("▲ 0.67") && textOf(met).includes("▼ 0.33") && textOf(met).includes("· 0.14"));
+  const html = await page({ ...LIQ, quorum_with_liquidity: u.QUORUM_NOT_MET });
+  const not = qwOf(html);
+  assert.match(not, /met<\/span><span[^>]*>no</);
+  assert.match(not, /score <span class="mono text-neutral">\+0\.08</);
+  assert.equal((html.match(/No gate reads it\./g) ?? []).length, 1, "said once on the page");
+  const short = qwOf(await page({ ...LIQ, quorum_with_liquidity: { ...LIQ.quorum_with_liquidity, bias: "BEARISH", score: -0.2, long_met: false, short_met: true } }));
+  assert.match(short, /met<\/span><span[^>]*><span class="text-bear">▼ short</);
+  const both = qwOf(await page({ ...LIQ, quorum_with_liquidity: { ...LIQ.quorum_with_liquidity, long_met: true, short_met: true } }));
+  assert.match(both, /met<\/span><span[^>]*>both sides</);
 });
 
 test("LQ10 the states: intel views off, lens B off and at its floor, an old state, facts unavailable, market closed, no sweep, the error line", { skip: NO_UI_DEPS }, async () => {
