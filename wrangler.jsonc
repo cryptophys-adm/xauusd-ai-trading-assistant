@@ -148,6 +148,9 @@
     // The pattern calibration v2 fields (src/pattern-calibration.mjs, Track A PR 4): "on" | "off"; "off" strips
     // by_tf and open from the stored calibration on read (the pooled block and the factors are unchanged).
     "PATTERN_HORIZON_MODE": "on",
+    // The public track record's managed exit (src/public-track-record.mjs, owner 2026-11-23): "v3" (the Signal Ledger's
+    // own policy, no parity gate) | "v4" (the v4 replay, shown only on a passing parity check).
+    "PUBLIC_MANAGED_SOURCE": "v3",
     "MACRO_ROOM_ENABLED": "true",
     "MACRO_ROOM_MAX_CALLS_PER_HOUR": "30",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.
