@@ -26,11 +26,17 @@ export const SWEEP_SCORE_BARS_15M = 8;
 export const SWEEP_SCORE_ATR = 0.5;
 export const LIQUIDITY_STATE_KEY = "liquidity:state:v1";
 export const LIQUIDITY_SPIKE_KEY = "liquidity:spike:v1";
+/** The v1 marker (one per Worker): kept only so a reader can tell the old backfill ran; B2 writes v2 per identity. */
 export const LIQUIDITY_BACKFILL_KEY = "liquidity:backfill:v1";
+/** B2: the backfill's identity, its account_ref, source and the connection versions it copied. */
+export const backfillIdentity = (accountRef, source, versions) => `${accountRef}|${source}|${versions.join(",")}`;
+export const backfillKey = (identity) => `liquidity:backfill:v2:${identity}`;
+export const backfillFailedKey = (identity) => `liquidity:backfill:failed:v2:${identity}`;
 export const LIQUIDITY_STATE_FRESH_MS = 15 * 60_000;
 export const baselineKey = (accountRef) => `liquidity:baseline:${accountRef}`;
-/** Bound parameters per D1 statement stay under 100: 12 columns, 8 rows (archiveMinuteBars writes 20 rows of 5). */
-export const BROKER_ROWS_PER_STATEMENT = 8;
+/** D1 binds at most 100 parameters a statement: 13 columns x 7 rows = 91 (archiveMinuteBars writes 20 rows of 5). */
+export const BROKER_ROWS_PER_STATEMENT = 7;
+export const BROKER_BAR_COLUMNS = 13;
 const QUANTILES = 101;
 const M1 = 60_000, M15 = 15 * M1, HOUR = 3_600_000, DAY = 86_400_000, WEEK = 7 * DAY;
 
@@ -126,21 +132,44 @@ export async function archiveBrokerBars(db, { accountRef, legacy = false, source
 }
 
 /**
- * The first run's backfill (RFC §4.1): every corpus_bars row of the traded pair (mt5:%, never mt5macro:%) stored by
- * the active connection (its version), copied under that connection's account_ref. Once (KV marker). Never throws.
+ * The backfill (RFC §4.1; B2): the traded pair's corpus_bars rows (mt5:%, never mt5macro:%) of the active connection
+ * version and of every version already archived for the account_ref and source, each group copied under its own
+ * version (INSERT OR IGNORE: an archived minute is kept as it is). Once per identity (account_ref, source, versions;
+ * KV liquidity:backfill:v2:<identity>), so a new connection version backfills again. Returns the rows added. A failure
+ * writes no marker (the next step retries) and logs one liquidity_backfill_failed per identity. Never throws.
  */
-export async function backfillBrokerBars(env, { accountRef, legacy = false, source, digits = null, connectionVersion = null, now = Date.now() } = {}) {
+export async function backfillBrokerBars(env, { accountRef, legacy = false, source, digits = null, connectionVersion = null, now = Date.now(), log = null } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
   if (!db || !kv?.put || !accountRef || !source?.startsWith("mt5:")) return { status: "unavailable" };
+  let identity = null;
   try {
-    if (await kv.get(LIQUIDITY_BACKFILL_KEY)) return { status: "done" };
     await ensureLiquiditySchema(db);
-    const rows = ((await db.prepare("SELECT minute_ms AS t, o, h, l, c, tick_volume AS v, spread_points AS s FROM corpus_bars WHERE source = ? AND connection_version = ? ORDER BY minute_ms").bind(source, connectionVersion).all()).results) ?? [];
-    const bars = rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v), s: r.s == null ? null : Number(r.s) }));
-    const n = await archiveBrokerBars(db, { accountRef, legacy, source, digits, connectionVersion, bars, now });
-    await kv.put(LIQUIDITY_BACKFILL_KEY, JSON.stringify({ at: new Date(now).toISOString(), rows: n }));
-    return { status: "backfilled", rows: n };
-  } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 160) }; }
+    const archived = ((await db.prepare("SELECT DISTINCT connection_version AS v FROM broker_bars_1m WHERE account_ref = ? AND source = ? AND connection_version IS NOT NULL").bind(accountRef, source).all()).results ?? []).map((r) => Number(r.v));
+    const versions = [...new Set([...(finite(connectionVersion) ? [connectionVersion] : []), ...archived].filter(finite))].sort((a, b) => a - b);
+    if (!versions.length) return { status: "no_version" };
+    identity = backfillIdentity(accountRef, source, versions);
+    if (await kv.get(backfillKey(identity))) return { status: "done", identity };
+    const count = async () => Number((await db.prepare("SELECT COUNT(*) AS n FROM broker_bars_1m WHERE account_ref = ? AND source = ?").bind(accountRef, source).first())?.n) || 0;
+    const before = await count();
+    let sent = 0;
+    for (const v of versions) {
+      const rows = ((await db.prepare("SELECT minute_ms AS t, o, h, l, c, tick_volume AS v, spread_points AS s FROM corpus_bars WHERE source = ? AND connection_version = ? ORDER BY minute_ms").bind(source, v).all()).results) ?? [];
+      const bars = rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v), s: r.s == null ? null : Number(r.s) }));
+      sent += await archiveBrokerBars(db, { accountRef, legacy, source, digits, connectionVersion: v, bars, now });
+    }
+    const added = (await count()) - before;
+    await kv.put(backfillKey(identity), JSON.stringify({ at: new Date(now).toISOString(), versions, sent, added }));
+    return { status: "backfilled", identity, versions, sent, added };
+  } catch (e) {
+    const error = String(e?.message ?? e).slice(0, 160);
+    try {
+      if (identity && typeof log === "function" && !(await kv.get(backfillFailedKey(identity)))) {
+        await log("liquidity_backfill_failed", { error });
+        await kv.put(backfillFailedKey(identity), JSON.stringify({ at: new Date(now).toISOString() }), { expirationTtl: 30 * 86_400 });
+      }
+    } catch { /* the event is best effort */ }
+    return { status: "failed", error, ...(identity ? { identity } : {}) };
+  }
 }
 
 /** The archived bars of an account and source from `fromMs` (oldest first). */

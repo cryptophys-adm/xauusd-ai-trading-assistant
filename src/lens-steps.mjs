@@ -18,6 +18,8 @@ const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const parse = (s, d = null) => { try { return typeof s === "string" ? JSON.parse(s) : (s ?? d); } catch { return d; } };
 const MODES = new Set(LENS_MODES);
 export const LIQUIDITY_REPLAY_KEY = "liquidity:replay:v1";
+/** B2: the sweep replay once more after a backfill added rows, once per backfill identity. */
+export const liquidityReplayKey = (identity) => `liquidity:replay:v2:${identity}`;
 
 async function modeNow(env) {
   const pinned = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
@@ -54,14 +56,14 @@ export async function upsertReading(db, r, { lens, kind, mode = null, now = Date
  * server, symbol or digits: a reset, with an event), else the hours that ended since the last update recomputed from
  * their 8 weeks. Returns { baseline, reset }.
  */
-export async function updateBaseline(env, acct, { now = Date.now(), log = null } = {}) {
+export async function updateBaseline(env, acct, { now = Date.now(), log = null, rebuild = false } = {}) {
   const kv = env.SIGNAL_CACHE, db = env.DB;
   const identity = baselineIdentity(acct);
   let stored = parse(await kv.get(baselineKey(acct.accountRef)), null);
   const prevIdentity = parse(await kv.get(LIQUIDITY_STATE_KEY), null)?.identity ?? null;
   const eligible = eligibleMinutes(now);
   let reset = false;
-  if (!stored || stored.identity !== identity) {
+  if (!stored || stored.identity !== identity || rebuild) {
     const from = now - LIQUIDITY_BASELINE_WEEKS * WEEK;
     const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: from, toMs: Math.floor(now / HOUR) * HOUR, digits: acct.digits ?? undefined });
     reset = Boolean(prevIdentity && prevIdentity !== identity) || Boolean(stored && stored.identity !== identity);
@@ -107,11 +109,13 @@ export async function runLiquidityStep(env, { now = Date.now(), log = null } = {
     if (!acct) return { status: "no_account" };
     await ensureLiquiditySchema(db);
     await ensureLensReadingsSchema(db);
-    const backfill = await backfillBrokerBars(env, { ...acct, now });
+    const backfill = await backfillBrokerBars(env, { ...acct, now, log });
+    // B2: rows the backfill added rebuild the baseline once and replay the archive's sweeps once (per identity).
+    const added = backfill.status === "backfilled" && backfill.added > 0;
     const prev = await readLiquidityState(env);
-    const hourly = !prev || !finite(prev.baseline_at) || Math.floor(now / HOUR) !== Math.floor(prev.baseline_at / HOUR) || prev.identity !== baselineIdentity(acct);
+    const hourly = added || !prev || !finite(prev.baseline_at) || Math.floor(now / HOUR) !== Math.floor(prev.baseline_at / HOUR) || prev.identity !== baselineIdentity(acct);
     let baseline = hourly ? null : parse(await kv.get(baselineKey(acct.accountRef)), null), reset = false;
-    if (!baseline) ({ baseline, reset } = await updateBaseline(env, acct, { now, log }));
+    if (!baseline) ({ baseline, reset } = await updateBaseline(env, acct, { now, log, rebuild: added }));
     const mode = await modeNow(env);
     const lens = await readLensState(env, { now });
     const knobs = lensKnobs("liquidity", mode, { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: baseline.baseline });
@@ -128,17 +132,19 @@ export async function runLiquidityStep(env, { now = Date.now(), log = null } = {
     // Sweeps: each detected sweep (not excluded) is a reading; scored on the bars after it (eight 15m bars).
     const atr = atr15(bars);
     let replay = null;
-    if (!(await kv.get(LIQUIDITY_REPLAY_KEY))) replay = await replaySweeps(env, acct, { baseline, knobs, now, mode });
+    const replayKey = !(await kv.get(LIQUIDITY_REPLAY_KEY)) ? LIQUIDITY_REPLAY_KEY
+      : added && !(await kv.get(liquidityReplayKey(backfill.identity))) ? liquidityReplayKey(backfill.identity) : null;
+    if (replayKey) replay = await replaySweeps(env, acct, { baseline, knobs, now, mode, key: replayKey });
     else for (const s of sweeps) await upsertReading(db, { id: `sweep:${s.t}:${s.side}`, at_ms: s.t, side: s.side === "buy_side" ? -1 : 1, detail: { vol_pctl: s.vol_pctl, atr15: finite(atr) ? Math.round(atr * 1000) / 1000 : null } }, { lens: "liquidity", kind: "sweep", mode, now });
     const scored = await scorePendingSweeps(env, acct, { now });
-    return { status: "ok", baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, reset, backfill: backfill.status, available: facts.available, sweeps: sweeps.length, scored, ...(replay ? { replay } : {}) };
+    return { status: "ok", baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, reset, backfill: backfill.status, ...(added ? { backfill_added: backfill.added } : {}), available: facts.available, sweeps: sweeps.length, scored, ...(replay ? { replay } : {}) };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }
 }
 
 /** The day-one replay (RFC §7.2): every sweep of the archive's bars, recorded and scored at once. Once (KV marker). */
-async function replaySweeps(env, acct, { baseline, knobs, now, mode }) {
+async function replaySweeps(env, acct, { baseline, knobs, now, mode, key = LIQUIDITY_REPLAY_KEY }) {
   const db = env.DB;
   const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: now - 30 * DAY, digits: acct.digits ?? undefined });
   const sweeps = detectSweeps(bars.slice(-30_000), { baseline, lookbackMin: knobs.sweep_lookback_min, spikePctl: knobs.spike_pctl });
@@ -149,7 +155,7 @@ async function replaySweeps(env, acct, { baseline, knobs, now, mode }) {
     const outcome = scoreSweep(s, bars, { atr, now });
     if ((await upsertReading(db, { id: `sweep:${s.t}:${s.side}`, at_ms: s.t, side: s.side === "buy_side" ? -1 : 1, outcome, detail: { vol_pctl: s.vol_pctl, replay: true, atr15: finite(atr) ? Math.round(atr * 1000) / 1000 : null } }, { lens: "liquidity", kind: "sweep", mode, now })) === "added") added += 1;
   }
-  await env.SIGNAL_CACHE.put(LIQUIDITY_REPLAY_KEY, JSON.stringify({ at: new Date(now).toISOString(), sweeps: sweeps.length }));
+  await env.SIGNAL_CACHE.put(key, JSON.stringify({ at: new Date(now).toISOString(), sweeps: sweeps.length }));
   return { sweeps: sweeps.length, added };
 }
 

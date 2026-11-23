@@ -182,6 +182,12 @@ All fact names below pass the platform's prohibited filter `/trad(e|ing)\b|order
 - **Backfill.** The first run copies every `corpus_bars` row of the traded pair (`mt5:%`, never `mt5macro:%`) into the
   archive, under the account_ref of the connection that stored it. With `CORPUS_ORACLE_MODE = "shadow"` in production
   that is up to 14 days.
+  - B2 (2026-11-22): the backfill reads the active connection version and every version already archived for the
+    account_ref and source, and copies each group under its own version, 7 rows a statement (13 columns x 7 = 91 of
+    D1's 100 bound parameters; 8 rows bound 104 and every batch rolled back). It runs once per identity (account_ref,
+    source, versions: KV `liquidity:backfill:v2:<identity>`), so a new connection version backfills again. Rows it adds
+    rebuild the baseline once and replay the sweeps once (`liquidity:replay:v2:<identity>`); a failure writes no
+    marker, is retried at the next step and logs one `liquidity_backfill_failed` per identity.
 - **A deeper backfill needs the EA and the bridge (optional stage 2b).** The bridge sends only bars after the server's
   cursor (`readCorpus(..., { afterMs: corpusCursorMs })`), so older bars cannot ride in `corpus.json`. A later EA (1.23+) would
   write `omega/corpus_history.json` (pages of 1,440 bars before a `corpus_history_before_ms` the sync response names,
