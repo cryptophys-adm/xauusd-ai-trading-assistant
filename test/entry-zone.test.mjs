@@ -63,7 +63,7 @@ test("EZ1 entryZoneOf: a key zone's band clipped to 0.5 x ATR(1H) around the ent
   assert.equal(entryZoneOf({ dir: 1, entry: 4100, stop: 4101, atrH1: 4 }), null);
   assert.equal(entryZoneOf({ dir: 1, entry: 4100, stop: 4090, atrH1: 0 }), null);
   assert.equal(entryZoneOf({ dir: 0, entry: 4100, stop: 4090, atrH1: 4 }), null);
-  assert.equal(entryZoneMode({}), "on");
+  assert.equal(entryZoneMode({}), "edge");
   assert.equal(entryZoneMode({ ENTRY_ZONE_MODE: " OFF " }), "off");
 });
 
@@ -342,4 +342,57 @@ test("EZ12 v4 (the market replay) is unchanged by the zone: the same records wit
   const b = replayOmega4({ ...base, decisions: [decision({ ...trade, entry_low: 1997, entry_high: 2003 })] });
   assert.ok(a.records[key], "v4 has the record");
   assert.deepEqual(b.records, a.records);
+});
+
+// EZ1b (owner 2026-11-23, "setuju", after the 04:15 BUY): the zone's near edge rests the limit when the plan's level is
+// out of the placement band and the edge is inside it.
+const EDGE_BUY = { side: "BUY", action: "ENTER_LIMIT", entry: 3595.29, stop: 3551.05, tp1: 3687.75, feed_basis: 0, feed_basis_known: true, trading_mode: "scalp", entry_zone_low: 3590.37, entry_zone_high: 3600.21, entry_zone_edge: true };
+
+test("EZ13 the 04:15 case: the plan's level 0.353R from price (band 0.35), the zone's top 0.24R: the limit rests at the edge", () => {
+  const sym = { bid: 3610.7, ask: 3610.9, spread_points: 20 };
+  const r = place(EDGE_BUY, sym);
+  assert.equal(r.ok, true, r.code);
+  assert.deepEqual([r.edge, r.entry_basis, r.price, r.sl, r.tp], [true, "zone_edge", 3600.21, 3551.05, 3687.75]);
+  assert.deepEqual(r.edge_detail, { plan_entry: 3595.29, edge: 3600.21, away_r_plan: 0.353, away_r_edge: 0.242 });
+  assert.ok(r.rr >= 1, `rr ${r.rr}`);
+  assert.equal(r.rr, 1.781);
+  // Without the edge switch ("on": EZ1 only) the same moment is today's limit_out_of_band.
+  const { entry_zone_edge, ...on } = EDGE_BUY;
+  assert.equal(place(on, sym).code, "limit_out_of_band");
+  // An edge within the gap of price moves away from it by the gap (one spread), as zoneLimit does.
+  const close = place(EDGE_BUY, { bid: 3600.2, ask: 3600.3, spread_points: 20 });
+  assert.notEqual(close.edge, true, "the plan's level is inside the band here: today's placement");
+});
+
+test("EZ14 the edge out of the band too: limit_out_of_band; an edge paying under 1R: zone_rr; a SELL mirrors it", () => {
+  assert.equal(place(EDGE_BUY, { bid: 3620, ask: 3620.2, spread_points: 20 }).code, "limit_out_of_band", "the top 0.453R away");
+  const rr = place({ ...EDGE_BUY, tp1: 3640 }, { bid: 3610.7, ask: 3610.9, spread_points: 20 });
+  assert.deepEqual([rr.ok, rr.code], [false, "zone_rr"]);
+  // A SELL at 3604.71 (stop 3648.95), zone 3599.79-3609.63, the bid 0.353R under the level: its bottom rests the limit.
+  const sell = { side: "SELL", action: "ENTER_LIMIT", entry: 3604.71, stop: 3648.95, tp1: 3512.25, feed_basis: 0, feed_basis_known: true, trading_mode: "scalp", entry_zone_low: 3599.79, entry_zone_high: 3609.63, entry_zone_edge: true };
+  const s = place(sell, { bid: 3589.1, ask: 3589.3, spread_points: 20 });
+  assert.deepEqual([s.ok, s.edge, s.price, s.sl, s.tp], [true, true, 3599.79, 3648.95, 3512.25]);
+  assert.equal(s.edge_detail.away_r_edge, 0.242);
+});
+
+test("EZ15 planIntents: the edge order keeps the plan's stop and target, records entry_basis zone_edge and its note; the switch", () => {
+  const sig = { ...SIGNAL, entry_zone_edge: true };
+  // The plan's level (broker 4100.2) 0.46R from the ask, the zone's top (4101.2) 0.26R: the edge rests.
+  const r = plan({ signal: sig, executor: ex({ bid: 4102.3, ask: 4102.5 }) });
+  const it = r.intents.find((x) => x.kind === "place_limit");
+  assert.ok(it, codes(r).join(","));
+  assert.deepEqual([it.entry, it.sl, it.tp, it.entry_basis, it.zone_from], [4101.2, 4095.2, 4110.2, "zone_edge", 4100.2]);
+  const n = r.notes.find((x) => x.code === "limit_zone_edge");
+  assert.deepEqual(JSON.parse(n.detail), { plan_entry: 4100.2, edge: 4101.2, away_r_plan: 0.46, away_r_edge: 0.26 });
+  assert.ok(it.lot <= 0.15 + 1e-9, "the lot from the edge's risk, capped at tight_stop_max_lot_factor x the plan's");
+  // EZ1 only (no edge flag on the signal): today's limit_out_of_band.
+  const on = plan({ executor: ex({ bid: 4102.3, ask: 4102.5 }) });
+  assert.deepEqual(on.intents.filter((x) => x.kind === "place_limit"), []);
+  assert.ok(codes(on).includes("limit_out_of_band"));
+  // The switch: "edge" by default; the decision carries it to the signal only beside a zone.
+  assert.deepEqual([entryZoneMode({}), entryZoneMode({ ENTRY_ZONE_MODE: "on" }), entryZoneMode({ ENTRY_ZONE_MODE: "off" }), entryZoneMode({ ENTRY_ZONE_MODE: "x" })], ["edge", "on", "off", "edge"]);
+  const d = { ...DECISION({ entry_low: 4099, entry_high: 4101 }), entry_zone_mode: "edge" };
+  assert.equal(eaSignalFromDecision({ decision: d, now: NOW }).entry_zone_edge, true);
+  assert.equal("entry_zone_edge" in eaSignalFromDecision({ decision: DECISION({ entry_low: 4099, entry_high: 4101 }), now: NOW }), false);
+  assert.equal("entry_zone_edge" in eaSignalFromDecision({ decision: { ...DECISION({}), entry_zone_mode: "edge" }, now: NOW }), false, "no zone, no flag");
 });

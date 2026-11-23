@@ -26,7 +26,7 @@
 // It never feeds a room, a prompt or a decision. R multiples and times only reach Aether (executionReport's limit block).
 import { replayOmega4, minuteBars, decisionFromRow, DECISION_SQL, loadOmega4Context, windowBars, MAX_REPLAY_MINUTES, OMEGA4_SIM, OMEGA4_CHECKPOINT_KEY } from "./ledger-omega4.mjs";
 import { effectiveLimits } from "./account-spec.mjs";
-import { signalEntryZone, zoneLimit } from "./omega-engine.mjs";
+import { signalEntryZone, zoneLimit, zoneEdgeLimit } from "./omega-engine.mjs";
 import { LIMIT_KNOB_START, LIMIT_KNOB_BOUNDS, LIMIT_KNOB_FACTS, LIMIT_KNOBS_SOURCE, limitKnobs } from "./omega-limit-knobs.mjs";
 import { TRADING_MODES, ensureLedgerSchema, ledgerSeries, OMEGA_LIMIT_VERSION } from "./signal-ledger.mjs";
 
@@ -112,9 +112,15 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
       // zone_rr.
       let zoned = null;
       const zone = signalEntryZone(signal, 2);
-      if (zone && !((buy ? ask0 - level : level - bid0) > 0)) {
-        zoned = zoneLimit({ signal, sym: { ...sym, bid: bid0, ask: ask0, spread_points: Math.round(spread / OMEGA4_SIM.point), point: OMEGA4_SIM.point }, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
+      const zsym = { ...sym, bid: bid0, ask: ask0, spread_points: Math.round(spread / OMEGA4_SIM.point), point: OMEGA4_SIM.point };
+      const away0 = buy ? ask0 - level : level - bid0;
+      if (zone && !(away0 > 0)) {
+        zoned = zoneLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
         if (zoned.ok) level = zoned.price;
+      } else if (zone && signal.entry_zone_edge === true && away0 > knobsFor(signal.trading_mode).placement_band * planStop + 1e-9) {
+        // EZ1b (as the live limitPlacement): out of the band, the zone's near edge when it is inside it.
+        zoned = zoneEdgeLimit({ signal, sym: zsym, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
+        if (zoned?.ok) level = zoned.price;
       }
       // planIntents' own gates and sizing, as if filled at the limit: the symbol shows the level as the price it enters at.
       const probeSym = { ...sym, bid: buy ? r2(level - spread) : level, ask: buy ? level : r2(level + spread) };

@@ -159,7 +159,10 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
  */
 export const ENTRY_ZONE = Object.freeze({ band_max_atr: 0.5, structural_atr: 0.15, stop_share: 0.5 });
 export function entryZoneMode(env) {
-  return String(env?.ENTRY_ZONE_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+  const v = String(env?.ENTRY_ZONE_MODE ?? "edge").trim().toLowerCase();
+  // EZ1b (owner 2026-11-23, "setuju"): "edge" (default) is EZ1 plus the zone's near edge when the plan's own level is
+  // out of the placement band; "on" is EZ1 alone; "off" no zone at all.
+  return v === "off" ? "off" : v === "on" ? "on" : "edge";
 }
 /**
  * Pure: the entry zone { entry_low, entry_high } around `entry` (feed scale, 2 decimals), or null. With `band` [low,
@@ -419,7 +422,7 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
   // EZ1 (the switch travels in the inputs as modes.entryZone, as TP1-KZ's): the plan carries its entry zone.
-  const entryZone = modes?.entryZone !== "off" && entryZoneMode(env) === "on";
+  const entryZone = modes?.entryZone !== "off" && entryZoneMode(env) !== "off";
   const ez = entryZone ? { entryZone: true } : {};
   const base = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, ...ez }) : null;
   // TP1-KZ (owner 2026-11-23; the switch travels in the inputs as modes.tp1KeyZone): the strategy's plan takes TP1 at
