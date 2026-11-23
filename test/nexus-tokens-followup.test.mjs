@@ -55,12 +55,15 @@ test("NF4 Performance: the terminal \"not connected\" is off grey, \"connected\"
 });
 
 test("NF5 Omega: the engine switched off is off grey (as the header's READY / OFF), killed stays a fault", () => {
-  const omega = src("pages/Omega.tsx");
-  const toolbar = omega.slice(omega.indexOf("{/* Algo Trading Master Direct Toggle Button */}"), omega.indexOf("{/* MT5 Terminal VPS Execution Health Pill */}"));
-  assert.match(toolbar, /: "border-off-fill\/35 bg-off-fill\/8 text-off hover:bg-off-fill\/15"/);
-  assert.match(toolbar, /eEnabled \? "bg-ok-fill animate-pulse" : "bg-off-fill"/);
-  assert.doesNotMatch(toolbar, /fault/, "engine disabled is the owner's switch, not a fault");
-  assert.match(omega, /<Badge tone=\{c\.mode === "killed" \? "fault" : eEnabled \? "ok" : "off"\}>\n\s*\{c\.mode === "killed" \? "KILLED" : eEnabled \? "ARMED" : "IDLE"\}/);
+  // OM-LEAN: one state chip (lib/omegaLean.ts stateChip) and the header's Engine switch, in the status tones.
+  const omega = src("pages/Omega.tsx"), lean = src("lib/omegaLean.ts");
+  assert.match(lean, /if \(e\.env_enabled === false\) return \{ key: "engine_off_server", label: "Engine off · server", tone: "off" \};/);
+  assert.match(lean, /if \(e\.enabled !== true\) return \{ key: "engine_off", label: "Engine off", tone: "off" \};/);
+  assert.match(lean, /return \{ key: "killed", label: [^}]+, tone: "fault" \};/, "killed stays a fault");
+  const sw = omega.slice(omega.indexOf('role="switch"'), omega.indexOf("</button>", omega.indexOf('role="switch"')));
+  assert.match(sw, /e\.enabled === true \? "bg-ok-fill\/35" : "bg-off-fill\/25"/);
+  assert.match(sw, /e\.enabled === true \? "right-\[2px\] bg-ok" : "left-\[2px\] bg-off"/);
+  assert.doesNotMatch(sw, /fault/, "engine disabled is the owner's switch, not a fault");
   assert.match(src("lib/headerStatus.ts"), /code: "OFF", detail: null, tone: "off"/, "the header shows engine off grey too");
 });
 
@@ -87,10 +90,11 @@ test("NF6 dialogs in the tokens: confirm or approve ok cyan, a step to think twi
 });
 
 test("NF7 a dash for no data is muted, never in the bull or bear colour", () => {
+  // OM-LEAN (the reviewer's final ruling): Omega's P/L is neutral with a sign, "—" without a number, never green or red.
   const omega = src("pages/Omega.tsx");
-  assert.match(omega, /const pnlColor = \(v\?: number \| null\) => \(typeof v !== "number" \|\| !Number\.isFinite\(v\) \? T\.muted : v < 0 \? T\.bear : v > 0 \? T\.bull : T\.fg\);/);
-  assert.match(omega, /color=\{pnlColor\(x\?\.net\)\}/, "Today, 7 days, 30 days: \"—\" muted");
-  assert.doesNotMatch(omega, /x\.net < 0 \? T\.bear : T\.bull/);
+  assert.match(omega, /statsRow\("Today", st\.today\)/);
+  assert.match(omega, /<dd className="mono">\{signedMoney\(z\.net\)\}/, "Today, 7 days, 30 days");
+  assert.doesNotMatch(omega, /pnlColor|toneCls|x\.net < 0 \? T\.bear : T\.bull/);
   // A fixed bull or bear class on a cell whose value can be "—".
   const fixed = /className="[^"]*\btext-(?:bull|bear)\b[^"]*">\{[^}]*"—"[^}]*\}/;
   for (const [f, s] of ALL) assert.doesNotMatch(s, fixed, `${f}: a "—" in bull or bear`);
@@ -134,7 +138,9 @@ test("NF8 green is bullish only: no \"green\" or emerald as a state tone anywher
   assert.match(st, /items\.filter\(\(i\) => i\.tone === "fault"\)\.length, warn = items\.filter\(\(i\) => i\.tone === "late"\)\.length/);
   assert.match(src("components/SystemIssues.tsx"), /items\.filter\(\(i\) => i\.tone === "fault" \|\| i\.tone === "late"\)/);
   // The states the follow-up names, each in the status tones.
-  assert.match(src("components/OmegaWhy.tsx"), /<Badge tone=\{blocked \? "late" : "ok"\}>\{blocked \? "NOT ENTERING" : "READY \/ MANAGING"\}<\/Badge>/);
+  // OmegaWhy (OM-LEAN): one dot per note in the status tones (block fault, adjust late, info ok).
+  assert.match(src("components/OmegaWhy.tsx"), /const TONE: Record<Kind, "fault" \| "late" \| "ok"> = \{ block: "fault", adjust: "late", info: "ok" \};/);
+  assert.match(src("components/OmegaWhy.tsx"), /<Dot tone=\{TONE\[i\.kind\]\} \/>/);
   assert.match(src("components/LensPanel.tsx"), /<Badge tone=\{on \? "ok" : "off"\}>\{on \? "on" : "switched off"\}<\/Badge>/);
   assert.match(src("pages/Alerts.tsx"), /v\.enabled \? \{ tone: "ok" as const, text: "active" \}/);
   assert.match(src("pages/Model.tsx"), /<Badge tone=\{on \? "ok" : "late"\}>\{on \? `CONNECTED/);
@@ -173,7 +179,8 @@ test("NF10 sentence-case labels without letter spacing, in the label grey; acron
   assert.match(src("components/KeyLevels.tsx"), /<div className="text-\[11px\] font-medium text-muted">\{name\}<\/div>/);
   assert.match(src("components/OrganismCard.tsx"), /<div className="text-\[11px\] font-medium text-muted">Omega control<\/div>/);
   const omega = src("pages/Omega.tsx");
-  for (const t of ["BID (SELL)", "ASK (BUY)", "Type KILL to close every EA position and stop the EA", "Type LIVE to let Omega trade a real account"]) assert.ok(omega.includes(t), t);
+  // OM-LEAN removed Market Watch (BID (SELL), ASK (BUY)); the typed confirmations stay.
+  for (const t of ["Type KILL to close every EA position and stop the EA", "Type LIVE to let Omega trade a real account"]) assert.ok(omega.includes(t), t);
 });
 
 test("NF11 Title Case labels and panel titles outside #518's lines are sentence case; names and acronyms kept", () => {
@@ -182,7 +189,8 @@ test("NF11 Title Case labels and panel titles outside #518's lines are sentence 
   for (const t of ["title=\"Omega execution\"", "label=\"Avg slippage\"", "label=\"Fill quality\"", "title=\"Order route\"", "title=\"Volatility & sizing\"", "title=\"Signal vs fill\"", "label=\"Closed trades\"", "label=\"Win rate\"", "label=\"Max drawdown\"", "title=\"By trading mode\"", "title=\"Omega v4 parity with live\"", "title=\"Equity curve\"", "title={`Open positions", "title={`Recent intents (", "title={`Held back ("]) assert.ok(perf.includes(t), `Performance: ${t}`);
   assert.ok(perf.includes("Signal Ledger"), "a proper name stays");
   const omega = src("pages/Omega.tsx");
-  for (const t of ["Digits / point", "Tick size / val", "Volume min / max", "Volume step", "Stops level", "Profit ccy / contract", "Leverage / margin", "Freeze / trade mode", "Day start:", "Bid / ask"]) assert.ok(omega.includes(`>${t}<`), `Omega: ${t}`);
-  for (const t of ["Market Watch", "Navigator", "Expert Advisors", "Decision Engine", "MT5 Terminal"]) assert.ok(omega.includes(t), `Omega keeps the MT5 and Nexus names: ${t}`);
+  // OM-LEAN: the spec moved to Details → Symbol and account, in full words.
+  for (const t of ["Digits / point", "Tick size / value", "Volume min / max / step", "Stops / freeze level", "Profit currency / contract", "Leverage / margin", "Margin per lot", "Trade mode", "Day start", "Bid / ask"]) assert.ok(omega.includes(`>${t}<`), `Omega: ${t}`);
+  for (const t of ["Market Watch", "OmegaExecutor", "MT5", "Algo Trading"]) assert.ok(omega.includes(t), `Omega keeps the MT5 names: ${t}`);
   assert.ok(src("components/ExitConfirmModal.tsx").includes(">Open price<"));
 });
