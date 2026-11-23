@@ -1,13 +1,14 @@
 name: Validate Nexus Dashboard
 
-# Pull requests that touch the Nexus Worker or its UI: typecheck and build the React SPA, then
-# validate the Worker bundle with its static assets (no deploy, no secrets).
+# Pull requests that touch the Nexus Worker or its UI: typecheck and build the React SPA, render each page view over
+# its fixture variants, then validate the Worker bundle with its static assets (no deploy, no secrets).
 on:
   pull_request:
     paths:
       - "workers/xauusd-nexus-dashboard/**"
       - ".github/workflows/validate-nexus-dashboard.yml"
       - ".github/workflows/deploy-nexus-dashboard.yml"
+      - "test/fixtures/nexus-intel/**"
 
 permissions:
   contents: read
@@ -29,6 +30,12 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+
+      - name: Render check of the Nexus pages
+        # Each pure page view over its fixture (test/fixtures/nexus-intel), the not_found bodies, each path nulled and
+        # each array emptied: no throw, "NaN", "undefined" or "[object Object]" (ui/scripts/render-check.mjs).
+        working-directory: workers/xauusd-nexus-dashboard/ui
+        run: npm run render-check
 
       - name: Validate Worker bundle with assets
         run: npx --yes wrangler@4.156.2 deploy --dry-run --config workers/xauusd-nexus-dashboard/wrangler.jsonc

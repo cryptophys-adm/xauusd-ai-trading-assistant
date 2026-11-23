@@ -18,7 +18,9 @@ const src = (p) => ui(`src/${p}`);
 const DIRECTION_FILES = [
   "components/Stance.tsx", "components/CrowdLine.tsx", "components/MetricChips.tsx", "components/Post.tsx", "pages/Audit.tsx",
   "components/GlobalDecision.tsx", "components/SetupLifecycle.tsx", "components/ThreadsPanel.tsx", "pages/Correlations.tsx",
-  "components/charts.tsx", "components/PriceChart.tsx", "pages/Performance.tsx"
+  "components/charts.tsx", "components/PriceChart.tsx", "pages/Performance.tsx",
+  // Track C1: the Positioning & Liquidity panel, the first view of the page render check.
+  "components/LensPanel.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {
