@@ -1,0 +1,36 @@
+{
+  "status": "ok",
+  "enabled": true,
+  "decision": {
+    "decision_key": "OANDA:XAUUSD:15:1795444200000",
+    "bar_close": "2026-11-23T14:45:00.000Z",
+    "stance": "WAIT",
+    "bias": "NEUTRAL",
+    "trading_mode": "intraday",
+    "source": "council",
+    "quorum": {
+      "score": 0.12,
+      "bias": "NEUTRAL",
+      "long_share": 0.46,
+      "short_share": 0.21,
+      "neutral_share": 0.33,
+      "witnesses": 7,
+      "weight": 1.0,
+      "share_needed_above": 0.5
+    },
+    "rules": {
+      "quorum_min": 0.5,
+      "quorum_lean_band": 0.15
+    },
+    "key_levels": [
+      {
+        "low": 4097.5,
+        "high": 4098.9
+      },
+      {
+        "low": 4110,
+        "high": 4111
+      }
+    ]
+  }
+}

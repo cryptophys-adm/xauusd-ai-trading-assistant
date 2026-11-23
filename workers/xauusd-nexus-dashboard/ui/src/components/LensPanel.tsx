@@ -1,10 +1,7 @@
 import type { ReactNode } from "react";
-import { Layers } from "lucide-react";
-import { Badge, Empty, Panel, PollBody } from "./ui";
-import { get } from "../lib/api";
+import { Badge, Empty } from "./ui";
 import { ago } from "../lib/format";
 import type { Tone } from "../lib/tokens";
-import { usePoll } from "../lib/usePoll";
 
 // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md §10; owner 2026-11-20, breakglass live): one
 // agent, two lenses. Read-only, from the AI Worker's GET /api/lens: per lens the weight per mode and where it comes from
@@ -12,8 +9,9 @@ import { usePoll } from "../lib/usePoll";
 // it is at its floor, lens B's baseline, the CFTC report's freshness and the owner's switches. No price.
 //
 // Track C1: LensView is pure and null-safe (any body, any path null), so the page render check (ui/scripts/render-check.mjs)
-// renders it over test/fixtures/nexus-intel/lens.json and its variants; LensPanel is the polled wrapper. Every state is
-// a status tone (ok / late / off), never the bull green.
+// renders it over test/fixtures/nexus-intel/lens.json and its variants. Every state is a status tone (ok / late / off),
+// never the bull green. Track C2: the polled wrapper is gone; the Liquidity page (pages/Liquidity.tsx) reads /api/lens
+// once and passes it here (its "Positioning & Liquidity analyst" panel) and to its score panel.
 
 const MODES = ["scalp", "intraday", "swing", "range"] as const;
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
@@ -39,15 +37,19 @@ function NoLens() {
   return <Empty when="The ledger step writes it every 5 minutes.">No lens state yet</Empty>;
 }
 
-function Lens({ title, lens, on, extra }: { title: string; lens: any; on: boolean; extra: ReactNode }) {
+/** The decisive readings before a lens's floor can act (src/lens-policy.mjs LENS_SCORE_MIN_N). */
+const SCORE_MIN_N = 20;
+
+function Lens({ title, lens, on, extra, note = null }: { title: string; lens: any; on: boolean; extra: ReactNode; note?: ReactNode }) {
   const s = lens?.score;
   return (
     <div className="glass-inner p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <span className="text-[12.5px] font-semibold text-slate-100">{title}</span>
-        <span className="flex gap-1.5">
+        <span className="flex flex-wrap gap-1.5">
           <Badge tone={on ? "ok" : "off"}>{on ? "on" : "switched off"}</Badge>
           {lens?.floored === true ? <Badge tone="late">at floor</Badge> : null}
+          {note}
         </span>
       </div>
       <div className="grid grid-cols-4 gap-2 text-[11px]">
@@ -63,9 +65,9 @@ function Lens({ title, lens, on, extra }: { title: string; lens: any; on: boolea
         })}
       </div>
       <div className="mt-2 text-[11px] text-slate-400">
-        Score {pc(s?.share)} over {count(s?.n)} readings ({count(s?.hits)} hit, {count(s?.misses)} miss) · floor {pc(s?.score_floor)} · window {num(s?.score_window) ? s.score_window : "—"}
+        Score {pc(s?.share)} · n {count(s?.n)} / {SCORE_MIN_N} · {count(s?.hits)} hit · {count(s?.misses)} miss · floor {pc(s?.score_floor)}
       </div>
-      <div className="mt-1 text-[11px] text-slate-400">{extra}</div>
+      <div className="mt-1 text-[11px] text-slate-400">{extra}{on ? null : <div className="mt-1">Switched off by the owner.</div>}</div>
     </div>
   );
 }
@@ -106,25 +108,16 @@ export function LensHeader({ d }: { d: any }) {
   return <Badge tone="plain">{mode ? `${mode} mode` : "Mode unknown"}{pulled ? ` · Aether ${ago(pulled)}` : " · anchors"}</Badge>;
 }
 
-/** The two lenses from a /api/lens body. Pure and null-safe: a body without lens state reads "No lens state yet". */
-export function LensView({ d }: { d: any }) {
+/**
+ * The two lenses from a /api/lens body. Pure and null-safe: a body without lens state reads "No lens state yet".
+ * `liquidityNote` adds chips to lens B's (the Liquidity page's "Omega ignores it after 15m").
+ */
+export function LensView({ d, liquidityNote = null }: { d: any; liquidityNote?: ReactNode }) {
   if (!lensReady(d)) return <NoLens />;
   return (
     <div className="grid gap-3 lg:grid-cols-2">
       <Lens title="Lens A · Positioning (CFTC)" lens={d.positioning} on={d.switches?.positioning_enabled !== false} extra={<CotLine p={d.positioning} />} />
-      <Lens title="Lens B · Liquidity (broker M1)" lens={d.liquidity} on={d.switches?.liquidity_enabled !== false} extra={<BaselineLine l={d.liquidity} />} />
+      <Lens title="Lens B · Liquidity (broker M1)" lens={d.liquidity} on={d.switches?.liquidity_enabled !== false} extra={<BaselineLine l={d.liquidity} />} note={liquidityNote} />
     </div>
-  );
-}
-
-export function LensPanel() {
-  const poll = usePoll(() => get("/api/lens"), 120_000);
-  const d: any = poll.data;
-  return (
-    <Panel title="Positioning & Liquidity" icon={<Layers className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live
-      hint="One analyst, two lenses: the CFTC positioning report (a small Decision Engine witness) and the broker's own tick volume and spread (a spread-spike filter, liquidity key levels and the councils' measured reasons). Each weight moves per mode within its doctrine bound; a poor score drops it to the floor until Aether sends a newer value. Neither lens ever opens a position."
-      right={<LensHeader d={d} />}>
-      <PollBody poll={poll} skeleton={3} empty={!lensReady(d) && <NoLens />}>{() => <LensView d={d} />}</PollBody>
-    </Panel>
   );
 }

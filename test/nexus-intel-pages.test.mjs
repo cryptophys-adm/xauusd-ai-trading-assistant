@@ -70,16 +70,13 @@ test("IP4 --self-test fails: it catches NaN, undefined, [object Object] and a th
   assert.doesNotMatch(r.stderr, /MISSED/);
 });
 
-test("IP5 LensPanel: a pure null-safe LensView, the polled wrapper (120 s, live tag, PollBody, the empty state), mounted on Strategy", () => {
+test("IP5 LensPanel.tsx: the pure null-safe LensView (and LensHeader); its polled wrapper gone with Track C2 (the Liquidity page reads /api/lens)", () => {
   const s = ui("src/components/LensPanel.tsx");
-  assert.match(s, /^export function LensView\(\{ d \}: \{ d: any \}\) \{\n  if \(!lensReady\(d\)\) return <NoLens \/>;/m);
-  assert.match(s, /const poll = usePoll\(\(\) => get\("\/api\/lens"\), 120_000\);/);
-  assert.match(s, /<Panel title="Positioning & Liquidity" [^\n]* poll=\{poll\} live\n/);
-  assert.match(s, /<PollBody poll=\{poll\} skeleton=\{3\} empty=\{!lensReady\(d\) && <NoLens \/>\}>\{\(\) => <LensView d=\{d\} \/>\}<\/PollBody>/);
+  assert.match(s, /^export function LensView\(\{ d, liquidityNote = null \}: \{ d: any; liquidityNote\?: ReactNode \}\) \{\n  if \(!lensReady\(d\)\) return <NoLens \/>;/m);
   assert.match(s, /<Empty when="The ledger step writes it every 5 minutes\.">No lens state yet<\/Empty>/);
   assert.match(s, /export const lensReady = \(d: any\): boolean => d != null && typeof d === "object" && d\.status === "ok";/);
   assert.doesNotMatch(s, /No data yet/);
-  const view = s.slice(s.indexOf("function Lens("), s.indexOf("export function LensPanel"));
-  assert.doesNotMatch(view, /usePoll|useState|useEffect|get\(/, "the view is pure");
-  assert.equal((ui("src/pages/Strategy.tsx").match(/<LensPanel \/>/g) ?? []).length, 1, "still mounted once on Strategy");
+  assert.doesNotMatch(s, /export function LensPanel|usePoll|useState|useEffect|get\(/, "pure: no poll, no state, no read");
+  assert.doesNotMatch(ui("src/pages/Strategy.tsx"), /LensPanel/, "no longer on the Strategy page");
+  assert.match(ui("src/pages/Liquidity.tsx"), /<LensView d=\{lens\} liquidityNote=\{/, "on the Liquidity page");
 });
