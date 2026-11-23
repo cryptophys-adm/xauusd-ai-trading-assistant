@@ -19,6 +19,11 @@ const CEILING = new Set(["signals.observe", "reports.publish", "memory.recall", 
 // XAUUSD_CEILING (platform V3, live 2026-11-17): the moderator alone may also read its handed-off proposals' state.
 // Platform HAIC H3e: nexus-teacher alone may record the owner's corrections (src/owner-corrections.mjs).
 const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"] });
+// DNA-1 (2026-11-22): genes the platform registered before this repository runs their code. Platform PF1 (migration
+// 0087) registers hud-mizan-oracle; declaring it here keeps the census free of undeclared_agent until B27 wires it.
+// Each is idle: not in HUD_PLATFORM_IDS and named nowhere in src/, so nothing reports as it. B27 moves
+// hud-mizan-oracle into the code set, and this list must be empty after B27.
+const DECLARED_IDLE = Object.freeze(["hud-mizan-oracle"]);
 
 function sourceFiles(dir) {
   return readdirSync(new URL(dir, root), { recursive: true }).map(String).filter((f) => /\.(mjs|ts)$/.test(f) && !f.endsWith(".d.mts")).map((f) => join(dir, f));
@@ -40,7 +45,12 @@ test("D1. one organ per Worker of this repository, named as its wrangler config 
 
 test("D2. the agents are exactly those that report to the platform kernel, within the external ceiling", () => {
   const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID].sort();
-  assert.deepEqual(ai.agents.map((a) => a.id).sort(), code);
+  assert.deepEqual(ai.agents.map((a) => a.id).sort(), [...code, ...DECLARED_IDLE].sort());
+  // A declared-idle gene has no code path: no kernel id in HUD_PLATFORM_IDS and no mention anywhere in src/.
+  for (const id of DECLARED_IDLE) {
+    assert.ok(!code.includes(id) && !Object.values(HUD_PLATFORM_IDS).includes(id), `${id}: idle, not in the code set`);
+    for (const f of sourceFiles("src")) assert.ok(!read(f).includes(id), `${id} is named in ${f}: move it out of DECLARED_IDLE (B27)`);
+  }
   for (const a of ai.agents) {
     assert.equal(a.voter, false, `${a.id}: no council seat for an external organ`);
     assert.ok(a.tier_max <= 1, a.id);
