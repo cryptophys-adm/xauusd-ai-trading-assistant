@@ -225,6 +225,8 @@ import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { pullLearnedPack, shadowCandidates, packStatus } from "./aether-pack.mjs";
 import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { runLensStep, lensStatus, pushLensReport } from "./lens-steps.mjs";
+import { intelViewsOn, readStrategyMemo } from "./intel-memo.mjs";
+import { readLiquidityView } from "./liquidity-view.mjs";
 import { runCotStep } from "./positioning-lens.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
@@ -2018,6 +2020,9 @@ function parseJsonText(value: unknown, fallback: unknown): unknown {
 
 const LOCAL_LANE_FRESH_MS = 2 * 60 * 60 * 1000;
 
+/** The Nexus Intelligence views (Track B) behind INTEL_VIEWS: B8 GET /api/liquidity. */
+const INTEL_VIEW_PATHS: readonly string[] = ["/api/liquidity"];
+
 /**
  * Read-only API for the Nexus dashboard (nexus.cryptophys.work proxies /api/*).
  * Exposes analysis summaries only: no secrets, no write operations.
@@ -2657,6 +2662,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // source, the score, the floor, lens B's baseline, the COT freshness and the owner's switches. No price.
     try { return dashboardJson({ status: "ok", ...(await lensStatus(env)) }); }
     catch (error) { console.error("lens_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
+  }
+  if (INTEL_VIEW_PATHS.includes(url.pathname)) {
+    // The Nexus Intelligence views (Track B): B8 the liquidity view (src/liquidity-view.mjs). Nexus only (behind
+    // Cloudflare Access), with prices labelled by scale; read-only. The strategy memo is read once for the views
+    // (readStrategy, 60 s per isolate); INTEL_VIEWS = "off" answers 404.
+    if (!intelViewsOn(env)) return dashboardJson({ status: "not_found", reason: "intel_views_off" }, 404);
+    const strategy = await readStrategyMemo(env);
+    if (url.pathname === "/api/liquidity") {
+      try { return dashboardJson({ status: "ok", ...(await readLiquidityView(env, { strategy })) }); }
+      catch (error) { console.error("liquidity_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "liquidity_unavailable" }, 500); }
+    }
   }
   if (url.pathname === "/api/corpus/status") {
     // Corpus Oracle phase 1 (owner 2026-11-11, src/corpus-oracle.mjs): the broker corpus from Omega's

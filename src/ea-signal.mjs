@@ -30,6 +30,9 @@ import { gridAdaptMode, applyGridChoice, readGridChoices } from "./grid-adapt.mj
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { readBrokerTrigger, brokerTriggerFields } from "./broker-trigger.mjs";
 import { readCorpusBars } from "./corpus-oracle.mjs";
+// B8: feedBasis lives in src/feed-basis.mjs (pure, for the read views); re-exported here for its callers.
+import { feedBasis } from "./feed-basis.mjs";
+export { feedBasis };
 import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
@@ -152,20 +155,6 @@ export function entryZoneFields(t, side) {
   if (![low, high, t?.entry, t?.stop].every(isPrice) || !(low < high) || !(low <= t.entry && t.entry <= high)) return {};
   if (buy ? !(t.stop < low) : !(high < t.stop)) return {};
   return { entry_zone_low: low, entry_zone_high: high };
-}
-
-/**
- * Pure: the broker's price minus the feed's, the median over the feed's closed 5m bars matched with the
- * broker's M1 bar closing at the same minute (at least 3 of them), or null. Omega moves the key levels,
- * which are on the feed's scale, onto the broker's with it.
- */
-export function feedBasis(brokerM1 = [], feedCandles = []) {
-  const closeAt = new Map((brokerM1 || []).filter((b) => Number.isFinite(b?.t) && isPrice(b?.c)).map((b) => [b.t + 60_000, b.c]));
-  const offs = (feedCandles || []).map((c) => ({ ms: Date.parse(String(c?.close_time ?? "")), close: c?.close })).filter((c) => Number.isFinite(c.ms) && isPrice(c.close) && closeAt.has(c.ms)).map((c) => closeAt.get(c.ms) - c.close).sort((a, b) => a - b);
-  if (offs.length < 3) return null;
-  const mid = Math.floor(offs.length / 2);
-  const median = offs.length % 2 ? offs[mid] : (offs[mid - 1] + offs[mid]) / 2;
-  return Math.round(median * 100) / 100;
 }
 
 /**
