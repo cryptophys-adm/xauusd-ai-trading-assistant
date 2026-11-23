@@ -112,7 +112,7 @@ export function fastNoise(bars, { now, knobs = PM_FAST_1M.intraday } = {}) {
     if (goldPausedAt(ms)) return { code: "market_paused", text: "gold is not trading" };
     if (inRollover(ms)) return { code: "rollover", text: "the rollover quarantine 21:55-22:15 UTC" };
     const d = new Date(ms);
-    if (d.getUTCHours() === 23 && d.getUTCMinutes() < knobs.reopen_min) return { code: "reopen", text: "the reopen quarantine 23:00-23:05 UTC" };
+    if (d.getUTCHours() === 23 && d.getUTCMinutes() < knobs.reopen_min) return { code: "reopen", text: `the reopen quarantine 23:00-23:${String(knobs.reopen_min).padStart(2, "0")} UTC` };
     for (let k = 1; k <= knobs.reopen_min; k++) if (goldPausedAt(ms - k * M1)) return { code: "reopen", text: `the first ${knobs.reopen_min} minutes after the reopen` };
   }
   const lateAt = bars.filter((b) => finite(b.r) && b.r - (b.t + M1) > knobs.late_bar_ms).reduce((m, b) => Math.max(m, b.r), -Infinity);
@@ -256,7 +256,7 @@ export const PM_FAST_RETRY_MS = 5_000;
 export async function runFastProtect(env, { executor, openIntents = null, gates = null, spike = false, now = Date.now() } = {}) {
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
-  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => Number(p?.ticket) > 0 && (p.side === "BUY" || p.side === "SELL") && typeof p.intent_id === "string" && p.intent_id.startsWith("open:"));
+  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => Number(p?.ticket) > 0 && (p.side === "BUY" || p.side === "SELL") && typeof p.intent_id === "string" && (p.intent_id.startsWith("open:") || /^re:\d+:\d+(:\d+)?$/.test(p.intent_id)));
   if (!positions.length) return { status: "no_positions" };
   const want = Math.floor(now / M1) * M1 - M1;
   const memo = MEMO.get(db) ?? { done: null, retry: 0 };

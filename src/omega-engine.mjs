@@ -27,6 +27,7 @@ import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./liquidity-lens.mjs";
 import { profitLockGateOn, gateBreakEven, gateAtrM5, stopInProfit, gateText, GATE_UNMEASURED, PROFIT_LOCK_GATE_MODES } from "./profit-lock-gate.mjs";
 import { isFastId, PM_FAST_MODES } from "./pm-fast.mjs";
+import { reentryOn, isReentryId, REENTRY_MODES, REENTRY_RULE, REENTRY_1M } from "./reentry-1m.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -81,7 +82,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // antisipasi TP lebih cepat dan mengurangi kerugian"; src/pm-fast.mjs): "on", the fast TP anticipation and loss
   // reduction on closed broker M1 bars; "off", today's engine byte for byte. The owner's switch only; Aether's policy
   // never writes it.
-  pm_fast_1m: "on"
+  pm_fast_1m: "on",
+  // RE1, a 1m re-entry after a profit-lock stop (owner 2026-11-23: "Live: gerbang + re-entry (Rekomendasi)";
+  // src/reentry-1m.mjs): "on", one re-entry of a setup a break-even or lock stop closed, when a closed broker 1m bar
+  // closes back beyond the lock; "off", today's engine byte for byte. The owner's switch only; Aether's policy never
+  // writes it.
+  reentry_1m: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -201,6 +207,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
     if (typeof body.pm_fast_1m !== "string" || !PM_FAST_MODES.includes(body.pm_fast_1m)) return { error: "pm_fast_1m must be 'on' or 'off'" };
     out.pm_fast_1m = body.pm_fast_1m;
   }
+  if (body.reentry_1m !== undefined) {
+    if (typeof body.reentry_1m !== "string" || !REENTRY_MODES.includes(body.reentry_1m)) return { error: "reentry_1m must be 'on' or 'off'" };
+    out.reentry_1m = body.reentry_1m;
+  }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
     if (v == null) return { error: "change_thresholds must be 'off' or a comma-separated list of conf, tpw, limit, skip, stance" };
@@ -258,7 +268,7 @@ export function isOmegaOwned(p) {
   if (p.delegated === true) return true;
   if (p.source === "omega") return true;
   if (p.magic === 920200) return true;
-  if (typeof p.intent_id === "string" && p.intent_id.startsWith("open:")) return true;
+  if (typeof p.intent_id === "string" && (p.intent_id.startsWith("open:") || isReentryId(p.intent_id))) return true;
   if (p.source === "manual" || p.source === "external" || p.magic === 0) return false;
   // Fallback for legacy unit tests without source/magic annotations
   return true;
@@ -1228,7 +1238,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {} } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -1466,6 +1476,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
   }
   if (leg?.deleted === true) id = leg.id;
+  // RE1 (owner 2026-11-23, src/reentry-1m.mjs): a re-entry trigger of the sync's 1m step (`reentry1m`) on this side is an
+  // open of its own (id re:<ticket>:<minute>) through every gate below, taken only while the signal's own entry cannot
+  // be (already opened, expired or too old): the latest decision's fresh entry goes first. "off": never.
+  const decided0 = finite(signal.decided_ms) ? signal.decided_ms : issued;
+  const re1 = reentry1m && reentryOn(S) && !leg && reentry1m.side === side && isReentryId(reentry1m.id) && positive(reentry1m.sl) && positive(reentry1m.tp)
+    && (recent.has(id) || positions.some((p) => p.intent_id === id) || now >= signal.expires_ms || now - decided0 > S.max_signal_age_ms) ? reentry1m : null;
+  if (re1) id = re1.id;
   const sameSide = [...positions, ...pendingKept.map(pendingAsPosition)].filter((p) => p.side === side);
   const decided = finite(signal.decided_ms) ? signal.decided_ms : issued;
   const closing = intents.filter((it) => it.kind === "close").length;
@@ -1498,13 +1515,15 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     [accountSpec?.review_pending === true, "profile_review_pending"],
     [eaGate === true && !versionAtLeast(executor.executor?.version ?? null, EXECUTOR_ENTRY_MIN_VERSION), "ea_outdated"],
     [!finite(issued) || !finite(signal.expires_ms), "bad_signal"],
-    [now >= signal.expires_ms, "expired"],
-    [now - decided > S.max_signal_age_ms, "signal_too_old"],
+    [!re1 && now >= signal.expires_ms, "expired"],
+    [!re1 && now - decided > S.max_signal_age_ms, "signal_too_old"],
     [signal.blackout === true, "blackout"],
     [signal.paused === true || control?.mode === "paused", "paused"],
     [account.trade_mode !== "demo" && S.live_armed !== true, "live_not_armed"],
     [recent.has(id) || positions.some((p) => p.intent_id === id), "already_opened"],
     [positions.length - closing + pendingKept.length >= S.max_positions || sameSide.length >= S.max_positions, "max_positions"],
+    // RE1: a re-entry also counts against the platform's cap of open positions and pending orders (ADR-0020 A7).
+    [re1 != null && positions.length - closing + pendingKept.length >= PLATFORM_MAX_OPEN, "platform_cap"],
     [!finite(sym.spread_points) || sym.spread_points > S.max_spread_points, "spread"],
     // Lens B (RFC §5.1): no new entry while the live spread is at or above the mode's spread_widen times the hour of
     // the week's median bar spread; the absolute gate above stays. It also holds a limit's placement.
@@ -1553,7 +1572,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // "place"; "council": the council's measured choice (enter_market, place_limit or skip), today's market path when it
   // is silent. The deterministic refusals of a limit come first, so no council is asked for an order that cannot rest.
   let route = "market", lim = null;
-  if (limitMode && !leg) {
+  if (limitMode && !leg && !re1) {
     lim = limitPlacement({ signal, sym, account, planStopDist, minDist, changes: changeTokens(S) });
     const council = entryCouncil && entryCouncil.id === id ? entryCouncil : null;
     const request = () => {
@@ -1597,7 +1616,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // 5m ATR), never wider than the plan's and never closer than 0.5 5m ATR (or the stop level plus 3
   // spreads). The target stays the plan's, so the RRR rises; the lot is capped below.
   let tight = false;
-  if (route === "market" && signal.action !== "ENTER_LIMIT" && signal.m5_source === "broker" && positive(signal.m5_atr) && positive(buy ? signal.m5_swing_low : signal.m5_swing_high)) {
+  if (!re1 && route === "market" && signal.action !== "ENTER_LIMIT" && signal.m5_source === "broker" && positive(signal.m5_atr) && positive(buy ? signal.m5_swing_low : signal.m5_swing_high)) {
     const spreadPx = (finite(sym.spread_points) ? sym.spread_points : 0) * sym.point;
     const buffer = Math.max(2 * spreadPx, 0.1 * signal.m5_atr);
     const px = buy ? sym.ask : sym.bid;
@@ -1610,7 +1629,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // stop-outs. The target moves with it, so the trade keeps the plan's reward-to-risk that the
   // Decision Engine checked (audit 2026-11-11: a widened stop with the plan's target cut the R).
   // A 5m stop keeps its own floor above.
-  if (!tight && S.adaptive_volatility !== false && positive(sym.atr_value)) {
+  if (!tight && !re1 && S.adaptive_volatility !== false && positive(sym.atr_value)) {
     const minAtrDist = sym.atr_value * 0.75;
     if (stopDist < minAtrDist) {
       stopDist = roundTo(minAtrDist, sym.digits);
@@ -1630,7 +1649,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // The sizing of an entry at `price` with its stop `sl` (today's formula and every hard guard), or null with its note.
   const pctOf = (money) => roundTo((money / account.equity) * 100, 2);
   const label = limits ? (PROFILES[limits.profile]?.label ?? limits.profile) : null;
-  const sizeEntry = (price, sl, { zoneMoved = false } = {}) => {
+  const sizeEntry = (price, sl, { zoneMoved = false, maxRisk = null } = {}) => {
     const lossPerLot = (Math.abs(price - sl) / sym.tick_size) * sym.tick_value;
     let volume = floorToStep((account.equity * S.risk_pct / 100) / lossPerLot, sym.volume_step);
     if (tight || zoneMoved) {
@@ -1669,6 +1688,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     const budgetVolume = floorToStep(budget / lossPerLot, sym.volume_step);
     if (budgetVolume < sym.volume_min) { note("daily_risk_budget"); return null; }
     if (volume > budgetVolume) { volume = budgetVolume; note("lot_capped_daily_budget"); }
+    // RE1: a re-entry risks at most the original trade's money risk (less the original's loss: 1.0R over the setup).
+    if (finite(maxRisk)) {
+      const capVolume = maxRisk > 0 ? floorToStep(maxRisk / lossPerLot, sym.volume_step) : 0;
+      if (!(capVolume >= sym.volume_min)) { note("reentry_risk_cap", `the minimum lot ${sym.volume_min} risks ${roundTo(lossPerLot * sym.volume_min, 2)}, over the setup's ${roundTo(maxRisk, 2)}`); return null; }
+      if (volume > capVolume) { volume = capVolume; note("lot_capped_reentry"); }
+    }
     return { volume, lossPerLot };
   };
   // What every entry records: its strategy agent, the grid, the volatility regime, the mode, R and probation.
@@ -1700,6 +1725,34 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     }
     return it;
   };
+
+  if (re1) {
+    // RE1: at market, the trigger's stop (the pullback's extreme plus its buffer) and the original TP1, checked again at
+    // the live price: the broker's stop distance, no wider than the original stop, at least 1R to TP1 (TP1-KZ).
+    const price = buy ? sym.ask : sym.bid;
+    const sl = roundTo(re1.sl, sym.digits), tp = roundTo(re1.tp, sym.digits);
+    const sd = buy ? price - sl : sl - price, td = buy ? tp - price : price - tp;
+    if (!(sd > minDist) || !(td > minDist)) { note("reentry_stops_level", `stop ${sl}, target ${tp} at ${price}`); return done(); }
+    if (positive(re1.max_stop_dist) && sd > re1.max_stop_dist + sym.point / 2) { note("reentry_stop_wide", `the stop distance ${roundTo(sd, sym.digits)} at ${price} is wider than the original ${re1.max_stop_dist}`); return done(); }
+    if (!(td + 1e-9 >= REENTRY_1M.min_r * sd)) { note("reentry_reward", `TP1 ${tp} pays ${roundTo(td / sd, 2)}R at ${price}, under ${REENTRY_1M.min_r}R`); return done(); }
+    const sized = sizeEntry(price, sl, { maxRisk: finite(re1.max_risk) ? re1.max_risk : 0 });
+    if (!sized) return done();
+    const { volume, lossPerLot } = sized;
+    const it = decorate({ id, kind: "open", side, volume, entry: price, sl, tp, signal_issued_ms: finite(re1.issued_ms) ? re1.issued_ms : issued, reason: REENTRY_RULE, stop_source: "reentry_1m", trigger_source: "broker_m1" }, price, sl, volume, lossPerLot);
+    // The setup's own: its strategy agent (its exits), its mode (the ladder's step), the ticket it re-enters and the lock.
+    if (typeof re1.strategy === "string" && re1.strategy) {
+      it.strategy = re1.strategy;
+      const c = parseConfidences(signal.agent_conf)[re1.strategy]?.[buy ? "long" : "short"];
+      if (finite(c)) it.agent_conf = c; else delete it.agent_conf;
+    }
+    if (["scalp", "intraday", "swing", "range"].includes(re1.mode)) it.mode = re1.mode;
+    it.reentry_of = re1.ticket;
+    it.reentry_lock = re1.lock;
+    if (typeof re1.lock_rule === "string") it.reentry_rule = re1.lock_rule;
+    note("reentry_1m", `re-entering #${re1.ticket} ${side} at ${price}: stop ${sl}, TP1 ${tp}`);
+    intents.push(it);
+    return done();
+  }
 
   if (route === "limit") {
     // The limit (RFC §3): the stop and the target keep their distances from the limit price (the adaptive stop above

@@ -411,10 +411,12 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   // The three fixture sets, outputs only.
   const names = text.split("\n").map((l) => l.slice(0, l.indexOf("=")));
   assert.ok(names.filter((n) => n.startsWith("market/hand/")).length >= 60);
-  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records", "fast/v4/cut_loss/records", "fast/v4/tp_anticipation/records"]);
+  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records", "fast/v4/cut_loss/records", "fast/v4/tp_anticipation/records", "re/v4/breakeven_reentry/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m"]);
+  // The 1m re-entry (RE1) is on by default: "off" starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, reentry_1m: "off" }), ["reentry_1m=off"]);
   // The 1m fast-protect layer (PM-1M) is on by default: "off" starts a new era.
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, pm_fast_1m: "off" }), ["pm_fast_1m=off"]);
   // The change thresholds (CH1) are all on by default: a token turned off starts a new era.

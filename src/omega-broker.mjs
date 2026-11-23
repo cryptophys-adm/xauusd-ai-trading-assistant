@@ -34,6 +34,7 @@ import { readCorpusBars, CORPUS_READ_MAX } from "./corpus-oracle.mjs";
 import { gatesFor, gateReadSince, gateMode, profitLockGateOn, PROFIT_LOCK_GATE, GATE_LOOKBACK_MIN } from "./profit-lock-gate.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
 import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
+import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -115,7 +116,7 @@ export const engineEnvEnabled = (env) => env?.OMEGA_ENGINE_ENABLED === "true";
 
 /** The strategy agent each open position's open intent recorded ({ intent id: agent }); {} when none can be read. */
 export async function positionAgents(db, executor) {
-  const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter((x) => typeof x === "string" && x.startsWith("open:")))].slice(0, 50);
+  const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter(isEntryIntentId))].slice(0, 50);
   if (!ids.length) return {};
   try {
     const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
@@ -129,7 +130,7 @@ export async function positionAgents(db, executor) {
 
 /** Each open position's mode at entry and its stop distance there ({ intent id: { mode, r_dist } }), for the ladder. */
 export async function positionMeta(db, executor) {
-  const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter((x) => typeof x === "string" && x.startsWith("open:")))].slice(0, 50);
+  const ids = [...new Set((Array.isArray(executor?.positions) ? executor.positions : []).map((p) => p?.intent_id).filter(isEntryIntentId))].slice(0, 50);
   if (!ids.length) return {};
   try {
     const rows = (await db.prepare(`SELECT id, payload FROM omega_intents WHERE kind IN ('open', 'place_limit') AND id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all()).results ?? [];
@@ -154,7 +155,7 @@ export async function positionMeta(db, executor) {
  */
 export async function pmLoosenInputs(db, executor, now = Date.now()) {
   const out = { loosened: {}, original: {} };
-  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && Number(p?.ticket) > 0);
+  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => isEntryIntentId(p?.intent_id) && Number(p?.ticket) > 0);
   try {
     const rows = (await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind IN ('modify_sl', 'modify_sltp') AND json_extract(payload, '$.loosen') = 1 AND created_ms > ?").bind(now - 30 * 86_400_000).all()).results ?? [];
     out.loosened = loosenRecords(rows);
@@ -282,7 +283,7 @@ export async function reconcileFilledOpens(env, db, executor, now) {
   await reconcileModifies(db, executor, now);
   const byId = new Map();
   for (const p of Array.isArray(executor?.positions) ? executor.positions : []) {
-    if (typeof p?.intent_id === "string" && p.intent_id.startsWith("open:") && Number(p?.ticket) > 0 && !byId.has(p.intent_id)) byId.set(p.intent_id, p);
+    if (isEntryIntentId(p?.intent_id) && Number(p?.ticket) > 0 && !byId.has(p.intent_id)) byId.set(p.intent_id, p);
   }
   if (!byId.size) return 0;
   const ids = [...byId.keys()].slice(0, 50);
@@ -313,6 +314,8 @@ export async function reconcileFilledOpens(env, db, executor, now) {
     if (!(Number(res?.meta?.changes ?? 1) > 0)) continue;
     count += 1;
     await event(db, now, "bridge", "intent_reconciled", { id: row.id, ticket: result.ticket });
+    // RE1: a re-entry's one line, recorded from the open position.
+    if (isReentryId(row.id)) { await sendOmegaTelegram(env, escHtml(reentryMessage({ ticket: Number(p.reentry_of) || null, side: p.side ?? pos.side, volume: p.volume ?? pos.volume, entry: p.entry, fill: result.fill_price, sl: pos.sl ?? p.sl, tp: pos.tp ?? p.tp, lock: p.reentry_lock ?? null, lockRule: p.reentry_rule ?? null, newTicket: result.ticket }))); continue; }
     const label = await brokerLabelFor(db, executor);
     await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>\nTicket: <code>#${result.ticket}</code>\nSide: <b>${p.side ?? pos.side ?? "—"}</b> | Volume: <code>${p.volume ?? pos.volume ?? "—"}</code>\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price ?? "—"}</code>\nSL: <code>${pos.sl ?? p.sl ?? "—"}</code> | TP: <code>${pos.tp ?? p.tp ?? "—"}</code>\nRecorded from the open position: the EA's result line did not arrive.`);
   }
@@ -1085,6 +1088,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     if (p?.kind === "place_limit" && limitFault({ kind: "place_limit", status: result.ok ? "done" : "failed", result: JSON.stringify(result) })) {
       await recordLimitFault(env, db, { intent_id: r.id, kind: "place_limit", why: LIMIT_FAULT_NO_TICKET, created_ms: Number(existing?.created_ms) || now }, { now });
     }
+    if (existing && (existing.status === "pending" || existing.status === "sent") && isReentryId(r.id)) {
+      // RE1: one line per re-entry, as the broker answered its open (instead of the generic executed or rejected line).
+      await sendOmegaTelegram(env, escHtml(reentryMessage({ ticket: Number(p.reentry_of) || null, side: p.side, volume: p.volume, entry: p.entry, fill: result.fill_price, sl: p.sl, tp: p.tp, lock: p.reentry_lock ?? null, lockRule: p.reentry_rule ?? null, newTicket: result.ticket },
+        result.ok ? { applied: true } : { applied: false, reason: `the broker refused it (${result.error || "no reason given"})` })));
+      continue;
+    }
     if (existing && (existing.status === "pending" || existing.status === "sent")) {
       // A Position Manager intent: its own line, as the broker answered (owner 2026-11-19: say what reached the broker).
       const pmId = actionIdOfIntent(r.id);
@@ -1274,7 +1283,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     const fast = await runFastProtect(env, { executor, gates, spike: spikeHolds({ signal, sym: executor?.symbol ?? {}, settings, spikeSinceMs: liquiditySpikeSince, now }), now });
     if (fast.status === "ran" && fast.positions.some((x) => x.status === "act")) pmActions = await pendingPositionActions(db, { now });
   }
-  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}) });
+  // RE1 (owner 2026-11-23, src/reentry-1m.mjs): the 1m re-entry after a profit-lock stop, once per newly closed broker
+  // minute on this sync (no cron of its own), while the engine runs; its trigger is an open planIntents checks like any
+  // other. Off (reentry_1m "off"): nothing is read or written, today's sync.
+  const re1 = executor?.connected === true && engineEnvEnabled(env) && settings?.enabled === true && control?.mode !== "killed" && signal?.kill !== true && reentryOn(settings)
+    ? await runReentry(env, { executor, signal, now }) : null;
+  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}), ...(re1 ? { reentry1m: re1 } : {}) });
+  // RE1: the trigger's record, applied when the plan made its open intent, else skipped with the plan's reason.
+  if (re1) {
+    const made = plan.intents.some((it) => it.id === re1.id);
+    const stopNote = plan.notes.at(-1);
+    if (made) await recordReentry(db, { cand: re1, setup: re1.setup, status: "applied", now });
+    else if (stopNote?.code !== "already_opened") await recordReentry(db, { cand: re1, setup: re1.setup, status: "skipped", reason: stopNote ? `${stopNote.code}${stopNote.detail ? ` (${String(stopNote.detail).slice(0, 160)})` : ""}` : "Omega's plan made no entry", now });
+  }
   if (limitStop) plan.notes.push({ code: "limit_fail_closed", detail: limitStop.why === LIMIT_FAULT_NO_ANSWER ? `${limitStop.kind}: ${limitStop.why}; no new entry until the EA answers again (or the owner saves the settings)` : `${limitStop.kind}: ${limitStop.why}; market entries until the owner saves the settings again` });
   // A new entry the spread spike held back is a reading of the lens (scored later from the v4 replay).
   if (plan.notes.some((x) => x.code === "liquidity_spread_spike")) { try { await recordSpikeBlock(db, signal, { now }); } catch { /* the plan stands */ } }
@@ -1913,12 +1934,13 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
         // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
-        // profit-lock gate's (SLG1), the change thresholds' (CH1) and the 1m fast layer's (PM-1M).
+        // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M) and the 1m re-entry's (RE1).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
         delete back.change_thresholds;
         delete back.pm_fast_1m;
+        delete back.reentry_1m;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -1939,13 +1961,14 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
-  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M): the owner's switches
-  // are carried as stored.
+  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1):
+  // the owner's switches are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
   delete body.change_thresholds;
   delete body.pm_fast_1m;
+  delete body.reentry_1m;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

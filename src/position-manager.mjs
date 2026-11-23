@@ -66,6 +66,7 @@ import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
 import { changeTokens, changeOn, trendFor, sideReadings, measuredFall, stanceAgainstConfirmed, changeRule, decisionHistory, heldText } from "./change-thresholds.mjs";
+import { isEntryIntentId } from "./reentry-1m.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -589,7 +590,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     const delegatedOf = (p) => delegatedTickets.has(Number(p?.ticket)) && (p?.source === "manual" || p?.magic === 0);
     const positions = (Array.isArray(executor?.positions) ? executor.positions : [])
       .map((p) => (delegatedOf(p) ? { ...p, intent_id: `deleg:${p.ticket}`, delegated: true } : p))
-      .filter((p) => typeof p?.intent_id === "string" && (p.intent_id.startsWith("open:") || p.delegated === true) && (p.side === "BUY" || p.side === "SELL"));
+      .filter((p) => typeof p?.intent_id === "string" && (isEntryIntentId(p.intent_id) || p.delegated === true) && (p.side === "BUY" || p.side === "SELL"));
     if (!positions.length) return { status: "no_positions" };
     const sym = executor?.symbol ?? {};
     const ids = positions.filter((p) => !p.delegated).map((p) => p.intent_id);
