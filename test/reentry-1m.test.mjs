@@ -394,3 +394,58 @@ test("R13. off is byte for byte today: the sync reads no exit or stream for RE1 
   await applyOmegaPolicy(p, { now: NOW });
   assert.equal((await readSettings(p)).settings.reentry_1m, "off");
 });
+
+test("R14. a refusal does not use the setup's one re-entry, but every attempt counts: at most 3 per setup, at least 5 minutes apart (orchestrator review of #543)", async () => {
+  // Pure: the trigger case with earlier attempts.
+  const t = check("trigger");
+  const now = nowAfter(BARS);
+  assert.equal(t.status, "trigger");
+  assert.deepEqual([check("trigger", { attempts: 3 }).status, check("trigger", { attempts: 3 }).code], ["invalid", "attempts"]);
+  assert.match(check("trigger", { attempts: 3 }).why, /3 re-entry attempts the broker refused \(at most 3 per setup\)/);
+  assert.deepEqual([check("trigger", { attempts: 2, lastAttemptMs: now - 4 * M1 }).status, check("trigger", { attempts: 2, lastAttemptMs: now - 4 * M1 }).code], ["wait", "attempt_gap"]);
+  assert.equal(check("trigger", { attempts: 2, lastAttemptMs: now - 5 * M1 }).status, "trigger", "5 minutes after the last attempt");
+  assert.equal(check("trigger", { attempts: 1, used: true }).code, "used", "a live one uses the setup");
+  assert.deepEqual([REENTRY_1M.max_attempts, REENTRY_1M.attempt_gap_min], [3, 5]);
+  // Live: refused attempts are failed intents of the setup (re:202:<minute>).
+  const refused = (e, minutesAgo) => {
+    const ins = e.DB.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES (?, 'open', ?, 'failed', ?, ?, ?)");
+    for (const m of minutesAgo) {
+      const at = NOW - m * M1;
+      ins.run(reentryId(202, Math.floor(at / M1) * M1 - M1), JSON.stringify({ kind: "open", side: "SELL", reason: "pm_reentry" }), JSON.stringify({ ok: false, error: "no money" }), at, at + 1000);
+    }
+  };
+  const count = (e) => e.DB.raw.prepare("SELECT COUNT(*) AS n FROM omega_intents WHERE id LIKE 're:202:%'").get().n;
+  // Persistent refusal: two refused, the third attempt is made; with three refused, none more and the reason noted once.
+  const a = env();
+  await ready(a);
+  refused(a, [20, 10]);
+  await sync(a);
+  assert.equal(count(a), 3, "the third attempt");
+  a.DB.raw.prepare("UPDATE omega_intents SET status = 'failed' WHERE id LIKE 're:202:%'").run();
+  const b = env();
+  await ready(b);
+  refused(b, [30, 20, 10]);
+  await sync(b);
+  await sync(b, {}, NOW + M1);
+  assert.equal(count(b), 3, "no fourth attempt");
+  const noted = b.DB.raw.prepare("SELECT status, why FROM position_actions WHERE rule = 'pm_reentry'").all();
+  assert.equal(noted.length, 1, JSON.stringify(noted));
+  assert.equal(noted[0].status, "noted");
+  assert.match(noted[0].why, /^\[attempts\] 3 re-entry attempts the broker refused/);
+  // The spacing: a refusal 2 minutes ago, no attempt this minute.
+  const c = env();
+  await ready(c);
+  refused(c, [2]);
+  await sync(c);
+  assert.equal(count(c), 1, "within 5 minutes of the last attempt");
+  // A refusal, then a success: 2 intents and the setup used.
+  const d = env();
+  await ready(d);
+  refused(d, [10]);
+  await sync(d);
+  assert.equal(count(d), 2);
+  assert.equal(d.DB.raw.prepare("SELECT COUNT(*) AS n FROM omega_intents WHERE id LIKE 're:202:%' AND status <> 'failed'").get().n, 1);
+  await seedBars(d, sellBars([1999.0, 1999.0, 1998.8]));
+  await sync(d, {}, NOW + 6 * M1);
+  assert.equal(count(d), 2, "the setup is used");
+});

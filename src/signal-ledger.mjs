@@ -437,7 +437,8 @@ export const OMEGA4_RULES = Object.freeze({
     "the Omega settings as stored now (their history is not kept); the engine switch and the live arm taken as on; the EA control (pause, kill) from ea_control_events; the news blackout from the week's calendar",
     "the account's balance rebuilt from its last known balance and its deals: deposits, withdrawals and the owner's daily-loss resets are not told apart",
     "the 1m fast-protect layer (PM-1M) on the feed's 1m bars at every minute: no reconnect quarantine (the bars carry no receipt time) and no spread-spike hold (no live spread)",
-    "the 1m re-entry (RE1) on the feed's 1m bars at every minute after a profit-lock stop: the spread is v4's fixed one (never above 60 points or twice its median), no reconnect quarantine, and the setup is v4's own last exit (live: the last exit deal and the stop Omega applied)"
+    "the 1m re-entry (RE1) on the feed's 1m bars at every minute after a profit-lock stop: the spread is v4's fixed one (never above 60 points or twice its median), no reconnect quarantine, and the setup is v4's own last exit (live: the last exit deal and the stop Omega applied)",
+    "the re-entry's attempt cap (3 per setup, 5 minutes apart) never binds in v4: the replay has no broker refusals, so its one attempt is its re-entry"
   ],
   not_reconstructable: {
     strategy_arm: "the arm state as it is now, applied to every replayed decision (its history is not stored)",

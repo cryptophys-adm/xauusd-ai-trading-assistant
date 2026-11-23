@@ -19,7 +19,10 @@
 // Valid while all hold (reentryCheck): the latest decision is on the same side (the signal's side); the original stop
 // has not been touched and TP1 has not been reached since the exit (the bars after the exit's minute, on the exit
 // price's bars: a BUY's bid, a SELL's ask); within the plan's validity, REENTRY_1M.window_min (240) minutes from the plan's issue (the decisions carry no
-// valid_until); no re-entry of this setup yet (at most one) and no other Omega entry since the exit.
+// valid_until); no re-entry of this setup yet (at most one) and no other Omega entry since the exit. A re-entry the
+// broker refused does not use the setup's one, but every attempt counts: at most REENTRY_1M.max_attempts (3) open
+// intents per setup, whatever their status (then invalid, code "attempts", noted once), at least attempt_gap_min (5)
+// minutes apart (orchestrator review of #543).
 // Trigger: the latest closed 1m bar, at least 5 bars after the exit's bar, closes back beyond the lock level.
 // Stop: the pullback's extreme since the exit plus max(2 x spread, 0.1 x ATR1m(14)); skipped when its distance is wider
 // than the original stop's. Target: the original TP1, which must pay at least 1R (TP1-KZ's TP1_MIN_R) at that stop.
@@ -48,7 +51,10 @@ export const REENTRY_RULE = "pm_reentry";
 /** Every threshold of the re-entry in one table. Minutes, R of the original stop, points. */
 export const REENTRY_1M = Object.freeze({
   min_bars: 5, window_min: 240, stop_spread_k: 2, stop_atr_k: 0.1, min_r: 1, max_spread_points: 60, spread_median_k: 2, median_min: 60, median_min_bars: 10,
-  reopen_min: 15, per_setup: 1, loss_cap_r: 1.0, atr_period: 14
+  reopen_min: 15, per_setup: 1, loss_cap_r: 1.0, atr_period: 14,
+  // A refusal by the broker does not use the setup's one re-entry, but every attempt counts (orchestrator review of
+  // #543): at most this many open intents per setup, whatever their status, at least this many minutes apart.
+  max_attempts: 3, attempt_gap_min: 5
 });
 /** The stop rules that lock the entry or a profit (the last applied stop before a stop-out must be one, at or beyond the entry). */
 export const REENTRY_LOCK_PATTERN = "^(break_even|ladder_lock_tp\\d+|sl_key_level_[a-z_]+|pm_breakeven|pm_tp2_breakeven|pm_lock_tp1|pm_fast_tp)$";
@@ -119,15 +125,17 @@ function median(xs) {
  * "trigger": { id, side, ticket, sl, tp, lock, lock_rule, extreme, atr, spread_points, entry, max_risk, max_stop_dist, mode,
  * issued_ms, strategy, bar_ms, why }.
  */
-export function reentryCheck({ setup = null, signal = null, bars = [], now, sym = {}, used = false, superseded = false, knobs = REENTRY_1M } = {}) {
+export function reentryCheck({ setup = null, signal = null, bars = [], now, sym = {}, used = false, superseded = false, attempts = 0, lastAttemptMs = null, knobs = REENTRY_1M } = {}) {
   if (!setup) return { status: "none", code: "no_setup", why: "no profit-lock exit to re-enter" };
   const s = setup, buy = s.side === "BUY", dir = buy ? 1 : -1;
   const out = (status, code, why) => ({ status, code, why, ticket: s.ticket, side: s.side });
   const from = finite(s.issued_ms) ? s.issued_ms : s.exit_ms;
   if (!(now <= from + knobs.window_min * M1)) return out("invalid", "window", `past the plan's ${knobs.window_min} minutes (issued ${hhmm(from)} UTC)`);
   if (used) return out("invalid", "used", `this setup was re-entered already (at most ${knobs.per_setup})`);
+  if (finite(attempts) && attempts >= knobs.max_attempts) return out("invalid", "attempts", `${attempts} re-entry attempts the broker refused (at most ${knobs.max_attempts} per setup)`);
   if (superseded) return out("invalid", "superseded", "another Omega entry since the exit");
   if (signal?.side !== s.side) return out("invalid", "decision_side", `the latest decision is not ${s.side} (${signal?.side || "none"})`);
+  if (finite(lastAttemptMs) && now - lastAttemptMs < knobs.attempt_gap_min * M1) return out("wait", "attempt_gap", `the last attempt was at ${hhmm(lastAttemptMs)} UTC: at least ${knobs.attempt_gap_min} minutes between attempts`);
   const point = positive(sym.point) ? sym.point : 0.01, digits = Number.isInteger(sym.digits) ? sym.digits : 2;
   const closed = (Array.isArray(bars) ? bars : []).filter((b) => [b?.t, b?.o, b?.h, b?.l, b?.c].every(finite) && b.t + M1 <= now).sort((a, b) => a.t - b.t);
   const noise = fastNoise(closed, { now, knobs: { ...PM_FAST_1M.intraday, reopen_min: knobs.reopen_min } });
@@ -209,8 +217,10 @@ export async function liveSetup(db, executor, now) {
     stop: Number(stop.sl), stopRule: typeof stop.reason === "string" ? stop.reason : null, exitMs: Number(d.closed_ms), exitPrice: Number(d.exit_price), open, realized: Number(net?.net), moneyPerPriceLot: mpl });
   if (!r.eligible) return { setup: null, code: r.code, why: r.why, ticket };
   const used = await db.prepare("SELECT id FROM omega_intents WHERE id LIKE ? AND status <> 'failed' LIMIT 1").bind(`re:${ticket}:%`).first();
+  // Every attempt of the setup, whatever its status (a refused one included), and when the last one was made.
+  const tries = await db.prepare("SELECT COUNT(*) AS n, MAX(created_ms) AS last FROM omega_intents WHERE id LIKE ?").bind(`re:${ticket}:%`).first();
   const later = await db.prepare("SELECT id FROM omega_intents WHERE kind IN ('open', 'place_limit') AND created_ms > ? AND id NOT LIKE 're:%' AND status <> 'failed' LIMIT 1").bind(r.setup.exit_ms).first();
-  return { setup: r.setup, used: Boolean(used), superseded: Boolean(later) };
+  return { setup: r.setup, used: Boolean(used), superseded: Boolean(later), attempts: Number(tries?.n) || 0, lastAttemptMs: Number(tries?.last) > 0 ? Number(tries.last) : null };
 }
 
 /**
@@ -243,10 +253,10 @@ export async function runReentry(env, { executor, signal = null, now = Date.now(
       MEMO.set(db, { minute: memo?.minute ?? null, cand: null, retry: now + REENTRY_RETRY_MS });
       return null;
     }
-    const c = reentryCheck({ setup: found.setup, signal, bars, now, sym: executor.symbol ?? {}, used: found.used, superseded: found.superseded });
+    const c = reentryCheck({ setup: found.setup, signal, bars, now, sym: executor.symbol ?? {}, used: found.used, superseded: found.superseded, attempts: found.attempts, lastAttemptMs: found.lastAttemptMs });
     const cand = c.status === "trigger" ? { ...c, setup: found.setup } : null;
     MEMO.set(db, { minute: want, cand, retry: 0 });
-    if (c.status === "blocked" || c.status === "skip") await recordReentry(db, { cand: { ...c, id: reentryId(found.setup.ticket, want), bar_ms: want, sl: null, tp: null, entry: null }, setup: found.setup, status: "noted", now, once: c.code });
+    if (c.status === "blocked" || c.status === "skip" || (c.status === "invalid" && c.code === "attempts")) await recordReentry(db, { cand: { ...c, id: reentryId(found.setup.ticket, want), bar_ms: want, sl: null, tp: null, entry: null }, setup: found.setup, status: "noted", now, once: c.code });
     return cand;
   } catch {
     MEMO.set(db, { minute: want, cand: null, retry: 0 });
