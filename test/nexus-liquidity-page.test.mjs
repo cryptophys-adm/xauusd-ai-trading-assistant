@@ -125,9 +125,16 @@ test("LQ4 the page renders over B8's contract and its unavailable case, each top
 
 test("LQ5 the B15-B19 fields null: the not-yet Empties; filled: the card, the quorum with liquidity and the level moves", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
-  for (const k of ["conditions", "card", "quorum_with_liquidity"]) assert.equal(LIQ[k], null, `${k} null at B8`);
+  assert.equal(LIQ.conditions, null, "conditions null until B16");
   assert.equal(LIQ.effects.level_moves, null);
-  const launch = await page(LIQ);
+  // B15 filled the card and the quorum with liquidity in the contract (the latest decision's decision.liquidity); the
+  // launch Empties are read with both null, as /api/liquidity answers for a decision without decision.liquidity.
+  assert.ok(LIQ.card && LIQ.quorum_with_liquidity, "card and quorum_with_liquidity filled since B15");
+  assert.deepEqual([UNAV.card, UNAV.quorum_with_liquidity], [null, null]);
+  const filled = await page(LIQ);
+  clean(filled);
+  for (const t of ["LIQUIDITY", "council only", "never counted", "Quorum with liquidity", "sell side", "▲ +0.60"]) assert.ok(filled.includes(t), `B15's card: ${t}`);
+  const launch = await page({ ...LIQ, card: null, quorum_with_liquidity: null });
   for (const t of ["No LIQUIDITY card yet", "Fills after backend B15 is deployed.", "Level moves", "Fills after backend B19 is deployed.", "Not scored yet", "Scored after backend B19 is deployed."]) assert.ok(launch.includes(t), t);
   assert.ok(!launch.includes("Quorum with liquidity"), "the quorum with liquidity waits for B15");
   assert.ok(launch.includes("Quorum") && launch.includes("WAIT"), "the quorum beside it is unchanged");

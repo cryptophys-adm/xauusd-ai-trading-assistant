@@ -241,8 +241,37 @@
       }
     ]
   },
-  "card": null,
-  "quorum_with_liquidity": null,
+  "card": {
+    "at_ms": 1795445220000,
+    "state_at_ms": 1795445160000,
+    "bar_close": "2026-11-23T14:45:00.000Z",
+    "stale": false,
+    "counts": false,
+    "weight": 0.03,
+    "lens_weight": 0.3,
+    "lean": 0.6,
+    "side": "BULLISH",
+    "sweep": "sell_side",
+    "sweep_age_min": 3,
+    "lean_reason": "sweep_with_agreeing_witness",
+    "agreeing": [
+      "H1",
+      "M15"
+    ],
+    "summary": "A reclaimed sell-side sweep on a tick-volume spike 3 minutes ago on the broker's own bars, and 1H War Room and 15m War Room lean bullish too: it leans bullish. Council only: it never counts in the quorum."
+  },
+  "quorum_with_liquidity": {
+    "score": 0.17,
+    "bias": "BULLISH",
+    "long_share": 0.67,
+    "short_share": 0.33,
+    "neutral_share": 0.14,
+    "share_needed_above": 0.5,
+    "quorum_min": 0.5,
+    "long_met": true,
+    "short_met": false,
+    "met": true
+  },
   "baseline": {
     "status": "insufficient",
     "weeks": 2,

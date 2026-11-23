@@ -64,7 +64,7 @@ import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
 import { positioningCard, positioningNow, POSITIONING_PROMPT } from "./positioning-lens.mjs";
 import { lensKnobs, readLensState } from "./lens-policy.mjs";
-import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS } from "./liquidity-lens.mjs";
+import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS, SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -690,7 +690,9 @@ export const COUNCIL_JSON_SCHEMA = Object.freeze({
   required: ["stance", "bias", "confidence", "entry_type", "target", "summary", "reasons", "risks", "weighed"]
 });
 
-const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS", "POSITIONING"];
+// The council's own list of the keys it may name in `weighed`. B15: LIQUIDITY joins it (the council may say it weighed
+// lens B's card); it is the council's list only, never src/witness-weighting.mjs's or src/witness-tuning.mjs's keys.
+const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STRATEGY_AGENTS", "POSITIONING", "LIQUIDITY"];
 
 /** Pure: a side's live agents with a plan the guardrails accept, the default first: [[id, { status, plan }]]. */
 export function liveAgentPlans(g) {
@@ -738,7 +740,8 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
   const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(g.liquidity ? { liquidity: g.liquidity } : {}), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
     bar_close: barClose,
-    witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
+    // A card that never counts (B15's LIQUIDITY: council only) says so; every other card counts while available and fresh.
+    witnesses: cards.map((c) => ({ key: c.key, name: c.label, role: c.role, weight: c.weight, counts: c.counts === false ? false : c.available && !c.stale, lean: c.lean, own_decision: c.decision, state: c.state ?? undefined, confidence: c.confidence, summary: c.summary })),
     // Production 2026-11-09 13:15: the council read the weighted lean (0.42) as the quorum. The quorum
     // is the share of weight leaning one way; the lean is only its strength.
     quorum: { bullish_share: quorum.long_share, bearish_share: quorum.short_share, neutral_share: quorum.neutral_share, share_needed_above: QUORUM_MIN, weighted_lean: quorum.score, lean_bias: quorum.bias },
@@ -774,6 +777,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
     "Never invent a price: the levels come only from the plans in the evidence. Never mention position size. Write summary, reasons and risks in plain sentences a trader would write: no field names, no words joined by underscores or dots, no key=value. The summary starts with the stance and the bias, for example \"Decision WAIT, bias bullish: ...\". Give one to four reasons and up to three risks. In weighed, list the witness keys you relied on most.",
     ...(evidence?.long?.strategies || evidence?.short?.strategies ? ["A side may list strategies: the strategy agents that see their own setup on the chart now, each with what it is made for (made_for), the setup it sees and its own plan. price_action, when present, is the Projection Agent's reading of the charts: the chart patterns it sees on the 15m, 1H and 4H charts, whether each has broken and which way (upward or downward), and how often that pattern reached its target on gold. Choose the strategy whose made_for matches that price action and what the witnesses describe (the regime, the structure, how price came to the level) and return its id in strategy; the trade then takes that agent's entry, stop and targets. Each strategy's record is what it earned on this system's own past setups, in R per setup, overall and in the present market condition: weigh it with the number of setups behind it, and treat a strategy without a record as untested. Without a clear match keep the first one. The side and the guardrails are decided as before; a strategy only changes where the trade enters, stops and targets."] : []),
     ...((evidence?.witnesses || []).some((w) => w.key === "POSITIONING") ? [POSITIONING_PROMPT] : []),
+    ...((evidence?.witnesses || []).some((w) => w.key === "LIQUIDITY") ? [LIQUIDITY_PROMPT] : []),
     ...(evidence?.long?.liquidity || evidence?.short?.liquidity ? ["A side may carry liquidity: the broker's own tick volume shows a reclaimed sweep on a volume spike in the last 15 minutes, sweep_with (the reversal is for that side) or sweep_against, with the lens weight to weigh it at. It confirms a pullback the strategy agents already plan; it never creates a plan or a side on its own."] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
@@ -1169,8 +1173,88 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const liq = liquidityEvidence(loaded?.liquidity ?? null, now);
   if (liq) { guards.long.liquidity = { sweep: liq.sweepFor("BUY"), lens_weight: liq.weight }; guards.short.liquidity = { sweep: liq.sweepFor("SELL"), lens_weight: liq.weight }; }
   const pos = cards.find((c) => c.key === "POSITIONING") ?? null;
+  // B15: lens B's LIQUIDITY card, for the council's view only. It joins neither `cards` (the quorum, the guardrails, the
+  // power, pickStrategy, decision.witnesses) nor the witness weights; quorum_with_liquidity is what the quorum would read
+  // with it, informational only. LIQUIDITY_WITNESS = "off": no card and no `liquidity` here.
+  const liqCard = liquidityWitnessEnabled(env) ? liquidityCard(loaded?.liquidity ?? null, cards, { now }) : null;
   return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null,
-    ...(pos ? { positioning: { weight: pos.weight, source: loaded.positioning.knobs?.weight_source ?? null, mode: loaded.positioning.knobs?.mode ?? null, lean: pos.lean, stale: pos.stale } } : {}) };
+    ...(pos ? { positioning: { weight: pos.weight, source: loaded.positioning.knobs?.weight_source ?? null, mode: loaded.positioning.knobs?.mode ?? null, lean: pos.lean, stale: pos.stale } } : {}),
+    ...(liqCard ? { liquidity: { card: liqCard, quorum_with_liquidity: liquidityQuorum(cards, liqCard, { now, analytics, env: effectiveEnv }) } } : {}) };
+}
+
+// ---------------------------------------------------------------- B15: LIQUIDITY, lens B's council-only card
+
+/**
+ * The LIQUIDITY card's rule (B15): its weight is `share` x lens B's council weight in force (liquidity.council_weight_<mode>
+ * as lensKnobs gives it: Aether's value or the anchor, held at the anchor while the baseline is insufficient), at most
+ * `cap`; its lean is 0 or +-`lean`. Council only: it never counts in the quorum and has no witness-weighting or
+ * witness-tuning key.
+ */
+export const LIQUIDITY_WITNESS = Object.freeze({ share: 0.1, cap: 0.06, lean: 0.6 });
+/** The council's sentence for the card, only when the evidence carries it. */
+export const LIQUIDITY_PROMPT = "LIQUIDITY is lens B's council-only card from the broker's own tick volume: it leans only on a reclaimed sweep on a volume spike in the last 15 minutes (a sell-side sweep bullish, a buy-side one bearish) and only when another counting witness already leans the same way, else its lean is 0. counts is false: it is outside the quorum and the guardrails, it never creates a plan or a side, and it carries a small weight; weigh it as confirmation at most.";
+/** The card is on unless LIQUIDITY_WITNESS is "off" (then no card, no decision.liquidity, and the council's prompt as before). */
+export function liquidityWitnessEnabled(env) { return String(env?.LIQUIDITY_WITNESS ?? "on").trim().toLowerCase() !== "off"; }
+/** Pure: the card's weight, min(cap, share x lens B's council weight), or null without a weight. */
+export function liquidityCardWeight(councilWeight) {
+  const w = Number(councilWeight);
+  return typeof councilWeight === "number" && Number.isFinite(w) && w >= 0 ? r4(Math.min(LIQUIDITY_WITNESS.cap, LIQUIDITY_WITNESS.share * w)) : null;
+}
+
+/**
+ * Pure: lens B's LIQUIDITY card (B15), or null: none while lens B is off, floored (lensKnobs active false) or its state is
+ * stale or unavailable (liquidityEvidence: LIQUIDITY_STATE_FRESH_MS), or its weight is 0. The lean is +-0.6 only from a
+ * reclaimed sweep at most SWEEP_WITH_MAX_AGE_MIN (15) minutes old at `now` (the facts' age plus the state's, sweepFor's
+ * rule) when another counting card (`cards`: available, fresh, a lean) leans the same way (|lean| >= LEAN); otherwise 0.
+ * No price: its summary is words and minutes; the sweep is named by its side only.
+ */
+export function liquidityCard(liquidity, cards = [], { now = Date.now() } = {}) {
+  const ev = liquidityEvidence(liquidity, now);
+  if (!ev) return null;
+  const st = liquidity.state, k = liquidity.knobs;
+  const weight = liquidityCardWeight(k.weight);
+  if (!(weight > 0)) return null;
+  const s = st.facts.sweep ?? null;
+  const age = s && isNum(s.age_min) ? s.age_min + Math.max(0, Math.round((now - Number(st.at_ms)) / 60_000)) : null;
+  const facts = s && s.reclaimed === true && age != null ? { sweep: { ...s, age_min: age } } : null;
+  const dir = facts && sweepFor(facts, "BUY") === "sweep_with" ? 1 : facts && sweepFor(facts, "SELL") === "sweep_with" ? -1 : 0;
+  const agreeing = dir ? (cards || []).filter((c) => c?.key !== "LIQUIDITY" && c.available && !c.stale && isNum(c.lean) && dir * c.lean >= LEAN) : [];
+  const lean = agreeing.length ? dir * LIQUIDITY_WITNESS.lean : 0;
+  const reason = !s ? "no_sweep" : s.reclaimed !== true ? "not_reclaimed" : !dir ? (age != null && age > SWEEP_WITH_MAX_AGE_MIN ? "sweep_stale" : "no_sweep") : agreeing.length ? "sweep_with_agreeing_witness" : "no_agreeing_witness";
+  const sideText = (x) => (x === "buy_side" ? "buy-side" : "sell-side");
+  const names = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}` : xs[0]);
+  const way = dir > 0 ? "bullish" : "bearish";
+  const summary = (reason === "sweep_with_agreeing_witness" ? `A reclaimed ${sideText(s.side)} sweep on a tick-volume spike ${age} minutes ago on the broker's own bars, and ${names(agreeing.map((c) => c.label ?? c.key))} ${agreeing.length > 1 ? "lean" : "leans"} ${way} too: it leans ${way}.`
+    : reason === "no_agreeing_witness" ? `A reclaimed ${sideText(s.side)} sweep on a tick-volume spike ${age} minutes ago on the broker's own bars, but no counting witness leans ${way}: no lean.`
+    : reason === "sweep_stale" ? "The last reclaimed sweep on the broker's tick volume is more than 15 minutes old: no lean."
+    : reason === "not_reclaimed" ? "The last sweep on the broker's tick volume did not close back inside: no lean."
+    : "No reclaimed sweep on the broker's tick volume in the last 15 minutes: no lean.") + " Council only: it never counts in the quorum.";
+  return {
+    key: "LIQUIDITY", label: "Liquidity", role: "the broker's tick-volume sweeps, council only", weight, counts: false,
+    available: true, stale: false, lean, side: sideOf(lean), decision: null, confidence: null, summary, at: null,
+    at_ms: Number(st.at_ms), sweep: dir ? s.side : null, sweep_age_min: dir ? age : null, lean_reason: reason,
+    agreeing: agreeing.map((c) => c.key), lens_weight: k.weight, mode: k.mode ?? null
+  };
+}
+
+/** Pure: the cards unchanged plus lens B's card (B15), for the council's view only; without a card, the cards themselves. */
+export function withLiquidity(cards, card) {
+  return card ? [...(cards || []), card] : cards;
+}
+
+/**
+ * Pure: quorum_with_liquidity (B15): what the quorum would read with the card added at its weight, and whether each
+ * side's quorum check (guardrailsFor's rule at the mode's thresholds) would then hold. Informational: no gate reads it.
+ */
+export function liquidityQuorum(cards, card, { now = Date.now(), analytics = null, env = null } = {}) {
+  const q = quorumOf(withLiquidity(cards, card), { now, analytics });
+  const t = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
+  const met = (dir) => {
+    const share = dir > 0 ? q.long_share : q.short_share, opposing = dir > 0 ? q.short_share : q.long_share;
+    return share > t.quorum_min || (dir * (q.score ?? 0) >= t.lean && share > opposing);
+  };
+  const long = met(1), short = met(-1);
+  return { score: q.score, bias: q.bias, long_share: q.long_share, short_share: q.short_share, neutral_share: q.neutral_share, witnesses: q.witnesses, weight: q.weight, share_needed_above: q.share_needed_above, quorum_min: t.quorum_min, long_met: long, short_met: short, met: long || short };
 }
 
 /**
@@ -1284,7 +1368,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // EZ1b: the entry zone's switch at this decision ("edge": Omega may rest a limit at the zone's near edge), only
     // when the zone is on; the signal carries it to Omega and v4 replays it from here.
     ...(entryZoneMode(env) === "edge" && isNum(d.trade?.entry_low) ? { entry_zone_mode: "edge" } : {}),
-    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, ...(assessment?.positioning ? { positioning: assessment.positioning } : {}), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
+    trading_mode: MODE, weighted: decisionWeightedEnabled(env), weights: (assessment?.witness_weights ?? { ...activeWitnessWeights(env) }), witness_weights_source: (assessment?.witness_weights_source ?? (decisionWeightedEnabled(env) ? "default" : "base")), witness_weights_id: assessment?.witness_weights_id ?? null, ...(assessment?.positioning ? { positioning: assessment.positioning } : {}),
+    // B15: lens B's council-only card and the quorum it would give (informational); absent with the card off or none.
+    ...(assessment?.liquidity ? { liquidity: assessment.liquidity } : {}), rules: { quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, min_confidence: minConfidenceOf(env), lean: MODE_LEAN, quorum_lean_band: LEAN },
     advisory: "The server places no order and gives no position size; the EA sizes each trade from the owner's risk input.",
     // The deployed Worker version that decided (2026-11-11: a deploy outside GitHub Actions put back an older build unseen).
     worker_version: typeof env?.CF_VERSION_METADATA?.id === "string" ? env.CF_VERSION_METADATA.id : null
@@ -1418,7 +1504,8 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
       context, feed: inputs.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview", tradingMode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode
     });
     if (advice) context.model = advice;
-    const evidence = councilEvidence({ barClose: closeIso, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode, regime: data.regime }) });
+    // B15: the council reads lens B's LIQUIDITY card beside the witnesses (counts: false); every gate keeps assessment.cards.
+    const evidence = councilEvidence({ barClose: closeIso, cards: withLiquidity(assessment.cards, assessment.liquidity?.card ?? null), quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode, regime: data.regime }) });
     const councilStarted = clock();
     const council = await askCouncil(env, evidence, { clock });
     const councilMs = clock() - councilStarted;

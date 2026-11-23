@@ -9,3 +9,5 @@ export function baselineHour(hour: number, entry: unknown): Record<string, any>;
 export function viewLevels(levels: unknown, options?: { basis?: number | null; zones?: Array<{ low: number; high: number }> | null }): Array<Record<string, any>>;
 export function backfillState(input?: { versions?: unknown; marker?: Record<string, any> | null; failed?: Record<string, any> | null }): { status: "done" | "backfilled" | "failed" | "unavailable"; at_ms: number | null; added: number | null; rebuilt: boolean | null };
 export function readLiquidityView(env: unknown, options?: { now?: number; strategy?: Record<string, any> | null }): Promise<Record<string, any>>;
+export function viewCard(decision: unknown, now?: number): Record<string, any> | null;
+export function viewQuorumWithLiquidity(decision: unknown): Record<string, any> | null;

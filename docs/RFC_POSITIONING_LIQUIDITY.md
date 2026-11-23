@@ -279,6 +279,13 @@ in the bridge sync from the KV baseline.
    - **Refinement:** the confirmation does not go into the strategy agents' confidence (`agentConfidence`). That
      confidence is a measured input of the Position Manager (`confidence_drop`) and of the limit council, so a
      liquidity term there would turn into exit reasons that nobody chose.
+   - **The LIQUIDITY card (Track B, B15, 2026-11-23; as built in §15).** Beside the per-side evidence, the council reads
+     one council-only card, `LIQUIDITY` (`counts: false`). It is outside the quorum: `quorumOf` counts every card it
+     gets and `decision.witnesses` is the cards, so the card joins neither, and it has no witness-weighting or
+     witness-tuning key (no canon change). Its weight is min(0.06, 0.1 × `liquidity.council_weight_<mode>`); its lean
+     is ±0.6 only from a reclaimed sweep at most 15 minutes old when another counting witness leans the same way, else
+     0. None while lens B is off, floored or stale. `decision.liquidity.quorum_with_liquidity` records what the quorum
+     would read with it, for the page only.
 3. **The entry council's maker or taker choice** (`src/limit-council.mjs`, `ENTRY_REASONS`), three new measured reasons,
    checked by the code against the facts like the others:
    - `liquidity_thin` → `place_limit` (thin liquidity: rest as a maker);
@@ -611,6 +618,21 @@ in the score, the score, the effects (blocks, maker choices, the entry council's
 Manager's actions), the 168-hour baseline and today's management level set. SELECTs and KV reads only, never
 `lensStatus`; nothing in it reaches a room, a decision card, the Position Council, Aether or a public page, and lens B
 still never opens, sizes or prices an entry. Switch `INTEL_VIEWS` (`off`: 404 `intel_views_off`). See docs/SSOT.md.
+
+**The LIQUIDITY card** (Track B, B15, 2026-11-23; §5.2): `liquidityCard` in `src/decision-engine.mjs`, built in
+`assess` from lens B's state and knobs as the council's sweep evidence reads them (`liquidityEvidence`: on, above the
+floor, a fresh and available state) and the counting cards. `LIQUIDITY_WITNESS` {share 0.1, cap 0.06, lean 0.6}: weight
+min(0.06, 0.1 × lens B's council weight in force, the `lensKnobs` weight of the decision's mode); lean ±0.6 (a sell-side
+sweep bullish, a buy-side one bearish) only from a reclaimed sweep whose age at the decision (the facts' `age_min` plus
+the state's age) is at most 15 minutes, and only when another counting card leans the same way by at least 0.15; else
+0 with its `lean_reason`. `withLiquidity` hands the council the cards unchanged plus the card (`counts: false`, one
+prompt sentence); the quorum, the guardrails, the power, `pickStrategy`, `decision.witnesses` and the witness weights
+never see it, and `src/witness-weighting.mjs` / `src/witness-tuning.mjs` hold no key for it (only the council's local
+`weighed` list names it). The record keeps `decision.liquidity` {`card`, `quorum_with_liquidity`} (`liquidityQuorum`:
+`quorumOf` with the card at its weight, and each side's quorum check at the mode's thresholds, informational), and
+`GET /api/liquidity` shows both. No price in the card: weight, lean, the sweep's side, minutes and words. Switch
+`LIQUIDITY_WITNESS` (`off`: no card, no `decision.liquidity`, the council's messages byte for byte as before). The
+Decision Engine is outside `ENGINE_CODE`, so `ENGINE_CODE_HASH` and `ENGINE_BEHAVIOUR_HASH` do not move.
 
 **Parity era.** `ERA_SWITCHES` gains `positioning_enabled` and `liquidity_enabled`. The signature compares each switch
 with its default (`eraSwitches`), so at their defaults (on) they add nothing, and a lens switched off writes

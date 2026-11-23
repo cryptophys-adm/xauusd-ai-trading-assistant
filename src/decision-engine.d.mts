@@ -72,3 +72,11 @@ export function independentWitnesses(loaded?: any, options?: { now?: number }): 
 export function calendarContextOf(outlook: any): Record<string, any> | null;
 export function pickStrategy(input: Record<string, any>): { mode: "auto" | "armed"; agent: string | null; trade: Record<string, any> | null; score: number | null; candidates: Array<Record<string, any>>; reason: string | null };
 export function selectionLine(selection: Record<string, any>): string;
+// B15: lens B's council-only LIQUIDITY card (never in the quorum, the guardrails or the witness weights).
+export const LIQUIDITY_WITNESS: Readonly<{ share: number; cap: number; lean: number }>;
+export const LIQUIDITY_PROMPT: string;
+export function liquidityWitnessEnabled(env: unknown): boolean;
+export function liquidityCardWeight(councilWeight: unknown): number | null;
+export function liquidityCard(liquidity: any, cards?: any[], options?: { now?: number }): Record<string, any> | null;
+export function withLiquidity(cards: any[], card: Record<string, any> | null): any[];
+export function liquidityQuorum(cards: any[], card: Record<string, any>, options?: { now?: number; analytics?: any; env?: any }): Record<string, any>;

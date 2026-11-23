@@ -9,7 +9,9 @@
 //            fallback). A table that does not exist yet reads as empty ("no such table" gives []).
 //   never    a write, a DDL statement, lensStatus (it creates lens_readings), an account number, login, server name,
 //            account_ref, source or identity key in the answer; lens B never opens, sizes or prices an entry here.
-//   later    B15 (card, quorum_with_liquidity), B16 (conditions), B17/B19 (effects.level_moves) are null until merged.
+//   card     B15: `card` and `quorum_with_liquidity` from the latest decision's decision.liquidity (lens B's council-only
+//            LIQUIDITY card and the quorum it would give, informational); null when that decision has none.
+//   later    B16 (conditions), B17/B19 (effects.level_moves) are null until merged.
 import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine } from "./liquidity-lens.mjs";
 import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
 import { activeAccount } from "./lens-steps.mjs";
@@ -96,6 +98,33 @@ export function backfillState({ versions = null, marker = null, failed = null } 
   if (failed) return { ...row("failed", null), at_ms: isoMs(failed.at) };
   if (marker) return row("backfilled", marker);
   return none;
+}
+
+/**
+ * Pure: the page's LIQUIDITY card (B15) from a decision's decision.liquidity.card, or null. `at_ms` is when the card was
+ * made (the decision's decided_at), `state_at_ms` the lens B state it read; `stale` once the card is older than lens B's
+ * freshness (15 minutes). No price: a weight, a lean, the sweep's side and minutes.
+ */
+export function viewCard(decision, now = Date.now()) {
+  const c = decision?.liquidity?.card;
+  if (!c || typeof c !== "object") return null;
+  const at = isoMs(decision.decided_at) ?? (finite(c.at_ms) ? c.at_ms : null);
+  return {
+    at_ms: at, state_at_ms: finite(c.at_ms) ? c.at_ms : null, bar_close: typeof decision.bar_close === "string" ? decision.bar_close : null,
+    stale: !(finite(at) && now - at <= LIQUIDITY_STATE_FRESH_MS), counts: false,
+    weight: finite(c.weight) ? c.weight : null, lens_weight: finite(c.lens_weight) ? c.lens_weight : null, lean: finite(c.lean) ? c.lean : null, side: c.side ?? null,
+    sweep: c.sweep === "buy_side" || c.sweep === "sell_side" ? c.sweep : null, sweep_age_min: finite(c.sweep_age_min) ? c.sweep_age_min : null,
+    lean_reason: typeof c.lean_reason === "string" ? c.lean_reason : null, agreeing: Array.isArray(c.agreeing) ? c.agreeing.filter((k) => typeof k === "string") : [],
+    summary: typeof c.summary === "string" ? c.summary : null
+  };
+}
+
+/** Pure: the page's quorum with liquidity (B15) from a decision's decision.liquidity, or null. Informational only. */
+export function viewQuorumWithLiquidity(decision) {
+  const q = decision?.liquidity?.quorum_with_liquidity;
+  if (!q || typeof q !== "object") return null;
+  const n = (v) => (finite(v) ? v : null), b = (v) => (typeof v === "boolean" ? v : null);
+  return { score: n(q.score), bias: typeof q.bias === "string" ? q.bias : null, long_share: n(q.long_share), short_share: n(q.short_share), neutral_share: n(q.neutral_share), share_needed_above: n(q.share_needed_above), quorum_min: n(q.quorum_min), long_met: b(q.long_met), short_met: b(q.short_met), met: b(q.met) };
 }
 
 /** The view (cryptophys.liquidity-view.v1). `strategy` is the shared memo (readStrategyMemo), or null. Throws on a D1 error. */
@@ -194,7 +223,7 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
     facts, line: facts ? liquidityLine(state.facts ?? { available: false, reason: "no_bars" }) : null, conditions: null,
     levels, readings, sweeps, score,
     effects: { blocks: await scoredKind("block"), makers: await scoredKind("maker"), skips, deferrals, level_moves: null, pm_actions: pmActions },
-    card: null, quorum_with_liquidity: null,
+    card: viewCard(decision, now), quorum_with_liquidity: viewQuorumWithLiquidity(decision),
     baseline, management
   };
 }
