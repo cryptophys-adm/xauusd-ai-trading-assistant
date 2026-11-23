@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type SVGProps } from "react";
 import { Activity, CandlestickChart, Droplets, Gauge, GitBranch, Grid3x3, Info, Layers, Scale, Target } from "lucide-react";
 import clsx from "clsx";
-import { Badge, Empty, Panel, PollBody } from "../components/ui";
+import { Badge, Empty, Hint, Panel, PollBody } from "../components/ui";
 import IntelChart, { barsOf, type IntelMarker } from "../components/IntelChart";
 import { LensHeader, LensView, lensReady } from "../components/LensPanel";
 import type { ChartZone } from "../lib/zones-primitive";
@@ -10,7 +10,7 @@ import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
 import { T, rgba, type Tone } from "../lib/tokens";
 import {
   LIQUIDITY_READS, LENS_MIN_N, ROLE_WORD, SCALE, WEEKDAYS, ZONE_COLOR, ZONE_TEXT, ageText, arr, atrDistance, clockPair, closedHour,
-  feedLevels, intelGet, kindWord, kindsInOrder, knownBasis, liquidityCardWeight, localDayTime, localTime, marketClosedAt, nextOpenMs, num, nyClock,
+  LIQUIDITY_CARD_MAX, cardSummary, cardWeightText, feedLevels, intelGet, kindWord, kindsInOrder, knownBasis, leanReasonText, localDayTime, localTime, marketClosedAt, nextOpenMs, num, nyClock,
   nyHourOfWeek, nyZoneText, obj, openText, pc, pctl, price, priceRange, roleOf, scoreKindWord, signed, str, utcDayTime, utcTime, words, zoneLabel,
   type FeedLevel, type Role
 } from "../lib/intel";
@@ -21,9 +21,10 @@ import {
 // backend B8), /api/lens, the feed's 15m candles, the 15m chart plane and the latest decision.
 //
 // LiquidityView is pure and null-safe (the page render check renders it over test/fixtures/nexus-intel/liquidity.json
-// and its variants). A field a later backend PR fills (B15 the LIQUIDITY card and the quorum with liquidity, B17 the
-// Position Manager's actions, B18 the management candidates, B19 the skip outcomes and the level moves) is null until
-// then and shows an Empty saying when it fills, never an error.
+// and its variants). A field a later backend PR fills (B17 the Position Manager's actions, B18 the management
+// candidates, B19 the skip outcomes and the level moves) is null until then and shows an Empty saying when it fills,
+// never an error. B15's LIQUIDITY card and quorum with liquidity are null when the latest decision has no
+// decision.liquidity (the switch off; lens B off, floored or stale; a decision before B15): an Empty says so.
 //
 // Prices: every one carries its scale (feed or broker). The chart is the feed's, so lens B's bands come only from
 // low_feed / high_feed, and none is drawn while the broker-to-feed basis is unknown. Liquidity never opens, sizes or
@@ -703,88 +704,133 @@ function EffectsPanel({ d, now }: { d: any; now: number }) {
 
 // ---------------------------------------------------------------- panel 8: in the latest decision
 
-function Kv({ k, children }: { k: string; children: ReactNode }) {
-  return <div className="flex flex-col gap-0.5"><span className="text-[11px] text-muted">{k}</span><span className="mono text-[13px] text-fg">{children}</span></div>;
+function Kv({ k, children, sub }: { k: string; children: ReactNode; sub?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] text-muted">{k}</span><span className="mono text-[13px] text-fg">{children}</span>
+      {sub ? <span className="text-balance text-[11px] text-muted">{sub}</span> : null}
+    </div>
+  );
 }
 const share2 = (x: unknown) => (num(x) ? x.toFixed(2) : "—");
 
+const SIDE_TONE: Record<string, string> = { BULLISH: "text-bull", BEARISH: "text-bear", NEUTRAL: "text-neutral" };
+const SIDE_GLYPH: Record<string, string> = { BULLISH: "▲", BEARISH: "▼", NEUTRAL: "·" };
+/** The card's side: the contract's `side`, else the lean's sign. */
+const sideOfCard = (c: any): string | null => {
+  const s = str(c?.side);
+  if (s && SIDE_TONE[s]) return s;
+  return num(c?.lean) ? (c.lean > 0 ? "BULLISH" : c.lean < 0 ? "BEARISH" : "NEUTRAL") : null;
+};
+/** A sweep's side: sell-side reads bullish (green), buy-side bearish (red) (sweepFor's rule). */
+const SWEEP: Record<string, { glyph: string; text: string; tone: string }> = {
+  sell_side: { glyph: "▲", text: "sell-side", tone: "text-bull" },
+  buy_side: { glyph: "▼", text: "buy-side", tone: "text-bear" }
+};
+const SmallClock = ({ label, ms }: { label: string; ms: number }) => <span className="whitespace-nowrap"><span className="text-muted">{label}</span> <span className="mono text-fg-2">{clockPair(ms)}</span></span>;
+
 /**
- * The LIQUIDITY card (backend B15; null until then, its shape not published yet): council only, never counted. Its
- * weight is min(0.06, 0.1 × lens B's council weight), shown "0.04 (0.036)"; a lean of 0 or ±0.60; the sweep side read
- * from the lean's sign. Stale (the card's or lens B's state older than 15 minutes): no weight, no lean colour.
+ * The LIQUIDITY card (backend B15: /api/liquidity `card`, from the latest decision's decision.liquidity): lens B's
+ * council-only card. counts is false, so it never counts toward the quorum; the card says so once, in words. Its weight
+ * (min(0.06, 0.1 × lens_weight)), lean (0 or ±0.60, toned by `side`), the sweep it read and why it leans, in words with
+ * the lean_reason code beside them. Stale (`stale`, or its time older than 15 minutes by this clock): the late tone and
+ * no direction colour. `decisionClose` is the panel's own decision bar close: the card's bar shows only when it differs.
  */
-function LiquidityCard({ card, councilWeight, old, stateAt, now }: { card: any; councilWeight: unknown; old: boolean; stateAt: unknown; now: number }) {
-  // Its age: lens B's state's when that is old (the card reads it), else the card's own time.
-  const at = old && num(stateAt) ? stateAt : num(card?.at_ms) ? card.at_ms : stateAt;
-  const age = num(at) ? now - at : null;
-  const stale = card?.stale === true || old || (age != null && age > STATE_FRESH_MS);
-  const rule = liquidityCardWeight(councilWeight);
-  const w = num(card?.weight) ? (rule != null ? Math.min(card.weight, rule) : Math.min(card.weight, 0.06)) : rule;
+function LiquidityCard({ card, now, decisionClose }: { card: any; now: number; decisionClose: number }) {
+  const at = num(card?.at_ms) ? card.at_ms : null;
+  const age = at != null ? now - at : null;
+  const stale = card?.stale === true || (age != null && age > STATE_FRESH_MS);
+  const side = sideOfCard(card);
+  const tone = (t: string | undefined) => (stale ? "text-fg-2" : t);
   const lean = card?.lean;
-  const sweep = str(card?.sweep);
-  const side = num(lean) && lean > 0 ? "long" : num(lean) && lean < 0 ? "short" : null;
-  const sideGlyph = side === "long" ? "▲" : side === "short" ? "▼" : "·";
+  const sw = SWEEP[str(card?.sweep) ?? ""];
+  const code = str(card?.lean_reason);
+  const summary = cardSummary(card?.summary);
+  const barClose = Date.parse(String(card?.bar_close ?? ""));
+  const lensW = card?.lens_weight;
   return (
-    <div className="glass-inner min-w-0 flex-[1_1_320px] p-3.5">
-      <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+    <div className="glass-inner flex min-w-0 flex-[1_1_320px] flex-col gap-3 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="mono text-[13px] font-semibold text-fg">LIQUIDITY</span>
-        <span className="flex flex-wrap gap-1.5"><Badge tone="plain">council only</Badge><Badge tone="off">never counted</Badge></span>
+        {stale ? <Badge tone="late">stale{age != null ? ` ${ageText(age)}` : ""}</Badge> : <Badge tone="ok">fresh{age != null ? ` ${ageText(age)}` : ""}</Badge>}
       </div>
+      {card?.counts === false ? <div className="-mt-1.5 text-[12px] text-fg-2">Council only: it never counts toward the quorum.</div> : null}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(110px,100%),1fr))] gap-3">
-        {stale ? (
-          <><Kv k="weight">—</Kv><Kv k="lean">—</Kv></>
-        ) : (
-          <>
-            <Kv k="weight">{num(w) ? <>{w.toFixed(2)} <span className="text-[11px] text-muted">({Number(w.toFixed(3))})</span></> : "—"}</Kv>
-            <Kv k="lean">{num(lean) ? <span className={lean > 0 ? "text-bull" : lean < 0 ? "text-bear" : "text-neutral"}>{lean > 0 ? "▲" : lean < 0 ? "▼" : "·"} {signed(lean)}</span> : "—"}</Kv>
-            <Kv k="sweep">{sweep ? <span className={side === "long" ? "text-bull" : side === "short" ? "text-bear" : "text-neutral"}>{sweep === "sweep_with" ? "with" : sweep === "sweep_against" ? "against" : words(sweep)} {sideGlyph} {side ?? ""}</span> : "none"}</Kv>
-          </>
-        )}
+        <Kv k="weight" sub={num(lensW) ? `a tenth of lens B's ${lensW.toFixed(2)}, at most ${LIQUIDITY_CARD_MAX.toFixed(2)}` : null}>{cardWeightText(card?.weight)}</Kv>
+        <Kv k="lean">{num(lean) ? <span className={tone(side ? SIDE_TONE[side] : undefined)}>{side ? SIDE_GLYPH[side] : "·"} {signed(lean)}{side ? ` ${side.toLowerCase()}` : ""}</span> : "—"}</Kv>
+        <Kv k="sweep" sub={sw && num(card?.sweep_age_min) ? `${card.sweep_age_min} min ago` : null}>{sw ? <span className={tone(sw.tone)}>{sw.glyph} {sw.text}</span> : "none"}</Kv>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-muted">state</span>
-        {stale ? <Badge tone="late">stale{age != null ? ` ${ageText(age)}` : ""} · Omega ignores it after 15m</Badge> : <Badge tone="ok">fresh{age != null ? ` ${ageText(age)}` : ""}</Badge>}
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[11px] text-muted">reason</span>
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <span className="text-[13px] text-fg">{leanReasonText(code, card?.agreeing)}</span>
+          {code ? <span className="mono text-[11px] text-muted">{code}</span> : null}
+          {summary ? <Hint text={summary} /> : null}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+        {at != null ? <SmallClock label="made" ms={at} /> : null}
+        {Number.isFinite(barClose) && barClose !== decisionClose ? <SmallClock label="decision" ms={barClose} /> : null}
+        {num(card?.state_at_ms) ? <SmallClock label="lens B state" ms={card.state_at_ms} /> : null}
       </div>
     </div>
   );
 }
 
-function QuorumBlock({ title, q, last }: { title: string; q: any; last: ReactNode }) {
+function QuorumBlock({ title, q, needs, children, note }: { title: string; q: any; needs: unknown; children: ReactNode; note?: ReactNode }) {
   return (
     <>
-      <div className="mb-2.5 text-[12px] font-semibold text-fg">{title}</div>
+      <div className={clsx("text-[12px] font-semibold text-fg", note ? "mb-1" : "mb-2.5")}>{title}</div>
+      {note ? <div className="mb-2.5 text-[11px] text-fg-2">{note}</div> : null}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(84px,100%),1fr))] gap-3">
         <Kv k="long"><span className="text-bull">▲ {share2(q?.long_share)}</span></Kv>
         <Kv k="short"><span className="text-bear">▼ {share2(q?.short_share)}</span></Kv>
         <Kv k="neutral"><span className="text-neutral">· {share2(q?.neutral_share)}</span></Kv>
-        <Kv k="needs above">{share2(q?.share_needed_above)}</Kv>
-        {last}
+        <Kv k="needs above">{share2(needs)}</Kv>
+        {children}
       </div>
     </>
   );
 }
 
-function DecisionPanel({ d, decision, lens, old, now, polls }: { d: any; decision: any; lens: any; old: boolean; now: number; polls: Polls }) {
+/** quorum_with_liquidity's check: which side's quorum would hold with the card added ("▲ long", "▼ short", "both sides", "no"). */
+function metText(q: any): ReactNode {
+  if (q?.long_met === true && q?.short_met === true) return "both sides";
+  if (q?.long_met === true) return <span className="text-bull">▲ long</span>;
+  if (q?.short_met === true) return <span className="text-bear">▼ short</span>;
+  return q?.met === false || q?.long_met === false || q?.short_met === false ? "no" : q?.met === true ? "yes" : "—";
+}
+
+function DecisionPanel({ d, decision, now, polls }: { d: any; decision: any; now: number; polls: Polls }) {
   const dec = obj(decision?.decision);
   const close = Date.parse(String(dec?.bar_close ?? ""));
-  // Lens B's council weight in the mode in force (/api/lens), for the LIQUIDITY card's min(0.06, 0.1 × weight).
-  const mode = str(d?.state?.mode) ?? (lensReady(lens) ? str(lens.mode) : null) ?? "intraday";
-  const councilWeight = lensReady(lens) ? lens.liquidity?.weights?.[mode]?.weight : null;
   const q = obj(dec?.quorum);
-  const needs = q ? { ...q, share_needed_above: num(q.share_needed_above) ? q.share_needed_above : dec?.rules?.quorum_min } : null;
   const stance = str(dec?.stance);
   const qw = obj(d?.quorum_with_liquidity);
+  const bias = str(qw?.bias);
   return (
     <Panel title="In the latest decision" icon={<Scale className="h-3.5 w-3.5 text-cyan-300" />} poll={polls.decision}
       right={Number.isFinite(close) ? <Badge tone="plain">decision {clockPair(close)}</Badge> : undefined}>
       <div className="flex flex-wrap items-stretch gap-3">
-        {d?.card == null ? <div className="min-w-0 flex-[1_1_300px]"><Empty when="Fills after backend B15 is deployed.">No LIQUIDITY card yet</Empty></div>
-          : <LiquidityCard card={d.card} councilWeight={councilWeight} old={old} stateAt={d?.state?.at_ms} now={now} />}
+        {d?.card == null ? (
+          <div className="min-w-0 flex-[1_1_300px]">
+            <Empty when="None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).">No LIQUIDITY card in the latest decision</Empty>
+          </div>
+        ) : <LiquidityCard card={d.card} now={now} decisionClose={close} />}
         <div className="glass-inner min-w-0 flex-[1_1_320px] p-3.5">
-          {!needs ? <Empty when="The Decision Engine decides at each 15m close.">No decision yet</Empty> : (
-            <QuorumBlock title="Quorum" q={needs} last={<Kv k="stance"><span className={stance === "BUY" ? "text-bull" : stance === "SELL" ? "text-bear" : "text-neutral"}>{stance ?? "—"}</span></Kv>} />
+          {!q ? <Empty when="The Decision Engine decides at each 15m close.">No decision yet</Empty> : (
+            <QuorumBlock title="Quorum" q={q} needs={num(q.share_needed_above) ? q.share_needed_above : dec?.rules?.quorum_min}>
+              <Kv k="stance"><span className={stance === "BUY" ? "text-bull" : stance === "SELL" ? "text-bear" : "text-neutral"}>{stance ?? "—"}</span></Kv>
+            </QuorumBlock>
           )}
-          {qw ? <div className="mt-3"><QuorumBlock title="Quorum with liquidity" q={qw} last={<Kv k="met">{qw.met === true ? "yes" : qw.met === false ? "no" : "—"}</Kv>} /></div> : null}
+          {qw ? (
+            <div className="mt-3">
+              <QuorumBlock title="Quorum with liquidity" q={qw} needs={num(qw.quorum_min) ? qw.quorum_min : qw.share_needed_above}
+                note="Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.">
+                <Kv k="met" sub={num(qw.score) ? <>score <span className={clsx("mono", bias ? SIDE_TONE[bias] : undefined)}>{signed(qw.score)}</span></> : null}>{metText(qw)}</Kv>
+              </QuorumBlock>
+            </div>
+          ) : null}
         </div>
       </div>
     </Panel>
@@ -852,7 +898,7 @@ export function LiquidityView({ d, lens = null, decision = null, candles = null,
         <div className="min-w-0 xl:col-span-5"><SweepsPanel d={d} polls={polls} /></div>
         <div className="min-w-0 self-start xl:col-span-7"><BaselinePanel d={d} now={now} /></div>
         <div className="min-w-0 self-start xl:col-span-5"><EffectsPanel d={d} now={now} /></div>
-        <div className="min-w-0 xl:col-span-12"><DecisionPanel d={d} decision={decision} lens={lens} old={old} now={now} polls={polls} /></div>
+        <div className="min-w-0 xl:col-span-12"><DecisionPanel d={d} decision={decision} now={now} polls={polls} /></div>
       </div>
     </Page>
   );

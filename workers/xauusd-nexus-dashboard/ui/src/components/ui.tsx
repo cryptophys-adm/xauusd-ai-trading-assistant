@@ -249,6 +249,15 @@ export function Dot({ tone = "ok", pulse = false }: { tone?: BadgeTone; pulse?: 
 }
 
 /** A chip in a semantic tone: bull, bear, neutral (direction); ok, late, fault, off (status); shadow; plain. */
+/**
+ * The lightweight-charts licence's attribution, as a quiet caption link (OM-LEAN's, pages/Omega.tsx): every chart sets
+ * attributionLogo false, because the library's logo injects a <style> the CSP blocks, and shows this link instead.
+ */
+export const TRADINGVIEW_URL = "https://www.tradingview.com/";
+export function ChartCredit() {
+  return <a href={TRADINGVIEW_URL} target="_blank" rel="noopener noreferrer" className="text-fg-2 underline decoration-white/20 hover:text-fg">Charts by TradingView</a>;
+}
+
 export function Badge({ tone = "plain", children }: { tone?: BadgeTone; children: ReactNode }) {
   return <span className={clsx("chip", CHIP[toneOf(tone)])}>{children}</span>;
 }

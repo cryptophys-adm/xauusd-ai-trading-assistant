@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type SeriesMarker, type TickMarkType, type Time, type UTCTimestamp } from "lightweight-charts";
-import { Empty, PollBody } from "./ui";
+import { ChartCredit, Empty, PollBody } from "./ui";
 import type { Poll } from "../lib/usePoll";
 import { CANDLE, T, tagText } from "../lib/tokens";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
@@ -84,7 +84,8 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
     if (!el.current) return;
     const c = createChart(el.current, {
       autoSize: true,
-      layout: { background: { color: "transparent" }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace", fontSize: 10 },
+      // No library logo (its <style> is blocked by the CSP): the caption's "Charts by TradingView" link is the attribution.
+      layout: { background: { color: "transparent" }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace", fontSize: 10, attributionLogo: false },
       grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)", scaleMargins: { top: 0.1, bottom: 0.06 } },
       timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: true, secondsVisible: false, rightOffset: 2, tickMarkFormatter: (t: Time, type: TickMarkType) => gmt7Tick(t, type) },
@@ -159,7 +160,12 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
         <div ref={el} role="img" aria-label={label} className="h-[340px] w-full sm:h-[440px]" />
         <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9px] text-muted">GMT+7</span>
       </div>
-      {!empty ? <div className="mono mt-1 text-right text-[10px] text-fg-2">last closed bar {closeText(bars[bars.length - 1].time, intervalS)}</div> : null}
+      {!empty ? (
+        <div className="mono mt-1 flex flex-wrap justify-end gap-x-3 gap-y-0.5 text-[10px] text-fg-2">
+          <span>last closed bar {closeText(bars[bars.length - 1].time, intervalS)}</span>
+          <ChartCredit />
+        </div>
+      ) : null}
     </div>
   );
 }
