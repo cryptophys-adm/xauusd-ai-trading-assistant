@@ -400,7 +400,7 @@ test("PS22 SHOULD 3: the chart's plan lines and zones from a stale decision are 
   const pc = src("components/PriceChart.tsx");
   assert.match(pc, /const decisionPoll = pollOf\(GLOBAL_PATH\);/);
   assert.match(pc, /title: title \+ mark\.suffix, color: mark\.dim \? rgba\(color, STALE_LINE_ALPHA\) : color,/, "each plan line dimmed and labelled");
-  assert.match(pc, /const p = showPlan && hasClearDecision && mark\.show \? strategy\?\.plan : null;/, "dropped past the threshold");
+  assert.match(pc, /const p = showPlan && mark\.show \? chartPlan\(strategy, engine\) : null;/, "dropped past the threshold");
   assert.match(pc, /const candidates: any\[\] = showZones && mark\.show \?/, "the zones too");
   assert.match(pc, /\* \(mark\.dim \? 0\.5 : 1\)/);
   assert.match(pc, /\{planHidden \? <div [^>]*>\{mark\.note\}<\/div> : null\}/, "the note on the chart");

@@ -62,6 +62,21 @@ export function bandSource(g: any): { source: "engine" | "plan"; plan: any; zone
 export const clearDecision = (strategy: any, engine: any): boolean =>
   strategy?.decision === "BUY" || strategy?.decision === "SELL" || engine?.stance === "BUY" || engine?.stance === "SELL";
 
+/**
+ * The plan the War Room chart draws as lines (Entry, Stop, SL+, TP1, TP2), from the same source as the Entry band and the
+ * Decision card (bandSource): the engine's trade when the engine is on, else the strategy plan; only on a clear decision.
+ * The engine's trade carries its RRR per target as `rrr_all` (its `rrr` is the chosen target's number). Null: no lines.
+ * With the engine on and no trade (a WAIT), there is no plan, as on the card.
+ */
+export function chartPlan(strategy: any, engine: any): any | null {
+  if (!clearDecision(strategy, engine)) return null;
+  const src = bandSource({ engine, strategy });
+  const p = src.plan;
+  if (!p) return null;
+  if (src.source === "plan") return p;
+  return { entry: p.entry, stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level, progressive_stop: p.progressive_stop ?? null, rrr: p.rrr_all ?? null };
+}
+
 /** The zone's near edge for a side: a BUY's high, a SELL's low (EZ1b rests the limit there). */
 export const nearEdge = (side: Side | null, z: Zone): number | null => (side === "BUY" ? z.high : side === "SELL" ? z.low : null);
 
