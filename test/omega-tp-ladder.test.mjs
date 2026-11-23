@@ -126,7 +126,8 @@ test("TL7 Amendment 4: the Position Manager's outward TP2 waits for the TP1 lock
   const { planIntents } = await import("../src/omega-engine.mjs");
   const exec = (pos) => ({ connected: true, trade_allowed: true, received_ms: NOW - 1000, account: { trade_mode: "demo", currency: "USD", balance: 1000, equity: 1000, day_start_balance: 1000 }, symbol: { ...at(4012), currency_profit: "USD", contract_size: 100, volume_max: 50 }, positions: [pos] });
   const act = [{ id: "pm:101:t:1", ticket: 101, action: "tp", rule: "tp2_target", tp: 4045 }];
-  const base = { signal: null, control: { mode: "active" }, settings: { ...S, max_positions: 3 }, now: NOW, engineEnabled: true, pmActions: act };
+  // SLG1 (2026-11-23): TP2 also waits for the profit-lock gate (on by default); here the gate is open, so Amendment 4 decides.
+  const base = { signal: null, control: { mode: "active" }, settings: { ...S, max_positions: 3 }, now: NOW, engineEnabled: true, pmActions: act, gates: { 101: { open: true, mfe_r: 1.5, mfe_atr: 2 } } };
   const early = planIntents({ ...base, executor: exec(LONG) });
   assert.ok(!early.intents.some((i) => i.kind === "modify_tp"), "stop below TP1: no outward move");
   const locked = planIntents({ ...base, executor: exec({ ...LONG, sl: 4010.2 }) });

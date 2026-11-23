@@ -54,7 +54,7 @@ const SETTING_WORDS = Object.freeze({
   max_daily_loss_pct: "daily loss limit %", max_spread_points: "max spread (points)", max_signal_age_ms: "max signal age",
   policy_auto: "Aether policy auto", entry_order: "entry order", pm_loosen_enabled: "stop/target loosening (A8)",
   positioning_enabled: "positioning lens", liquidity_enabled: "liquidity lens", wait_bias_entry: "WAIT-with-bias entry",
-  tp_ladder: "TP ladder", trailing_stop_r: "trailing stop R", sor_mode: "order routing"
+  tp_ladder: "TP ladder", trailing_stop_r: "trailing stop R", sor_mode: "order routing", profit_lock_gate: "profit-lock gate"
 });
 // Keys whose value never appears in a line, by exact name (a pattern hid ladder_lock_pips: orchestrator review of #511):
 // identity and credentials, and prices (the private chat may carry them, but this audit says what changed, not where).

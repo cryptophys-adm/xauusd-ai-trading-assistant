@@ -60,7 +60,8 @@ test("L1. a limit fills when a bar reaches the level, then v4 manages it: the TP
   const { bars, decisions, to } = sellCase(pts, { later });
   const trace = [];
   let calls = 0;
-  const run = replayOmegaLimit({ ...base(), bars, decisions, to, trace, plan: (input) => { calls += 1; return planIntents(input); } });
+  // SLG1 (2026-11-23): the lock below is the "legacy" one (MFE 4.5 never reaches the profit-lock gate's 1R of 20).
+  const run = replayOmegaLimit({ ...base({ settings: { ...OMEGA_DEFAULTS, enabled: true, profit_lock_gate: "legacy" } }), bars, decisions, to, trace, plan: (input) => { calls += 1; return planIntents(input); } });
   // Every call is planIntents (the main plans and the placement probes).
   assert.equal(calls, run.plans + run.limit.probes);
   assert.deepEqual([run.limit.placed, run.limit.filled, run.limit.missed], [1, 1, 0]);

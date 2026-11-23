@@ -30,7 +30,8 @@ import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedI
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
 import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
-import { readCorpusBars } from "./corpus-oracle.mjs";
+import { readCorpusBars, CORPUS_READ_MAX } from "./corpus-oracle.mjs";
+import { gatesFor, gateReadSince, gateMode, profitLockGateOn, PROFIT_LOCK_GATE, GATE_LOOKBACK_MIN } from "./profit-lock-gate.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
@@ -135,7 +136,9 @@ export async function positionMeta(db, executor) {
     for (const r of rows) {
       const p = parse(r.payload, {});
       const rDist = Number.isFinite(Number(p.r_dist)) ? Number(p.r_dist) : (Number.isFinite(Number(p.entry)) && Number.isFinite(Number(p.sl)) ? Math.abs(Number(p.entry) - Number(p.sl)) : null);
-      out[r.id] = { mode: typeof p.mode === "string" ? p.mode : null, r_dist: rDist, ...(p.probation === true ? { probation: true } : {}) };
+      // SLG1: the plan's TP distance at entry, the range gate's measure (src/profit-lock-gate.mjs).
+      const tpDist = Number.isFinite(Number(p.entry)) && Number(p.tp) > 0 ? Math.abs(Number(p.tp) - Number(p.entry)) : null;
+      out[r.id] = { mode: typeof p.mode === "string" ? p.mode : null, r_dist: rDist, ...(p.probation === true ? { probation: true } : {}), ...(tpDist > 0 ? { tp_dist: tpDist } : {}) };
     }
     return out;
   } catch { return {}; }
@@ -198,6 +201,47 @@ export async function ladderCandles(env, now, { read = readCorpusBars, server = 
   const candles = { M5: lastClosedCandle(bars, 5, now), M15: lastClosedCandle(bars, 15, now), H1: lastClosedCandle(bars, 60, now) };
   candleCache = { key, candles };
   return candles;
+}
+
+// SLG1, the profit-lock gate (owner 2026-11-23, src/profit-lock-gate.mjs): the broker's M1 bars since the earliest fill
+// of the open positions, at most GATE_LOOKBACK_MIN minutes back (CORPUS_READ_MAX bars, about a day), read at most once
+// a minute per isolate, from the connected terminal's own server and symbol only (like the ladder's candles).
+let gateBarsCache = { key: null, bars: null };
+export function resetGateBarsCacheForTests() { gateBarsCache = { key: null, bars: null }; }
+export async function gateBars(env, now, { positions = [], read = readCorpusBars, server = null, symbol = null } = {}) {
+  const since = gateReadSince(positions, now);
+  if (since == null) return [];
+  const ident = `${String(server ?? "").trim().toLowerCase()}|${String(symbol ?? "").trim().toLowerCase()}`;
+  const key = `${Math.floor(now / 60_000)}|${since}|${ident}`;
+  if (gateBarsCache.key === key && gateBarsCache.bars) return gateBarsCache.bars;
+  let res = null;
+  try { res = await read(env, { sinceMs: since - 1, limit: Math.min(CORPUS_READ_MAX, GATE_LOOKBACK_MIN) }); } catch { res = null; }
+  const same = res && `${String(res.server ?? "").trim().toLowerCase()}|${String(res.symbol ?? "").trim().toLowerCase()}` === ident && ident !== "|";
+  const bars = same && Array.isArray(res.bars) ? res.bars : [];
+  gateBarsCache = { key, bars };
+  return bars;
+}
+
+/**
+ * The profit-lock gate's facts of the open positions ({ [ticket]: facts }), from the bars above, the terminal's ATR(14,
+ * M15) (symbol.atr_value) and, only when a swing position is open, the latest decision's ATR(H1) (strategy.atr_h1, as
+ * v4 reads it from the same record). `metaOf(p)` gives { mode, r_dist, tp_dist } of its open intent. Unreadable bars or
+ * ATR give closed gates (src/profit-lock-gate.mjs). Never throws.
+ */
+export async function profitLockGates(env, { executor, metaOf = () => null, now = Date.now(), read = readCorpusBars, atrH1 = undefined } = {}) {
+  const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => p?.ticket != null && (p.side === "BUY" || p.side === "SELL"));
+  if (!positions.length) return {};
+  try {
+    const bars = await gateBars(env, now, { positions, read, server: executor?.server, symbol: executor?.symbol?.name });
+    let h1 = atrH1;
+    if (h1 === undefined) {
+      h1 = null;
+      if (positions.some((p) => PROFIT_LOCK_GATE[gateMode(metaOf(p)?.mode)].atr_tf === "H1")) {
+        try { h1 = Number((await readLatestDecision(env))?.strategy?.atr_h1); } catch { h1 = null; }
+      }
+    }
+    return gatesFor({ positions, metaOf, bars, atrM15: Number(executor?.symbol?.atr_value), atrH1: h1, now });
+  } catch { return {}; }
 }
 
 /**
@@ -1219,7 +1263,10 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // The EA never answered (owner 2026-11-21: "no answer → no entries"): the plan runs as paused, so it opens nothing and
   // loosens nothing while closes and protection still go out; a kill stays a kill.
   const planControl = limitStop?.why === LIMIT_FAULT_NO_ANSWER && control?.mode !== "killed" ? { ...(control ?? {}), mode: "paused", reason: "limit_fail_closed" } : control;
-  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: { ...meta, ...dlg.meta }, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince });
+  // SLG1: the profit-lock gate's facts per ticket, only while profit_lock_gate is "on" ("legacy" reads nothing).
+  const allMeta = { ...meta, ...dlg.meta };
+  const gates = hasPositions && profitLockGateOn(settings) ? await profitLockGates(env, { executor: { ...dlg.executor, server: executor?.server }, metaOf: (p) => allMeta[p.intent_id] ?? null, now }) : null;
+  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}) });
   if (limitStop) plan.notes.push({ code: "limit_fail_closed", detail: limitStop.why === LIMIT_FAULT_NO_ANSWER ? `${limitStop.kind}: ${limitStop.why}; no new entry until the EA answers again (or the owner saves the settings)` : `${limitStop.kind}: ${limitStop.why}; market entries until the owner saves the settings again` });
   // A new entry the spread spike held back is a reading of the lens (scored later from the v4 replay).
   if (plan.notes.some((x) => x.code === "liquidity_spread_spike")) { try { await recordSpikeBlock(db, signal, { now }); } catch { /* the plan stands */ } }
@@ -1855,9 +1902,11 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const worse = after.profit_factor != null && after.profit_factor < 1 && (before?.profit_factor == null || after.profit_factor < before.profit_factor);
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
-        // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8).
+        // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so is the
+        // profit-lock gate's (SLG1).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
+        delete back.profit_lock_gate;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -1878,9 +1927,10 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
-  // Amendment 8): the owner's switches are carried as stored.
+  // Amendment 8) nor profit_lock_gate (SLG1): the owner's switches are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
+  delete body.profit_lock_gate;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

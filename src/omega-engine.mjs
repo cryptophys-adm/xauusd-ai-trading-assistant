@@ -24,6 +24,7 @@ import { versionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, effectiveLimits, PROFILES, 
 import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./liquidity-lens.mjs";
+import { profitLockGateOn, gateBreakEven, gateAtrM5, stopInProfit, gateText, GATE_UNMEASURED, PROFIT_LOCK_GATE_MODES } from "./profit-lock-gate.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -64,7 +65,11 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // "Sekarang breakglass urgent jadi langsung live"): on by default, the owner's switches on the Omega page only;
   // Aether's policy never writes them. Off, the lens contributes nothing (no witness, gate, deferral, reason or level).
   positioning_enabled: true,
-  liquidity_enabled: true
+  liquidity_enabled: true,
+  // SLG1, one profit-lock gate (owner 2026-11-23; src/profit-lock-gate.mjs): "on", no stop moves into profit until the
+  // position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; "legacy", today's locks byte for
+  // byte. The owner's switch on the Omega page only; Aether's policy never writes it.
+  profit_lock_gate: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -173,6 +178,12 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
       return { error: "sor_mode must be 'primary_only' or 'auto_failover'" };
     }
     out.sor_mode = body.sor_mode;
+  }
+  if (body.profit_lock_gate !== undefined) {
+    if (typeof body.profit_lock_gate !== "string" || !PROFIT_LOCK_GATE_MODES.includes(body.profit_lock_gate)) {
+      return { error: "profit_lock_gate must be 'on' or 'legacy'" };
+    }
+    out.profit_lock_gate = body.profit_lock_gate;
   }
   if (body.entry_order !== undefined) {
     if (!ENTRY_ORDERS.includes(body.entry_order)) return { error: "entry_order must be 'market', 'limit' or 'council'" };
@@ -347,9 +358,10 @@ export function powerBand(p) {
  *   trailing TP  near the take-profit (within max(0.5 x 5m ATR, 3 spreads, 0.2 x the open-to-target
  *                distance)) with a strong power, the target moves to the next key level and the stop to
  *                the old target, less the buffer; with a weaker power the target stays and is taken.
- * The stop only moves in the position's favour and keeps the broker's stop distance from price.
+ * The stop only moves in the position's favour and keeps the broker's stop distance from price. `lockPx` (SLG1, the
+ * profit-lock gate on) replaces the small-profit lock with the gate's first lock.
  */
-export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(), extend = true }) {
+export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(), extend = true, lockPx = null }) {
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp);
   const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
@@ -371,7 +383,9 @@ export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(
   // SL+: the key levels wholly beyond the entry that price has passed, nearest to price first.
   const passed = levels.filter((z) => (buy ? z.low > open && z.high < price - buffer : z.high < open && z.low > price + buffer)).sort((a, b) => (buy ? b.high - a.high : a.low - b.low));
   if (passed.length) {
-    const lock = open + dir * Math.max(2 * spreadPx, buffer);
+    // SLG1: with the profit-lock gate on, the lock floor is the gate's first lock (`lockPx`, break-even plus the spread
+    // plus 0.1 x ATR(M5)); SL+ goes further than it only after the gate.
+    const lock = finite(lockPx) ? lockPx : open + dir * Math.max(2 * spreadPx, buffer);
     let sl = band === "strong" ? (passed[1] ? behind(passed[1]) : lock) : behind(passed[0]);
     if (band === "weak" && positive(buy ? signal?.m5_swing_low : signal?.m5_swing_high)) {
       const swing = buy ? signal.m5_swing_low - buffer : signal.m5_swing_high + buffer;
@@ -464,7 +478,7 @@ export function ladderStep(meta, S) {
   return { mode, step: r * (mode === "intraday" ? S.ladder_r_intraday : S.ladder_r_swing), unit: "R" };
 }
 
-export function ladderPlan({ position: p, sym, signal = null, levels = null, settings = OMEGA_DEFAULTS, partialsDone = 0, now = Date.now(), meta = null, candles = undefined }) {
+export function ladderPlan({ position: p, sym, signal = null, levels = null, settings = OMEGA_DEFAULTS, partialsDone = 0, now = Date.now(), meta = null, candles = undefined, beLockPx = null }) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), vol = Number(p.volume);
@@ -497,7 +511,9 @@ export function ladderPlan({ position: p, sym, signal = null, levels = null, set
   // step past the entry, break-even (TP0); one step past TPx, TPx.
   if (past >= 1) {
     const rung = past - 1;
-    const target = roundTo(rung === 0 ? open + dir * buffer : L[rung], digits);
+    // SLG1: with the profit-lock gate on, TP0 is the gate's first lock (`beLockPx`: break-even plus the spread plus
+    // 0.1 x ATR(M5)); the planner drops every ladder lock into profit while the gate is closed.
+    const target = roundTo(rung === 0 ? (finite(beLockPx) ? beLockPx : open + dir * buffer) : L[rung], digits);
     const better = !finite(curSl) || curSl <= 0 ? true : buy ? target > curSl + point : target < curSl - point;
     // The break-even lock is taken once: its buffer follows the spread and the M5 ATR, so a stop already past the entry
     // is not moved again by a few cents at TP0 (2026-11-19: three modifications in seven seconds).
@@ -564,8 +580,13 @@ export function withCommandedStop(p, stops = {}) {
  *   extended    a farther TP2 or extended target of the current signal moves the take-profit of the
  *               positions on the signal's side;
  *   scale-out   a position of 0.02 lots or more at 1.5R or its target banks half, once per position.
+ * SLG1 (owner 2026-11-23, src/profit-lock-gate.mjs): with `gates` (the planner passes them while profit_lock_gate is
+ * "on"; { [ticket]: gate facts }, a ticket missing reads as closed) no stop moves to or beyond the entry (SL+, the
+ * break-even, the 5m trail, the ladder's lock) until the position's gate is open; at the gate the first lock is
+ * break-even plus the spread plus 0.1 x ATR(M5) (gateBreakEven), and each lock records the MFE it was made at (mfe_r,
+ * mfe_atr). Without `gates` (direct calls, profit_lock_gate "legacy"), no gate: today's locks.
  */
-export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {}, loosenedFrom = {} } = {}) {
+export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {}, loosenedFrom = {}, gates = undefined } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
   const out = [];
   if (!finite(sym.bid) || !finite(sym.ask)) return out;
@@ -590,6 +611,11 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     const atBreakEven = Number.isFinite(curSl) && (buy ? curSl >= open - 1e-9 : curSl <= open + 1e-9);
     const risk = Number.isFinite(curSl) && !atBreakEven ? Math.abs(open - curSl) : 0;
     const r = risk > 0 ? move / risk : 0;
+    // SLG1: the position's profit-lock gate (null without `gates`: no gate). Closed, a stop at or beyond the entry waits.
+    const gate = gates === undefined ? null : gates?.[String(p.ticket)] ?? GATE_UNMEASURED;
+    const gatePoint = positive(sym.point) ? sym.point : Math.pow(10, -digits);
+    const gateShut = (x) => gate != null && gate.open !== true && stopInProfit(x, open, buy ? 1 : -1, gatePoint);
+    const gateBe = gate ? gateBreakEven({ open, dir: buy ? 1 : -1, spread: (finite(sym.spread_points) ? sym.spread_points : 0) * gatePoint, atrM5: gateAtrM5(signal, sym), digits }) : null;
 
     // 5m management (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12), from the broker's last 5m bars:
     // a confirmation against the position closes it once it is 0.5R in profit (or already protected);
@@ -603,18 +629,26 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     let movedSl = false;
     // Key-level management: SL+, trailing TP, and the close when the power turned against a winner.
     if (levels) {
-      const k = keyLevelPlan({ position: p, sym, signal, levels, now, extend: extendOf(p) });
+      const k = keyLevelPlan({ position: p, sym, signal, levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}) });
       if (k.close) {
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
       }
-      if (k.sl != null && !held(k.sl)) {
+      if (k.sl != null && !held(k.sl) && !gateShut(k.sl)) {
         out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}` });
         movedSl = true;
       }
       if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level" });
     }
-    if (!movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r && !held(roundTo(open, digits))) {
+    if (gate && !movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
+      // SLG1: the break-even waits for the gate and then goes to the gate's first lock, with the broker's stop distance.
+      const floorPx = (finite(sym.stops_level_points) ? sym.stops_level_points : 0) * gatePoint + (finite(sym.spread_points) ? sym.spread_points : 0) * gatePoint;
+      const room = buy ? gateBe < sym.bid - floorPx : gateBe > sym.ask + floorPx;
+      if (!gateShut(gateBe) && room && !held(gateBe)) {
+        out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: gateBe, tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
+        movedSl = true;
+      }
+    } else if (!movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r && !held(roundTo(open, digits))) {
       out.push({ id: `ms:${p.ticket}:be`, kind: "modify_sl", ticket: p.ticket, sl: roundTo(open, digits), tp: Number.isFinite(curTp) ? curTp : null, reason: "break_even" });
       movedSl = true;
     }
@@ -626,7 +660,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       const target = buy ? roundTo(m5.m5_swing_low - buffer, digits) : roundTo(m5.m5_swing_high + buffer, digits);
       const better = Number.isFinite(curSl) ? (buy ? target > curSl + point : target < curSl - point) : true;
       const room = buy ? target < sym.bid - floorPx : target > sym.ask + floorPx;
-      if (finite(target) && target > 0 && better && room && !held(target)) {
+      if (finite(target) && target > 0 && better && room && !held(target) && !gateShut(target)) {
         out.push({ id: `ms:${p.ticket}:t5:${Math.floor(m5.m5_close_ms / 60_000)}`, kind: "modify_sl", ticket: p.ticket, sl: target, tp: Number.isFinite(curTp) ? curTp : null, reason: "trail_5m" });
       }
     }
@@ -638,8 +672,9 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     // The TP ladder: the SL lock and the progressive partials (ladderPlan). It replaces the single scale-out below.
     if (S.tp_ladder) {
       const partialsDone = [...recent].filter((rid) => String(rid).startsWith(`pl:${p.ticket}:`)).length;
-      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles });
+      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles, ...(gate ? { beLockPx: gateBe } : {}) });
       if (lad.sl != null && held(lad.sl)) lad.sl = null;
+      if (lad.sl != null && gateShut(lad.sl)) lad.sl = null;
       if (lad.sl != null) {
         // One stop per position per plan: the ladder's lock wins only when it is tighter than a stop already planned.
         const i = out.findIndex((x) => x.kind === "modify_sl" && x.ticket === p.ticket);
@@ -666,7 +701,24 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
       }
     }
   }
+  if (gates !== undefined) stampGate(out, positions, gates, sym);
   return out;
+}
+
+/**
+ * Pure (SLG1): each stop at or beyond its position's entry in `intents` records the MFE its gate measured (mfe_r,
+ * mfe_atr), for the audit. Only an open gate lets such a stop through, so these are the locks made at or after it.
+ */
+export function stampGate(intents, positions, gates, sym = {}) {
+  const point = positive(sym.point) ? sym.point : 0.01;
+  for (const it of intents) {
+    if ((it.kind !== "modify_sl" && it.kind !== "modify_sltp") || !finite(it.sl)) continue;
+    const p = positions.find((x) => x?.ticket === it.ticket), g = gates?.[String(it.ticket)];
+    if (!p || !g || !stopInProfit(it.sl, Number(p.open_price ?? p.entry), p.side === "BUY" ? 1 : -1, point)) continue;
+    it.mfe_r = g.mfe_r ?? null;
+    it.mfe_atr = g.mfe_atr ?? null;
+  }
+  return intents;
 }
 
 // The same-side re-entry guard (owner 2026-11-18, relayed and confirmed: "Setuju"). On 2026-11-18 the Position Manager
@@ -737,8 +789,11 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * against the live price: a close; a stop only in the position's favour with the broker's stop distance; a target
  * only out to TP2 (the side's way). Risk-reducing only: never an open, an add or a wider stop. One intent per ticket
  * and 5-minute bar (the id carries the action's bar). `actions` are { id, ticket, action, rule, sl, tp }.
+ * SLG1 (owner 2026-11-23): with `gates` (profit_lock_gate "on"), a stop at or beyond the entry (break-even, the TP1
+ * lock, TP2 with break-even) and TP2 itself wait for the position's profit-lock gate: dropped, with the gate's reading,
+ * while it is closed; at or after it each lock records the MFE it was made at (mfe_r, mfe_atr).
  */
-export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false, a8 = null, loosenedFrom = {} } = {}) {
+export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false, a8 = null, loosenedFrom = {}, gates = undefined } = {}) {
   // `dropped`: each action that became no intent, with the reason in plain words (owner 2026-11-19: the Telegram
   // line says what reached the broker, and why an action did not).
   const out = [], used = [], dropped = [];
@@ -759,6 +814,14 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
     const from = Number(loosenedFrom?.[String(p.ticket)]);
     const heldByLoosen = (x) => finite(from) && from > 0 && !(buy ? x > from + point / 2 : x < from - point / 2);
     const a8Rule = typeof a.rule === "string" && (a.rule.startsWith("loosen_") || /^tp_(nearer|further)_/.test(a.rule));
+    // SLG1: the position's profit-lock gate while it is on (a ticket missing reads as closed).
+    const gate = gates === undefined ? null : gates?.[String(p.ticket)] ?? GATE_UNMEASURED;
+    const gateClosed = gate != null && gate.open !== true;
+    const intoProfit = (x) => stopInProfit(roundTo(x, digits), Number(p.open_price ?? p.entry), buy ? 1 : -1, point);
+    if (!a8Rule && gateClosed && ((a.action === "sl" && finite(a.sl) && intoProfit(a.sl)) || (a.action === "tp" && /^tp2_/.test(String(a.rule))))) {
+      drop(a, `${a.action === "tp" ? "TP2 waits" : "the lock waits"} for the profit-lock gate: ${gateText(gate)}`);
+      continue;
+    }
     if (a8Rule) {
       // The council's loosening or target move (ADR-0020 Amendment 8), checked again here against every bound.
       const r = a8Intent({ a, p, sym, bar, a8, point, digits, floorPx });
@@ -794,6 +857,7 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
     } else { drop(a, "not an action Omega applies"); continue; }
     used.push(a.id);
   }
+  if (gates !== undefined) stampGate(out, positions, gates, sym);
   return { intents: out, used, dropped };
 }
 
@@ -1086,7 +1150,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {} } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -1267,7 +1331,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     };
     a8 = { original: pmLoosen?.original ?? {}, loosened: loosenedRec, stops, blocked, riskCheck, veto: (p) => (p.side === "BUY" ? signal?.veto_long : signal?.veto_short) === true };
   }
-  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: [...closingNow], sltp: versionAtLeast(executor.executor?.version ?? null, "1.18"), ...(a8 ? { a8 } : {}), ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}) });
+  // SLG1 (owner 2026-11-23): the profit-lock gate's facts per ticket (`gates`, from the sync or v4), only while
+  // profit_lock_gate is "on"; a position without facts reads as closed. "legacy": no gate, today's calls.
+  const lockGates = profitLockGateOn(S) ? (lockGateFacts && typeof lockGateFacts === "object" ? lockGateFacts : {}) : undefined;
+  const pm = positionManagerIntents({ positions, sym, actions: pmActions, skipTickets: [...closingNow], sltp: versionAtLeast(executor.executor?.version ?? null, "1.18"), ...(a8 ? { a8 } : {}), ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}), ...(lockGates ? { gates: lockGates } : {}) });
   // ADR-0020 Amendment 4: under the TP ladder the Position Manager's outward take-profit (TP2) waits, like every
   // outward move, until the stop locks a profit at or beyond TP1. A target the council moves nearer (Amendment 8) is
   // not an outward move.
@@ -1290,7 +1357,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // Position management runs on every sync, whatever the entry gates say (audit 2026-11-11, owner:
   // "perbaiki"): a blackout, the rollover quarantine, a pause, a wide spread or a full book only stop
   // NEW entries; the positions already open keep their break-even, extended target and scale-out.
-  const managed = manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles, stops, ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}) });
+  const managed = manageIntents({ positions, sym, settings: S, signal, side, recentIntentIds, skipTickets: intents.map((it) => it.ticket), now, extendOf: exits.extendOf, positionMeta, candles, stops, ...(Object.keys(loosenedFrom).length ? { loosenedFrom } : {}), ...(lockGates ? { gates: lockGates } : {}) });
   // ADR-0020 Amendment 8: in the sync that loosens a stop, no mechanical stop or target move for that position (the
   // ladder never re-tightens it from a stale snapshot, and a target further never comes with a looser stop).
   const loosenedNow = new Set(pm.intents.filter((it) => it.loosen === true).map((it) => it.ticket));

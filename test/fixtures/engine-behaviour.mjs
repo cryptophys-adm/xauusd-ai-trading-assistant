@@ -9,7 +9,10 @@
 //   liquidity planIntents over the market path's hand inputs with the liquidity lens on (its default) and the live
 //            spread at 3x the hour's norm (the spread-spike gate and the modification deferral), and at 1x (no effect),
 //            docs/RFC_POSITIONING_LIQUIDITY.md §5-§6.
+//   gate     planIntents over the hand inputs with every position's profit-lock gate open (SLG1, the gate on).
 // Only outputs are written, never the inputs: a new switch added to OMEGA_DEFAULTS at its default leaves the text as is.
+// `profitLockGate` (SLG1, 2026-11-23) sets profit_lock_gate on every input after the defaults check: "legacy" gives the
+// text of the engine before the gate byte for byte (its hash is the old ENGINE_BEHAVIOUR_HASH, test V14b).
 import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
@@ -20,12 +23,13 @@ const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
   if (on.length) throw new Error(`${name}: a behaviour switch is on (${on.join(", ")}); the fingerprint is taken with every switch at its default`);
 };
-const replayLines = (group, scenarios) => {
+const withGate = (settings, gate) => (gate ? { ...settings, profit_lock_gate: gate } : settings);
+const replayLines = (group, scenarios, gate = null) => {
   const lines = [];
   for (const s of scenarios) {
     atDefaults(`${group}/${s.name}`, s.opts.settings);
     const trace = [];
-    const run = replayOmega4({ ...s.opts, trace });
+    const run = replayOmega4({ ...s.opts, settings: withGate(s.opts.settings, gate), trace });
     lines.push(`${group}/${s.name}/trace=${JSON.stringify(trace.map((t) => [t.now, t.output]))}`);
     lines.push(`${group}/${s.name}/records=${JSON.stringify(run.records)}`);
     lines.push(`${group}/${s.name}/work=${JSON.stringify([run.steps, run.plans, run.pm_calls, run.open_positions])}`);
@@ -34,22 +38,33 @@ const replayLines = (group, scenarios) => {
 };
 
 /** The text ENGINE_BEHAVIOUR_HASH is taken of (sha256Hex of it). */
-export function engineBehaviourSource() {
+export function engineBehaviourSource({ profitLockGate = null } = {}) {
   const lines = [];
   for (const [name, input] of handInputs()) {
     atDefaults(`market/${name}`, input.settings);
-    lines.push(`market/hand/${name}=${JSON.stringify(planIntents(input))}`);
+    lines.push(`market/hand/${name}=${JSON.stringify(planIntents({ ...input, settings: withGate(input.settings, profitLockGate) }))}`);
   }
-  lines.push(...replayLines("market/replay", replayScenarios().filter((s) => !eraSwitches(s.opts.settings).length)));
-  const pm = pmOffOutputs();
+  lines.push(...replayLines("market/replay", replayScenarios().filter((s) => !eraSwitches(s.opts.settings).length), profitLockGate));
+  const pm = pmOffOutputs(profitLockGate ? { profitLockGate } : {});
   for (const part of ["facts", "actions", "messages", "schema", "cleaned", "intents", "plans"]) lines.push(`pm/${part}=${JSON.stringify(pm[part])}`);
-  lines.push(...replayLines("v4", v4ReplayScenarios()));
+  lines.push(...replayLines("v4", v4ReplayScenarios(), profitLockGate));
   for (const [ratio, tag] of [[3, "spike"], [1, "calm"]]) {
-    for (const [name, input] of handInputs()) {
+    for (const [name, inputRaw] of handInputs()) {
+      const input = { ...inputRaw, settings: withGate(inputRaw.settings, profitLockGate) };
       const sp = Number(input.executor?.symbol?.spread_points);
       if (!input.signal || !(sp > 0)) continue;
       const signal = { ...input.signal, liquidity_on: true, liquidity_weight: 0.3, liquidity_spread_median: sp / ratio, liquidity_spread_widen: 2, liquidity_levels: "" };
       lines.push(`liquidity/${tag}/${name}=${JSON.stringify(planIntents({ ...input, signal, liquiditySpikeSince: input.now }))}`);
+    }
+  }
+  // SLG1 (2026-11-23): with the profit-lock gate on (its default), the hand inputs with every position's gate open: the
+  // locks made at the gate (its first lock, SL+ and the ladder past it) and the MFE they record. Not written for "legacy".
+  if (profitLockGate !== "legacy") {
+    for (const [name, input] of handInputs()) {
+      const ps = Array.isArray(input.executor?.positions) ? input.executor.positions : [];
+      if (!ps.length) continue;
+      const gates = Object.fromEntries(ps.map((p) => [String(p.ticket), { open: true, mfe_r: 1.25, mfe_atr: 1.5 }]));
+      lines.push(`gate/open/${name}=${JSON.stringify(planIntents({ ...input, settings: withGate(input.settings, profitLockGate), gates }))}`);
     }
   }
   return lines.join("\n");

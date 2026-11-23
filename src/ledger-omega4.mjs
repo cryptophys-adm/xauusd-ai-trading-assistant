@@ -26,6 +26,7 @@ import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_
 import { eaSignalFromDecision, managementFields, applyArmGate, blackoutWindow } from "./ea-signal.mjs";
 import { positionFacts, positionAction, brokerLevels } from "./position-manager.mjs";
 import { lastClosedCandle } from "./omega-broker.mjs";
+import { gatesFor, gateReadSince, profitLockGateOn } from "./profit-lock-gate.mjs";
 import { applyGridChoice, gridAdaptMode, readGridChoices } from "./grid-adapt.mjs";
 import { applyRangeMode, RANGE_GATED_AGENTS } from "./htf-cells.mjs";
 import { strategyArmMode, readArmState } from "./strategy-arm.mjs";
@@ -47,6 +48,7 @@ import * as omegaLimitKnobs from "./omega-limit-knobs.mjs";
 import * as pmLoosenKnobs from "./pm-loosen-knobs.mjs";
 import * as limitCouncil from "./limit-council.mjs";
 import * as liquidityLens from "./liquidity-lens.mjs";
+import * as profitLockGate from "./profit-lock-gate.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -376,6 +378,22 @@ export function replayOmega4({
     // Another entry policy's resting order: its deterministic cancels at the minute's open.
     if (entry) entry.atOpen({ now, decision: d, decisions: decs, mode, blackout, executor, profile, settings: S });
     if (!restingOnly) {
+      // SLG1, the profit-lock gate (src/profit-lock-gate.mjs), only while profit_lock_gate is "on": each position's
+      // facts from the 1m bars since its fill (at most GATE_LOOKBACK_MIN minutes back, the minute it is in excluded),
+      // the M15 ATR above and the decision's ATR(H1), as the live sync and the Position Manager measure them.
+      let gates = null;
+      if (profitLockGateOn(S) && positions.length) {
+        const live = positions.map(execPos);
+        const since = gateReadSince(live, now);
+        let lo = 0, hi = k;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (m1[mid].t < since) lo = mid + 1; else hi = mid; }
+        const metaOf = (p) => {
+          const it = positions.find((x) => x.ticket === p.ticket)?.open_intent ?? {};
+          const rd = finite(it.r_dist) && it.r_dist > 0 ? it.r_dist : finite(it.entry) && finite(it.sl) ? Math.abs(it.entry - it.sl) : null;
+          return { mode: typeof it.mode === "string" ? it.mode : null, r_dist: rd, tp_dist: finite(it.entry) && finite(it.tp) && it.tp > 0 ? Math.abs(it.tp - it.entry) : null };
+        };
+        gates = gatesFor({ positions: live, metaOf, bars: m1.slice(lo, k), atrM15: atrValue, atrH1: Number(d?.strategy?.atr_h1), now });
+      }
       // The Position Manager, once per 5m bar (the live cron, about 2.5 minutes past the 5m close).
       const pmActions = [];
       if (positions.length && now - Math.floor(now / M5) * M5 === OMEGA4_SIM.pm_offset_ms && d) {
@@ -386,7 +404,7 @@ export function replayOmega4({
         for (const p of positions) {
           const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
           const council = parseCouncil(text);
-          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal });
+          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}) });
           const a = positionAction(f, council);
           pmCalls += 1;
           const t = tradeOf(p);
@@ -409,7 +427,7 @@ export function replayOmega4({
       // The ladder's closed candles as ladderCandles builds them (lastClosedCandle over the last 125 1m bars); {} when flat, as live.
       const candles = recentBars ? { M5: lastClosedCandle(recentBars, 5, now), M15: lastClosedCandle(recentBars, 15, now), H1: lastClosedCandle(recentBars, 60, now) } : {};
       const re = reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null;
-      const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops };
+      const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops, ...(gates ? { gates } : {}) };
       const out = plan(input);
       plans += 1;
       if (trace) trace.push({ now, input, output: out });
@@ -532,14 +550,18 @@ export const ENGINE_CODE = Object.freeze({
     // EZ1 (2026-11-23): the limit inside the signal's entry zone.
     "signalEntryZone", "zoneLimit", "zoneEdgeLimit", "ZONE_MIN_RR", "ZONE_MIN_RISK_SHARE",
     // ADR-0020 Amendment 8 (2026-11-20): Omega's check of the council's loosening and target moves, and the loosenings sent.
-    "a8Intent", "loosenRecords"]],
+    "a8Intent", "loosenRecords",
+    // SLG1 (2026-11-23): the MFE each lock records.
+    "stampGate"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
     "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs",
     // Fail closed (2026-11-21): a limit intent the EA never answered or answered without a ticket sends Omega to market.
-    "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER"]],
+    "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER",
+    // SLG1 (2026-11-23): the profit-lock gate's live bars and facts.
+    "gateBars", "profitLockGates"]],
   "omega-limit-knobs": [omegaLimitKnobs, ["limitKnobs", "LIMIT_KNOB_START", "LIMIT_KNOB_BOUNDS"]],
   "pm-loosen-knobs": [pmLoosenKnobs, ["pmLoosenKnobs", "PM_LOOSEN_KNOB_START", "PM_LOOSEN_KNOB_BOUNDS"]],
   "limit-council": [limitCouncil, ["entryFacts", "entryChoice", "pendingFacts", "pendingAction", "runLimitCouncil", "ENTRY_REASONS", "PULLBACK_MIN_R", "ENTRY_SHARE_DROP", "LIMIT_ACTION_TTL_MS"]],
@@ -551,6 +573,8 @@ export const ENGINE_CODE = Object.freeze({
   "broker-trigger": [brokerTrigger, ["brokerTriggerFields", "readBrokerTrigger", "BROKER_TRIGGER_FRESH_MS"]],
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4-§6): the signal's liquidity
   // fields and levels, the spread-spike entry gate and the modification deferral planIntents applies.
+  // SLG1 (2026-11-23): the one profit-lock gate (its rules per mode, its facts, the first lock at it).
+  "profit-lock-gate": [profitLockGate, ["profitLockGateOn", "gateMode", "gateAtrM5", "gateBreakEven", "stopInProfit", "gateFacts", "gatesFor", "gateReadSince", "gateText", "PROFIT_LOCK_GATE", "PROFIT_LOCK_GATE_MODES", "GATE_BE_ATR_M5", "GATE_LOOKBACK_MIN", "GATE_UNMEASURED"]],
   "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
 });
 
@@ -579,7 +603,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "688f4b0981ac353255e4b004ac60910de9c0ee75380b6d56c1a7cfe5618969f2";
+export const ENGINE_CODE_HASH = "3f1febdcb6e764beb1f4828862dcbbdedc157367e780eaa825e299740f860947";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -589,12 +613,15 @@ export const ENGINE_CODE_HASH = "688f4b0981ac353255e4b004ac60910de9c0ee75380b6d5
  *   (test/fixtures/pm-a8-off.mjs); replayOmega4's traces and records over the v4 replay fixtures
  *   (test/fixtures/omega-v4-replay.mjs); planIntents over the hand inputs with the liquidity lens on (its default) and
  *   the live spread at 3x and 1x the hour's norm (docs/RFC_POSITIONING_LIQUIDITY.md: the gate and the deferral; this
- *   group moved the hash in 2026-11-20's lens PR, a new era at its deploy). Only tests build the text, so the Worker
- *   bundle carries the value alone.
+ *   group moved the hash in 2026-11-20's lens PR, a new era at its deploy); planIntents over the hand inputs with every
+ *   position's profit-lock gate open (SLG1). Only tests build the text, so the Worker bundle carries the value alone.
+ * SLG1 (owner 2026-11-23, a recorded exception): the profit-lock gate on by default moved it from
+ * b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f, a new era at its deploy; with profit_lock_gate
+ * "legacy" on every input the fixtures still give that old hash byte for byte (test/profit-lock-gate.test.mjs SLG1-15).
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f";
+export const ENGINE_BEHAVIOUR_HASH = "ddccddcd2904ee0878eb2286d3504772b40132951f570f1683c9e44c95347384";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
@@ -604,7 +631,9 @@ export const ENGINE_BEHAVIOUR_HASH = "b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa5
 // positioning_enabled and liquidity_enabled (docs/RFC_POSITIONING_LIQUIDITY.md, owner 2026-11-20) are on by default: the
 // signature compares each switch with its default (OMEGA_DEFAULTS), so at their defaults they add nothing, and the
 // owner turning a lens off writes "liquidity_enabled=false" and starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled"]);
+// profit_lock_gate (SLG1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy;
+// the owner setting it to "legacy" writes "profit_lock_gate=legacy" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
@@ -1120,4 +1149,64 @@ export async function runOmegaParity(env, { now = Date.now(), force = false } = 
 /** The stored parity result (GET /api/ledger `parity`), or null. */
 export async function readOmegaParity(env) {
   try { return JSON.parse((await env?.SIGNAL_CACHE?.get?.(OMEGA4_PARITY_KEY)) || "null"); } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// SLG1's brake (owner 2026-11-23): read-only, plus the one switch the owner holds. After at least PLG_BRAKE.min_closes
+// closes under the profit-lock gate, when their mean R per trade is below the mean of the last PLG_BRAKE.pre_closes
+// closes before the gate by more than PLG_BRAKE.worse_r, one Telegram line asks the owner to consider setting the Omega
+// setting profit_lock_gate to "legacy". It never changes the setting.
+//   the gate's era   starts the first time this step sees profit_lock_gate "on" (PLG_SINCE_KEY, the time it saw it);
+//                    the step seeing "legacy" clears it, so switching the gate on again starts a new era;
+//   under the gate   Omega's live trades (loadLiveTrades: ea_deals of the live USD account joined to their open intents,
+//                    R = profit over the risk at the open) whose position opened at or after the era's start;
+//   before the gate  the last PLG_BRAKE.pre_closes of those opened and closed before it.
+// At most one line per era (PLG_BRAKE_KEY + the era's start, in KV). Runs with the hourly parity check.
+
+export const PLG_BRAKE = Object.freeze({ min_closes: 30, pre_closes: 30, worse_r: 0.15 });
+export const PLG_SINCE_KEY = "omega:plg:since:v1";
+export const PLG_BRAKE_KEY = "omega:plg:brake:v1:";
+const mean = (xs) => (xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null);
+
+/** Pure: the brake's verdict over the live trades ({ fire, status, gated, pre, mean_gated_r, mean_pre_r, gap_r }). */
+export function profitLockBrake({ trades = [], sinceMs } = {}) {
+  const rows = (Array.isArray(trades) ? trades : []).filter((t) => finite(t?.r) && finite(t?.opened_ms));
+  const gated = rows.filter((t) => t.opened_ms >= sinceMs);
+  const pre = rows.filter((t) => t.opened_ms < sinceMs && finite(t.closed_ms) && t.closed_ms < sinceMs).sort((a, b) => a.closed_ms - b.closed_ms).slice(-PLG_BRAKE.pre_closes);
+  const mg = mean(gated.map((t) => t.r)), mp = mean(pre.map((t) => t.r));
+  const out = { gated: gated.length, pre: pre.length, mean_gated_r: r3(mg), mean_pre_r: r3(mp), gap_r: mg != null && mp != null ? r3(mp - mg) : null };
+  if (!finite(sinceMs) || gated.length < PLG_BRAKE.min_closes || pre.length < PLG_BRAKE.pre_closes) return { ...out, fire: false, status: "insufficient" };
+  return mg < mp - PLG_BRAKE.worse_r ? { ...out, fire: true, status: "worse" } : { ...out, fire: false, status: "holds" };
+}
+
+/** Pure: the brake's one Telegram line (plain text; escaped for Telegram's HTML by the caller). */
+export function profitLockBrakeMessage(b) {
+  return `XAUUSD OMEGA · Profit-lock gate brake: the ${b.gated} closes under the gate average ${b.mean_gated_r}R per trade, ${b.gap_r}R below the ${b.mean_pre_r}R of the ${b.pre} closes before it (threshold ${PLG_BRAKE.worse_r}R). Consider setting the Omega setting profit_lock_gate to 'legacy' (Omega page, Setup → Engine). The gate never switches itself off.`;
+}
+
+/** The brake's step (from runOmega4Step, after the hourly parity check). Read-only in D1; KV for the era and the dedupe. Never throws. */
+export async function runProfitLockBrake(env, { now = Date.now(), send = null, trades: tradesIn = undefined } = {}) {
+  const kv = env?.SIGNAL_CACHE;
+  if (!env?.DB || !kv?.put) return { status: "unavailable" };
+  try {
+    let stored = {};
+    try { stored = parse((await env.DB.prepare("SELECT settings FROM omega_settings WHERE id = 1").first())?.settings, {}) ?? {}; } catch { stored = {}; }
+    if (!profitLockGateOn({ ...OMEGA_DEFAULTS, ...stored })) {
+      if (await kv.get(PLG_SINCE_KEY)) await kv.delete?.(PLG_SINCE_KEY);
+      return { status: "legacy" };
+    }
+    const since = Number(await kv.get(PLG_SINCE_KEY));
+    if (!(since > 0)) { await kv.put(PLG_SINCE_KEY, String(now)); return { status: "started", since_ms: now }; }
+    if (await kv.get(`${PLG_BRAKE_KEY}${since}`)) return { status: "sent_before", since_ms: since };
+    const trades = tradesIn ?? (await loadLiveTrades(env, { sinceMs: since - 90 * 86_400_000 })).trades;
+    const b = profitLockBrake({ trades, sinceMs: since });
+    if (!b.fire) return { ...b, since_ms: since };
+    await kv.put(`${PLG_BRAKE_KEY}${since}`, String(now), { expirationTtl: 180 * 86_400 });
+    const line = profitLockBrakeMessage(b);
+    const deliver = send ?? (async (t) => { const ob = await import("./omega-broker.mjs"); await ob.sendOmegaTelegram(env, ob.escHtml(t)); });
+    try { await deliver(line); } catch { /* said once per era; the verdict is in the step's result */ }
+    return { ...b, status: "sent", since_ms: since };
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
 }
