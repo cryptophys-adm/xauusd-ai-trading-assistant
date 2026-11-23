@@ -10,7 +10,7 @@ import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
 import { CANDLE, KWW, T, rgba, tagText, volumeColor } from "../lib/tokens";
-import { bandSource, gmt7ClockOf, gmt7Crosshair, gmt7Tick, zoneText } from "../lib/entryZone";
+import { bandSource, clearDecision, gmt7ClockOf, gmt7Crosshair, gmt7Tick, zoneText } from "../lib/entryZone";
 
 const ZONE_COLOR: Record<string, string> = { support: T.bullFill, resistance: T.bearFill, "at price": T.okFill };
 const ZONE_ALPHA: Record<string, number> = { strong: 0.16, medium: 0.1, weak: 0.06 };
@@ -220,7 +220,7 @@ export default function PriceChart() {
     for (const l of planLines.current) series.removePriceLine(l);
     planLines.current = [];
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
-    const hasClearDecision = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL";
+    const hasClearDecision = clearDecision(strategy, engine);
     const p = showPlan && hasClearDecision && mark.show ? strategy?.plan : null;
     if (p) {
       // Stale: the line dimmed and its title marked; the axis tag keeps its fill so the price stays readable.
@@ -235,17 +235,17 @@ export default function PriceChart() {
       line(p.tp1, `TP1 ${p.rrr?.tp1 ?? ""}R`, T.bullFill, LineStyle.Dashed);
       line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, T.bullFill, LineStyle.Dotted);
     }
-  }, [strategy, showZones, showPlan, mark.show, mark.dim, mark.suffix]);
+  }, [strategy, engine, showZones, showPlan, mark.show, mark.dim, mark.suffix]);
 
   // EZ1 (the reviewer's ruling 1): the Entry band from the engine's trade when the engine is on, else the strategy plan,
   // so the chart and the Decision card show the same zone (feed scale); shown with the plan lines, dimmed with them while
   // the decision is stale, dropped with them past the threshold.
   useEffect(() => {
-    const clear = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL" || engine?.stance === "BUY" || engine?.stance === "SELL";
+    const clear = clearDecision(strategy, engine);
     const ez = showPlan && clear && mark.show ? bandSource({ engine, strategy }).zone : null;
     const narrow = (el.current?.clientWidth ?? 1000) < 480;
     entryRef.current?.setZones(ez ? [{ low: ez.low, high: ez.high, color: T.okFill, alpha: mark.dim ? 0.08 : 0.16, text: mark.dim ? rgba(T.ok, 0.6) : T.ok, label: narrow ? "Entry zone · feed" : `Entry zone ${zoneText(ez)} · feed scale` }] : []);
-  }, [strategy, engine, g?.engine?.stance, showPlan, mark.show, mark.dim]);
+  }, [strategy, engine, showPlan, mark.show, mark.dim]);
 
   useEffect(() => {
     let fit = true;
@@ -359,7 +359,7 @@ export default function PriceChart() {
   }, [plane, planeTf, layers.volume, layers.liquidity, layers.session, fibShown]);
 
   // The note only when something was dropped: a clear decision's plan, or the zones.
-  const planHidden = !mark.show && ((showPlan && !!strategy?.plan && (strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL")) || (showZones && (strategy?.key_levels?.candidates?.length ?? 0) > 0));
+  const planHidden = !mark.show && ((showPlan && !!strategy?.plan && clearDecision(strategy, engine)) || (showZones && (strategy?.key_levels?.candidates?.length ?? 0) > 0));
   const hiddenWhy = decisionPoll.replayed && decisionPoll.replayAt == null ? "the decision is a hub replay of unknown age (no read has answered yet)" : mark.note === "plan hidden: decision stale" ? "the decision's age is unknown or ahead of this clock" : "the decision's plan and zones are older than 2h";
   const staleTitle = decisionPoll.error ? `${decisionPoll.error} · ${hiddenWhy}` : hiddenWhy;
   const up = (head.change ?? 0) >= 0;

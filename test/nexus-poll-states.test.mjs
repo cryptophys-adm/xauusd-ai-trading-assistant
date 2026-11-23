@@ -404,7 +404,7 @@ test("PS22 SHOULD 3: the chart's plan lines and zones from a stale decision are 
   assert.match(pc, /const candidates: any\[\] = showZones && mark\.show \?/, "the zones too");
   assert.match(pc, /\* \(mark\.dim \? 0\.5 : 1\)/);
   assert.match(pc, /\{planHidden \? <div [^>]*>\{mark\.note\}<\/div> : null\}/, "the note on the chart");
-  assert.match(pc, /\}, \[strategy, showZones, showPlan, mark\.show, mark\.dim, mark\.suffix\]\);/, "redrawn when the mark changes");
+  assert.match(pc, /\}, \[strategy, engine, showZones, showPlan, mark\.show, mark\.dim, mark\.suffix\]\);/, "redrawn when the mark changes");
 });
 
 test("PS23 SHOULD 4: Retry now is never stuck behind a hung read", async () => {

@@ -54,6 +54,14 @@ export function bandSource(g: any): { source: "engine" | "plan"; plan: any; zone
   return { source: "plan", plan: p, zone: p ? zoneOf(p) : null, side, edge: false };
 }
 
+/**
+ * A clear decision, the only time the chart draws a plan (owner directive 2026-11-11): the strategy engine's BUY or SELL,
+ * or the Decision Engine's BUY or SELL stance. `engine` is the body's top-level `engine` (useMarket's `engine`); the
+ * Global Conclusion's `global` never carries it.
+ */
+export const clearDecision = (strategy: any, engine: any): boolean =>
+  strategy?.decision === "BUY" || strategy?.decision === "SELL" || engine?.stance === "BUY" || engine?.stance === "SELL";
+
 /** The zone's near edge for a side: a BUY's high, a SELL's low (EZ1b rests the limit there). */
 export const nearEdge = (side: Side | null, z: Zone): number | null => (side === "BUY" ? z.high : side === "SELL" ? z.low : null);
 
