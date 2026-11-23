@@ -7,6 +7,7 @@ export interface OmegaSettings {
   max_spread_points: number;
   max_signal_age_ms: number;
   entry_order?: "market" | "limit" | "council";
+  profit_lock_gate?: "on" | "legacy";
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;
@@ -35,9 +36,10 @@ export function planIntents(input?: {
   pendingMeta?: Record<string, any>;
   limitFills?: number[];
   conversion?: Record<string, any> | null;
+  gates?: Record<string, Record<string, any>>;
 }): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[]; entry_request?: Record<string, any> | null; limit_used?: string[]; limit_dropped?: { id: string; reason: string }[]; fill_checks?: { ticket: number; guard: string | null }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
-export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]> }): Array<Record<string, any>>;
+export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]>; gates?: Record<string, Record<string, any>> }): Array<Record<string, any>>;
 export const STOP_COMMAND_MS: number;
 export function commandedStops(rows?: Array<{ payload?: unknown; status?: string; result?: unknown }>): Record<string, number[]>;
 export function withCommandedStop<T extends Record<string, any>>(p: T, stops?: Record<string, number[]>): T;

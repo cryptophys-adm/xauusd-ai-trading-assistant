@@ -275,7 +275,8 @@ test("audit 2026-11-11: open positions are managed whatever the entry gates say 
     ["no_side", { signal: { ...SIGNAL, side: "NONE" } }]
   ];
   for (const [code, over] of gated) {
-    const r = plan({ settings: { ...ON, trailing_stop_r: 1, max_positions: code === "max_positions" ? 1 : 3 }, executor: ex({ positions }), ...over });
+    // SLG1 (2026-11-23): the break-even at the open price is the "legacy" one (with the gate on it waits for the gate).
+    const r = plan({ settings: { ...ON, trailing_stop_r: 1, max_positions: code === "max_positions" ? 1 : 3, profit_lock_gate: "legacy" }, executor: ex({ positions }), ...over });
     assert.ok(codes(r).includes(code), `${code}: ${JSON.stringify(codes(r))}`);
     assert.ok(!r.intents.some((it) => it.kind === "open"), `${code}: no new entry`);
     assert.ok(r.intents.some((it) => it.kind === "modify_sl" && it.sl === 4090 && it.reason === "break_even"), `${code}: break-even still applied`);

@@ -79,6 +79,16 @@ export function tp2Case() {
 }
 
 /** The replay scenarios as replayOmega4 options ({ name, opts }), as V2-V6 run them. */
+/** SLG1-18: a SELL at 2000 with a 5.00 stop (scalp) whose one-minute wick reaches 7 in its favour, then sits at +1 (0.2R, inside the
+ * 0.3R band) until it runs back up through the stop: the gate opens on the wick's closed M5 bar, the price is back inside
+ * the band at the Position Manager's next run. */
+export function retraceCase() {
+  const d0 = decision({ close: C, trade: sellTrade(2000, 2005, 1985), lv: levels([[1940, 1942]]) });
+  const d1 = decision({ close: C + M15, stance: "WAIT", decidedAfter: M1, lv: levels([[1940, 1942]]) });
+  const price = lerp([[C + 3 * M1, 2000], [C + 5 * M1, 1999], [C + 6 * M1, 1993], [C + 7 * M1, 1999], [C + 40 * M1, 1999], [C + 55 * M1, 2006]]);
+  return { bars: path(C - WARM, C + 60 * M1, price, 0.05), decisions: [dec(d0), dec(d1)], to: C + 60 * M1 };
+}
+
 export function v4ReplayScenarios() {
   const { settings: cutSettings, ...cut } = cutLossCase();
   return [

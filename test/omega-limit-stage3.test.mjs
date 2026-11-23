@@ -307,7 +307,8 @@ test("S11 the entry council's answer: the measured reason rule under council, pl
 });
 
 test("S12 the market path is unchanged byte for byte (hand fixtures and v4's replay traces, hashed before stage 3)", () => {
-  const outs = marketOutputs();
+  // SLG1 (2026-11-23): stage 2 had no profit-lock gate; profit_lock_gate "legacy" is that code byte for byte.
+  const outs = marketOutputs({ profitLockGate: "legacy" });
   const h = (x) => createHash("sha256").update(JSON.stringify(x)).digest("hex");
   // Taken from the code at 3b245ca (stage 2) with test/fixtures/omega-market-path.mjs.
   assert.equal(h(outs.map((o) => o.output)), "96fdbcd43621042554b4c4198130d3516557aecaff9985dfe7f372f7b8630f39");

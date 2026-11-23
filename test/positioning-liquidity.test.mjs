@@ -400,7 +400,9 @@ test("PL13. the modify deferral: during a spike the planner's stop and target mo
   assert.equal(deferModifications(its, { spike: false, now }).deferred.length, 0);
   // In planIntents over every hand fixture: a spike only ever removes modifications; every close and kill stays.
   let deferredSome = 0;
-  for (const [name, input] of handInputs()) {
+  // SLG1 (2026-11-23): the profit-lock gate is on by default; open for every position here, so its locks are there to defer.
+  for (const [name, raw] of handInputs()) {
+    const input = { ...raw, gates: Object.fromEntries((raw.executor?.positions ?? []).map((p) => [String(p.ticket), { open: true, mfe_r: 2, mfe_atr: 2 }])) };
     const sp = Number(input.executor?.symbol?.spread_points);
     if (!input.signal || !(sp > 0)) continue;
     const calm = planIntents({ ...input, signal: { ...input.signal, ...liq({ liquidity_spread_median: sp }) } });

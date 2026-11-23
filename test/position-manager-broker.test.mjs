@@ -51,7 +51,8 @@ test("PB2. every action that becomes no intent says why", () => {
 
 test("PB3. under the TP ladder, the held TP2 is a dropped action with its reason (ADR-0020 Amendment 4)", () => {
   const executor = { connected: true, received_ms: 1_000, positions: [pos()], account: { trade_mode: "demo" }, symbol: sym(3876.1) };
-  const plan = planIntents({ executor, now: 1_000, engineEnabled: true, settings: { enabled: true, tp_ladder: true }, pmActions: [{ id: "pm:101:7001", ticket: 101, action: "tp", rule: "tp2_target", tp: 3862 }] });
+  // SLG1 (2026-11-23): TP2 also waits for the profit-lock gate (on by default); open here, so Amendment 4 holds it.
+  const plan = planIntents({ executor, now: 1_000, engineEnabled: true, settings: { enabled: true, tp_ladder: true }, pmActions: [{ id: "pm:101:7001", ticket: 101, action: "tp", rule: "tp2_target", tp: 3862 }], gates: { 101: { open: true, mfe_r: 1.2, mfe_atr: 1.6 } } });
   assert.ok(!plan.intents.some((i) => i.kind === "modify_tp" && String(i.id).startsWith("pm:")));
   assert.deepEqual(plan.pm_dropped, [{ id: "pm:101:7001", reason: "the TP ladder holds the target until the stop locks TP1 (ADR-0020 Amendment 4)" }]);
   // Every plan carries the list, an early stop too.
@@ -174,7 +175,9 @@ test("PB8. the sync: a broker take-profit is said once with its numbers; a full 
 test("PB9. the sync: a Position Manager action is said when the broker answers, or as not applied with the reason", async () => {
   const e = env();
   await sync(e);
-  await writeSettings(e, { body: { enabled: true, tp_ladder: true }, actor: "owner" }, { now: NOW });
+  // SLG1 (2026-11-23): "legacy", so the TP2 here is held by the TP ladder alone (with the gate on it would wait for the
+  // gate first, test/profit-lock-gate.test.mjs).
+  await writeSettings(e, { body: { enabled: true, tp_ladder: true, profit_lock_gate: "legacy" }, actor: "owner" }, { now: NOW });
   const at = NOW - 60_000, bar = Math.floor(at / 300_000);
   const ins = (id, action, extra) => e.DB.raw.prepare(`INSERT INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, status) VALUES (?, 101, ?, ?, 'SELL', 37, 3876.3, ?, ?, ?, ?, ?, 'weakening, thesis weakening: fading', 'pending')`)
     .run(id, bar, at, action, extra.rule, extra.sl ?? null, extra.tp ?? null, extra.why);
@@ -208,7 +211,8 @@ test("PB10. TP2 with the break-even stop: one modify_sltp on OmegaExecutor 1.18+
   assert.match(positionManagerIntents({ positions: [pos({ sl: 3879 })], sym: sym(3876.1), actions: [a], sltp: true }).dropped[0].reason, /looser/);
   // Through the plan under the ladder: the stop-and-target passes (it carries its own protection); a bare TP2 still waits.
   const executor = { connected: true, received_ms: 1_000, positions, account: { trade_mode: "demo" }, symbol: sym(3876.1), executor: { version: "1.20" } };
-  const plan = planIntents({ executor, now: 1_000, engineEnabled: true, settings: { enabled: true, tp_ladder: true }, pmActions: [a] });
+  // SLG1 (2026-11-23): past the profit-lock gate (on by default).
+  const plan = planIntents({ executor, now: 1_000, engineEnabled: true, settings: { enabled: true, tp_ladder: true }, pmActions: [a], gates: { 101: { open: true, mfe_r: 1.2, mfe_atr: 1.6 } } });
   assert.ok(plan.intents.some((i) => i.id === "pm:101:t:9" && i.kind === "modify_sltp"));
   assert.match(actionMessage({ ticket: 101, side: "SELL", pips: 37, action: "tp", tp: 3862, sl: 3879.8, why: "w", council: null }), /target to 3862 and stop to 3879\.8 · applied at the broker/);
 });

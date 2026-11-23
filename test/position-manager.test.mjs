@@ -136,7 +136,8 @@ test("PM5. the runner: once per position and 5m bar, live only, no Telegram line
   const kv = new Map();
   const env = { DB: db, POSITION_MANAGER_MODE: "live", POSITION_COUNCIL_DAILY_USD: "5", SIGNAL_CACHE: { get: async (k) => kv.get(k) ?? null, put: async (k, v) => kv.set(k, v) } };
   const call = async (_e, req) => { calls.push(req); return { status: "answered", obj: { momentum: "weakening", thesis: "weakening", reason: "momentum fading at the zone" } }; };
-  const base = { call, send: async (t) => sent.push(t), executor: { positions: [pos()], symbol: sym(3876.1) }, openIntents: { "open:1:S": intent }, signal: null, decision: decision() };
+  // SLG1 (2026-11-23): the profit-lock gate is on by default; open here (the runner's `gates`), so the lock may apply.
+  const base = { call, send: async (t) => sent.push(t), executor: { positions: [pos()], symbol: sym(3876.1) }, openIntents: { "open:1:S": intent }, signal: null, decision: decision(), gates: { 101: { open: true, mfe_r: 1.1, mfe_atr: 1.6 } } };
   const now = Date.parse("2026-11-17T08:00:30Z");
   assert.equal((await runPositionManager({ ...env, POSITION_MANAGER_MODE: "off" }, { ...base, now })).status, "off");
   const r = await runPositionManager(env, { ...base, now });

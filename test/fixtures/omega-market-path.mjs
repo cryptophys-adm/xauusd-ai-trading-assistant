@@ -148,13 +148,17 @@ export function replayScenarios() {
   ];
 }
 
-/** Every output of the two groups, in order ({ group, name, output }). */
-export function marketOutputs({ plan = planIntents } = {}) {
+/**
+ * Every output of the two groups, in order ({ group, name, output }). `profitLockGate` (SLG1, 2026-11-23) sets
+ * profit_lock_gate on every input: "legacy" is the code before the gate byte for byte.
+ */
+export function marketOutputs({ plan = planIntents, profitLockGate = null } = {}) {
+  const gate = (settings) => (profitLockGate ? { ...settings, profit_lock_gate: profitLockGate } : settings);
   const out = [];
-  for (const [name, input] of handInputs()) out.push({ group: "hand", name, output: plan(input) });
+  for (const [name, input] of handInputs()) out.push({ group: "hand", name, output: plan({ ...input, settings: gate(input.settings) }) });
   for (const s of replayScenarios()) {
     const trace = [];
-    const run = replayOmega4({ ...s.opts, trace, plan });
+    const run = replayOmega4({ ...s.opts, settings: gate(s.opts.settings), trace, plan });
     out.push({ group: "replay", name: s.name, calls: trace.length, output: trace.map((t) => t.output), records: run.records });
   }
   return out;

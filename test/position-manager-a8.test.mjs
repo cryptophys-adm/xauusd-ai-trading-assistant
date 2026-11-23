@@ -43,7 +43,8 @@ test("A8-1 the switch: off by default, a boolean, owner-only on the page; Aether
 });
 
 test("A8-2 switch off: positionFacts, positionAction, the council's messages and schema and Omega's intents are byte for byte the same", () => {
-  const o = pmOffOutputs();
+  // SLG1 (2026-11-23): the code at ad21475 had no profit-lock gate; profit_lock_gate "legacy" is that code byte for byte.
+  const o = pmOffOutputs({ profitLockGate: "legacy" });
   // Taken from the code at ad21475 (before the amendment) with test/fixtures/pm-a8-off.mjs.
   assert.equal(h(o.facts), "51d837cdc426341bb7791239493dbbb6770f8e70ab4e68b9f9fbd3151b740ae8");
   assert.equal(h(o.actions), "5b45c5488e77feb12cd5377958940f329b1b323febe2eddb4e12f3a3e600caac");
@@ -270,7 +271,8 @@ test("A8-10 after a loosening the position counts as unprotected again; its late
 test("A8-11 in the sync that loosens, no mechanical stop or target move for that position (no re-tightening from a stale snapshot)", () => {
   const KL = { feed_basis: 0, feed_basis_known: true, key_levels: "4009:4010,4019:4020", power: 0.6, power_ms: 1_000, side: "NONE" };
   const ex = { connected: true, received_ms: 1_000, positions: [pos({ sl: 4005, tp: 4030 })], executor: { version: "1.21" }, account: { trade_mode: "demo", equity: 10_000, day_start_balance: 10_000 }, symbol: sym(4016) };
-  const base = { executor: ex, now: 1_000, engineEnabled: true, signal: KL, positionMeta: { "open:1:B": { mode: "scalp", r_dist: 10 } }, pmLoosen: { loosened: {}, original: { 7: { sl: 3990, mode: "scalp", r_dist: 10 } } } };
+  // SLG1 (2026-11-23): the profit-lock gate is on by default; open here, so the ladder may lock TP1.
+  const base = { executor: ex, now: 1_000, engineEnabled: true, signal: KL, positionMeta: { "open:1:B": { mode: "scalp", r_dist: 10 } }, pmLoosen: { loosened: {}, original: { 7: { sl: 3990, mode: "scalp", r_dist: 10 } } }, gates: { 7: { open: true, mfe_r: 1.6, mfe_atr: 2.5 } } };
   const off = planIntents({ ...base, settings: { enabled: true, tp_ladder: true } });
   assert.ok(off.intents.some((i) => i.kind === "modify_sl" && String(i.id).startsWith("ms:7:lad:")), "the ladder locks TP1 on this snapshot");
   const loosen = { id: "pm:7:9", ticket: 7, action: "sl", rule: "loosen_atr_expansion", sl: 4002 };

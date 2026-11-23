@@ -19,6 +19,14 @@ import { DECISION_SCHEMA_SQL } from "../src/decision-engine.mjs";
 
 // The replay fixtures (V2-V6), shared with ENGINE_BEHAVIOUR_HASH (test/fixtures/engine-behaviour.mjs).
 import { M1, M5, M15, C, WARM, key, levels, path, decision, sellTrade, dec, base, ladderCase, breakevenCase, cutLossCase, tp2Case } from "./fixtures/omega-v4-replay.mjs";
+// SLG1 (2026-11-23): V3, V4, V6, V9 and V12 replay the locks the profit-lock gate now holds (their moves never reach the
+// gate: MFE below 1R); they run with profit_lock_gate "legacy", which is the engine before the gate byte for byte
+// (test/profit-lock-gate.test.mjs replays the same fixtures with the gate on).
+const LEGACY = { settings: { ...OMEGA_DEFAULTS, enabled: true, profit_lock_gate: "legacy" } };
+const legacySettings = (db, at) => {
+  db.raw.exec("CREATE TABLE IF NOT EXISTS omega_settings (id INTEGER PRIMARY KEY, settings TEXT NOT NULL, version INTEGER NOT NULL, updated_by TEXT, updated_ms INTEGER)");
+  db.raw.prepare("INSERT INTO omega_settings VALUES (1, ?, 1, 'owner', ?)").run(JSON.stringify(LEGACY.settings), at);
+};
 
 test("V1. the 5m structure is the pull adapter's structureOf; councils, decisions, profiles and balances parse", () => {
   const bars = Array.from({ length: 20 }, (_, i) => ({ high: 2000 + (i % 5) + 0.7, low: 2000 + (i % 5) - 0.4, close: 2000 + (i % 3) }));
@@ -60,7 +68,7 @@ test("V2. v4 is planIntents: the same intents as a direct planIntents call on ea
 test("V3. a v4 trade hits the TP ladder's lock on a closed M5 candle and exits at the locked stop (sl_plus)", () => {
   const { bars, decisions } = ladderCase();
   const trace = [];
-  const run = replayOmega4({ ...base(), bars, decisions, to: C + 40 * M1, trace });
+  const run = replayOmega4({ ...base(LEGACY), bars, decisions, to: C + 40 * M1, trace });
   const lock = trace.flatMap((s) => s.output.intents.map((it) => ({ ...it, at: s.now }))).find((it) => /^ladder_lock_tp0/.test(String(it.reason)));
   assert.ok(lock, "a ladder lock was planned");
   assert.equal(lock.kind, "modify_sl");
@@ -81,7 +89,7 @@ test("V4. the Position Manager's break-even lock applies as the mechanical fallb
   // Stop 5 (band 0.3 x 5 = 1.5, 15 pips; the ladder's scalp step is 3.0): at 3 minutes past the 5m close the SELL is
   // 2 in profit, no council answered, so the stop goes to break-even plus the spread; price comes back to it.
   const trace = [];
-  const run = replayOmega4({ ...base(), ...breakevenCase(), trace });
+  const run = replayOmega4({ ...base(LEGACY), ...breakevenCase(), trace });
   const pm = trace.flatMap((s) => s.output.intents.map((it) => ({ ...it, at: s.now }))).find((it) => it.reason === "pm_breakeven");
   assert.ok(pm, JSON.stringify(trace.map((s) => s.output.intents)));
   assert.equal(pm.kind, "modify_sl");
@@ -122,7 +130,7 @@ test("V6. TP2 with the break-even stop: one modify_sltp on the council's verdict
   // In profit inside the band, the target still at TP1 (1985), a key level beyond it (1975-1977): under the TP ladder
   // the council's "strengthening, thesis intact" sends TP2 out with the stop at break-even plus the spread.
   const trace = [];
-  const run = replayOmega4({ ...base(), ...tp2Case(), trace });
+  const run = replayOmega4({ ...base(LEGACY), ...tp2Case(), trace });
   const sltp = trace.flatMap((s) => s.output.intents).find((it) => it.reason === "pm_tp2_breakeven");
   assert.ok(sltp, "tp2_breakeven planned");
   assert.equal(sltp.kind, "modify_sltp");
@@ -233,6 +241,7 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   // The live USD account: its profile and its last balance (never its number).
   db.raw.exec("CREATE TABLE omega_accounts (account_ref TEXT PRIMARY KEY, profile TEXT, last_balance REAL, last_seen_ms INTEGER, created_ms INTEGER)");
   db.raw.prepare("INSERT INTO omega_accounts VALUES ('acct_x', 'aggressive', 1000.4, ?, ?)").run(C + 30 * M1, C - 86_400_000);
+  legacySettings(db, C - 7200_000);
   for (const d of decisions) {
     const full = JSON.parse(JSON.stringify(d));
     db.raw.prepare("INSERT INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, 'engine', ?)").run(full.decision_key, full.bar_close, full.decided_at, full.stance, 0.7, JSON.stringify(full));
@@ -253,7 +262,7 @@ test("V9. the cron step: v4 rows in D1 beside v3, the checkpoint, the view's ome
   // The live trade on the same decision, closed by the ladder's locked stop: parity passes.
   db.raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES (?, 'open', ?, 'done', ?, ?, ?)").run(`open:${C}:S`, JSON.stringify({ side: "SELL", volume: 0.01, entry: 2000, sl: 2020, r_dist: 20, signal_issued_ms: C, mode: "scalp" }), JSON.stringify({ ok: true, ticket: 42 }), C + 3 * M1, C + 3 * M1);
   // The era holding this code (as if it had started an hour before the trade).
-  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ behaviour_hash: ENGINE_BEHAVIOUR_HASH, code_hash: ENGINE_CODE_HASH, switches: [], since_ms: C - 3600_000, commit: "c0ffee", reason: "behaviour change", previous: [], carried: [] }));
+  cache.m.set(OMEGA4_ERA_KEY, JSON.stringify({ behaviour_hash: ENGINE_BEHAVIOUR_HASH, code_hash: ENGINE_CODE_HASH, switches: ["profit_lock_gate=legacy"], since_ms: C - 3600_000, commit: "c0ffee", reason: "behaviour change", previous: [], carried: [] }));
   const parity = await runOmegaParity(env, { now });
   assert.equal(parity.status, "checked", JSON.stringify(parity));
   const stored = JSON.parse(cache.m.get(OMEGA4_PARITY_KEY));
@@ -351,6 +360,7 @@ test("V12. the 1m archive: merged with the KV series without duplicates, and the
     // The account's profile (as V9): without one the default 0.5 % risk sizes the minimum lot out.
     db.raw.exec("CREATE TABLE omega_accounts (account_ref TEXT PRIMARY KEY, profile TEXT, last_balance REAL, last_seen_ms INTEGER, created_ms INTEGER)");
     db.raw.prepare("INSERT INTO omega_accounts VALUES ('acct_x', 'aggressive', 1000, ?, ?)").run(C, C - 86_400_000);
+    legacySettings(db, C - 7200_000);
     db.raw.prepare("INSERT INTO ea_deals (deal_ticket, position_ticket, mode, side, volume, profit, reason, opened_ms, closed_ms, currency, source, account_ref) VALUES (9, 9, 'unknown', 'SELL', 0.01, 0, 'tp', ?, ?, 'USD', 'omega', 'acct_x')").run(C - 86_400_000, C - 86_000_000);
     return { db, cache, env };
   };
@@ -398,10 +408,12 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   // The three fixture sets, outputs only.
   const names = text.split("\n").map((l) => l.slice(0, l.indexOf("=")));
   assert.ok(names.filter((n) => n.startsWith("market/hand/")).length >= 60);
-  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records"]);
+  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate"]);
+  // The profit-lock gate (SLG1) is on by default: "legacy" starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, profit_lock_gate: "legacy" }), ["profit_lock_gate=legacy"]);
   // The lens switches are on by default: at their defaults they add nothing; a lens switched off starts a new era.
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, liquidity_enabled: false }), ["liquidity_enabled=false"]);
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, positioning_enabled: false, liquidity_enabled: false }), ["liquidity_enabled=false", "positioning_enabled=false"]);

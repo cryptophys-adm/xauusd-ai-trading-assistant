@@ -23,6 +23,16 @@
 // PM_R_BAND of the mode it opened in: scalp 0.3R, intraday and range 0.5R, swing 0.7R. A position whose stop distance
 // is unknown keeps 30 pips. The 30 pips beyond TP1 of lock_tp1 stay in pips.
 //
+// SLG1, one profit-lock gate (owner 2026-11-23, src/profit-lock-gate.mjs), while the Omega setting profit_lock_gate is
+// "on" (the default; the runner passes `gate` into positionFacts): the break-even, the TP1 lock and TP2 (with or without
+// its break-even stop) wait until the position's MFE on closed bars of its mode's timeframe reaches the mode's
+// threshold (the scalp, intraday, swing and range rules there); a lock waiting is a hold (lock_waits_gate,
+// tp2_waits_gate). At the gate the break-even is break-even plus the spread plus 0.1 x ATR(M5), and TP2 is no longer
+// reached at any profit inside the band: the gate is its trigger. The gate is the break-even's trigger as well: once it
+// is open the first lock goes in at any price inside the band too (a peak past the gate that pulled back still locks),
+// without the council, or waits as lock_waits_room while the price leaves no room for it. take_profit_weakening,
+// cut_loss and lock_tp1's level are unchanged. "legacy" (no `gate`): the rules as they were.
+//
 // Guardrails (owner): only close, or a stop moved in the position's favour (never widened), or the take-profit
 // moved out to TP2; never an add, a reversal or an open. Inputs are measured: the strategy agent's confidence on the
 // position's side against the bar before, the quorum's shares, the decision's stance. Never the council's own
@@ -43,6 +53,7 @@ import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
 import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords } from "./omega-engine.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
+import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -86,8 +97,11 @@ export const pipsOf = (dist) => r1(dist / PIP);
  * Pure: what the manager knows of one position. `openIntent` is its open intent's payload (entry, sl, tp = TP1,
  * strategy); `levels` the key levels on the broker's scale (low first); `decision` the latest Decision Engine record
  * (stance, quorum, agent_confidence and agent_confidence_prev). Returns null when an input the rules need is missing.
+ * `gate` (SLG1, profit_lock_gate "on"): the position's profit-lock gate facts (src/profit-lock-gate.mjs gateFacts; null
+ * reads as closed, unmeasured); the facts then carry `gate` { open, mfe_r, mfe_atr, ..., be } with `be` the gate's
+ * first lock. Absent ("legacy"): the facts are today's.
  */
-export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null }) {
+export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null, gate = undefined }) {
   if (!p || (p.side !== "BUY" && p.side !== "SELL") || !isNum(sym?.bid) || !isNum(sym?.ask)) return null;
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), sl = Number(p.sl), tp = Number(p.tp);
@@ -121,6 +135,10 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   // owner's switch, the weight above its floor, a fresh state); otherwise the facts are today's.
   const liq = liquidityOf(signal, p.side);
   if (liq) out.liquidity = liq;
+  if (gate !== undefined) {
+    const g = gate && typeof gate === "object" ? gate : GATE_UNMEASURED;
+    out.gate = { ...g, open: g.open === true, be: gateBreakEven({ open, dir, spread: spreadPx, atrM5: gateAtrM5(signal, sym), digits: Number.isInteger(sym.digits) ? sym.digits : 2 }) };
+  }
   return out;
 }
 
@@ -184,37 +202,57 @@ export function ruleAction(f, council) {
   // (a failure, a timeout, the daily cap), the lock is applied as the mechanical fallback: a lock only reduces risk.
   const silent = council ? "" : " (the council did not answer: the lock applies as the fallback)";
   const reading = council ? `; the council reads ${council.momentum}, thesis ${council.thesis}` : silent;
+  // SLG1: the profit-lock gate (only with `f.gate`, profit_lock_gate "on"). Closed, no stop moves into profit and TP2
+  // waits; each lock made at or after it records the MFE it was made at.
+  const G = f.gate ?? null;
+  const shut = G != null && G.open !== true;
+  const waits = (rule, what) => ({ action: "hold", rule, why: `${what} waits for the profit-lock gate: ${gateText(G)}` });
+  const mfe = (a) => (G && (a.action === "sl" || a.action === "tp") ? { ...a, mfe_r: G.mfe_r ?? null, mfe_atr: G.mfe_atr ?? null, why: `${a.why}; at the profit-lock gate (${gateText(G)})` } : a);
+  // The gate's first lock follows the spread and the M5 ATR: a stop already past the entry is not moved again by a few
+  // cents to it (as the ladder takes its break-even once).
+  const pastEntry = G != null && f.sl != null && f.dir * (f.sl - f.open) > f.point / 2;
+  // SLG1: the gate open, the stop not yet past the entry and its first lock tighter than the stop: the lock is due.
+  const gateLock = G != null && G.open === true && !pastEntry && better(G.be);
+  const lockWaitsRoom = () => ({ action: "hold", rule: "lock_waits_room", why: `the profit-lock gate is open (${gateText(G)}) but the price leaves no room for the stop at ${G.be} (break-even plus the spread and 0.1 x ATR(M5)): the lock waits` });
   // Beyond TP1 by 30 pips: the stop locks TP1, or the position closes when the council reads the momentum weakening.
   if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) {
     if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
-    return { action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` };
+    if (shut) return waits("lock_waits_gate", `${f.beyond_tp1_pips} pips beyond TP1: the TP1 lock`);
+    return mfe({ action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` });
   }
   // TP2 (owner 2026-11-19, PM PR 2): the target moves out only when the council answered with the momentum not
   // weakening and the thesis intact, and, under the TP ladder, once the stop locks its TP1. Otherwise the target holds
   // and nothing is sent (no action, so no "not applied" line every five minutes).
   const tp2 = (fallback) => {
     if (!tpAtTp1 || f.tp2 == null) return fallback;
+    if (shut) return waits("tp2_waits_gate", "TP2");
     if (!council) return { action: "hold", rule: "tp2_waits_council", why: "TP2 waits: the council did not answer" };
     if (council.momentum === "weakening" || council.thesis !== "intact") return { action: "hold", rule: "tp2_waits_council", why: `TP2 waits: the council reads ${council.momentum}, thesis ${council.thesis}` };
     if (f.ladder_hold) {
       // ADR-0020 Amendment 6 (owner 2026-11-19, "Merge #490 + kerjakan opsi BE"): before the ladder's TP1 lock, TP2 goes
       // out in profit together with the stop at break-even plus the spread or better, in one modification (both or
       // neither): the worst case is about zero instead of the TP1 profit, never below the entry.
-      const be = f.open + f.dir * f.spread;
+      // SLG1: at the gate, break-even is the gate's first lock (plus the spread and 0.1 x ATR(M5)).
+      const be = G ? G.be : f.open + f.dir * f.spread;
       if (f.pips > 0 && room(be)) {
-        const sl = better(be) ? be : f.sl;
-        return { action: "tp", rule: "tp2_breakeven", tp: f.tp2, sl, why: `target out to TP2 with the stop at ${better(be) ? "break-even plus the spread" : "its level, already past break-even"} (one modification); the council reads ${council.momentum}, thesis intact` };
+        const sl = better(be) && !pastEntry ? be : f.sl;
+        return mfe({ action: "tp", rule: "tp2_breakeven", tp: f.tp2, sl, why: `target out to TP2 with the stop at ${better(be) && !pastEntry ? `break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}` : "its level, already past break-even"} (one modification); the council reads ${council.momentum}, thesis intact` });
       }
       return { action: "hold", rule: "tp2_waits_ladder", why: "TP2 waits: no room for a break-even stop yet" };
     }
-    return { action: "tp", rule: "tp2_target", tp: f.tp2, why: `target out to TP2 (the next key level); the council reads ${council.momentum}, thesis intact` };
+    return mfe({ action: "tp", rule: "tp2_target", tp: f.tp2, why: `target out to TP2 (the next key level); the council reads ${council.momentum}, thesis intact` });
   };
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
   const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
   if (f.pips >= band) {
     if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
-    const be = f.open + f.dir * f.spread;
-    if (better(be) && room(be)) return { action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${reading}` };
+    // SLG1: with the gate on, the break-even waits for it and is then the gate's first lock.
+    const be = G ? G.be : f.open + f.dir * f.spread;
+    if (better(be) && room(be) && !pastEntry) {
+      if (shut) return waits("lock_waits_gate", `${at(1)}: the break-even`);
+      return mfe({ action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}${reading}` });
+    }
+    if (gateLock && !room(G.be)) return lockWaitsRoom();
     if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
     return tp2({ action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` });
   }
@@ -236,7 +274,15 @@ export function ruleAction(f, council) {
     if (council.thesis === "intact") return { action: "hold", rule: "hold_thesis_intact", why: `${at(-1)} and ${reasons.join("; ")}, but the council calls the thesis intact: held to the original stop` };
     return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${[...reasons, ...(wait ? [wait] : [])].join("; ")}; the council calls the thesis ${council.thesis}: loss cut` };
   }
-  if (tpAtTp1 && f.tp2 != null && f.pips > 0) return tp2(null);
+  // TP2 inside the band: at any profit before SLG1; with the gate on, the gate is its trigger (tp2_breakeven's any-profit
+  // trigger is gone, owner 2026-11-23). TP2 with its break-even stop goes first (both in one modification).
+  const t2 = tpAtTp1 && f.tp2 != null && (G ? G.open === true : f.pips > 0) ? tp2(null) : null;
+  if (t2 && (!gateLock || t2.rule === "tp2_breakeven")) return t2;
+  // SLG1: the gate is the break-even's trigger (orchestrator review of #535): once it is open, the first lock goes in
+  // whatever the price does inside the band (a peak past the gate that pulls back inside the band still locks), and
+  // without the council (a lock only reduces risk, as the silent fallback). With no room for it (the price under the
+  // gate's break-even plus the spread) it waits, and is tried again each run while the gate stays open.
+  if (gateLock) return room(G.be) ? mfe({ action: "sl", rule: "breakeven", sl: G.be, why: `${at(f.pips >= 0 ? 1 : -1)} inside the band, the profit-lock gate open: stop to break-even plus the spread and 0.1 x ATR(M5)${reading}` }) : lockWaitsRoom();
   return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
 }
 
@@ -478,7 +524,7 @@ export async function positionCouncilSpendUsd(db, { now = Date.now() } = {}) {
  * The runner, on the main Worker's 5-minute cron: each open Omega position once per 5-minute bar. `deps` lets the
  * tests give the executor, the open intents, the signal, the decision, the model call and Telegram. Never throws.
  */
-export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn, events: eventsIn } = {}) {
+export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn, events: eventsIn, gates: gatesIn } = {}) {
   if (positionManagerMode(env) !== "live") return { status: "off" };
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
@@ -507,8 +553,24 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);
     const levels = brokerLevels(signal);
     // The TP ladder setting (Omega's settings, default on): TP2 waits for its TP1 lock (positionFacts ladder_hold).
-    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false;
-    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; } catch { /* the defaults */ }
+    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false, lockGate = profitLockGateOn(OMEGA_DEFAULTS);
+    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
+    // SLG1 (owner 2026-11-23): with profit_lock_gate "on", each position's profit-lock gate, measured as Omega's sync
+    // measures it (src/omega-broker.mjs profitLockGates: the broker's M1 corpus since the fill, the terminal's ATR(14,
+    // M15), the decision's ATR(H1)); a position without facts reads as closed. "legacy": none, today's rules.
+    let gates = null;
+    if (lockGate) {
+      if (gatesIn !== undefined) gates = gatesIn ?? {};
+      else {
+        const metaOf = (p) => {
+          const it = openIntents[p.intent_id] ?? {};
+          const rd = Number(it.r_dist) > 0 ? Number(it.r_dist) : Number.isFinite(Number(it.entry)) && Number.isFinite(Number(it.sl)) ? Math.abs(Number(it.entry) - Number(it.sl)) : null;
+          const td = !p.delegated && Number.isFinite(Number(it.entry)) && Number(it.tp) > 0 ? Math.abs(Number(it.tp) - Number(it.entry)) : null;
+          return { mode: p.delegated ? signal?.trading_mode ?? null : typeof it.mode === "string" ? it.mode : null, r_dist: rd, tp_dist: td };
+        };
+        try { gates = await (await import("./omega-broker.mjs")).profitLockGates(env, { executor: { ...executor, positions }, metaOf, now, atrH1: Number(decision?.strategy?.atr_h1) }); } catch { gates = {}; }
+      }
+    }
     // ADR-0020 Amendment 8 (owner 2026-11-20): with the owner's switch on, what the bounded loosening reads.
     const loosenOf = a8 ? await loosenInputs(env, db, { positions, openIntents, sym, now, events: eventsIn }) : null;
     const bar = Math.floor(now / 300_000);
@@ -526,7 +588,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     for (const p of positions) {
       const id = `pm:${p.ticket}:${bar}`;
       if (await db.prepare("SELECT id FROM position_actions WHERE id = ?").bind(id).first()) continue;
-      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}) });
+      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}), ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}) });
       let council = null, councilNote = null;
       if (f && spent < capUsd) {
         try {
