@@ -17,7 +17,9 @@ const REVIEW_FILES = [
   // Track C1: LensView, split from the polled LensPanel.
   "components/LensPanel.tsx",
   // Track C2: the Liquidity page, the Intelligence pages' chart and their helpers.
-  "pages/Liquidity.tsx", "components/IntelChart.tsx", "lib/intel.ts"
+  "pages/Liquidity.tsx", "components/IntelChart.tsx", "lib/intel.ts",
+  // Track C3: the Chart patterns page, the charts' lines and the pattern agents' rules.
+  "pages/Patterns.tsx", "lib/lines-primitive.ts", "lib/patternRules.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {

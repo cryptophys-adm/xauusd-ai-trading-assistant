@@ -1,6 +1,8 @@
 // The Intelligence pages' shared helpers (Track C2, first used by the Liquidity page; C3 and C4 add to it): the per-page
 // GET allow-list, the price and time formats with their scale and zone, the New York clock of the baseline and the
-// market hours, the feed-scale bands of lens B, and the LIQUIDITY card's weight rule. Pure: no React, no request.
+// market hours, the feed-scale bands of lens B, the LIQUIDITY card's weight rule, and (C3) the charts' keys, a close
+// time snapped to its candle, the Projection Agent's seat rules and the measured record's (the pattern agents' rules are
+// lib/patternRules.ts). Pure: no React, no request.
 import { CHART_READ, get, type GetOptions } from "./api";
 import { T } from "./tokens";
 
@@ -24,6 +26,19 @@ export const LIQUIDITY_READS = {
   decision: { path: "/api/engine/decision", everyMs: 120_000, chart: false }
 } as const;
 export type LiquidityRead = keyof typeof LIQUIDITY_READS;
+
+/**
+ * The Chart patterns page's reads (Track C3, owner ruling at the mockup's approval: the candles are the view's own 60
+ * closed bars per chart and "armed" is its decision.trade_agent, so no /api/ohlcv and no /api/engine/decision read).
+ * Each is polled once: the view (120 s, backend B9), the strategy agents (120 s, the pattern agents' records) and the
+ * neuron allocation (300 s, the Projection Agent's seat per room).
+ */
+export const CHART_PATTERNS_READS = {
+  patterns: { path: "/api/chart-patterns", everyMs: 120_000, chart: false },
+  agents: { path: "/api/strategy-agents", everyMs: 120_000, chart: false },
+  seat: { path: "/api/neuron-allocation", everyMs: 300_000, chart: false }
+} as const;
+export type ChartPatternsRead = keyof typeof CHART_PATTERNS_READS;
 
 /** The allow-list's paths. */
 export const allowedPaths = (reads: Record<string, { path: string }>): string[] => Object.values(reads).map((r) => r.path);
@@ -202,3 +217,41 @@ export const WEEKDAYS = DAY_NAMES;
 
 /** Words for a key: "partial_close" reads "partial close". */
 export const words = (x: unknown): string => (str(x) ?? "—").replace(/_/g, " ");
+
+// ---------------------------------------------------------------- the chart patterns (Track C3)
+
+/** The view's charts, in tab order (backend B9 charts keys). */
+export const TF_KEYS = ["15", "60", "240", "D"] as const;
+export type TfKey = (typeof TF_KEYS)[number];
+/** A chart's label on the page: B9 labels the daily chart "daily"; the page shows it as 1D (owner ruling). */
+export const TF_LABEL: Record<TfKey, string> = { "15": "15m", "60": "1H", "240": "4H", D: "1D" };
+/** The room of each chart, as the Projection Agent's seat keys it (seat.rooms). */
+export const TF_ROOM: Record<TfKey, string> = { "15": "M15", "60": "H1", "240": "H4", D: "D1" };
+/** A chart key of the view, or null. */
+export const tfKey = (x: unknown): TfKey | null => (TF_KEYS as readonly unknown[]).includes(x) ? (x as TfKey) : null;
+
+/**
+ * A close time on a chart's candles: the latest candle opened before it (its open time, unix seconds), or null outside
+ * the candles (at or before the first open, or after the last candle's close). On the 15m and 1H charts a bar's close
+ * is the next bar's open, so it snaps to its own bar exactly; a daily close (15:00 UTC on the feed) snaps to the day it
+ * closes. `at` is an ISO time or unix ms.
+ */
+export function snapToCandle(at: unknown, times: number[], intervalS: number): number | null {
+  const ms = typeof at === "string" ? Date.parse(at) : num(at) ? at : NaN;
+  if (!Number.isFinite(ms) || !times.length || !num(intervalS)) return null;
+  const t = ms / 1000;
+  if (t <= times[0] || t > times[times.length - 1] + intervalS) return null;
+  let lo = 0, hi = times.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (times[mid] < t) lo = mid; else hi = mid - 1; }
+  return times[lo];
+}
+
+/** A price's distance from the last price in ATR(1H), or null. */
+export const atrFrom = (p: unknown, last: unknown, atr: unknown): number | null => (num(p) && num(last) && num(atr) && atr > 0 ? (p - last) / atr : null);
+
+/** The Projection Agent's seat rules (src/agent-allocation.mjs ALLOCATION_RULES): to shadow below 45% from 60 scored, back to live at 50%. */
+export const SEAT_RULES = { demote_below: 0.45, promote_at: 0.5, min_scored: 60 } as const;
+/** The measured record's follow-up (src/pattern-calibration.mjs CALIBRATION): 30 to 120 bars, active from 20 breakouts. */
+export const RECORD_RULES = { horizon: 30, horizon_max: 120, min_sample: 20 } as const;
+/** A pattern held back once its own record is negative over this many setups (src/strategy-agents.mjs PATTERN_BREAKER). */
+export const PATTERN_BREAKER_MIN = 15;

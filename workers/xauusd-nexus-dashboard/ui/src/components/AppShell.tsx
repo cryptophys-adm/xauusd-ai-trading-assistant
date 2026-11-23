@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Swords, Trophy, Users, X, Zap, Cpu } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Shapes, Swords, Trophy, Users, X, Zap, Cpu } from "lucide-react";
 import { StatusRow, StatusStrip } from "./HeaderStatus";
 import { omegaCell, roomCell } from "../lib/headerStatus";
 import { useWarRoom } from "../lib/warroom";
@@ -34,7 +34,9 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Model & Learning", href: "/#/model", key: "model", icon: GraduationCap },
     { label: "Strategy agents", href: "/#/strategy", key: "strategy", icon: Puzzle },
     // Track C (owner 2026-11-22: the opening range, chart patterns and liquidity each get their own Intelligence page):
+    // Chart patterns (Track C3), the Projection Agent's patterns, their measured record and the pattern agents' plans;
     // Liquidity (Track C2), lens B of the Positioning & Liquidity analyst on its own page.
+    { label: "Chart patterns", href: "/#/patterns", key: "patterns", icon: Shapes },
     { label: "Liquidity", href: "/#/liquidity", key: "liquidity", icon: Droplets },
     { label: "Neuron allocation", href: "/#/neurons", key: "neurons", icon: Cpu },
     { label: "Decision audit", href: "/#/audit", key: "audit", icon: BookOpenCheck },

@@ -1,5 +1,8 @@
-/** The server's error code as shown: at most 24 characters (mockup "Nexus data states"). */
-const CODE_MAX = 24;
+/**
+ * The server's error code as shown: at most 32 characters (mockup "Nexus data states" cut it at 24; the C3 Chart patterns
+ * mockup's approved error state shows "chart_patterns_unavailable" whole, 26 characters).
+ */
+const CODE_MAX = 32;
 
 /**
  * A failed read, as a code: the route (no query string), the HTTP status (0 when the request never got an answer)
