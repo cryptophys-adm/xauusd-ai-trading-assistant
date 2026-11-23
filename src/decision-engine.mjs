@@ -36,7 +36,7 @@
 // The server never sizes a position; prices come only from the key-level plan.
 
 import { goldClosedAt, nextGoldChange, SESSIONS, nyHour } from "./market-hours.mjs";
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr, TP1_MIN_R, tp1KeyZoneMode } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -143,6 +143,10 @@ export const DECISION_TELEGRAM_KEY = "telegram:decision-engine:last:v1";
 export const MODE_THRESHOLDS = Object.freeze({
   // Scalp (owner 2026-11-12: "untuk mode scalping jangan TP berdasarkan RRR tapi target di Key Level
   // terdekat", "Tanpa batas RRR"): the target is the nearest key level ahead, with no reward minimum.
+  // TP1-KZ replaces that for TP1 in every mode (owner 2026-11-23: "ok setuju, TP1 ke key zone minimal 1R, karena di
+  // perjalanan position manager juga mengawal jika perlu close lebih cepat untuk mengamankan profit"): the strategy
+  // agents' TP1 is the nearest key zone ahead and pays at least TP1_MIN_R (1R); scalp's min_rrr stays 0, so for scalp
+  // the floor is 1R on TP1 (src/strategy-engine.mjs tp1KeyZoneOf; switch TP1_KEY_ZONE_MODE).
   scalp: Object.freeze({ quorum_min: 0.45, min_rrr: 0, lean: 0.1, target: "nearest" }),
   intraday: Object.freeze({ quorum_min: 0.5, min_rrr: 1.5, lean: 0.15 }),
   swing: Object.freeze({ quorum_min: 0.6, min_rrr: 2.0, lean: 0.2 }),
@@ -688,13 +692,19 @@ const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STR
 
 /** Pure: a side's live agents with a plan the guardrails accept, the default first: [[id, { status, plan }]]. */
 export function liveAgentPlans(g) {
-  const all = Object.entries(g?.plans || {}).filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT || agentPlanPasses(a.plan, g)));
+  // The default agent is exempt from the reward guardrail (its plan is the guardrail's own), not from TP1-KZ's floor.
+  const tp1Floor = (plan) => !isNum(g?.tp1_min_r) || (plan.rrr?.tp1 ?? 0) >= g.tp1_min_r;
+  const all = Object.entries(g?.plans || {}).filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT ? tp1Floor(a.plan) : agentPlanPasses(a.plan, g)));
   return all.sort(([a], [b]) => (a === DEFAULT_AGENT ? -1 : b === DEFAULT_AGENT ? 1 : 0));
 }
 
-/** Pure: the reward guardrail on an agent's own plan: scalp needs a real level as the first target, the other modes MIN_RRR to the best target. */
+/**
+ * Pure: the reward guardrail on an agent's own plan: scalp needs a real level as the first target, the other modes MIN_RRR to the
+ * best target; with TP1-KZ (`g.tp1_min_r`) the first target also pays at least that many R, in every mode.
+ */
 export function agentPlanPasses(plan, g) {
   if (!plan || !isNum(plan.entry) || !isNum(plan.stop) || !isNum(plan.tp1)) return false;
+  if (isNum(g?.tp1_min_r) && !((plan.rrr?.tp1 ?? 0) >= g.tp1_min_r)) return false;
   if (g?.target_rule === "nearest") return plan.tp1_note !== TP1_PROJECTION;
   return Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) >= (isNum(g?.min_rrr) ? g.min_rrr : MIN_RRR);
 }
@@ -854,7 +864,9 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
           }
         }
       } else {
-        trade = (agent ? tradeFor(stance, agent.plan, opts) : null) ?? tradeFor(stance, g.plan, opts);
+        // TP1-KZ: the default agent's own plan (its key zone, at least 1R), not the guardrail's; none, no trade.
+        const base = isNum(g.tp1_min_r) ? (g.plans?.[DEFAULT_AGENT]?.plan ?? null) : g.plan;
+        trade = (agent ? tradeFor(stance, agent.plan, opts) : null) ?? (base ? tradeFor(stance, base, opts) : null);
         if (!trade) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "reward", detail: `no target pays ${minRrr}R` }] };
       }
     }
@@ -1109,14 +1121,17 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const statuses = agentStatuses(env, { records: agentRecords });
   const thresholds = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
   const scalp = thresholds.target === "nearest";
+  // TP1-KZ (owner 2026-11-23): the agents' plans take TP1 at the nearest key zone, at least 1R; the guardrails keep
+  // their own plan (planForDirection without keyZone) for their checks. "off": today's plans and gates.
+  const keyZone = tp1KeyZoneMode(env) === "on";
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
   const plansOf = (dir) => {
-    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns }), statuses); } catch { return {}; }
+    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone }), statuses); } catch { return {}; }
   };
   const plans = { long: plansOf(1), short: plansOf(-1) };
   let consensus = null;
-  const passes = (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr });
+  const passes = (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr, ...(keyZone ? { tp1_min_r: TP1_MIN_R } : {}) });
   try { consensus = agentsConsensus(plans, { records: agentRecords, statuses, passes }); } catch { consensus = null; }
   const context = { regime, correlations, session, calendar: loaded?.calendar ?? null, independent: independentWitnesses(loaded, { now }), strategy_agents: consensus };
   // The witness weights (owner 2026-11-11: "harusnya bobot itu dinamis sesuai dengan auto tune yang ada di
@@ -1136,6 +1151,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
   guards.long.plans = plans.long; guards.short.plans = plans.short;
+  if (keyZone) { guards.long.tp1_min_r = TP1_MIN_R; guards.short.tp1_min_r = TP1_MIN_R; }
   // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): the trade only from an
   // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
   guards.strategy_execution = strategyExecutionEnabled(env);

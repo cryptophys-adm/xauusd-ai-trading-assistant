@@ -22,7 +22,7 @@
 // negative measured record back to shadow by itself. STRATEGY_AGENTS_MODE =
 // "on" (default) | "off" (only zone_pullback; nothing else is computed or recorded).
 
-import { planForDirection, zoneLevels, SCALP_TARGET } from "./strategy-engine.mjs";
+import { planForDirection, zoneLevels, SCALP_TARGET, TP1_MIN_R, tp1KeyZoneOf } from "./strategy-engine.mjs";
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
@@ -47,12 +47,14 @@ const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ?
 const hours = (bars) => Math.round((bars * 15) / 60);
 
 /** Pure: the key levels ahead as targets, as tradeLevels: the nearest major zone, then one 1.5R or more away. */
-function targetsAhead({ dir, entry, risk, levels, atr, gapAtr }) {
+function targetsAhead({ dir, entry, risk, levels, atr, gapAtr, keyZone = false }) {
   const edge = (z) => (dir > 0 ? lo(z) : hi(z));
   const ahead = (levels || []).filter((z) => z.major !== false && dir * (edge(z) - entry) >= gapAtr * atr).sort((a, b) => dir * (edge(a) - edge(b)));
-  const t1 = ahead[0] ?? null;
+  // TP1-KZ (src/strategy-engine.mjs TP1_MIN_R): the nearest key zone ahead, never jumped; under 1R, no targets.
+  const t1 = keyZone ? tp1KeyZoneOf(ahead, levels, { dir, entry, tgap: gapAtr * atr, edge }) : ahead[0] ?? null;
   const t2 = t1 ? ahead.find((z) => dir * (edge(z) - edge(t1)) >= 0.5 * atr && Math.abs(edge(z) - entry) / risk >= 1.5) ?? null : null;
   const tp1 = t1 ? edge(t1) : entry + dir * 2 * risk;
+  if (keyZone && Math.abs(tp1 - entry) / risk < TP1_MIN_R) return null;
   return {
     tp1, tp1_note: t1 ? t1.label : PROJECTION_NOTE,
     tp2: t2 ? edge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk), tp2_note: t2 ? t2.label : "a projection beyond the first target"
@@ -71,7 +73,8 @@ export function finishPlan(agent, dir, { entry, stop, atLevel, entryNote, stopNo
   if (dir * (entry - s) < AGENT_RULES.min_risk_atr * atr) { s = entry - dir * AGENT_RULES.min_risk_atr * atr; note = `${AGENT_RULES.min_risk_atr} times the 1H average range (the structure is closer)`; }
   const risk = dir * (entry - s);
   if (risk > AGENT_RULES.max_risk_atr * atr) return null;
-  const t = targets ?? targetsAhead({ dir, entry, risk, levels: ctx.levels, atr, gapAtr: ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr });
+  const t = targets ?? targetsAhead({ dir, entry, risk, levels: ctx.levels, atr, gapAtr: ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr, keyZone: ctx.keyZone === true });
+  if (!t) return null;
   if (!(dir * (t.tp1 - entry) > 0) || !(dir * (t.tp2 - t.tp1) >= 0)) return null;
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
   return {
@@ -84,7 +87,7 @@ const zonePullback = Object.freeze({
   id: DEFAULT_AGENT, version: 1, label: "Zone pullback",
   fits: "Any market: enter at the nearest key zone behind price (or at price when it already holds there), the stop behind the next zone, the target at the next key level. The plan of every decision before the agents.",
   plan(dir, ctx) {
-    const p = ctx.basePlan ?? planForDirection(ctx.strategy, dir, { scalp: ctx.scalp === true });
+    const p = ctx.basePlan ?? planForDirection(ctx.strategy, dir, { scalp: ctx.scalp === true, keyZone: ctx.keyZone === true });
     return p ? { ...p, agent: DEFAULT_AGENT, setup: p.at_level ? "price holds at a key zone" : "a pullback to the nearest key zone" } : null;
   }
 });
@@ -428,9 +431,9 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
-export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [] } = {}) {
+export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [], keyZone = false } = {}) {
   return {
-    strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan,
+    strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan, ...(keyZone === true ? { keyZone: true } : {}),
     // The Projection Agent's reading (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya
     // knowledge terkait price action"): the chart patterns it detected on each chart and each pattern's
     // measured record on gold.

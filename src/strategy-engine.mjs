@@ -104,7 +104,7 @@ function roomLayer(key, room, now) {
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
  */
-export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5 }) {
+export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5, keyZone = false }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
   const near = nearAtr * atrH1, gap = 0.5 * atrH1, pad = 0.2 * atrH1;
   // How far beyond the entry the first target must lie (0.5 ATR; scalp 0.25 ATR, owner 2026-11-12).
@@ -126,11 +126,13 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   const risk = Math.abs(entry - stop);
   const targetEdge = (z) => (dir > 0 ? lo(z) : hi(z));
   const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= tgap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
-  const t1 = ahead[0] ?? null;
+  // TP1-KZ (keyZone): the first target is the nearest key zone ahead, else today's nearest level; under TP1_MIN_R, no plan.
+  const t1 = keyZone ? tp1KeyZoneOf(ahead, levels, { dir, entry, tgap, edge: targetEdge }) ?? null : ahead[0] ?? null;
   const t2 = t1
     ? ahead.find((z) => dir * (targetEdge(z) - targetEdge(t1)) >= gap && Math.abs(targetEdge(z) - entry) / risk >= 1.5) ?? null
     : null;
   const tp1 = t1 ? targetEdge(t1) : entry + dir * 2 * risk;
+  if (keyZone && Math.abs(tp1 - entry) / risk < TP1_MIN_R) return null;
   const tp2 = t2 ? targetEdge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk);
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
   return {
@@ -143,13 +145,33 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   };
 }
 
+/**
+ * TP1 at the nearest key zone, at least 1R (owner 2026-11-23: "ok setuju, TP1 ke key zone minimal 1R, karena di
+ * perjalanan position manager juga mengawal jika perlu close lebih cepat untuk mengamankan profit"; it replaces the
+ * owner's 2026-11-12 scalp rule for TP1, "target di Key Level terdekat", "Tanpa batas RRR"). A key zone is a Key
+ * Level Agent candidate (`key`). Switch TP1_KEY_ZONE_MODE "on" (default) | "off" (today's targets and gates).
+ */
+export const TP1_MIN_R = 1;
+export function tp1KeyZoneMode(env) {
+  return String(env?.TP1_KEY_ZONE_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
+/**
+ * Pure: the first target under TP1-KZ: the nearest key zone (`key`) beyond the target gap, never jumped (a key zone
+ * that pays under 1R is an obstacle: the caller drops the plan); without one, today's nearest level beyond the gap
+ * (`ahead[0]`), else null (the projection). `levels` are every zone; `ahead` today's candidates, sorted nearest first.
+ */
+export function tp1KeyZoneOf(ahead, levels, { dir, entry, tgap, edge }) {
+  const key = (levels || []).filter((z) => z.key === true && dir * (edge(z) - entry) >= tgap).sort((a, b) => dir * (edge(a) - edge(b)))[0];
+  return key ?? ahead[0] ?? null;
+}
+
 const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
 /**
  * The Key Level Agent's zones as tradeLevels input: candidates are the major zones; with `qualified`,
  * also the zones that qualified as candidates but were left out by the cap of two per side.
  */
 export function zoneLevels(zones, { qualified = false } = {}) {
-  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), label: zoneText(z) }));
+  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), key: z.candidate === true, label: zoneText(z) }));
 }
 
 /**
@@ -199,11 +221,11 @@ export const SCALP_TARGET = Object.freeze({ targetGapAtr: 0.25, qualified: true 
  * demand or supply zone) counts only when the strategy points the same way. Null without a price,
  * an ATR or a direction.
  */
-export function planForDirection(strategy, dir, { scalp = false } = {}) {
+export function planForDirection(strategy, dir, { scalp = false, keyZone = false } = {}) {
   if (!strategy || !(dir === 1 || dir === -1)) return null;
   const sameWay = (strategy.direction === "LONG" && dir > 0) || (strategy.direction === "SHORT" && dir < 0);
   const setupNote = sameWay && strategy.setup?.type && strategy.setup.type !== "none" ? `${strategy.setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${(strategy.setup.evidence || []).join(", ")}` : null;
-  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}) });
+  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}), ...(keyZone ? { keyZone: true } : {}) });
 }
 
 /**
@@ -363,7 +385,14 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   // location with the trade, like a demand or supply zone.
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
-  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
+  const base = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
+  // TP1-KZ (owner 2026-11-23; the switch travels in the inputs as modes.tp1KeyZone): the strategy's plan takes TP1 at
+  // the nearest key zone, at least 1R. Under 1R the plan stays today's for its location (the guardrails read its
+  // at_level), and the decision waits (state LOW_REWARD): no trade comes from a first target under 1R.
+  const keyZone = modes?.tp1KeyZone !== "off" && tp1KeyZoneMode(env) === "on";
+  const kz = keyZone && base ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, keyZone: true }) : null;
+  const plan = keyZone && kz ? kz : base;
+  const tp1Short = keyZone && base && !kz;
   const { vetoes, cautions, supports } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
@@ -377,6 +406,7 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   else if (!plan) { state = "NO_LEVELS"; headline = `A ${side} bias, but the key levels or the 1-hour range are not available yet.`; }
   else if (!plan.at_level) { state = "SETUP_FORMING"; headline = `A ${side} setup is forming: wait for ${plan.entry_note} near ${fmt(plan.entry)}.`; }
   else if (!trigger.fired) { state = "SETUP_READY"; headline = `The ${side} setup is ready at ${fmt(plan.entry)} (${plan.entry_note}); ${trigger.note}.`; }
+  else if (tp1Short) { state = "LOW_REWARD"; headline = `The ${side} trigger fired, but the nearest key zone ahead pays under ${TP1_MIN_R}R to the first target.`; }
   else if (plan.rrr.tp2 < MIN_RRR) { state = "LOW_REWARD"; headline = `The ${side} trigger fired, but the reward to the final target is only ${plan.rrr.tp2}R (at least ${MIN_RRR}R is needed).`; }
   else if (confidence < MIN_CONFIDENCE) { state = "LOW_CONFIDENCE"; headline = `The ${side} trigger fired, but the agents' alignment is too weak (confidence ${Math.round(confidence * 100)}%).`; }
   else { state = "TRIGGERED"; decision = dir > 0 ? "BUY" : "SELL"; headline = `${decision}: ${trigger.note}, with the trend and setup aligned; ${plan.rrr.tp2}R to the final target.`; }
@@ -468,7 +498,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env) },
     now
   };
 }
