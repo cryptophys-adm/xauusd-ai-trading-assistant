@@ -376,7 +376,7 @@ test("R13. off is byte for byte today: the sync reads no exit or stream for RE1 
   await sync(k);
   assert.equal(k.DB.raw.prepare("SELECT COUNT(*) AS n FROM position_actions").get().n, 0);
   // Every fixture with reentry_1m "off" gives the behaviour text before RE1: PM-1M's hash, byte for byte.
-  assert.equal(await sha256Hex(engineBehaviourSource({ reentry: "off" })), BEFORE_RE1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ reentry: "off", limitSupersede: "off" })), BEFORE_RE1_HASH);
   assert.notEqual(ENGINE_BEHAVIOUR_HASH, BEFORE_RE1_HASH, "the re-entry on is a new era (a recorded exception)");
   const text = engineBehaviourSource();
   assert.equal(await sha256Hex(text), ENGINE_BEHAVIOUR_HASH);

@@ -29,6 +29,12 @@
 //            Written with the re-entry on only.
 // `reentry` (RE1, 2026-11-23) sets reentry_1m on every input the same way: "off" gives the text of the engine before
 // RE1 byte for byte (PM-1M's d0def5bb…; test/reentry-1m.test.mjs).
+//   ss       SS1's cases (test/fixtures/limit-supersede.mjs): today's 14:00 and 14:15 BUYs through planIntents under
+//            entry_order "limit" and "council" (each refusal, the open position, the other side, a refused and an
+//            unanswered delete), and the limit counterfactual beside v4 over the two decisions. Written with the
+//            supersede on only.
+// `limitSupersede` (SS1, 2026-11-23) sets limit_supersede on every input the same way: "off" gives the text of the
+// engine before SS1 byte for byte (RE1's 39c10287…; test/limit-supersede.test.mjs).
 import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
@@ -37,17 +43,19 @@ import { v4ReplayScenarios, base, retraceCase } from "./omega-v4-replay.mjs";
 import { changeLines } from "./change-thresholds.mjs";
 import { fastLines } from "./pm-fast.mjs";
 import { reentryLines } from "./reentry-1m.mjs";
+import { supersedeLines } from "./limit-supersede.mjs";
 
 const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
   if (on.length) throw new Error(`${name}: a behaviour switch is on (${on.join(", ")}); the fingerprint is taken with every switch at its default`);
 };
-let changeOverride = null, fastOverride = null, reOverride = null;
+let changeOverride = null, fastOverride = null, reOverride = null, ssOverride = null;
 const withGate = (settings, gate) => {
   const s = gate ? { ...settings, profit_lock_gate: gate } : settings;
   const c = changeOverride != null ? { ...s, change_thresholds: changeOverride } : s;
   const f = fastOverride != null ? { ...c, pm_fast_1m: fastOverride } : c;
-  return reOverride != null ? { ...f, reentry_1m: reOverride } : f;
+  const r = reOverride != null ? { ...f, reentry_1m: reOverride } : f;
+  return ssOverride != null ? { ...r, limit_supersede: ssOverride } : r;
 };
 const replayLines = (group, scenarios, gate = null) => {
   const lines = [];
@@ -63,11 +71,12 @@ const replayLines = (group, scenarios, gate = null) => {
 };
 
 /** The text ENGINE_BEHAVIOUR_HASH is taken of (sha256Hex of it). */
-export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null, pmFast = null, reentry = null } = {}) {
+export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null, pmFast = null, reentry = null, limitSupersede = null } = {}) {
   changeOverride = changeThresholds == null ? null : changeThresholds === "" ? "off" : changeThresholds;
   fastOverride = pmFast == null ? null : pmFast;
   reOverride = reentry == null ? null : reentry;
-  try { return behaviourText(profitLockGate); } finally { changeOverride = null; fastOverride = null; reOverride = null; }
+  ssOverride = limitSupersede == null ? null : limitSupersede;
+  try { return behaviourText(profitLockGate); } finally { changeOverride = null; fastOverride = null; reOverride = null; ssOverride = null; }
 }
 function behaviourText(profitLockGate) {
   const lines = [];
@@ -106,5 +115,7 @@ function behaviourText(profitLockGate) {
   if (fastOverride !== "off") lines.push(...fastLines());
   // RE1 (2026-11-23): the re-entry's own cases, only with it on (they are absent from the text before RE1).
   if (reOverride !== "off") lines.push(...reentryLines());
+  // SS1 (2026-11-23): the supersede's own cases, only with it on (they are absent from the text before SS1).
+  if (ssOverride !== "off") lines.push(...supersedeLines());
   return lines.join("\n");
 }

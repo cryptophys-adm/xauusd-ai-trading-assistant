@@ -35,6 +35,7 @@ import { gatesFor, gateReadSince, gateMode, profitLockGateOn, PROFIT_LOCK_GATE, 
 import { readLatestDecision } from "./decision-engine.mjs";
 import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
+import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -327,9 +328,12 @@ export async function reconcileFilledOpens(env, db, executor, now) {
  * `entryCouncil` (the stored answer for the current signal), `limitActions` (the council's fresh moves, cancels and
  * conversions), `pendingMeta` (each resting order's and each just-filled position's place_limit payload, by ticket),
  * `limitFills` (positions whose ticket is an order Omega placed and whose fill is not yet recorded) and `conversion`
- * (the last limit->market delete within the hour: its result and whether the order filled first). Never throws.
+ * (the last limit->market delete within the hour: its result and whether the order filled first). With `supersede`
+ * (SS1, limit_supersede "on"; src/limit-supersede.mjs) also `supersede`: the superseded_by_signal deletes of the last
+ * SUPERSEDE_READ_MS, the newest per ticket, done, refused or still unanswered (planIntents enters nothing while one
+ * waits). Never throws.
  */
-export async function limitInputs(db, executor, signal, now) {
+export async function limitInputs(db, executor, signal, now, { supersede = false } = {}) {
   const out = { entryCouncil: null, limitActions: [], pendingMeta: {}, limitFills: [], conversion: null };
   try {
     await ensureLimitCouncilSchema(db);
@@ -359,6 +363,13 @@ export async function limitInputs(db, executor, signal, now) {
         deleted: cv.status === "done" && res?.ok === true ? true : cv.status === "failed" || cv.status === "expired" || (cv.status === "done" && res?.ok !== true) ? false : null };
     }
   } catch { /* a limit input that cannot be read is absent: no council answer, no fill check, no conversion */ }
+  if (supersede) {
+    // A read that fails holds every entry (fail closed): a superseded order's delete is then never assumed done.
+    try {
+      const rows = (await db.prepare("SELECT payload, status, result FROM omega_intents WHERE kind = 'delete_order' AND json_extract(payload, '$.reason') = ? AND created_ms > ? ORDER BY created_ms DESC, id DESC LIMIT 20").bind(SUPERSEDE_REASON, now - SUPERSEDE_READ_MS).all()).results ?? [];
+      out.supersede = supersedeDeletes(rows);
+    } catch { out.supersede = [{ ticket: 0, deleted: null }]; }
+  }
   return out;
 }
 
@@ -1261,7 +1272,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md, stage 3): only with entry_order "limit" or "council". The council's
   // stored answers (src/limit-council.mjs), each resting order's place_limit intent, the fills not yet re-checked and
   // the last limit->market conversion. With "market" none of this is read and planIntents gets none of it.
-  const limitIn = settings?.entry_order === "limit" || settings?.entry_order === "council" ? await limitInputs(db, executor, signal, now) : {};
+  // SS1 (limit_supersede "on"): the superseded_by_signal deletes too, so a new entry waits until the old limit is gone.
+  const limitIn = settings?.entry_order === "limit" || settings?.entry_order === "council" ? await limitInputs(db, executor, signal, now, limitSupersedeOn(settings) ? { supersede: true } : {}) : {};
   // ADR-0020 Amendment 8: the loosenings already sent and the original entry stops (read whatever the switch says: a
   // loosened position stays unprotected after the switch goes off).
   const pmLoosen = hasPositions ? await pmLoosenInputs(db, executor, now) : null;
@@ -1934,13 +1946,15 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
         // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
-        // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M) and the 1m re-entry's (RE1).
+        // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M), the 1m re-entry's (RE1) and
+        // the limit supersede's (SS1).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
         delete back.change_thresholds;
         delete back.pm_fast_1m;
         delete back.reentry_1m;
+        delete back.limit_supersede;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -1961,14 +1975,15 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
-  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1):
-  // the owner's switches are carried as stored.
+  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1)
+  // nor limit_supersede (SS1): the owner's switches are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
   delete body.change_thresholds;
   delete body.pm_fast_1m;
   delete body.reentry_1m;
+  delete body.limit_supersede;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

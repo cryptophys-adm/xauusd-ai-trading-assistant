@@ -410,7 +410,7 @@ test("SLG1-15 legacy is byte for byte the engine before the gate: the old behavi
   // CH1 (2026-11-23): the engine before the gate had no change thresholds either ("off" is today's rules byte for byte).
   // PM-1M (2026-11-23): nor the 1m fast layer ("off" is the engine before it byte for byte); RE1 (2026-11-23): nor the
   // 1m re-entry.
-  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy", changeThresholds: "", pmFast: "off", reentry: "off" })), OLD_BEHAVIOUR_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ profitLockGate: "legacy", changeThresholds: "", pmFast: "off", reentry: "off", limitSupersede: "off" })), OLD_BEHAVIOUR_HASH);
   assert.notEqual(ENGINE_BEHAVIOUR_HASH, OLD_BEHAVIOUR_HASH, "the gate on is a new era (SLG1, a recorded exception)");
   assert.equal(await sha256Hex(engineBehaviourSource()), ENGINE_BEHAVIOUR_HASH);
   // "legacy" ignores any gate facts given.
