@@ -26,6 +26,7 @@ import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { signalLiquidityLevels, liveSpreadSpike, deferModifications } from "./liquidity-lens.mjs";
 import { profitLockGateOn, gateBreakEven, gateAtrM5, stopInProfit, gateText, GATE_UNMEASURED, PROFIT_LOCK_GATE_MODES } from "./profit-lock-gate.mjs";
+import { isFastId, PM_FAST_MODES } from "./pm-fast.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -75,7 +76,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // threshold atau ambang perubahan"; "Live semua (Rekomendasi)"; src/change-thresholds.mjs): the tokens conf, tpw,
   // limit, skip and stance, all on; "off" (or a token left out) is today's rule for that trigger byte for byte. The
   // owner's switch only; Aether's policy never writes it.
-  change_thresholds: CHANGE_THRESHOLDS_ALL
+  change_thresholds: CHANGE_THRESHOLDS_ALL,
+  // PM-1M, the 1m fast-protect layer (owner 2026-11-23: "deploy semuanya live. Tf 1m diperlukan position manager untuk
+  // antisipasi TP lebih cepat dan mengurangi kerugian"; src/pm-fast.mjs): "on", the fast TP anticipation and loss
+  // reduction on closed broker M1 bars; "off", today's engine byte for byte. The owner's switch only; Aether's policy
+  // never writes it.
+  pm_fast_1m: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -190,6 +196,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
       return { error: "profit_lock_gate must be 'on' or 'legacy'" };
     }
     out.profit_lock_gate = body.profit_lock_gate;
+  }
+  if (body.pm_fast_1m !== undefined) {
+    if (typeof body.pm_fast_1m !== "string" || !PM_FAST_MODES.includes(body.pm_fast_1m)) return { error: "pm_fast_1m must be 'on' or 'off'" };
+    out.pm_fast_1m = body.pm_fast_1m;
   }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
@@ -809,6 +819,8 @@ export function openRiskAtStops(positions = [], sym = {}) {
  * SLG1 (owner 2026-11-23): with `gates` (profit_lock_gate "on"), a stop at or beyond the entry (break-even, the TP1
  * lock, TP2 with break-even) and TP2 itself wait for the position's profit-lock gate: dropped, with the gate's reading,
  * while it is closed; at or after it each lock records the MFE it was made at (mfe_r, mfe_atr).
+ * PM-1M (owner 2026-11-23, src/pm-fast.mjs): an action with a fast id (pm1:<ticket>:<bar minute>) is the 1m layer's,
+ * checked by fastIntent under the same id: its stop into profit waits for the gate as above; a nearer target is not one.
  */
 export function positionManagerIntents({ positions = [], sym = {}, actions = [], skipTickets = [], sltp = false, a8 = null, loosenedFrom = {}, gates = undefined } = {}) {
   // `dropped`: each action that became no intent, with the reason in plain words (owner 2026-11-19: the Telegram
@@ -839,7 +851,13 @@ export function positionManagerIntents({ positions = [], sym = {}, actions = [],
       drop(a, `${a.action === "tp" ? "TP2 waits" : "the lock waits"} for the profit-lock gate: ${gateText(gate)}`);
       continue;
     }
-    if (a8Rule) {
+    if (isFastId(a.id)) {
+      // PM-1M (src/pm-fast.mjs): the 1m layer's lock, tightened stop, nearer target or early close, checked again here.
+      const r = fastIntent({ a, p, sym, bar, point, digits, floorPx });
+      if (r.drop) { drop(a, r.drop); continue; }
+      if (r.intent.kind === "modify_sl" && heldByLoosen(r.intent.sl)) { drop(a, `the council loosened this stop: a lock waits until it is tighter than ${from}, the stop before the loosening`); continue; }
+      out.push(r.intent);
+    } else if (a8Rule) {
       // The council's loosening or target move (ADR-0020 Amendment 8), checked again here against every bound.
       const r = a8Intent({ a, p, sym, bar, a8, point, digits, floorPx });
       if (r.drop) { drop(a, r.drop); continue; }
@@ -947,6 +965,34 @@ export function a8Intent({ a, p, sym, bar, a8, point = 0.01, digits = 2, floorPx
     if (nearer ? !(buy ? tp < curTp - point / 2 : tp > curTp + point / 2) : !(buy ? tp > curTp + point / 2 : tp < curTp - point / 2)) return { drop: `a target at ${tp} is not ${nearer ? "nearer" : "further out"} than the broker's (${curTp})` };
     if (!nearer && a8.veto?.(p)) return { drop: "no target further: the Decision Engine vetoes the position's side" };
     return { intent: { id: `pm:${p.ticket}:t:${bar}`, kind: "modify_tp", ticket: p.ticket, tp, reason: `pm_${a.rule}`, from_tp: curTp, mode, tp_r_from: finite(open) ? inR(curTp - open) : null, tp_r_to: finite(open) ? inR(tp - open) : null } };
+  }
+  return { drop: "not an action Omega applies" };
+}
+
+/**
+ * Pure: one PM-1M fast action (src/pm-fast.mjs, id pm1:<ticket>:<bar minute>) as an intent with the same id, or
+ * { drop: reason }. Risk-reducing only: a close; a stop only tighter than the broker's, with the broker's stop distance;
+ * a target only nearer than the broker's and on the right side of price with that distance, never with a stop. The
+ * profit-lock gate (SLG1) has dropped a stop into profit before this, as for every Position Manager lock.
+ */
+export function fastIntent({ a, p, sym, bar, point = 0.01, digits = 2, floorPx = 0 }) {
+  const buy = p.side === "BUY", curSl = Number(p.sl), curTp = Number(p.tp);
+  const id = `pm1:${p.ticket}:${bar}`;
+  if (a.action === "close") return { intent: { id, kind: "close", ticket: p.ticket, reason: a.rule } };
+  if (a.action === "sl" && finite(a.sl)) {
+    const sl = roundTo(a.sl, digits);
+    const tighter = !Number.isFinite(curSl) || curSl <= 0 || (buy ? sl > curSl + point / 2 : sl < curSl - point / 2);
+    if (!tighter) return { drop: `the stop is already at or beyond ${sl}` };
+    if (!(buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx)) return { drop: `the live price leaves no room for a stop at ${sl}` };
+    return { intent: { id, kind: "modify_sl", ticket: p.ticket, sl, tp: Number.isFinite(curTp) ? curTp : null, reason: a.rule } };
+  }
+  if (a.action === "tp" && finite(a.tp)) {
+    if (finite(a.sl)) return { drop: "a fast target move never carries a stop" };
+    if (!(Number.isFinite(curTp) && curTp > 0)) return { drop: "the position has no target to bring nearer" };
+    const tp = roundTo(a.tp, digits);
+    if (!(buy ? tp < curTp - point / 2 : tp > curTp + point / 2)) return { drop: `a target at ${tp} is not nearer than the broker's (${curTp})` };
+    if (!(buy ? tp > sym.ask + floorPx : tp < sym.bid - floorPx)) return { drop: `a target at ${tp} would be on the wrong side of price or inside the broker's stop distance` };
+    return { intent: { id, kind: "modify_tp", ticket: p.ticket, tp, reason: a.rule, from_tp: curTp } };
   }
   return { drop: "not an action Omega applies" };
 }

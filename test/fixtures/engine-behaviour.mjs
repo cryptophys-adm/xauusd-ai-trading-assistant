@@ -20,21 +20,27 @@
 // `changeThresholds` (CH1, 2026-11-23) sets change_thresholds on every input the same way (and the Position Manager's
 // facts get the tokens as the runner passes them): "" or "off" gives the text of the engine before CH1 byte for byte
 // (SLG1's 94e6f50c… with the gate on; test/change-thresholds.test.mjs).
+//   fast     PM-1M's cases (test/fixtures/pm-fast.mjs): the 1m layer's triggers and noise rules, Omega's check of its
+//            actions, and v4's replay of a position the layer protects. Written with the layer on only.
+// `pmFast` (PM-1M, 2026-11-23) sets pm_fast_1m on every input the same way: "off" gives the text of the engine before
+// PM-1M byte for byte (CH1's 169243f2…; test/pm-fast.test.mjs).
 import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
 import { pmOffOutputs } from "./pm-a8-off.mjs";
 import { v4ReplayScenarios, base, retraceCase } from "./omega-v4-replay.mjs";
 import { changeLines } from "./change-thresholds.mjs";
+import { fastLines } from "./pm-fast.mjs";
 
 const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
   if (on.length) throw new Error(`${name}: a behaviour switch is on (${on.join(", ")}); the fingerprint is taken with every switch at its default`);
 };
-let changeOverride = null;
+let changeOverride = null, fastOverride = null;
 const withGate = (settings, gate) => {
   const s = gate ? { ...settings, profit_lock_gate: gate } : settings;
-  return changeOverride != null ? { ...s, change_thresholds: changeOverride } : s;
+  const c = changeOverride != null ? { ...s, change_thresholds: changeOverride } : s;
+  return fastOverride != null ? { ...c, pm_fast_1m: fastOverride } : c;
 };
 const replayLines = (group, scenarios, gate = null) => {
   const lines = [];
@@ -50,9 +56,10 @@ const replayLines = (group, scenarios, gate = null) => {
 };
 
 /** The text ENGINE_BEHAVIOUR_HASH is taken of (sha256Hex of it). */
-export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null } = {}) {
+export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null, pmFast = null } = {}) {
   changeOverride = changeThresholds == null ? null : changeThresholds === "" ? "off" : changeThresholds;
-  try { return behaviourText(profitLockGate); } finally { changeOverride = null; }
+  fastOverride = pmFast == null ? null : pmFast;
+  try { return behaviourText(profitLockGate); } finally { changeOverride = null; fastOverride = null; }
 }
 function behaviourText(profitLockGate) {
   const lines = [];
@@ -87,5 +94,7 @@ function behaviourText(profitLockGate) {
   }
   // CH1 (2026-11-23): the change thresholds' own cases, only with them on (they are absent from the text before CH1).
   if (changeOverride !== "off") lines.push(...changeLines(changeOverride ?? undefined));
+  // PM-1M (2026-11-23): the 1m layer's own cases, only with it on (they are absent from the text before PM-1M).
+  if (fastOverride !== "off") lines.push(...fastLines());
   return lines.join("\n");
 }

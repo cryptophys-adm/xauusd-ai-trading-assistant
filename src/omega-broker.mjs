@@ -33,6 +33,7 @@ import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-select
 import { readCorpusBars, CORPUS_READ_MAX } from "./corpus-oracle.mjs";
 import { gatesFor, gateReadSince, gateMode, profitLockGateOn, PROFIT_LOCK_GATE, GATE_LOOKBACK_MIN } from "./profit-lock-gate.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
+import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -1147,8 +1148,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // A Position Manager intent the terminal never answered is said as not applied (the expiry below).
   // The intents about to expire, read once: a Position Manager one is said as not applied; a limit one the EA never
   // answered is the limit fault (fail closed).
-  const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR kind IN ('place_limit', 'modify_order', 'delete_order')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
-  const pmExpiring = expiring.filter((r) => /^(d:)?pm:/.test(String(r.id))).map((r) => r.id);
+  const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR id LIKE 'pm1:%' OR id LIKE 'd:pm1:%' OR kind IN ('place_limit', 'modify_order', 'delete_order')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
+  const pmExpiring = expiring.filter((r) => /^(d:)?pm1?:/.test(String(r.id))).map((r) => r.id);
   const limitExpiring = expiring.find((r) => LIMIT_FAULT_KINDS.includes(r.kind));
   // ea_silent: the EA's own state was stale too (a VPS restart, the terminal down), so its heartbeat coming back lifts the
   // stop; an EA alive that did not answer needs a real answer or the owner's save.
@@ -1213,7 +1214,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     }
   }
   // The Position Manager's fresh actions (src/position-manager.mjs, owner 2026-11-17), checked again in the plan.
-  const pmActions = await pendingPositionActions(db, { now });
+  let pmActions = await pendingPositionActions(db, { now });
   let reviewStarted = false;
   if (executor?.connected === true) {
     // The profile agent's immediate steps (phase 3, src/profile-agent.mjs): the kill switch or the daily loss -> Safe,
@@ -1266,6 +1267,13 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // SLG1: the profit-lock gate's facts per ticket, only while profit_lock_gate is "on" ("legacy" reads nothing).
   const allMeta = { ...meta, ...dlg.meta };
   const gates = hasPositions && profitLockGateOn(settings) ? await profitLockGates(env, { executor: { ...dlg.executor, server: executor?.server }, metaOf: (p) => allMeta[p.intent_id] ?? null, now }) : null;
+  // PM-1M (owner 2026-11-23, src/pm-fast.mjs): the 1m fast-protect layer, once per newly closed broker minute, on this
+  // sync (no cron of its own), while the engine runs; an action it records is pending now and planned below. Off
+  // (pm_fast_1m "off"): nothing is read or written, today's sync.
+  if (hasPositions && executor?.connected === true && engineEnvEnabled(env) && settings?.enabled === true && control?.mode !== "killed" && signal?.kill !== true && pmFastOn(settings)) {
+    const fast = await runFastProtect(env, { executor, gates, spike: spikeHolds({ signal, sym: executor?.symbol ?? {}, settings, spikeSinceMs: liquiditySpikeSince, now }), now });
+    if (fast.status === "ran" && fast.positions.some((x) => x.status === "act")) pmActions = await pendingPositionActions(db, { now });
+  }
   const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}) });
   if (limitStop) plan.notes.push({ code: "limit_fail_closed", detail: limitStop.why === LIMIT_FAULT_NO_ANSWER ? `${limitStop.kind}: ${limitStop.why}; no new entry until the EA answers again (or the owner saves the settings)` : `${limitStop.kind}: ${limitStop.why}; market entries until the owner saves the settings again` });
   // A new entry the spread spike held back is a reading of the lens (scored later from the v4 replay).
@@ -1275,6 +1283,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   if (pmActions.length) {
     // An action that became an intent is applied; one the live price no longer allows is skipped (never retried).
     const planned = new Set(plan.intents.filter((it) => String(it.id).startsWith("pm:")).map((it) => { const [, t, , b] = String(it.id).split(":"); return `pm:${t}:${b}`; }));
+    // PM-1M: a fast intent carries its action's id (pm1:<ticket>:<bar minute>).
+    for (const it of plan.intents) if (String(it.id).startsWith("pm1:")) planned.add(actionIdOfIntent(it.id));
     await markPositionActions(db, pmActions.filter((a) => planned.has(a.id)).map((a) => a.id), "applied");
     const skipped = pmActions.filter((a) => !planned.has(a.id));
     await markPositionActions(db, skipped.map((a) => a.id), "skipped");
@@ -1903,11 +1913,12 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
         // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
-        // profit-lock gate's (SLG1) and the change thresholds' (CH1).
+        // profit-lock gate's (SLG1), the change thresholds' (CH1) and the 1m fast layer's (PM-1M).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
         delete back.change_thresholds;
+        delete back.pm_fast_1m;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -1928,11 +1939,13 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
-  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1): the owner's switches are carried as stored.
+  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M): the owner's switches
+  // are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
   delete body.change_thresholds;
+  delete body.pm_fast_1m;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

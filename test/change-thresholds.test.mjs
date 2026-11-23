@@ -247,9 +247,10 @@ test("CH1-11 stance: the other side on 2 consecutive closed decisions; a flip th
 
 test("CH1-12 each token off is today's rule for its trigger byte for byte; all off is the engine before CH1", async () => {
   // All off: SLG1's fingerprint (94e6f50c…) byte for byte; with "legacy" too, the one before SLG1.
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "" })), SLG1_HASH);
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "off" })), SLG1_HASH);
-  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", profitLockGate: "legacy" })), PRE_SLG1_HASH);
+  // PM-1M (2026-11-23): with the 1m fast layer off too (the engine before it).
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", pmFast: "off" })), SLG1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "off", pmFast: "off" })), SLG1_HASH);
+  assert.equal(await sha256Hex(engineBehaviourSource({ changeThresholds: "", profitLockGate: "legacy", pmFast: "off" })), PRE_SLG1_HASH);
   // One token off: its trigger's outputs are the all-off outputs (the other tokens stay on).
   const parse = (lines, name) => JSON.parse(lines.find((l) => l.startsWith(`${name}=`)).slice(name.length + 1));
   const off = changeLines("off");
@@ -291,9 +292,10 @@ test("CH1-13 v4 replays it as live: the decision rows' history, the stance held 
   const bars = path(C - WARM, C + 60 * M1, price, 0.05);
   const councils = {};
   for (let t = C + 15 * M1; t < C + 60 * M1; t += M5) councils[`open:${C}:S|${Math.floor(t / M5)}`] = "weakening, thesis broken: the decision turned";
-  const run = (stance2, settings = { ...OMEGA_DEFAULTS, enabled: true }) => replayOmega4({ ...v4Base({ settings }), bars, decisions: [d0, ...later(stance2)].map(dec), to: C + 60 * M1, councils });
+  // PM-1M (2026-11-23): the 1m fast layer off (the engine before it): its impulse rule would tighten this stop first.
+  const run = (stance2, settings = { ...OMEGA_DEFAULTS, enabled: true, pm_fast_1m: "off" }) => replayOmega4({ ...v4Base({ settings }), bars, decisions: [d0, ...later(stance2)].map(dec), to: C + 60 * M1, councils });
   const recOf = (r) => r.records[`OANDA:XAUUSD:15:${C - M15}`];
-  const confirmed = recOf(run("BUY")), reverted = recOf(run("SELL")), off = recOf(run("SELL", { ...OMEGA_DEFAULTS, enabled: true, change_thresholds: "off" }));
+  const confirmed = recOf(run("BUY")), reverted = recOf(run("SELL")), off = recOf(run("SELL", { ...OMEGA_DEFAULTS, enabled: true, change_thresholds: "off", pm_fast_1m: "off" }));
   const exitAt = (r) => [r.omega4_exit, JSON.parse(r.omega4_json).pm.map((x) => x.rule)];
   assert.deepEqual(exitAt(confirmed), ["pm_cut_loss", ["cut_loss"]]);
   assert.equal(confirmed.omega4_closed_at, new Date(C + 2 * M15 + 3 * M1).toISOString(), "at the first run on the second BUY decision");
@@ -311,7 +313,7 @@ test("CH1-13 v4 replays it as live: the decision rows' history, the stance held 
   assert.equal((await decisionRowsBefore(env, latest)).length, 2);
   const live = await withHistory(env, latest), pm = await latestDecisions(env.DB);
   const trace = [];
-  replayOmega4({ ...v4Base(), bars, decisions: [d0, ...later("BUY")].map(dec), to: C + 2 * M15 + 5 * M1, councils, trace });
+  replayOmega4({ ...v4Base({ settings: { ...OMEGA_DEFAULTS, enabled: true, pm_fast_1m: "off" } }), bars, decisions: [d0, ...later("BUY")].map(dec), to: C + 2 * M15 + 5 * M1, councils, trace });
   const sig = trace.at(-1).input.signal;
   assert.deepEqual([sig.quorum_short_share_prev, sig.decision_prev_ms, sig.agent_conf_last, sig.agent_conf_last_prev], [managementFields(live).quorum_short_share_prev, managementFields(live).decision_prev_ms, managementFields(live).agent_conf_last, managementFields(live).agent_conf_last_prev]);
   assert.deepEqual(pm.decision_history, live.decision_history);
