@@ -113,7 +113,7 @@ export const VIEWS: Entry[] = [
   { name: "LensView", View: LensView, fixture: lens, shows: ["Lens A · Positioning (CFTC)", "Lens B · Liquidity (broker M1)", "at floor", "fresh", "insufficient"] },
   { name: "LensHeader", View: LensHeader, fixture: lens, shows: ["Intraday mode"] },
   {
-    name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: liquidity,
+    name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: null, quorum_with_liquidity: null },
     shows: [...PANELS, HINT, "lens B on", "No LIQUIDITY card yet", "Fills after backend B15 is deployed.", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
     missing: [NOT_FOUND]
   },

@@ -3,8 +3,8 @@
 // Nexus Liquidity page's contract) is this seed's answer; liquidity-unavailable.json is the same with no recent bars.
 import { DatabaseSync } from "node:sqlite";
 import { BROKER_BARS_SQL, LIQUIDITY_STATE_KEY, baselineKey, backfillKey, backfillIdentity, backfillVersionsKey } from "../../src/liquidity-lens.mjs";
-import { LENS_READINGS_SQL } from "../../src/lens-policy.mjs";
-import { DECISION_LATEST_KEY } from "../../src/decision-engine.mjs";
+import { LENS_READINGS_SQL, lensKnobs } from "../../src/lens-policy.mjs";
+import { DECISION_LATEST_KEY, liquidityCard, liquidityQuorum } from "../../src/decision-engine.mjs";
 
 export const NOW = Date.parse("2026-11-23T15:00:00Z"); // Monday 10:00 in New York: the market is open
 export const REF = "acct_00112233aabbccdd";
@@ -90,8 +90,22 @@ export async function seedLiquidityEnv({ available = true, feed = true } = {}) {
   kvPut(backfillVersionsKey(REF, SOURCE), { at: iso(NOW - 20 * HOUR), versions });
   kvPut(backfillKey(backfillIdentity(REF, SOURCE, versions)), { status: "copied", at: iso(NOW - 20 * HOUR), versions, sent: 3083, added: 2419, from_ms: NOW - 9 * 86_400_000, to_ms: NOW - 8 * 86_400_000, rebuilt: true });
 
-  // The decision Omega manages with (its key zones on the feed's scale).
-  kvPut(DECISION_LATEST_KEY, { decision_key: `OANDA:XAUUSD:15:${NOW - 30 * M1}`, bar_close: iso(NOW - 15 * M1), trading_mode: "intraday", quorum: { score: 0.3, long_share: 0.6, short_share: 0.3 }, key_levels: [{ low: 4097.5, high: 4098.9 }, { low: 4110, high: 4111 }] });
+  // The decision Omega manages with (its key zones on the feed's scale). B15: with lens B's facts available it carries
+  // decision.liquidity, made by the Decision Engine's own liquidityCard and liquidityQuorum from lens B's state at that
+  // decision (a reclaimed sell-side sweep 3 minutes old) and its witness cards (the 1H and 15m rooms lean bullish).
+  const decidedAt = NOW - 13 * M1;
+  const cards = [
+    { key: "D1", label: "D1 War Room", weight: 0.1263, available: true, stale: false, lean: -0.2 },
+    { key: "H1", label: "1H War Room", weight: 0.1263, available: true, stale: false, lean: 0.4 },
+    { key: "M15", label: "15m War Room", weight: 0.0947, available: true, stale: false, lean: 0.3 },
+    { key: "NEWS", label: "News Daily", weight: 0.0632, available: true, stale: false, lean: 0.05 }
+  ];
+  const decisionLiquidity = { state: { at_ms: decidedAt - M1, facts: facts({ sweep: { side: "sell_side", age_min: 2, vol_pctl: 0.97, reclaimed: true } }) }, knobs: lensKnobs("liquidity", "intraday", { baseline: "insufficient" }) };
+  const card = available ? liquidityCard(decisionLiquidity, cards, { now: decidedAt }) : null;
+  kvPut(DECISION_LATEST_KEY, {
+    decision_key: `OANDA:XAUUSD:15:${NOW - 30 * M1}`, bar_close: iso(NOW - 15 * M1), decided_at: iso(decidedAt), trading_mode: "intraday", quorum: { score: 0.3, long_share: 0.6, short_share: 0.3 }, key_levels: [{ low: 4097.5, high: 4098.9 }, { low: 4110, high: 4111 }],
+    ...(card ? { liquidity: { card, quorum_with_liquidity: liquidityQuorum(cards, card, { now: decidedAt, env: { TRADING_MODE: "intraday" } }) } } : {})
+  });
 
   // The readings of the last 24 hours (facts only), the sweeps and their outcomes, the blocks and maker choices.
   const reading = raw.prepare("INSERT INTO liquidity_readings (at_ms, account_ref, mode, baseline, facts_json, levels_json) VALUES (?, ?, 'intraday', 'insufficient', ?, '[]')");

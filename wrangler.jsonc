@@ -158,6 +158,10 @@
     // The Nexus Intelligence views (Track B; B8 GET /api/liquidity, src/liquidity-view.mjs): "on" | "off". "off" answers
     // 404 intel_views_off. Read-only, Nexus only (behind Cloudflare Access); the prices there are labelled by scale.
     "INTEL_VIEWS": "on",
+    // Lens B's LIQUIDITY card in the Decision Engine (B15, src/decision-engine.mjs liquidityCard): "on" | "off". Council
+    // only: never in the quorum, the guardrails or the witness weights. "off": no card, no decision.liquidity, the
+    // council's prompt as before.
+    "LIQUIDITY_WITNESS": "on",
     "MACRO_ROOM_ENABLED": "true",
     "MACRO_ROOM_MAX_CALLS_PER_HOUR": "30",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.
