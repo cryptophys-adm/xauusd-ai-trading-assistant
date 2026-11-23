@@ -66,7 +66,7 @@ test("EZ1-1 the detail formatters: limit_in_zone's \"a -> b\" and limit_zone_edg
   assert.equal(ez.intentPlacement({ entry: 2685.32 }), null, "a plain limit says nothing new");
 });
 
-test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the chart's titles carry both scales", () => {
+test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the chart's caption says the scale once", () => {
   assert.equal(ez.knownFeedBasis({ feed_basis: 0.42, feed_basis_known: true }), 0.42);
   assert.equal(ez.knownFeedBasis({ feed_basis: 0, feed_basis_known: false }), null, "the signal's 0 while unknown is not a basis");
   assert.equal(ez.knownFeedBasis({ feed_basis: 0.42 }), null, "feed_basis_known must say so");
@@ -81,11 +81,9 @@ test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the 
   assert.deepEqual(ez.zoneToFeed({ low: 2684.62, high: 2686.02 }, 0.42), { low: 2684.2, high: 2685.6 });
   assert.deepEqual(ez.zoneToBroker({ low: 2684.2, high: 2685.6 }, 0.42), { low: 2684.62, high: 2686.02 });
   assert.equal(ez.zoneToFeed({ low: 1, high: 2 }, null), null);
-  assert.equal(ez.quoteTitle("bid", 2684.64, 2684.22), "bid broker 2684.64 · feed 2684.22");
-  assert.equal(ez.quoteTitle("ask", 2684.86, 2684.44), "ask broker 2684.86 · feed 2684.44");
-  assert.equal(ez.limitTitle(2684.64, 2684.22), "LIMIT · broker 2684.64 (feed 2684.22)");
-  assert.equal(ez.chartZoneLabel({ low: 2684.62, high: 2686.02 }, { low: 2684.2, high: 2685.6 }, 0.42), "Entry zone · broker 2684.62–2686.02 (feed 2684.20–2685.60)");
-  assert.equal(ez.chartZoneLabel({ low: 2684.62, high: 2686.02 }, { low: 2684.2, high: 2685.6 }, 0.42, true), "zone · feed 2684.20–2685.60 (broker +0.42)");
+  // The Omega chart's labels carry no price and no scale (OM-TEXT, test/nexus-omega-chart-text.test.mjs): the caption does.
+  assert.equal(ez.chartScaleCaption(0.42), "prices: feed · broker = feed + 0.42");
+  assert.equal(ez.chartScaleCaption(null), "prices: feed · bid, ask, positions: broker (basis unknown)");
   assert.equal(ez.basisText(0.42), "+0.420");
   assert.equal(ez.basisText(-0.35, 2), "−0.35");
   // Omega's resting limit: its own broker order first (a manual one never), else the newest pending place_limit intent.
@@ -143,8 +141,10 @@ test("EZ1-4 times: UTC and GMT+7, the chart axes in GMT+7", () => {
   for (const f of ["components/PriceChart.tsx", "pages/Omega.tsx"]) {
     assert.match(src(f), /tickMarkFormatter: \(t: Time, type: TickMarkType\) => gmt7Tick\(t, type\)/, f);
     assert.match(src(f), />GMT\+7<\/span>/, `${f}: the time axis' zone`);
-    assert.match(src(f), />feed<\/span>/, `${f}: the price axis' scale`);
   }
+  // The price axis' scale: the War Room's tag; on Omega the chart's one caption (OM-TEXT: said once).
+  assert.match(src("components/PriceChart.tsx"), />feed<\/span>/, "PriceChart: the price axis' scale");
+  assert.match(src("pages/Omega.tsx"), /<span>\{chartScaleCaption\(feedBasis\)\}<\/span>/, "Omega: the scale in the caption");
 });
 
 test("EZ1-5 OmegaWhy: the five codes' wording, limit_in_zone and limit_zone_edge an amber adjust, the refusals a red why with NOT ENTERING", { skip: NO_UI_DEPS }, async () => {
@@ -221,12 +221,12 @@ test("EZ1-7 the Omega Signal card and intents: every price with its scale, entry
   assert.equal(cell({ side: "BUY" }), "Market (Ask)");
   const cards = textOf(u.render(({ d }) => u.IntentCards({ intents: d }), OVERVIEW.broker.intents));
   assert.ok(cards.includes("place_limit BUY 0.10") && cards.includes("2684.64 broker · in zone · from 2685.32") && cards.includes("zone 2684.62–2686.02 · SL 2680.82 · TP 2692.02 · broker"), cards);
-  // The chart: the zone, the limit and the bid and ask converted and labelled (lines from the helpers above).
+  // The chart: the zone, the limit and the bid and ask converted, each with its short label (OM-TEXT).
   assert.match(omega, /addLine\(feedBid, "", T\.bullFill, LineStyle\.Solid, 1, false\);/);
-  assert.match(omega, /label: quoteTitle\("bid", bid, feedBid, digits\)/);
-  assert.match(omega, /addLine\(limitFeed, limitTitle\(limit\.price, limitFeed, digits\)/);
-  assert.match(omega, /chartZoneLabel\(zoneBroker, zoneFeed, feedBasis, narrow\)/);
-  assert.match(omega, /candles, PLAN lines: TradingView feed · times GMT\+7/);
+  assert.match(omega, /label: CHART_LABEL\.bid, below: true \}/);
+  assert.match(omega, /addLine\(limitFeed, CHART_LABEL\.limit,/);
+  assert.match(omega, /label: CHART_LABEL\.zone \}/);
+  assert.match(omega, /<span>\{chartScaleCaption\(feedBasis\)\}<\/span>/);
 });
 
 test("EZ1-8 the War Room: the card, the ladder and the chart wired as the mockup; the meta line and the chart footer carry the scale", () => {
@@ -247,39 +247,39 @@ test("EZ1-8 the War Room: the card, the ladder and the chart wired as the mockup
   assert.match(read("workers/xauusd-nexus-dashboard/ui/scripts/render-check.mjs"), /for \(const t of entry\.hides \?\? \[\]\) if \(html\.includes\(t\)\)/);
 });
 
-test("EZ1-9 the open positions on the Omega chart: entry, SL and TP converted as the bid and ask, titled broker and feed; broker without a basis", () => {
+test("EZ1-9 the open positions on the Omega chart: entry, SL and TP converted as the bid and ask; broker prices without a basis", () => {
   const pos = { ticket: 50128, side: "BUY", volume: 0.1, open_price: 2686.02, sl: 2680.82, tp: 2692.02 };
   assert.deepEqual(ez.positionLines(pos, 0.42), [
-    { kind: "entry", price: 2685.6, title: "#50128 BUY 0.10 · broker 2686.02 · feed 2685.60" },
-    { kind: "sl", price: 2680.4, title: "#50128 SL · broker 2680.82 · feed 2680.40" },
-    { kind: "tp", price: 2691.6, title: "#50128 TP · broker 2692.02 · feed 2691.60" }
+    { kind: "entry", price: 2685.6, title: "BUY 0.10" },
+    { kind: "sl", price: 2680.4, title: "SL" },
+    { kind: "tp", price: 2691.6, title: "TP" }
   ]);
   assert.deepEqual(ez.positionLines({ ...pos, side: "SELL" }, -0.35).map((l) => [l.price, l.title]), [
-    [2686.37, "#50128 SELL 0.10 · broker 2686.02 · feed 2686.37"], [2681.17, "#50128 SL · broker 2680.82 · feed 2681.17"], [2692.37, "#50128 TP · broker 2692.02 · feed 2692.37"]
+    [2686.37, "SELL 0.10"], [2681.17, "SL"], [2692.37, "TP"]
   ], "a negative basis");
-  // Without a basis (knownFeedBasis null): the broker's prices, each title marked broker.
+  // Without a basis (knownFeedBasis null): the broker's prices (the caption says so: chartScaleCaption(null)).
   const basis = ez.knownFeedBasis({ feed_basis: 0, feed_basis_known: false });
   assert.equal(basis, null);
   assert.deepEqual(ez.positionLines(pos, basis), [
-    { kind: "entry", price: 2686.02, title: "#50128 BUY 0.10 · broker" },
-    { kind: "sl", price: 2680.82, title: "#50128 SL · broker" },
-    { kind: "tp", price: 2692.02, title: "#50128 TP · broker" }
+    { kind: "entry", price: 2686.02, title: "BUY 0.10" },
+    { kind: "sl", price: 2680.82, title: "SL" },
+    { kind: "tp", price: 2692.02, title: "TP" }
   ]);
   // The entry from `entry` when open_price is missing; no SL or TP (0 or missing) draws no line; nothing for no position.
-  assert.deepEqual(ez.positionLines({ ticket: 7, side: "SELL", volume: 0.25, entry: 2690.5, sl: 0 }, 0.42).map((l) => l.title), ["#7 SELL 0.25 · broker 2690.50 · feed 2690.08"]);
+  assert.deepEqual(ez.positionLines({ ticket: 7, side: "SELL", volume: 0.25, entry: 2690.5, sl: 0 }, 0.42).map((l) => [l.price, l.title]), [[2690.08, "SELL 0.25"]]);
   assert.deepEqual(ez.positionLines(null, 0.42), []);
   assert.deepEqual(ez.positionLines({ ticket: 7, side: "BUY" }, 0.42), []);
-  assert.equal(ez.positionLines({ ticket: 7, side: "BUY", volume: 0.1, open_price: 2686.021, sl: 2680 }, 0.42, 3)[0].title, "#7 BUY 0.10 · broker 2686.021 · feed 2685.601", "the symbol's digits");
-  // Every title names its scale, with or without a basis.
-  for (const b of [0.42, null]) for (const l of ez.positionLines(pos, b)) assert.match(l.title, /· broker/);
+  assert.equal(ez.positionLines({ ticket: 7, side: "BUY", volume: 0.1, open_price: 2686.021, sl: 2680 }, 0.42, 3)[0].price, 2685.601, "the symbol's digits");
+  // No title carries a price or a scale, with or without a basis.
+  for (const b of [0.42, null]) for (const l of ez.positionLines(pos, b)) assert.doesNotMatch(l.title, /\d{4}|broker|feed|#/);
   // The chart draws the positions only through positionLines, with the same basis as the bid and ask.
   const omega = src("pages/Omega.tsx");
   assert.match(omega, /for \(const l of positionLines\(p, feedBasis, digits\)\)/);
   assert.doesNotMatch(omega, /addLine\(p\.(sl|tp)|addLine\(entryPrice/, "no raw broker position line left");
-  assert.match(omega, /zone, limit, bid, ask, positions: broker − /);
+  assert.match(omega, /<span>\{chartScaleCaption\(feedBasis\)\}<\/span>/);
   // Every other line on that chart is the feed's (candles, PLAN lines, key zones, the last price) or converted and labelled.
   const lines = [...omega.matchAll(/addLine\(([^,]+),/g)].map((m) => m[1].trim());
   assert.deepEqual(lines.sort(), ["bid", "ask", "feedBid", "feedAsk", "l.price", "l.price", "limitFeed", "signal.entry", "signal.stop", "signal.tp1"].sort());
-  assert.match(omega, /addLine\(bid, "BID broker"/);
-  assert.match(omega, /addLine\(ask, "ASK broker"/);
+  assert.match(omega, /addLine\(bid, CHART_LABEL\.bid,/);
+  assert.match(omega, /addLine\(ask, CHART_LABEL\.ask,/);
 });

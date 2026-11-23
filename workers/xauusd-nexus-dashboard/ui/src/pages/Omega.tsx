@@ -28,7 +28,7 @@ import { KeyZoneBands } from "../lib/keyZoneBands";
 import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { CreatedCell, IntentCards, IntentEntry, SignalRows } from "../components/OmegaZone";
-import { basisText, brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, knownFeedBasis, limitTitle, positionLines, quoteTitle, restingLimit, signalZoneOf, zoneText, zoneToBroker, zoneToFeed, type Zone } from "../lib/entryZone";
+import { brokerToFeed, CHART_LABEL, chartScaleCaption, gmt7Crosshair, gmt7Tick, knownFeedBasis, positionLines, restingLimit, signalZoneOf, zoneToFeed, type Zone } from "../lib/entryZone";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -377,40 +377,39 @@ export function Mt5ChartCanvas({
       return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: KEY_ROLE_TEXT[z.role ?? ""] ?? T.fg2, label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
     }) : []);
     // EZ1 (the reviewer's ruling 4): the broker's bid, ask, resting limit and entry zone on the feed chart, converted
-    // (broker − feed_basis) and labelled with both prices. The bid and ask labels sit at the left next to their lines
-    // (the axis keeps the limit's tag); while the basis is unknown the bid and ask stay at the broker's prices, marked so.
-    const narrow = (hostRef.current?.clientWidth ?? 1000) < 480;
+    // (broker − feed_basis). Each line carries one short label (CHART_LABEL) and its price only on the axis tag; the
+    // caption says the scale once (owner 2026-11-23: less cosmetic text on the chart). The bid and ask labels sit at the
+    // left next to their lines, the ask's above its line and the bid's below (the axis keeps the limit's tag; the bid's
+    // feed price is the last price's tag); while the basis is unknown the bid and ask stay at the broker's prices with
+    // their own axis tags.
     const labels: ChartZone[] = [];
     const feedBid = brokerToFeed(bid, feedBasis, digits), feedAsk = brokerToFeed(ask, feedBasis, digits);
     if (showBidAsk) {
       if (feedBasis != null) {
         addLine(feedBid, "", T.bullFill, LineStyle.Solid, 1, false);
         addLine(feedAsk, "", T.bearFill, LineStyle.Solid, 1, false);
-        if (!narrow && feedBid != null && typeof bid === "number") labels.push({ low: feedBid, high: feedBid, color: T.bullFill, alpha: 0, text: T.bull, label: quoteTitle("bid", bid, feedBid, digits) });
-        if (!narrow && feedAsk != null && typeof ask === "number") labels.push({ low: feedAsk, high: feedAsk, color: T.bearFill, alpha: 0, text: T.bear, label: quoteTitle("ask", ask, feedAsk, digits) });
+        if (feedBid != null) labels.push({ low: feedBid, high: feedBid, color: T.bullFill, alpha: 0, text: T.bull, label: CHART_LABEL.bid, below: true });
+        if (feedAsk != null) labels.push({ low: feedAsk, high: feedAsk, color: T.bearFill, alpha: 0, text: T.bear, label: CHART_LABEL.ask });
       } else {
-        addLine(bid, "BID broker", T.bullFill, LineStyle.Solid, 1);
-        addLine(ask, "ASK broker", T.bearFill, LineStyle.Solid, 1);
+        addLine(bid, CHART_LABEL.bid, T.bullFill, LineStyle.Solid, 1);
+        addLine(ask, CHART_LABEL.ask, T.bearFill, LineStyle.Solid, 1);
       }
     }
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
     if (hasClearDecision) {
-      addLine(signal.entry, `PLAN ${signal.side}`, T.okFill, LineStyle.Dashed, 1);
-      addLine(signal.stop, "PLAN SL", T.bearFill, LineStyle.Dashed, 1);
-      addLine(signal.tp1, "PLAN TP1", T.bullFill, LineStyle.Dashed, 1);
+      addLine(signal.entry, CHART_LABEL.plan, T.okFill, LineStyle.Dashed, 1);
+      addLine(signal.stop, CHART_LABEL.planSl, T.bearFill, LineStyle.Dashed, 1);
+      addLine(signal.tp1, CHART_LABEL.planTp, T.bullFill, LineStyle.Dashed, 1);
     }
     // The entry zone: the resting limit's own (broker, converted), else the clear decision's (signal, feed).
     const limitFeed = limit ? brokerToFeed(limit.price, feedBasis, digits) : null;
     const zoneFeed = limit?.zone ? zoneToFeed(limit.zone, feedBasis) : hasClearDecision ? signalZoneOf(signal) : null;
-    const zoneBroker = limit?.zone ? limit.zone : zoneToBroker(zoneFeed, feedBasis);
-    if (showPlan && zoneFeed) {
-      labels.unshift({ low: zoneFeed.low, high: zoneFeed.high, color: T.okFill, alpha: 0.16, text: T.ok, label: zoneBroker && feedBasis != null ? chartZoneLabel(zoneBroker, zoneFeed, feedBasis, narrow) : `Entry zone · feed ${zoneText(zoneFeed)}` });
-    }
-    if (showPositions && limit && limitFeed != null) addLine(limitFeed, limitTitle(limit.price, limitFeed, digits), limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
+    if (showPlan && zoneFeed) labels.unshift({ low: zoneFeed.low, high: zoneFeed.high, color: T.okFill, alpha: 0.16, text: T.ok, label: CHART_LABEL.zone });
+    if (showPositions && limit && limitFeed != null) addLine(limitFeed, CHART_LABEL.limit, limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
     ezRef.current?.setZones(labels);
-    // The open positions (broker scale): entry, SL and TP converted to the feed as the bid and ask are, each titled
-    // "broker X · feed Y"; without a basis at the broker's prices, titled "broker" (lib/entryZone.ts positionLines).
+    // The open positions (broker scale): entry, SL and TP converted to the feed as the bid and ask are, labelled
+    // "BUY 0.10", "SL" and "TP"; without a basis at the broker's prices (lib/entryZone.ts positionLines).
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
         const isBuy = p?.side === "BUY";
@@ -442,35 +441,30 @@ export function Mt5ChartCanvas({
             <span>H {num(last.high, digits)}</span>
             <span>L {num(last.low, digits)}</span>
             <span className={last.close >= last.open ? "text-bull" : "text-bear"}>C {num(last.close, digits)}</span>
-            {last.volume != null ? <span>V {Math.round(last.volume)}</span> : null}
-            <span className="text-fg-2">feed</span>
           </div>
         ) : (
           <div className="mono text-[10.5px] text-slate-500">Loading…</div>
         )}
-        {/* The live broker bid and ask (EZ1: with their feed prices), a line of this box so it never covers it on a narrow chart. */}
+        {/* The live broker bid and ask, a line of this box so it never covers it on a narrow chart; their feed prices are the chart's lines. */}
         <div className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
           <span className="text-slate-400">Bid</span>
           <span className="mono font-bold text-bull">{num(bid, digits)}</span>
-          {feedBasis != null && brokerToFeed(bid, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(bid, feedBasis, digits), digits)})</span> : null}
           <span className="text-slate-600">/</span>
           <span className="text-slate-400">Ask</span>
           <span className="mono font-bold text-bear">{num(ask, digits)}</span>
-          {feedBasis != null && brokerToFeed(ask, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(ask, feedBasis, digits), digits)})</span> : null}
           <span className="text-fg-2">· broker</span>
           {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
         </div>
       </div>
 
-      {/* EZ1: every price on the chart's axis is the feed's, its times GMT+7; the broker's prices are converted. */}
+      {/* EZ1: every price on the chart's axis is the feed's (the caption says so, once), its times GMT+7. */}
       <div className="relative min-h-[380px] flex-1">
-        <span className="mono pointer-events-none absolute right-1 top-0.5 z-10 text-[9.5px] text-fg-2">feed</span>
-        <div ref={hostRef} className="absolute inset-x-0 bottom-0 top-4" />
+        <div ref={hostRef} className="absolute inset-0" />
         <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9.5px] text-fg-2">GMT+7</span>
       </div>
-      <div className="mono flex flex-col gap-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
-        <span>candles, PLAN lines: TradingView feed · times GMT+7</span>
-        <span>{feedBasis != null ? `zone, limit, bid, ask, positions: broker − ${basisText(feedBasis, 2).replace(/^\+/, "")} basis (intents[].entry_zone, the order, the terminal)` : "bid, ask, positions: broker prices, not converted (the basis is unknown)"}</span>
+      {/* The scale, said once (owner 2026-11-23: less cosmetic text on the chart), and the library's credit. */}
+      <div className="mono flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
+        <span>{chartScaleCaption(feedBasis)}</span>
         <span><ChartCredit /></span>
       </div>
     </div>

@@ -101,38 +101,43 @@ export const zoneToBroker = (z: Zone | null, basis: number | null): Zone | null 
 /** The basis as signed text: "+0.420". */
 export const basisText = (b: number, digits = 3): string => `${b >= 0 ? "+" : "−"}${Math.abs(b).toFixed(digits)}`;
 
-/** A bid or ask line's title on the feed chart: "bid broker 2684.64 · feed 2684.22". */
-export const quoteTitle = (kind: "bid" | "ask", broker: number, feed: number, digits = 2): string => `${kind} broker ${broker.toFixed(digits)} · feed ${feed.toFixed(digits)}`;
-/** The resting limit's title on the feed chart: "LIMIT · broker 2684.64 (feed 2684.22)". */
-export const limitTitle = (broker: number, feed: number, digits = 2): string => `LIMIT · broker ${broker.toFixed(digits)} (feed ${feed.toFixed(digits)})`;
-/** The entry zone's label on the feed chart: "Entry zone · broker A–B (feed C–D)"; on a phone "zone · feed C–D (broker +0.42)". */
-export function chartZoneLabel(broker: Zone, feed: Zone, basis: number, phone = false): string {
-  return phone ? `zone · feed ${zoneText(feed)} (broker ${basisText(basis, 2)})` : `Entry zone · broker ${zoneText(broker)} (feed ${zoneText(feed)})`;
+// The Omega chart's text (owner 2026-11-23: "pengurangan kosmetik text di chart bukan mengubah layout sebelumnya", less
+// cosmetic text on the chart, not a new layout): one short label per line, its price only on the axis tag, and the
+// scale said once, in the caption under the chart (chartScaleCaption). The lines, their colours and their conversion
+// (broker − basis while the basis is known) are as before.
+
+/** The Omega chart's line labels: no price and no scale in a label. */
+export const CHART_LABEL = { bid: "Bid", ask: "Ask", limit: "Limit", zone: "Zone", plan: "Plan", planSl: "Plan SL", planTp: "Plan TP", sl: "SL", tp: "TP" } as const;
+
+/**
+ * The Omega chart's one scale caption: the axis is the feed's, and with a known basis the broker's lines are converted
+ * ("prices: feed · broker = feed + 0.42"); without one the bid, ask and positions stay at the broker's prices, unconverted.
+ */
+export function chartScaleCaption(basis: number | null): string {
+  if (!isNum(basis)) return "prices: feed · bid, ask, positions: broker (basis unknown)";
+  return `prices: feed · broker = feed ${basis < 0 ? "−" : "+"} ${Math.abs(basis).toFixed(2)}`;
 }
 
-/** One open position's line on the feed chart: its price on the chart's scale and its title. */
+/** One open position's line on the feed chart: its price on the chart's scale and its label. */
 export type PositionLine = { kind: "entry" | "sl" | "tp"; price: number; title: string };
 /**
  * An open position's entry, SL and TP lines on the feed chart (the reviewer's addition to EZ1): with a known basis each
- * broker price converted (broker − basis) and titled "<words> · broker X · feed Y"; without one at the broker's price,
- * titled "<words> · broker", so the chart never mixes scales unlabelled. The words are the page's own: "#ticket SIDE lot",
- * "#ticket SL", "#ticket TP". A missing or zero price (no SL or TP) draws no line.
+ * broker price converted (broker − basis), without one at the broker's price (the caption says which). Labels: the
+ * entry "BUY 0.10" (side and lot), then "SL" and "TP"; no ticket and no price (the price is the axis tag). A missing or
+ * zero price (no SL or TP) draws no line.
  */
 export function positionLines(p: any, basis: number | null, digits = 2): PositionLine[] {
   if (!p || typeof p !== "object") return [];
-  const ticket = p.ticket != null && p.ticket !== "" ? `#${p.ticket}` : "#?";
   const side = p.side === "BUY" || p.side === "SELL" ? p.side : "";
   const lot = isNum(p.volume) ? p.volume.toFixed(2) : "";
-  const words = { entry: [ticket, side, lot].filter(Boolean).join(" "), sl: `${ticket} SL`, tp: `${ticket} TP` };
+  const titles = { entry: [side, lot].filter(Boolean).join(" ") || "Position", sl: CHART_LABEL.sl, tp: CHART_LABEL.tp };
   const raw = { entry: p.open_price ?? p.entry, sl: p.sl, tp: p.tp };
   const out: PositionLine[] = [];
   for (const kind of ["entry", "sl", "tp"] as const) {
     const broker = raw[kind];
     if (!isNum(broker) || broker <= 0) continue;
-    if (isNum(basis)) {
-      const feed = brokerToFeed(broker, basis, digits);
-      if (feed != null) out.push({ kind, price: feed, title: `${words[kind]} · broker ${broker.toFixed(digits)} · feed ${feed.toFixed(digits)}` });
-    } else out.push({ kind, price: broker, title: `${words[kind]} · broker` });
+    const price = isNum(basis) ? brokerToFeed(broker, basis, digits) : broker;
+    if (price != null) out.push({ kind, price, title: titles[kind] });
   }
   return out;
 }
