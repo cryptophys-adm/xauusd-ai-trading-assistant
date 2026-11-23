@@ -155,6 +155,9 @@
     // The public track record's managed exit (src/public-track-record.mjs, owner 2026-11-23): "v3" (the Signal Ledger's
     // own policy, no parity gate) | "v4" (the v4 replay, shown only on a passing parity check).
     "PUBLIC_MANAGED_SOURCE": "v3",
+    // The Nexus Intelligence views (Track B; B8 GET /api/liquidity, src/liquidity-view.mjs): "on" | "off". "off" answers
+    // 404 intel_views_off. Read-only, Nexus only (behind Cloudflare Access); the prices there are labelled by scale.
+    "INTEL_VIEWS": "on",
     "MACRO_ROOM_ENABLED": "true",
     "MACRO_ROOM_MAX_CALLS_PER_HOUR": "30",
     // News Daily (owner decision 2026-11-06): the last 24 hours, each headline tagged once.

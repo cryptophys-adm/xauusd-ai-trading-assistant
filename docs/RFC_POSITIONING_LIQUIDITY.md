@@ -260,7 +260,7 @@ in the bridge sync from the KV baseline.
 - Every reader of `brokerKeyLevels` sees both: the Position Manager's TP2 and A8 reasons, the limit council's moves, and
   `manageIntents`.
 - **On the feed's scale** (the ledger's replays; anything that reads OANDA prices): `feed = broker − feed_basis`
-  (`feedBasis`, `src/ea-signal.mjs`). Without a known basis (`feed_basis_known` false) liquidity levels are left out on
+  (`feedBasis`, `src/feed-basis.mjs` since B8, re-exported by `src/ea-signal.mjs`). Without a known basis (`feed_basis_known` false) liquidity levels are left out on
   the feed's scale.
 - **No price leaves the Worker.** The rooms get counts and words, never these levels. Aether and the kernel get
   nothing of them.
@@ -602,6 +602,15 @@ Doctrine facts: `positioning.*` and `liquidity.*` in the Nexus seat, each with `
 `cot_stale`, `liquidity_archive_stale`, `lens_at_floor` (`report_once`). `GET /api/lens`; Nexus: the "Positioning &
 Liquidity" panel on the Strategy page (weight per mode and source, score, floor, baseline, COT freshness, switches), the
 two switches on the Omega page, and `liquidity_spread_spike` / `liquidity_modify_deferred` in "why".
+**The Nexus liquidity view** (Track B, B8, 2026-11-23): `GET /api/liquidity` (`src/liquidity-view.mjs`,
+`cryptophys.liquidity-view.v1`; contract `test/fixtures/nexus-intel/liquidity.json`) for the Nexus Liquidity page
+under Intelligence. Nexus only (Cloudflare Access), so it may carry lens B's levels, each on both scales (`low`/`high`
+broker, `low_feed`/`high_feed` feed, null without a known basis), with the state, the backfill's status, the basis, the
+feed's 15m ATR, the facts and line, 24 hours of readings, the newest 50 sweeps with their outcome and whether they count
+in the score, the score, the effects (blocks, maker choices, the entry council's skips, deferrals, the Position
+Manager's actions), the 168-hour baseline and today's management level set. SELECTs and KV reads only, never
+`lensStatus`; nothing in it reaches a room, a decision card, the Position Council, Aether or a public page, and lens B
+still never opens, sizes or prices an entry. Switch `INTEL_VIEWS` (`off`: 404 `intel_views_off`). See docs/SSOT.md.
 
 **Parity era.** `ERA_SWITCHES` gains `positioning_enabled` and `liquidity_enabled`. The signature compares each switch
 with its default (`eraSwitches`), so at their defaults (on) they add nothing, and a lens switched off writes
