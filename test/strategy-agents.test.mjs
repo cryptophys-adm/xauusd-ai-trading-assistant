@@ -431,8 +431,15 @@ test("the Projection Agent's reading reaches the council with the strategies, an
   assert.equal(ev.long.strategies[1].this_pattern_record, null);
   assert.ok(councilMessages(ev)[0].content.includes("price_action, when present, is the Projection Agent's reading"));
   const council = { answer: { stance: "BUY", bias: "BULLISH", confidence: 0.7, entry_type: "limit", target: "tp1", strategy: "pattern_peaks", summary: "Decision BUY, bias bullish: the double bottom broke out.", reasons: ["The pattern is confirmed."], risks: [], weighed: [] } };
-  const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, council, now: NOW, env });
+  // TP1-KZ2 (owner 2026-11-23): under TP1_KEY_ZONE_MODE "on" (the default) the pattern agent's TP1 is the nearest key
+  // zone, 4030 (4.8R); its measured target, 4009, lies short of it and stays named in the TP2 note. "off": as before.
+  const offEnv = { ...env, TP1_KEY_ZONE_MODE: "off" };
+  const aOff = assess(loaded, { now: NOW, env: offEnv });
+  const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: aOff, council, now: NOW, env: offEnv });
   assert.deepEqual([rec.trade.strategy, rec.trade.pattern, rec.trade.entry, rec.trade.stop, rec.trade.tp1, rec.trade.target, rec.trade.tp], ["pattern_peaks", "double_bottom_adam_adam", 4000, 3993.75, 4009, "tp2", 4013.75], "the measured target pays 1.44R, below this mode's 1.5R, so the trade takes the second target");
+  const recOn = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded, assessment: a, council, now: NOW, env });
+  assert.deepEqual([recOn.trade.strategy, recOn.trade.entry, recOn.trade.stop, recOn.trade.tp1, recOn.trade.target, recOn.trade.tp], ["pattern_peaks", 4000, 3993.75, 4030, "tp1", 4030], "TP1 at the key zone pays 4.8R: the trade takes it");
+  assert.match(a.guards.long.plans.pattern_peaks.plan.tp2_note, /double bottom \(Adam & Adam\): measured target \(4009\.00\) lies short of the first key zone$/);
   assert.equal(rec.strategy_plans.long.pattern_peaks.pattern, "double_bottom_adam_adam");
   // The breaker's held pattern reaches the family through assess: no plan from it.
   const held = assess(loaded, { now: NOW, env, agentRecords: [{ agent: "pattern_peaks", setups: 20, mean_r: 0.1, patterns: [{ pattern: "double_bottom_adam_adam", setups: 15, mean_r: -0.4 }] }] });

@@ -62,6 +62,24 @@ function targetsAhead({ dir, entry, risk, levels, atr, gapAtr, keyZone = false }
 }
 
 /**
+ * Pure, TP1-KZ2 (owner 2026-11-23, "setuju": TP1-KZ applies to the pattern agents too): an agent's own targets under
+ * TP1_KEY_ZONE_MODE "on". TP1 is the key-zone first target (`kz`, targetsAhead with keyZone: the nearest key zone beyond
+ * the gap, never jumped, at least TP1_MIN_R; null, no plan, when it pays less), exactly as the default agent's. The
+ * agent's own measured target (`own.measured`, else none) becomes TP2 when it lies beyond that TP1; else the agent's own
+ * TP2 when it is not short of TP1; else the key-zone second target. A measured target left short of TP1 stays named in
+ * the TP2 note. `own`: { tp1, tp1_note, tp2, tp2_note, measured?: { price, note } }.
+ */
+export function ownTargetsUnderKeyZone(dir, own, kz) {
+  if (!kz) return null;
+  const beyond = (x, strict) => isNum(x) && (strict ? dir * (x - kz.tp1) > 0 : dir * (x - kz.tp1) >= 0);
+  const m = own?.measured;
+  if (m && beyond(m.price, true)) return { tp1: kz.tp1, tp1_note: kz.tp1_note, tp2: m.price, tp2_note: m.note };
+  const short = m && isNum(m.price) ? `; ${m.note} (${r2(m.price).toFixed(2)}) lies short of the first key zone` : "";
+  if (beyond(own?.tp2, false)) return { tp1: kz.tp1, tp1_note: kz.tp1_note, tp2: own.tp2, tp2_note: `${own.tp2_note}${short}` };
+  return { tp1: kz.tp1, tp1_note: kz.tp1_note, tp2: kz.tp2, tp2_note: `${kz.tp2_note}${short}` };
+}
+
+/**
  * Pure: a plan in tradeLevels' shape from an agent's entry and stop. The stop is at least MIN_RISK ATR
  * away (a closer one is moved out); a stop farther than MAX_RISK ATR is no plan. Targets are the key
  * levels ahead unless the agent gives its own.
@@ -73,7 +91,11 @@ export function finishPlan(agent, dir, { entry, stop, atLevel, entryNote, stopNo
   if (dir * (entry - s) < AGENT_RULES.min_risk_atr * atr) { s = entry - dir * AGENT_RULES.min_risk_atr * atr; note = `${AGENT_RULES.min_risk_atr} times the 1H average range (the structure is closer)`; }
   const risk = dir * (entry - s);
   if (risk > AGENT_RULES.max_risk_atr * atr) return null;
-  const t = targets ?? targetsAhead({ dir, entry, risk, levels: ctx.levels, atr, gapAtr: ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr, keyZone: ctx.keyZone === true });
+  const gapAtr = ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr;
+  // TP1-KZ2 (owner 2026-11-23, "setuju"): an agent with its own targets takes TP1 at the key zone too (ownTargetsUnderKeyZone).
+  const t = targets
+    ? (ctx.keyZone === true ? ownTargetsUnderKeyZone(dir, targets, targetsAhead({ dir, entry, risk, levels: ctx.levels, atr, gapAtr, keyZone: true })) : targets)
+    : targetsAhead({ dir, entry, risk, levels: ctx.levels, atr, gapAtr, keyZone: ctx.keyZone === true });
   if (!t) return null;
   if (!(dir * (t.tp1 - entry) > 0) || !(dir * (t.tp2 - t.tp1) >= 0)) return null;
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
@@ -242,9 +264,9 @@ function patternAgent(family) {
           entryNote: near ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}`,
           stopNote: back >= cap ? `${F.stop.cap} times the 1H average range behind the broken line (the pattern is larger)` : structural ? "beyond the pattern's other line" : `${F.stop.height === 0.5 ? "half" : "a third of"} the pattern's height behind the broken line`,
           setup: `the Projection Agent's ${name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`,
-          targets: F.first === 1
+          targets: { ...(F.first === 1
             ? { tp1: p.target, tp1_note: `${name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
-            : { tp1, tp1_note: `${name}: half the measured move`, tp2: p.target, tp2_note: `${name}: measured target` }
+            : { tp1, tp1_note: `${name}: half the measured move`, tp2: p.target, tp2_note: `${name}: measured target` }), measured: { price: p.target, note: `${name}: measured target` } }
         }, ctx);
         if (plan) return { ...plan, pattern: p.id, chart };
       }

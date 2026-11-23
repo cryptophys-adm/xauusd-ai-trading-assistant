@@ -2,7 +2,8 @@
 // mengawal jika perlu close lebih cepat untuk mengamankan profit"): in every mode the strategy agents' first target,
 // when it comes from the key levels, is the nearest key zone ahead (a Key Level Agent candidate) and pays at least 1R;
 // a nearer key zone under 1R is an obstacle (no plan); without a key zone ahead, today's nearest level or projection,
-// still at least 1R. Agents with their own targets keep them. The guardrail keeps its own plan. TP1_KEY_ZONE_MODE "off"
+// still at least 1R. Agents with their own targets take TP1 there too (TP1-KZ2, owner 2026-11-23 "setuju"; their own
+// measured target moves to TP2: test/tp1-key-zone-agents.test.mjs). The guardrail keeps its own plan. TP1_KEY_ZONE_MODE "off"
 // is today's targets and gates, byte for byte.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -66,14 +67,18 @@ test("TK3 no key zone ahead: today's nearest level (at least 1R) or the 2R proje
   assert.equal(agentPlanPasses(projected, { target_rule: "rrr", min_rrr: 1.5, tp1_min_r: 1 }), true, "intraday takes it");
 });
 
-test("TK4 agents with their own targets keep them; TP1 >= 1R decides only whether they can be selected", () => {
+test("TK4 an agent with its own targets takes TP1 at the key zone too (TP1-KZ2); TP1 >= 1R decides whether it can be selected", () => {
   const ctx = { ...agentContext({ strategy: strategyOf(zonesOf([KEY])), bars: sweepBars, scalp: true, keyZone: true }) };
   const own = { tp1: 3572, tp1_note: "the range's other side", tp2: 3565, tp2_note: "beyond" };
   const plan = finishPlan("range_fade", -1, { entry: PRICE, stop: 3590.83, atLevel: true, entryNote: "e", stopNote: "s", setup: "x", targets: own }, ctx);
   const off = finishPlan("range_fade", -1, { entry: PRICE, stop: 3590.83, atLevel: true, entryNote: "e", stopNote: "s", setup: "x", targets: own }, { ...ctx, keyZone: undefined });
-  assert.deepEqual(plan, off, "the agent's own targets, as today");
-  assert.equal(plan.tp1, 3572);
-  assert.equal(agentPlanPasses(plan, { target_rule: "rrr", min_rrr: 0, tp1_min_r: 1 }), false, `${plan.rrr.tp1}R: not selectable`);
+  assert.deepEqual([off.tp1, off.tp2, off.rrr.tp1], [3572, 3565, 0.71], "off: the agent's own targets, as before");
+  // On: TP1 at the key zone 3560.96 (1.71R); its own TP2 (3565) lies short of it, so TP2 is the key zones' second target.
+  assert.deepEqual([plan.tp1, plan.rrr.tp1], [3560.96, 1.71]);
+  assert.match(plan.tp1_note, /3553\.73–3560\.96 key zone/);
+  assert.ok(plan.tp2 < plan.tp1, "TP2 beyond TP1 (a short)");
+  assert.equal(agentPlanPasses(plan, { target_rule: "rrr", min_rrr: 0, tp1_min_r: 1 }), true, `${plan.rrr.tp1}R: selectable`);
+  assert.equal(agentPlanPasses(off, { target_rule: "rrr", min_rrr: 0, tp1_min_r: 1 }), false, `${off.rrr.tp1}R: not selectable`);
   // liveAgentPlans: the default agent is exempt from the reward guardrail, not from the 1R floor.
   const g = { target_rule: "rrr", min_rrr: 1.5, tp1_min_r: 1, plans: { zone_pullback: { status: "live", plan: { ...plan, agent: "zone_pullback", rrr: { tp1: 0.7, tp2: 3 } } }, sweep_reversal: { status: "live", plan: { ...plan, rrr: { tp1: 1.2, tp2: 2 } } } } };
   assert.deepEqual(liveAgentPlans(g).map(([id]) => id), ["sweep_reversal"]);
