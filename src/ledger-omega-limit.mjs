@@ -81,6 +81,20 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
   return null;
 }
 
+/**
+ * Pure: the fill price of a resting limit at `level` in the 1m bar `bar` ({ o, h, l } on the bid, `spread` added for the
+ * ask), or null when the bar does not reach it. The ask's low (bid low + spread) reaches a BUY limit; the bid's high a
+ * SELL limit. A gap through it at the minute's open fills at the open (the broker's better price). Shared with v3's limit
+ * entry (src/ledger-v3-limit.mjs, V3L).
+ */
+export function limitFillPrice({ side, level, bar, spread }) {
+  const buy = side === "BUY";
+  const reached = buy ? bar.l + spread <= level + 1e-9 : bar.h >= level - 1e-9;
+  if (!reached) return null;
+  const openPx = buy ? r2(bar.o + spread) : r2(bar.o);
+  return buy ? Math.min(level, openPx) : Math.max(level, openPx);
+}
+
 /** The reasons a limit entry was missed (never filled): at placement, then while it rested. */
 export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap", "superseded_by_signal"]);
 
@@ -162,13 +176,8 @@ export function limitEntryPolicy({ state = null, knobsFor = (m, settings) => lim
     inMinute({ now, bar, spread, fill }) {
       lastMs = now;
       if (!pending || pending.placed_ms > now) return;
-      const buy = pending.side === "BUY";
-      // The ask's low (bid low + spread) reaches a BUY limit; the bid's high a SELL limit. A gap through it at the
-      // minute's open fills at the open (the broker's better price); the stop and the target stay where they were placed.
-      const reached = buy ? bar.l + spread <= pending.level + 1e-9 : bar.h >= pending.level - 1e-9;
-      if (!reached) return;
-      const openPx = buy ? r2(bar.o + spread) : r2(bar.o);
-      const px = buy ? Math.min(pending.level, openPx) : Math.max(pending.level, openPx);
+      const px = limitFillPrice({ side: pending.side, level: pending.level, bar, spread });
+      if (px == null) return;
       const it = px === pending.it.entry ? pending.it : { ...pending.it, entry: px, r_dist: r2(Math.abs(px - pending.it.sl)) };
       fill({ key: pending.key, it, issuedMs: pending.issued_ms, mode: pending.mode, agent: pending.agent, equity: pending.equity, profile: pending.profile, noteCodes: pending.note_codes,
         extra: { policy: OMEGA_LIMIT_VERSION, placed_at: iso(pending.placed_ms), wait_min: Math.round((now - pending.placed_ms) / M1), away_r: pending.away_r, knobs: pending.knobs } });
@@ -232,6 +241,21 @@ export function replayOmegaLimit({ state = null, knobsFor, ...opts } = {}) {
 // ---------------------------------------------------------------------------
 // D1, KV and the cron.
 
+/**
+ * The decision rows' EZ1b switch (`entry_zone_mode`, "edge" beside a zone), which v4's DECISION_SQL does not extract:
+ * without it eaSignalFromDecision never sets `entry_zone_edge`, so this replay never rested a limit at the zone's near
+ * edge as the live limitPlacement does (found by V3L, 2026-11-23). v4's own DECISION_SQL stays as it is (v4 is the market
+ * replay; the steady state hands this replay v4's decisions), so the switch is read here and joined by decision key.
+ */
+export const LIMIT_ZONE_MODE_SQL = "SELECT decision_key, json_extract(decision_json, '$.entry_zone_mode') AS zone_mode FROM engine_decisions WHERE bar_close >= ? AND json_extract(decision_json, '$.entry_zone_mode') IS NOT NULL";
+/** The decisions this replay reads: v4's DECISION_SQL with the decision's entry_zone_mode (LIMIT_ZONE_MODE_SQL's column). */
+export const LIMIT_DECISION_SQL = DECISION_SQL.replace(" FROM engine_decisions WHERE", ", json_extract(decision_json, '$.entry_zone_mode') AS zone_mode FROM engine_decisions WHERE");
+/** Pure: `decisions` (decisionFromRow's) with each one's entry_zone_mode from `rows` ({ decision_key, zone_mode }); the others as they are. */
+export function withZoneModes(decisions = [], rows = []) {
+  const mode = new Map((Array.isArray(rows) ? rows : []).filter((r) => typeof r?.zone_mode === "string" && r.zone_mode).map((r) => [r.decision_key, r.zone_mode]));
+  return decisions.map((d) => (d && mode.has(d.decision_key) && d.entry_zone_mode !== mode.get(d.decision_key) ? { ...d, entry_zone_mode: mode.get(d.decision_key) } : d));
+}
+
 const UPSERT_SQL = `INSERT INTO ledger_omega4 (decision_key, side, issued_ms, trading_mode, agent, omega4_status, regime, limit_status, limit_gate, limit_filled_at, limit_closed_at, limit_exit, r_limit, limit_json, updated_at)
   VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(decision_key) DO UPDATE SET regime = excluded.regime, limit_status = excluded.limit_status, limit_gate = excluded.limit_gate, limit_filled_at = excluded.limit_filled_at,
@@ -277,8 +301,14 @@ export async function runOmegaLimit(env, { now = Date.now(), bars = null, maxMin
     }
     const from = cp ? cp.at_ms : earliest;
     if (!reuse) {
-      decisions = ((await env.DB.prepare(DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []).map(decisionFromRow).filter(Boolean);
+      const rows = (await env.DB.prepare(LIMIT_DECISION_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? [];
+      decisions = withZoneModes(rows.map(decisionFromRow).filter(Boolean), rows);
       ctx = await loadOmega4Context(env, { sinceMs: from, now });
+    } else {
+      // v4's decisions (its DECISION_SQL has no entry_zone_mode): EZ1b's switch joined in, v4's own list left untouched.
+      let zm = [];
+      try { zm = (await env.DB.prepare(LIMIT_ZONE_MODE_SQL).bind(iso(from - 2 * 3600_000)).all()).results ?? []; } catch { zm = []; }
+      decisions = withZoneModes(decisions, zm);
     }
     const run = replayOmegaLimit({ bars: m1, decisions, from, to: until, state: cp, maxSteps: maxMinutes, ...ctx });
     const keys = Object.keys(run.records);
