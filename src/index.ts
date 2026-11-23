@@ -1794,7 +1794,8 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
   /**
    * The public track record (owner 2026-11-20, confirmed: "Yes, build it"): win rate, expectancy, net R and profit
    * factor per exit scenario, in R only, aggregates only, from results closed more than the public delay ago; the
-   * managed exit only while the v4 replay matches the live account (src/public-track-record.mjs).
+   * managed exit from the Signal Ledger's own policy (PUBLIC_MANAGED_SOURCE "v3", default), or with "v4" only while the v4
+   * replay matches the live account (src/public-track-record.mjs).
    */
   async trackRecord(): Promise<JsonObject> {
     return readPublicTrackRecord(this.env) as Promise<JsonObject>;

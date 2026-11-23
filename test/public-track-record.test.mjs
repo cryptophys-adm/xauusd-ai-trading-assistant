@@ -2,7 +2,7 @@
 // passing replay check, and no forbidden key at any depth.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicTrackRecord, summarise, forbiddenKeys, readPublicTrackRecord, resetTrackRecordMemoForTests } from "../src/public-track-record.mjs";
+import { publicTrackRecord, summarise, forbiddenKeys, readPublicTrackRecord, resetTrackRecordMemoForTests, publicManagedSource } from "../src/public-track-record.mjs";
 
 const NOW = Date.parse("2026-11-22T12:00:00Z");
 const old = "2026-11-20 10:00:00", fresh = "2026-11-22 08:00:00";
@@ -21,7 +21,7 @@ test("TR1 the four numbers per scenario, with won, lost and even", () => {
 });
 
 test("TR2 only results closed more than the delay ago count; the base and its date", () => {
-  const t = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: { status: "pass" }, now: NOW, delayHours: 24 });
+  const t = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: { status: "pass" }, now: NOW, delayHours: 24, source: "v4" });
   const [first, second, managed] = t.scenarios;
   assert.equal(first.count, 3, "the 2026-11-22 result is inside the delay");
   assert.equal(second.count, 2, "a plan without a second target is not in TP2");
@@ -34,9 +34,9 @@ test("TR2 only results closed more than the delay ago count; the base and its da
   assert.equal(t.unit, "R");
 });
 
-test("TR3 the managed exit is hidden, with no number, until the replay check passes", () => {
+test("TR3 v4: the managed exit is hidden, with no number, until the replay check passes", () => {
   for (const status of ["insufficient", "fail", undefined]) {
-    const m = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: status ? { status } : null, now: NOW }).scenarios[2];
+    const m = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: status ? { status } : null, now: NOW, source: "v4" }).scenarios[2];
     assert.equal(m.shown, false);
     assert.equal(m.count, undefined);
     assert.equal(m.expectancy_r, undefined);
@@ -45,17 +45,18 @@ test("TR3 the managed exit is hidden, with no number, until the replay check pas
 });
 
 test("TR4 no forbidden key at any depth, no Omega and no price-like number", () => {
-  const t = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: { status: "pass" }, now: NOW });
+  const t = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: { status: "pass" }, now: NOW, source: "v4" });
   assert.deepEqual(forbiddenKeys(t), []);
   const text = JSON.stringify(t);
   assert.doesNotMatch(text, /omega/i);
   assert.deepEqual(forbiddenKeys({ a: [{ tp1: 1 }] }), ["tp1"]);
 });
 
-test("TR5 the reader: D1 and the parity in KV, kept 10 minutes", async () => {
+test("TR5 the reader (v4): D1 and the parity in KV, kept 10 minutes", async () => {
   resetTrackRecordMemoForTests();
   let reads = 0;
   const env = {
+    PUBLIC_MANAGED_SOURCE: "v4",
     DB: { prepare: (sql) => ({ all: async () => { reads += 1; return { results: /signal_ledger/.test(sql) ? LEDGER : MANAGED }; } }) },
     SIGNAL_CACHE: { get: async () => JSON.stringify({ status: "insufficient" }) }
   };
@@ -64,4 +65,73 @@ test("TR5 the reader: D1 and the parity in KV, kept 10 minutes", async () => {
   assert.equal(a.scenarios[2].shown, false);
   await readPublicTrackRecord(env, { now: NOW + 60_000 });
   assert.equal(reads, 2, "the second call within 10 minutes is the memo");
+});
+
+// PUB-V3 (owner 2026-11-23: "yang ditampilkan di cta public harusnya omega (v3) bukan yang live omega v4").
+const V3 = [
+  { opened_at: "2026-11-19 09:00:00", omega_closed_at: "2026-11-20 09:00:00", r_omega: 2, omega_size: 0.5 },
+  { opened_at: "2026-11-18 09:00:00", omega_closed_at: "2026-11-19 09:00:00", r_omega: -1, omega_size: null },
+  { opened_at: "2026-11-22 07:00:00", omega_closed_at: fresh, r_omega: 3, omega_size: 1 },
+  { opened_at: "2026-11-19 12:00:00", omega_closed_at: old, r_omega: null, omega_size: 1 }
+];
+
+test("TR6 v3 (the default): the managed exit is the ledger's own policy, sized as the ledger sizes it, with no parity gate", () => {
+  for (const parity of [null, { status: "fail" }, { status: "insufficient" }, { status: "pass" }]) {
+    const t = publicTrackRecord({ ledger: LEDGER, managed: V3, parity, now: NOW });
+    const m = t.scenarios[2];
+    assert.equal(m.shown, true);
+    assert.equal(m.count, 2, "the fresh close is inside the delay; a null R is no trade");
+    assert.equal(m.net_r, 0, "2 x 0.5 + (-1 unsized)");
+    assert.equal(m.won, 1);
+    assert.equal(m.lost, 1);
+    assert.equal(m.since, "2026-11-18");
+    assert.deepEqual(t.replay_check, { status: "not_required", shown: true }, "the CTA page shows the managed column only when replay_check.shown is true");
+  }
+  assert.equal(publicTrackRecord({ ledger: LEDGER, managed: V3, now: NOW, source: "v3" }).scenarios[2].net_r, 0);
+});
+
+test("TR7 v3 keeps the v4 shape: the same keys at every level, the same version and labels", () => {
+  const keys = (x) => (Array.isArray(x) ? x.map(keys) : x && typeof x === "object" ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, keys(x[k])])) : "value");
+  const v3 = publicTrackRecord({ ledger: LEDGER, managed: V3, now: NOW });
+  const v4 = publicTrackRecord({ ledger: LEDGER, managed: MANAGED, parity: { status: "pass" }, now: NOW, source: "v4" });
+  assert.deepEqual(keys(v3), keys(v4));
+  assert.equal(v3.version, "cryptophys.public-track-record.v1");
+  assert.deepEqual(v3.scenarios.map((x) => [x.id, x.label]), v4.scenarios.map((x) => [x.id, x.label]));
+  assert.deepEqual(v3.scenarios.slice(0, 2), v4.scenarios.slice(0, 2), "TP1 and TP2 do not depend on the managed source");
+});
+
+test("TR8 v3: no forbidden key, no Omega, no account and no price field, even when the rows carry them", () => {
+  const rows = V3.map((x) => ({ ...x, entry_price: 4021.5, account_ref: "acct_x", omega_status: "closed", lots: 0.1 }));
+  const t = publicTrackRecord({ ledger: LEDGER, managed: rows, now: NOW });
+  assert.deepEqual(forbiddenKeys(t), []);
+  const text = JSON.stringify(t);
+  assert.doesNotMatch(text, /omega|acct_|price|lot|4021/i);
+  for (const s of t.scenarios) for (const [k, v] of Object.entries(s)) if (typeof v === "number") assert.ok(Math.abs(v) < 1000, `${k} is an R aggregate, not a price`);
+});
+
+test("TR9 the switch PUBLIC_MANAGED_SOURCE: v3 by default; the reader's v3 query and no KV read; v4 as before", async () => {
+  assert.equal(publicManagedSource({}), "v3");
+  assert.equal(publicManagedSource({ PUBLIC_MANAGED_SOURCE: " V4 " }), "v4");
+  assert.equal(publicManagedSource({ PUBLIC_MANAGED_SOURCE: "v5" }), "v3");
+  resetTrackRecordMemoForTests();
+  const sqls = [];
+  let kv = 0;
+  const env = {
+    DB: { prepare: (sql) => ({ all: async () => { sqls.push(sql); return { results: /omega_status = 'closed'/.test(sql) ? V3 : LEDGER }; } }) },
+    SIGNAL_CACHE: { get: async () => { kv += 1; return JSON.stringify({ status: "fail" }); } }
+  };
+  const a = await readPublicTrackRecord(env, { now: NOW });
+  assert.equal(kv, 0, "v3 reads no parity");
+  assert.equal(sqls.length, 2);
+  assert.match(sqls[1], /FROM signal_ledger WHERE source = 'decision' AND omega_status = 'closed' AND r_omega IS NOT NULL/);
+  assert.doesNotMatch(sqls.join(" "), /ledger_omega4/);
+  assert.equal(a.scenarios[2].shown, true);
+  assert.equal(a.scenarios[2].count, 2);
+  resetTrackRecordMemoForTests();
+  sqls.length = 0;
+  const b = await readPublicTrackRecord({ ...env, PUBLIC_MANAGED_SOURCE: "v4" }, { now: NOW });
+  assert.equal(kv, 1);
+  assert.match(sqls[1], /FROM ledger_omega4/);
+  assert.equal(b.scenarios[2].shown, false, "v4 with a failing parity stays hidden");
+  resetTrackRecordMemoForTests();
 });
