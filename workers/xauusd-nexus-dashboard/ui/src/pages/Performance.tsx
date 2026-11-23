@@ -29,6 +29,7 @@ import {
   CARD_H, activeIndex, cardFields, cardPosition, chartModel, chartSummary, indexOfKey, keyStep, pointerClears, pointerIndex, rTick,
   rValue, rowKey,
 } from "../lib/chartScale";
+import { omegaR, policyR } from "../lib/sizedR";
 
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const r = (x?: number | null, sign = true) => (x == null ? "n/a" : `${sign && (x ?? 0) > 0 ? "+" : ""}${Math.round((x ?? 0) * 100) / 100}R`);
@@ -400,11 +401,15 @@ function ModePolicyTable({ byMode }: { byMode: any }) {
 }
 
 /**
- * Outcome Distribution Histogram (Buckets of R-multiples).
+ * Outcome Distribution Histogram (Buckets of R-multiples). Omega v3 in sized R (lib/sizedR.ts policyR: r_omega ×
+ * omega_size), as the KPI line and the public record count it.
  */
 function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy: Policy }) {
-  const rKey = policy === "tp2" ? "r_tp2" : policy === "omega" ? "r_omega" : policy === "omega4" ? "r_omega4" : "r_tp1";
-  const closed = items.filter((x) => (policy === "omega" ? x.omega_status : policy === "omega4" ? x.omega4_status : x.status) === "closed" && Number.isFinite(x[rKey]));
+  const unit = policy === "omega" ? "sized R" : "R";
+  const closed = items
+    .filter((x) => (policy === "omega" ? x.omega_status : policy === "omega4" ? x.omega4_status : x.status) === "closed")
+    .map((x) => policyR(x, policy))
+    .filter((v): v is number => v != null);
 
   const buckets = useMemo(() => {
     const b = [
@@ -417,8 +422,7 @@ function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy:
       { label: "< -1.0R", min: -Infinity, max: -1.0, count: 0, tone: C.bear },
     ];
 
-    for (const item of closed) {
-      const val = item[rKey];
+    for (const val of closed) {
       for (const bucket of b) {
         if (val >= bucket.min && val < bucket.max) {
           bucket.count++;
@@ -427,7 +431,7 @@ function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy:
       }
     }
     return b;
-  }, [closed, rKey]);
+  }, [closed]);
 
   const maxCount = Math.max(...buckets.map((b) => b.count), 1);
 
@@ -437,6 +441,9 @@ function OutcomeDistributionHistogram({ items, policy }: { items: any[]; policy:
 
   return (
     <div className="space-y-2 pt-1">
+      <p className="text-[11px] text-muted" title={policy === "omega" ? "R × Omega's size for the day, as the KPIs and the public record" : undefined}>
+        Closed trades by {unit}
+      </p>
       {buckets.map((b) => {
         const pctVal = Math.round((b.count / closed.length) * 100);
         const barWidth = Math.max(3, Math.round((b.count / maxCount) * 100));
@@ -1645,7 +1652,7 @@ export default function Performance() {
                           <th>Mode</th>
                           <th>Status</th>
                           <th>R</th>
-                          <th>Omega</th>
+                          <th title="Omega v3 in sized R: R × Omega's size for the day, as the KPIs">Omega (sized R)</th>
                           <th>Omega v4</th>
                           <th>MFE / MAE</th>
                         </tr>
@@ -1701,8 +1708,8 @@ export default function Performance() {
                               </td>
                               <td className="mono">
                                 {om === "closed" ? (
-                                  <span style={{ color: (x.r_omega ?? 0) > 0 ? C.bull : (x.r_omega ?? 0) < 0 ? C.bear : undefined }}>
-                                    {r(x.r_omega)}{" "}
+                                  <span style={{ color: (omegaR(x) ?? 0) > 0 ? C.bull : (omegaR(x) ?? 0) < 0 ? C.bear : undefined }} title="Sized R: R × Omega's size for the day">
+                                    {r(omegaR(x))}{" "}
                                     <span className="text-[10px] text-slate-400">{OMEGA_EXIT[x.omega_exit] ?? x.omega_exit}</span>
                                   </span>
                                 ) : om === "skipped" ? (
