@@ -122,3 +122,37 @@ jobs:
           const last = chart.candles.at(-1);
           console.log(JSON.stringify({ chart: { symbol: chart.symbol, timeframe: chart.timeframe, count: chart.count, latest_close_time: chart.latest_close_time, last_close: last.close } }));
           NODE
+
+      - name: Smoke test the Liquidity view
+        # Track C2 (the Intelligence Liquidity page): GET /api/liquidity through the Nexus proxy answers 200 JSON with
+        # no-store under the CI service token (cryptophys.liquidity-view.v1), and the Access login redirect without it.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
+          const URL_ = "https://nexus.cryptophys.work/api/liquidity";
+          const token = accessToken();
+          if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
+          // Without the token: Cloudflare Access answers with its login redirect, never the view.
+          const bare = await fetch(URL_, { redirect: "manual", signal: AbortSignal.timeout(20000) });
+          if (!isAccessLogin(bare)) { console.error(`/api/liquidity without the token: expected the Access login redirect, got ${bare.status}`); process.exit(1); }
+          console.log(`/api/liquidity without the token: Access login redirect (${bare.status})`);
+          // With the token: 200 JSON, no-store, the view's schema (the AI Worker may still be deploying: retry).
+          let r = null, body = null;
+          for (let i = 0; i < 6; i++) {
+            try {
+              r = await fetch(URL_, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+              body = await r.json().catch(() => null);
+              if (r.status === 200) break;
+              console.log("liquidity view not ready:", r.status, JSON.stringify(body).slice(0, 200));
+            } catch (e) { console.log("liquidity view error:", e?.name); }
+            await new Promise((res) => setTimeout(res, 10000));
+          }
+          if (!r || r.status !== 200) { console.error(`/api/liquidity: HTTP ${r?.status ?? "no answer"} ${JSON.stringify(body).slice(0, 200)}`); process.exit(1); }
+          if (!/\bjson\b/i.test(r.headers.get("content-type") ?? "")) { console.error(`/api/liquidity: not JSON (${r.headers.get("content-type")})`); process.exit(1); }
+          if (!/no-store/i.test(r.headers.get("cache-control") ?? "")) { console.error(`/api/liquidity: cache-control ${r.headers.get("cache-control")}, expected no-store`); process.exit(1); }
+          if (body?.schema !== "cryptophys.liquidity-view.v1") { console.error(`/api/liquidity: schema ${body?.schema}`); process.exit(1); }
+          console.log(JSON.stringify({ liquidity: { schema: body.schema, on: body.state?.on ?? null, fresh: body.state?.fresh ?? null, levels: Array.isArray(body.levels) ? body.levels.length : null, basis_known: body.scale?.feed_basis_known ?? null } }));
+          NODE

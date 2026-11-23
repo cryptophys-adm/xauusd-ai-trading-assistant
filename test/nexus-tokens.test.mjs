@@ -20,7 +20,9 @@ const DIRECTION_FILES = [
   "components/GlobalDecision.tsx", "components/SetupLifecycle.tsx", "components/ThreadsPanel.tsx", "pages/Correlations.tsx",
   "components/charts.tsx", "components/PriceChart.tsx", "pages/Performance.tsx",
   // Track C1: the Positioning & Liquidity panel, the first view of the page render check.
-  "components/LensPanel.tsx"
+  "components/LensPanel.tsx",
+  // Track C2: the Liquidity page and the Intelligence pages' chart.
+  "pages/Liquidity.tsx", "components/IntelChart.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

@@ -13,6 +13,7 @@ import Aether from "./pages/Aether";
 import Omega from "./pages/Omega";
 import Model from "./pages/Model";
 import Strategy from "./pages/Strategy";
+import Liquidity from "./pages/Liquidity";
 import Neurons from "./pages/Neurons";
 import Councils from "./pages/Councils";
 
@@ -31,7 +32,7 @@ export default function App() {
       window.removeEventListener("popstate", on);
     };
   }, []);
-  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega, model: Model, strategy: Strategy, neurons: Neurons, councils: Councils };
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega, model: Model, strategy: Strategy, liquidity: Liquidity, neurons: Neurons, councils: Councils };
   const current = route in PAGES ? route : "";
   const Page = PAGES[current] ?? WarRoom;
   return <AppShell current={current}><Page /></AppShell>;
