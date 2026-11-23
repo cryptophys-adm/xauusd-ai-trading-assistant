@@ -11,10 +11,13 @@
 //            account_ref, source or identity key in the answer; lens B never opens, sizes or prices an entry here.
 //   card     B15: `card` and `quorum_with_liquidity` from the latest decision's decision.liquidity (lens B's council-only
 //            LIQUIDITY card and the quorum it would give, informational); null when that decision has none.
-//   later    B16 (conditions), B17/B19 (effects.level_moves) are null until merged.
-import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine } from "./liquidity-lens.mjs";
+//   conditions B16: lens B's liquidity conditions (liquidityConditions, the line the 15m and 1H risk desks and moderators
+//            read, no sweep, no price) from the latest state at the mode's knobs, with `in_rooms` (whether the rooms read
+//            them now: LENS_ROOM_LINE "conditions" and lens B on, above its floor and fresh); null without available facts.
+//   later    B17/B19 (effects.level_moves) are null until merged.
+import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine, liquidityConditions, liquidityConditionsOn } from "./liquidity-lens.mjs";
 import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
-import { activeAccount } from "./lens-steps.mjs";
+import { activeAccount, lensRoomLine } from "./lens-steps.mjs";
 import { feedBasis } from "./feed-basis.mjs";
 import { managementFields } from "./ea-signal.mjs";
 import { brokerKeyLevels } from "./omega-engine.mjs";
@@ -127,6 +130,18 @@ export function viewQuorumWithLiquidity(decision) {
   return { score: n(q.score), bias: typeof q.bias === "string" ? q.bias : null, long_share: n(q.long_share), short_share: n(q.short_share), neutral_share: n(q.neutral_share), share_needed_above: n(q.share_needed_above), quorum_min: n(q.quorum_min), long_met: b(q.long_met), short_met: b(q.short_met), met: b(q.met) };
 }
 
+/**
+ * Pure: the page's conditions (B16): liquidityConditions of the state's facts at the knobs, with the state's time,
+ * whether it is stale and whether the rooms read it now (`in_rooms`, with `room_line` the switch's value); null without
+ * available facts. No price.
+ */
+export function viewConditions(state, { knobs = null, now = Date.now(), roomLine = "conditions" } = {}) {
+  const c = state?.facts ? liquidityConditions(state.facts, { knobs, stateAtMs: state.at_ms, now }) : null;
+  if (!c) return null;
+  const at = finite(state.at_ms) ? state.at_ms : null;
+  return { at_ms: at, stale: !(finite(at) && now - at <= LIQUIDITY_STATE_FRESH_MS), in_rooms: roomLine === "conditions" && liquidityConditionsOn(state, knobs, now), room_line: roomLine, ...c };
+}
+
 /** The view (cryptophys.liquidity-view.v1). `strategy` is the shared memo (readStrategyMemo), or null. Throws on a D1 error. */
 export async function readLiquidityView(env, { now = Date.now(), strategy = null } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
@@ -220,7 +235,8 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
       mode: state?.mode ?? null, on: fields.liquidity_on === true, baseline: state?.baseline ?? "unavailable", backfill
     },
     scale, price, atr_m15: atrM15,
-    facts, line: facts ? liquidityLine(state.facts ?? { available: false, reason: "no_bars" }) : null, conditions: null,
+    facts, line: facts ? liquidityLine(state.facts ?? { available: false, reason: "no_bars" }) : null,
+    conditions: viewConditions(state, { knobs, now, roomLine: lensRoomLine(env) }),
     levels, readings, sweeps, score,
     effects: { blocks: await scoredKind("block"), makers: await scoredKind("maker"), skips, deferrals, level_moves: null, pm_actions: pmActions },
     card: viewCard(decision, now), quorum_with_liquidity: viewQuorumWithLiquidity(decision),

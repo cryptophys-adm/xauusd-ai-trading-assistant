@@ -594,7 +594,7 @@ older than 15 minutes. `brokerKeyLevels` appends the levels with `source: "liqui
 `hard` are never held. The entry request carries `liquidity` (weight, thin, sweep with/against); `ENTRY_REASONS` gains
 `liquidity_thin` → place_limit, `liquidity_sweep_with` → enter_market, `liquidity_sweep_against` → skip, each held only
 when the request carries it. The Position Manager reads the signal: `liquidity_sweep_against` joins the loss band's cut
-reasons (the council's thesis still decides) and `TP_NEARER_REASONS`. The 15m and 1H rooms' brief carries the line.
+reasons (the council's thesis still decides) and `TP_NEARER_REASONS`. The 15m and 1H rooms' brief carries the line; since B16 its risk desk and moderator also read lens B's conditions (below).
 
 **Scores and floor.** D1 `lens_readings` (`lens`, `kind`, `at_ms`, `mode`, `side`, `outcome`, no price). Kinds: `h4`
 (lens A), `sweep`, `block` (scored from `ledger_omega4.r_omega4`: a v4 loss is a hit), `maker` (a `liquidity_thin`
@@ -633,6 +633,19 @@ never see it, and `src/witness-weighting.mjs` / `src/witness-tuning.mjs` hold no
 `GET /api/liquidity` shows both. No price in the card: weight, lean, the sweep's side, minutes and words. Switch
 `LIQUIDITY_WITNESS` (`off`: no card, no `decision.liquidity`, the council's messages byte for byte as before). The
 Decision Engine is outside `ENGINE_CODE`, so `ENGINE_CODE_HASH` and `ENGINE_BEHAVIOUR_HASH` do not move.
+
+**Lens B's conditions in the rooms** (Track B, B16, 2026-11-23; §4.3): `liquidityConditions` in
+`src/liquidity-lens.mjs` turns the facts into one plain-words line for the 15m and 1H rooms: the spread against its
+norm for the New York hour of the week (with the mode's `spread_widen`), the depth (the last 15 minutes' tick-volume
+percentile, with the mode's `thin_pctl`), the minute's tick volume, the session's liquidity at the facts' minute and where
+price sits against lens B's levels (inside a high-volume node or not; nodes and untaken pools above, below and at
+price, as counts). No sweep clause (the LIQUIDITY card's) and no price-shaped number (`PRICE_SHAPED`; a line that would
+carry one is refused). `roomContextLine` adds it to lens B's brief line as `conditions` while lens B is on, above its
+floor and fresh (`liquidityConditionsOn`: `liquidityEvidence`'s gates); the 15m War Room and the 1H room read it from
+the stored brief into the Risk Manager's opening data (`liquidity_conditions`) and the moderator's prompt, with no model
+call added; the 4H and D1 rooms never do. `GET /api/liquidity` fills `conditions` with the same output and `in_rooms`.
+Switch `LENS_ROOM_LINE` (`conditions`; `brief`: the brief's line only, the prompts byte for byte as before). Outside
+`ENGINE_CODE`: the hashes hold.
 
 **Parity era.** `ERA_SWITCHES` gains `positioning_enabled` and `liquidity_enabled`. The signature compares each switch
 with its default (`eraSwitches`), so at their defaults (on) they add nothing, and a lens switched off writes

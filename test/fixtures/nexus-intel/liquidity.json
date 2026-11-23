@@ -59,7 +59,48 @@
     "excluded": null
   },
   "line": "Liquidity (broker M1, baseline: insufficient, 2 of 4 weeks): tick volume at the 62th percentile of its hour; the last 15 minutes at the 41th percentile; spread 1.1x the hour's norm; a reclaimed sell-side sweep 12 minutes ago; equal highs/lows untaken: 1 above, 0 below; high-volume nodes: 0 above, 1 below.",
-  "conditions": null,
+  "conditions": {
+    "at_ms": 1795445880000,
+    "stale": false,
+    "in_rooms": true,
+    "room_line": "conditions",
+    "mode": "intraday",
+    "baseline": "insufficient",
+    "baseline_weeks": 2,
+    "spread": {
+      "ratio": 1.1,
+      "widen": 2,
+      "state": "normal"
+    },
+    "depth": {
+      "vol_pctl_15m": 0.41,
+      "thin_pctl": 0.2,
+      "state": "normal"
+    },
+    "activity": {
+      "vol_pctl": 0.62,
+      "spike_pctl": 0.95,
+      "state": "normal"
+    },
+    "session": {
+      "names": [
+        "London",
+        "New York"
+      ],
+      "overlap": true,
+      "liquidity": "high",
+      "excluded": null
+    },
+    "levels": {
+      "inside_node": false,
+      "nodes_above": 0,
+      "nodes_below": 1,
+      "pools_above": 1,
+      "pools_below": 0,
+      "pools_at": 0
+    },
+    "line": "Liquidity conditions (broker M1, intraday mode, baseline: insufficient, 2 of 4 weeks): spread 1.1 times its norm for this hour of the week, normal (widened at 2 times or more); depth normal: the last 15 minutes' tick volume at the 41st percentile of its hour (thin at or below the 20th); the minute's tick volume at the 62nd percentile, no spike; session: London and New York overlap, high liquidity; levels: price outside a high-volume node (0 above, 1 below); untaken equal highs/lows 1 above, 0 below."
+  },
   "levels": [
     {
       "kind": "sweep",

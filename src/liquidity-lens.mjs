@@ -12,7 +12,7 @@
 //              high-volume nodes); the levels stay inside (brokerKeyLevels, source "liquidity").
 //   never      liquidity never opens a position, sets a size or a price for an entry (test LQ-alone).
 
-import { goldPausedAt } from "./market-hours.mjs";
+import { goldPausedAt, goldClosedAt, nyHour, SESSIONS } from "./market-hours.mjs";
 
 export const BROKER_BARS_KEEP_DAYS = 120;
 export const LIQUIDITY_BASELINE_WEEKS = 8;
@@ -518,6 +518,85 @@ export function liquidityLine(facts) {
     `high-volume nodes: ${facts.hvn.above} above, ${facts.hvn.below} below${facts.hvn.inside ? ", price inside one" : ""}`
   ];
   return `Liquidity (broker M1, baseline: ${facts.baseline}${facts.baseline !== "sufficient" ? `, ${facts.baseline_weeks} of ${LIQUIDITY_SUFFICIENT_WEEKS} weeks` : ""}): ${parts.join("; ")}.${facts.excluded ? ` Excluded minute (${facts.excluded}).` : ""}`;
+}
+
+// ---------------------------------------------------------------- the conditions (B16: the 15m and 1H risk desks and moderators)
+
+/**
+ * A number shaped like a price: three to five digits, with or without decimals. Lens B's conditions never carry one
+ * (words, percentiles, ratios and counts only), and liquidityConditions refuses a line that would.
+ */
+export const PRICE_SHAPED = /\b\d{3,5}(\.\d+)?\b/;
+const ordinal = (n) => { const t = n % 100; return `${n}${t >= 11 && t <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" })[n % 10] ?? "th"}`; };
+const pctlWord = (p) => (finite(p) ? ordinal(Math.max(0, Math.min(100, Math.round(p * 100)))) : null);
+const r1 = (v) => (finite(v) ? Math.round(v * 10) / 10 : null);
+const r2c = (v) => (finite(v) ? Math.round(v * 100) / 100 : null);
+const timesWord = (x) => (!finite(x) ? null : x >= 10 ? "more than 10 times" : `${r1(x)} times`);
+const countWord = (n) => (finite(n) && n >= 0 ? (n > 99 ? "many" : String(Math.round(n))) : "0");
+const count = (n) => (finite(n) && n >= 0 ? Math.round(n) : 0);
+
+/**
+ * Pure: the session liquidity at an instant (src/market-hours.mjs SESSIONS, as the Decision Engine's sessionAt reads it):
+ * "high" in an overlap, "normal" in one session, "thin" between sessions, "paused" in the daily pause, "closed".
+ */
+export function sessionLiquidity(ms) {
+  if (!finite(ms)) return { names: [], overlap: false, liquidity: null };
+  if (goldClosedAt(ms)) return { names: [], overlap: false, liquidity: "closed" };
+  if (goldPausedAt(ms)) return { names: [], overlap: false, liquidity: "paused" };
+  const h = nyHour(ms);
+  const names = SESSIONS.filter((x) => (h >= x.from && h < x.to) || (h + 24 >= x.from && h + 24 < x.to)).map((x) => x.name);
+  return { names, overlap: names.length > 1, liquidity: names.length > 1 ? "high" : names.length ? "normal" : "thin" };
+}
+
+/**
+ * Pure: whether the rooms read lens B's conditions (the same gates as the Decision Engine's liquidityEvidence and the
+ * LIQUIDITY card): lens B on and above its floor (`knobs.active`), its facts available and its state at most
+ * LIQUIDITY_STATE_FRESH_MS old.
+ */
+export function liquidityConditionsOn(state, knobs, now = Date.now()) {
+  return Boolean(knobs?.active && state?.facts?.available === true && now - Number(state.at_ms) <= LIQUIDITY_STATE_FRESH_MS);
+}
+
+/**
+ * Pure: lens B's liquidity conditions in plain words (B16), for the 15m and 1H rooms' risk desk and moderator, their
+ * stored brief and GET /api/liquidity: the spread against its norm for this New York hour of the week, the depth (the
+ * last 15 minutes' tick volume, thin or not), the minute's tick volume, the session's liquidity and where price sits
+ * against lens B's levels (inside a high-volume node or not; the untaken equal-high/low pools and nodes above and below,
+ * as counts). The flags are the facts' own (measured at the ledger step); the thresholds are the mode's knobs in force.
+ * No sweep (the LIQUIDITY council card's, B15) and no price: words, percentiles, ratios and counts, never a number shaped
+ * like a price (PRICE_SHAPED; a line that would carry one is refused: null). Null without available facts.
+ */
+export function liquidityConditions(facts, { knobs = null, stateAtMs = null, now = Date.now() } = {}) {
+  if (!facts || facts.available !== true) return null;
+  const k = knobs && typeof knobs === "object" ? knobs : {};
+  const ratio = r2c(facts.spread_ratio);
+  const widen = finite(k.spread_widen) ? k.spread_widen : null;
+  const spread = { ratio, widen, state: !finite(ratio) ? "unmeasured" : facts.spread_spike === true ? "widened" : "normal" };
+  const thinAt = finite(k.thin_pctl) ? k.thin_pctl : null;
+  const depth = { vol_pctl_15m: finite(facts.vol_pctl_15m) ? facts.vol_pctl_15m : null, thin_pctl: thinAt, state: !finite(facts.vol_pctl_15m) ? "unmeasured" : facts.thin === true ? "thin" : "normal" };
+  const spikeAt = finite(k.spike_pctl) ? k.spike_pctl : null;
+  const activity = { vol_pctl: finite(facts.vol_pctl) ? facts.vol_pctl : null, spike_pctl: spikeAt, state: !finite(facts.vol_pctl) ? "unmeasured" : facts.vol_spike === true ? "spike" : "normal" };
+  const at = Date.parse(String(facts.minute_at ?? ""));
+  const session = { ...sessionLiquidity(Number.isFinite(at) ? at : finite(stateAtMs) ? stateAtMs : now), excluded: typeof facts.excluded === "string" ? facts.excluded : null };
+  const pools = facts.pools ?? {}, hvn = facts.hvn ?? {};
+  const poolsAt = Math.max(0, count(pools.equal_highs) + count(pools.equal_lows) - count(pools.above) - count(pools.below));
+  const levels = { inside_node: hvn.inside === true, nodes_above: count(hvn.above), nodes_below: count(hvn.below), pools_above: count(pools.above), pools_below: count(pools.below), pools_at: poolsAt };
+  const baseline = facts.baseline === "sufficient" ? "sufficient" : "insufficient";
+  const weeks = finite(facts.baseline_weeks) ? facts.baseline_weeks : 0;
+
+  const spreadText = spread.state === "unmeasured" ? "spread against its norm unmeasured"
+    : `spread ${timesWord(facts.spread_ratio)} its norm for this hour of the week, ${spread.state}${finite(widen) ? ` (widened at ${timesWord(widen)} or more)` : ""}`;
+  const depthText = depth.state === "unmeasured" ? "depth unmeasured"
+    : `depth ${depth.state}: the last 15 minutes' tick volume at the ${pctlWord(depth.vol_pctl_15m)} percentile of its hour${finite(thinAt) ? ` (thin at or below the ${pctlWord(thinAt)})` : ""}`;
+  const activityText = activity.state === "unmeasured" ? "the minute's tick volume unmeasured"
+    : `the minute's tick volume at the ${pctlWord(activity.vol_pctl)} percentile${activity.state === "spike" ? ", a spike" : ", no spike"}`;
+  const sessionText = session.liquidity === "closed" ? "session: market closed" : session.liquidity === "paused" ? "session: the daily trading pause"
+    : `session: ${session.names.length ? session.names.join(" and ") + (session.overlap ? " overlap" : "") : "between sessions"}, ${session.liquidity} liquidity`;
+  const levelText = `levels: price ${levels.inside_node ? "inside" : "outside"} a high-volume node (${countWord(levels.nodes_above)} above, ${countWord(levels.nodes_below)} below); untaken equal highs/lows ${countWord(levels.pools_above)} above, ${countWord(levels.pools_below)} below${levels.pools_at ? `, ${countWord(levels.pools_at)} at price` : ""}`;
+  const head = `Liquidity conditions (broker M1${k.mode ? `, ${k.mode} mode` : ""}, baseline: ${baseline}${baseline !== "sufficient" ? `, ${countWord(weeks)} of ${LIQUIDITY_SUFFICIENT_WEEKS} weeks` : ""})`;
+  const line = `${head}: ${[spreadText, depthText, activityText, sessionText, levelText].join("; ")}.${session.excluded ? ` The minute is excluded from the baseline (${session.excluded.replace(/_/g, " ")}).` : ""}`;
+  if (PRICE_SHAPED.test(line) || /sweep/i.test(line)) return null;
+  return { mode: typeof k.mode === "string" ? k.mode : null, baseline, baseline_weeks: weeks, spread, depth, activity, session, levels, line };
 }
 
 // ---------------------------------------------------------------- the signal's flat fields and the live spread
