@@ -63,8 +63,8 @@ export const nearEdge = (side: Side | null, z: Zone): number | null => (side ===
 export function knownFeedBasis(signal: any): number | null {
   return signal?.feed_basis_known === true && isNum(signal?.feed_basis) ? signal.feed_basis : null;
 }
-/** A broker price on the feed scale: broker − basis, to the cent; null without a price or a basis. */
-export const brokerToFeed = (price: unknown, basis: number | null): number | null => (isNum(price) && price > 0 && isNum(basis) ? round(price - basis) : null);
+/** A broker price on the feed scale: broker − basis, to the symbol's digits (the cent by default); null without a price or a basis. */
+export const brokerToFeed = (price: unknown, basis: number | null, digits = 2): number | null => (isNum(price) && price > 0 && isNum(basis) ? round(price - basis, digits) : null);
 /** A broker zone on the feed scale, or null. */
 export const zoneToFeed = (z: Zone | null, basis: number | null): Zone | null => {
   if (!z || !isNum(basis)) return null;
@@ -85,6 +85,33 @@ export const limitTitle = (broker: number, feed: number, digits = 2): string => 
 /** The entry zone's label on the feed chart: "Entry zone · broker A–B (feed C–D)"; on a phone "zone · feed C–D (broker +0.42)". */
 export function chartZoneLabel(broker: Zone, feed: Zone, basis: number, phone = false): string {
   return phone ? `zone · feed ${zoneText(feed)} (broker ${basisText(basis, 2)})` : `Entry zone · broker ${zoneText(broker)} (feed ${zoneText(feed)})`;
+}
+
+/** One open position's line on the feed chart: its price on the chart's scale and its title. */
+export type PositionLine = { kind: "entry" | "sl" | "tp"; price: number; title: string };
+/**
+ * An open position's entry, SL and TP lines on the feed chart (the reviewer's addition to EZ1): with a known basis each
+ * broker price converted (broker − basis) and titled "<words> · broker X · feed Y"; without one at the broker's price,
+ * titled "<words> · broker", so the chart never mixes scales unlabelled. The words are the page's own: "#ticket SIDE lot",
+ * "#ticket SL", "#ticket TP". A missing or zero price (no SL or TP) draws no line.
+ */
+export function positionLines(p: any, basis: number | null, digits = 2): PositionLine[] {
+  if (!p || typeof p !== "object") return [];
+  const ticket = p.ticket != null && p.ticket !== "" ? `#${p.ticket}` : "#?";
+  const side = p.side === "BUY" || p.side === "SELL" ? p.side : "";
+  const lot = isNum(p.volume) ? p.volume.toFixed(2) : "";
+  const words = { entry: [ticket, side, lot].filter(Boolean).join(" "), sl: `${ticket} SL`, tp: `${ticket} TP` };
+  const raw = { entry: p.open_price ?? p.entry, sl: p.sl, tp: p.tp };
+  const out: PositionLine[] = [];
+  for (const kind of ["entry", "sl", "tp"] as const) {
+    const broker = raw[kind];
+    if (!isNum(broker) || broker <= 0) continue;
+    if (isNum(basis)) {
+      const feed = brokerToFeed(broker, basis, digits);
+      if (feed != null) out.push({ kind, price: feed, title: `${words[kind]} · broker ${broker.toFixed(digits)} · feed ${feed.toFixed(digits)}` });
+    } else out.push({ kind, price: broker, title: `${words[kind]} · broker` });
+  }
+  return out;
 }
 
 /**

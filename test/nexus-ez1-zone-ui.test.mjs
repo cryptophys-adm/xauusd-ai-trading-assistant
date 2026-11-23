@@ -77,6 +77,7 @@ test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the 
   assert.equal(ez.brokerToFeed(2684.64, null), null);
   assert.equal(ez.brokerToFeed(null, 0.42), null);
   assert.equal(ez.brokerToFeed(0, 0.42), null, "no price");
+  assert.equal(ez.brokerToFeed(2686.021, 0.42, 3), 2685.601, "to the symbol's digits");
   assert.deepEqual(ez.zoneToFeed({ low: 2684.62, high: 2686.02 }, 0.42), { low: 2684.2, high: 2685.6 });
   assert.deepEqual(ez.zoneToBroker({ low: 2684.2, high: 2685.6 }, 0.42), { low: 2684.62, high: 2686.02 });
   assert.equal(ez.zoneToFeed({ low: 1, high: 2 }, null), null);
@@ -98,7 +99,7 @@ test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the 
   // The page converts with the signal's own field, which it already receives; no new API field and no new read.
   const omega = src("pages/Omega.tsx");
   assert.match(omega, /const feedBasis = knownFeedBasis\(s\);/);
-  assert.match(omega, /const feedBid = brokerToFeed\(bid, feedBasis\);\n\s+if \(!series \|\| feedBid == null \|\| candles\.length === 0\) return;/, "the bid painted into the last candle is converted, and not painted without a basis");
+  assert.match(omega, /const feedBid = brokerToFeed\(bid, feedBasis, digits\);\n\s+if \(!series \|\| feedBid == null \|\| candles\.length === 0\) return;/, "the bid painted into the last candle is converted, and not painted without a basis");
   assert.match(omega, /close: feedBid,/);
   assert.doesNotMatch(omega, /close: bid,/);
   for (const f of ["lib/entryZone.ts", "components/PlanLadder.tsx", "components/OmegaZone.tsx"]) assert.doesNotMatch(src(f), /\bfetch\(|usePoll|\bget\(|["'`]\/(omega\/)?api\//, `${f}: no read of its own`);
@@ -244,4 +245,41 @@ test("EZ1-8 the War Room: the card, the ladder and the chart wired as the mockup
   const entry = read("workers/xauusd-nexus-dashboard/ui/scripts/render-entry.tsx");
   for (const f of ["conclusion-global.json", "omega-overview.json"]) assert.match(entry, new RegExp(`test/fixtures/nexus-ez1/${f.replace(".", "\\.")}`), f);
   assert.match(read("workers/xauusd-nexus-dashboard/ui/scripts/render-check.mjs"), /for \(const t of entry\.hides \?\? \[\]\) if \(html\.includes\(t\)\)/);
+});
+
+test("EZ1-9 the open positions on the Omega chart: entry, SL and TP converted as the bid and ask, titled broker and feed; broker without a basis", () => {
+  const pos = { ticket: 50128, side: "BUY", volume: 0.1, open_price: 2686.02, sl: 2680.82, tp: 2692.02 };
+  assert.deepEqual(ez.positionLines(pos, 0.42), [
+    { kind: "entry", price: 2685.6, title: "#50128 BUY 0.10 · broker 2686.02 · feed 2685.60" },
+    { kind: "sl", price: 2680.4, title: "#50128 SL · broker 2680.82 · feed 2680.40" },
+    { kind: "tp", price: 2691.6, title: "#50128 TP · broker 2692.02 · feed 2691.60" }
+  ]);
+  assert.deepEqual(ez.positionLines({ ...pos, side: "SELL" }, -0.35).map((l) => [l.price, l.title]), [
+    [2686.37, "#50128 SELL 0.10 · broker 2686.02 · feed 2686.37"], [2681.17, "#50128 SL · broker 2680.82 · feed 2681.17"], [2692.37, "#50128 TP · broker 2692.02 · feed 2692.37"]
+  ], "a negative basis");
+  // Without a basis (knownFeedBasis null): the broker's prices, each title marked broker.
+  const basis = ez.knownFeedBasis({ feed_basis: 0, feed_basis_known: false });
+  assert.equal(basis, null);
+  assert.deepEqual(ez.positionLines(pos, basis), [
+    { kind: "entry", price: 2686.02, title: "#50128 BUY 0.10 · broker" },
+    { kind: "sl", price: 2680.82, title: "#50128 SL · broker" },
+    { kind: "tp", price: 2692.02, title: "#50128 TP · broker" }
+  ]);
+  // The entry from `entry` when open_price is missing; no SL or TP (0 or missing) draws no line; nothing for no position.
+  assert.deepEqual(ez.positionLines({ ticket: 7, side: "SELL", volume: 0.25, entry: 2690.5, sl: 0 }, 0.42).map((l) => l.title), ["#7 SELL 0.25 · broker 2690.50 · feed 2690.08"]);
+  assert.deepEqual(ez.positionLines(null, 0.42), []);
+  assert.deepEqual(ez.positionLines({ ticket: 7, side: "BUY" }, 0.42), []);
+  assert.equal(ez.positionLines({ ticket: 7, side: "BUY", volume: 0.1, open_price: 2686.021, sl: 2680 }, 0.42, 3)[0].title, "#7 BUY 0.10 · broker 2686.021 · feed 2685.601", "the symbol's digits");
+  // Every title names its scale, with or without a basis.
+  for (const b of [0.42, null]) for (const l of ez.positionLines(pos, b)) assert.match(l.title, /· broker/);
+  // The chart draws the positions only through positionLines, with the same basis as the bid and ask.
+  const omega = src("pages/Omega.tsx");
+  assert.match(omega, /for \(const l of positionLines\(p, feedBasis, digits\)\)/);
+  assert.doesNotMatch(omega, /addLine\(p\.(sl|tp)|addLine\(entryPrice/, "no raw broker position line left");
+  assert.match(omega, /zone, limit, bid, ask, positions: broker − /);
+  // Every other line on that chart is the feed's (candles, PLAN lines, key zones, the last price) or converted and labelled.
+  const lines = [...omega.matchAll(/addLine\(([^,]+),/g)].map((m) => m[1].trim());
+  assert.deepEqual(lines.sort(), ["bid", "ask", "feedBid", "feedAsk", "l.price", "l.price", "limitFeed", "signal.entry", "signal.stop", "signal.tp1"].sort());
+  assert.match(omega, /addLine\(bid, "BID broker"/);
+  assert.match(omega, /addLine\(ask, "ASK broker"/);
 });

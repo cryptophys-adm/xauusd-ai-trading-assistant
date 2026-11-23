@@ -28,7 +28,7 @@ import { KeyZoneBands } from "../lib/keyZoneBands";
 import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { CreatedCell, IntentCards, IntentEntry, SignalRows } from "../components/OmegaZone";
-import { basisText, brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, knownFeedBasis, limitTitle, quoteTitle, restingLimit, signalZoneOf, zoneText, zoneToBroker, zoneToFeed, type Zone } from "../lib/entryZone";
+import { basisText, brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, knownFeedBasis, limitTitle, positionLines, quoteTitle, restingLimit, signalZoneOf, zoneText, zoneToBroker, zoneToFeed, type Zone } from "../lib/entryZone";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -330,7 +330,7 @@ function Mt5ChartCanvas({
   // while the basis is unknown.
   useEffect(() => {
     const series = seriesRef.current;
-    const feedBid = brokerToFeed(bid, feedBasis);
+    const feedBid = brokerToFeed(bid, feedBasis, digits);
     if (!series || feedBid == null || candles.length === 0) return;
     const lastBar = candles[candles.length - 1];
     if (!lastBar || !Number.isFinite(lastBar.time)) return;
@@ -346,7 +346,7 @@ function Mt5ChartCanvas({
     } catch {
       // ignore if chart series is resetting
     }
-  }, [bid, candles, feedBasis]);
+  }, [bid, candles, feedBasis, digits]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -378,7 +378,7 @@ function Mt5ChartCanvas({
     // (the axis keeps the limit's tag); while the basis is unknown the bid and ask stay at the broker's prices, marked so.
     const narrow = (hostRef.current?.clientWidth ?? 1000) < 480;
     const labels: ChartZone[] = [];
-    const feedBid = brokerToFeed(bid, feedBasis), feedAsk = brokerToFeed(ask, feedBasis);
+    const feedBid = brokerToFeed(bid, feedBasis, digits), feedAsk = brokerToFeed(ask, feedBasis, digits);
     if (showBidAsk) {
       if (feedBasis != null) {
         addLine(feedBid, "", T.bullFill, LineStyle.Solid, 1, false);
@@ -398,7 +398,7 @@ function Mt5ChartCanvas({
       addLine(signal.tp1, "PLAN TP1", T.bullFill, LineStyle.Dashed, 1);
     }
     // The entry zone: the resting limit's own (broker, converted), else the clear decision's (signal, feed).
-    const limitFeed = limit ? brokerToFeed(limit.price, feedBasis) : null;
+    const limitFeed = limit ? brokerToFeed(limit.price, feedBasis, digits) : null;
     const zoneFeed = limit?.zone ? zoneToFeed(limit.zone, feedBasis) : hasClearDecision ? signalZoneOf(signal) : null;
     const zoneBroker = limit?.zone ? limit.zone : zoneToBroker(zoneFeed, feedBasis);
     if (showPlan && zoneFeed) {
@@ -406,13 +406,15 @@ function Mt5ChartCanvas({
     }
     if (showPositions && limit && limitFeed != null) addLine(limitFeed, limitTitle(limit.price, limitFeed, digits), limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
     ezRef.current?.setZones(labels);
+    // The open positions (broker scale): entry, SL and TP converted to the feed as the bid and ask are, each titled
+    // "broker X · feed Y"; without a basis at the broker's prices, titled "broker" (lib/entryZone.ts positionLines).
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
-        const entryPrice = p.open_price ?? p.entry;
-        const isBuy = p.side === "BUY";
-        addLine(entryPrice, `#${p.ticket} ${p.side} ${num(p.volume, 2)}`, isBuy ? T.bullFill : T.bearFill, LineStyle.Solid, 2);
-        addLine(p.sl, `#${p.ticket} SL`, T.bearFill, LineStyle.Dotted, 1);
-        addLine(p.tp, `#${p.ticket} TP`, T.bullFill, LineStyle.Dotted, 1);
+        const isBuy = p?.side === "BUY";
+        for (const l of positionLines(p, feedBasis, digits)) {
+          if (l.kind === "entry") addLine(l.price, l.title, isBuy ? T.bullFill : T.bearFill, LineStyle.Solid, 2);
+          else addLine(l.price, l.title, l.kind === "sl" ? T.bearFill : T.bullFill, LineStyle.Dotted, 1);
+        }
       }
     }
   }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, feedBasis, limit, keyZones, showKeyLevels, digits]);
@@ -447,11 +449,11 @@ function Mt5ChartCanvas({
         <div className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
           <span className="text-slate-400">Bid</span>
           <span className="mono font-bold text-bull">{num(bid, digits)}</span>
-          {feedBasis != null && brokerToFeed(bid, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(bid, feedBasis), digits)})</span> : null}
+          {feedBasis != null && brokerToFeed(bid, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(bid, feedBasis, digits), digits)})</span> : null}
           <span className="text-slate-600">/</span>
           <span className="text-slate-400">Ask</span>
           <span className="mono font-bold text-bear">{num(ask, digits)}</span>
-          {feedBasis != null && brokerToFeed(ask, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(ask, feedBasis), digits)})</span> : null}
+          {feedBasis != null && brokerToFeed(ask, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(ask, feedBasis, digits), digits)})</span> : null}
           <span className="text-fg-2">· broker</span>
           {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
         </div>
@@ -465,7 +467,7 @@ function Mt5ChartCanvas({
       </div>
       <div className="mono flex flex-col gap-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
         <span>candles, PLAN lines: TradingView feed · times GMT+7</span>
-        <span>{feedBasis != null ? `zone, limit, bid, ask: broker − ${basisText(feedBasis, 2).replace(/^\+/, "")} basis (intents[].entry_zone, the order, the terminal)` : "bid, ask: broker prices, not converted (the basis is unknown)"}</span>
+        <span>{feedBasis != null ? `zone, limit, bid, ask, positions: broker − ${basisText(feedBasis, 2).replace(/^\+/, "")} basis (intents[].entry_zone, the order, the terminal)` : "bid, ask, positions: broker prices, not converted (the basis is unknown)"}</span>
       </div>
     </div>
   );
