@@ -9,7 +9,8 @@
 //   liquidity planIntents over the market path's hand inputs with the liquidity lens on (its default) and the live
 //            spread at 3x the hour's norm (the spread-spike gate and the modification deferral), and at 1x (no effect),
 //            docs/RFC_POSITIONING_LIQUIDITY.md §5-§6.
-//   gate     planIntents over the hand inputs with every position's profit-lock gate open (SLG1, the gate on).
+//   gate     planIntents over the hand inputs with every position's profit-lock gate open (SLG1, the gate on), and v4's
+//            replay of a peak past the gate that pulls back inside the band (the gate as the break-even's trigger).
 // Only outputs are written, never the inputs: a new switch added to OMEGA_DEFAULTS at its default leaves the text as is.
 // `profitLockGate` (SLG1, 2026-11-23) sets profit_lock_gate on every input after the defaults check: "legacy" gives the
 // text of the engine before the gate byte for byte (its hash is the old ENGINE_BEHAVIOUR_HASH, test V14b).
@@ -17,7 +18,7 @@ import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
 import { pmOffOutputs } from "./pm-a8-off.mjs";
-import { v4ReplayScenarios } from "./omega-v4-replay.mjs";
+import { v4ReplayScenarios, base, retraceCase } from "./omega-v4-replay.mjs";
 
 const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
@@ -66,6 +67,8 @@ export function engineBehaviourSource({ profitLockGate = null } = {}) {
       const gates = Object.fromEntries(ps.map((p) => [String(p.ticket), { open: true, mfe_r: 1.25, mfe_atr: 1.5 }]));
       lines.push(`gate/open/${name}=${JSON.stringify(planIntents({ ...input, settings: withGate(input.settings, profitLockGate), gates }))}`);
     }
+    // The gate as the break-even's trigger (#535 review): a peak past the gate, back inside the band at the next run.
+    lines.push(...replayLines("gate/retrace", [{ name: "retrace", opts: { ...base(), ...retraceCase() } }], profitLockGate));
   }
   return lines.join("\n");
 }

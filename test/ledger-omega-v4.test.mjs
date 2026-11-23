@@ -408,7 +408,7 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   // The three fixture sets, outputs only.
   const names = text.split("\n").map((l) => l.slice(0, l.indexOf("=")));
   assert.ok(names.filter((n) => n.startsWith("market/hand/")).length >= 60);
-  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records"]);
+  assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
   assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate"]);

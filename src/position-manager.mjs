@@ -28,8 +28,10 @@
 // its break-even stop) wait until the position's MFE on closed bars of its mode's timeframe reaches the mode's
 // threshold (the scalp, intraday, swing and range rules there); a lock waiting is a hold (lock_waits_gate,
 // tp2_waits_gate). At the gate the break-even is break-even plus the spread plus 0.1 x ATR(M5), and TP2 is no longer
-// reached at any profit inside the band: the gate is its trigger. take_profit_weakening, cut_loss and lock_tp1's level
-// are unchanged. "legacy" (no `gate`): the rules as they were.
+// reached at any profit inside the band: the gate is its trigger. The gate is the break-even's trigger as well: once it
+// is open the first lock goes in at any price inside the band too (a peak past the gate that pulled back still locks),
+// without the council, or waits as lock_waits_room while the price leaves no room for it. take_profit_weakening,
+// cut_loss and lock_tp1's level are unchanged. "legacy" (no `gate`): the rules as they were.
 //
 // Guardrails (owner): only close, or a stop moved in the position's favour (never widened), or the take-profit
 // moved out to TP2; never an add, a reversal or an open. Inputs are measured: the strategy agent's confidence on the
@@ -209,6 +211,9 @@ export function ruleAction(f, council) {
   // The gate's first lock follows the spread and the M5 ATR: a stop already past the entry is not moved again by a few
   // cents to it (as the ladder takes its break-even once).
   const pastEntry = G != null && f.sl != null && f.dir * (f.sl - f.open) > f.point / 2;
+  // SLG1: the gate open, the stop not yet past the entry and its first lock tighter than the stop: the lock is due.
+  const gateLock = G != null && G.open === true && !pastEntry && better(G.be);
+  const lockWaitsRoom = () => ({ action: "hold", rule: "lock_waits_room", why: `the profit-lock gate is open (${gateText(G)}) but the price leaves no room for the stop at ${G.be} (break-even plus the spread and 0.1 x ATR(M5)): the lock waits` });
   // Beyond TP1 by 30 pips: the stop locks TP1, or the position closes when the council reads the momentum weakening.
   if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) {
     if (council?.momentum === "weakening") return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
@@ -247,6 +252,7 @@ export function ruleAction(f, council) {
       if (shut) return waits("lock_waits_gate", `${at(1)}: the break-even`);
       return mfe({ action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council ? " and still strong" : ""}: stop to break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}${reading}` });
     }
+    if (gateLock && !room(G.be)) return lockWaitsRoom();
     if (!council) return { action: "none", rule: "council_unavailable", why: "the council did not answer: the stop and target stay" };
     return tp2({ action: "hold", rule: "protected", why: `${at(1)}, the stop already protects it` });
   }
@@ -269,8 +275,14 @@ export function ruleAction(f, council) {
     return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${[...reasons, ...(wait ? [wait] : [])].join("; ")}; the council calls the thesis ${council.thesis}: loss cut` };
   }
   // TP2 inside the band: at any profit before SLG1; with the gate on, the gate is its trigger (tp2_breakeven's any-profit
-  // trigger is gone, owner 2026-11-23).
-  if (tpAtTp1 && f.tp2 != null && (G ? G.open === true : f.pips > 0)) return tp2(null);
+  // trigger is gone, owner 2026-11-23). TP2 with its break-even stop goes first (both in one modification).
+  const t2 = tpAtTp1 && f.tp2 != null && (G ? G.open === true : f.pips > 0) ? tp2(null) : null;
+  if (t2 && (!gateLock || t2.rule === "tp2_breakeven")) return t2;
+  // SLG1: the gate is the break-even's trigger (orchestrator review of #535): once it is open, the first lock goes in
+  // whatever the price does inside the band (a peak past the gate that pulls back inside the band still locks), and
+  // without the council (a lock only reduces risk, as the silent fallback). With no room for it (the price under the
+  // gate's break-even plus the spread) it waits, and is tried again each run while the gate stays open.
+  if (gateLock) return room(G.be) ? mfe({ action: "sl", rule: "breakeven", sl: G.be, why: `${at(f.pips >= 0 ? 1 : -1)} inside the band, the profit-lock gate open: stop to break-even plus the spread and 0.1 x ATR(M5)${reading}` }) : lockWaitsRoom();
   return { action: "hold", rule: "inside_band", why: `${f.pips} pips: inside the ±${band} pip band${f.r != null ? ` (±${f.band_r}R ${f.mode})` : ""}` };
 }
 

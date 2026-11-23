@@ -20,7 +20,7 @@ import { resetPositionSchemaCacheForTests } from "../src/position-actions.mjs";
 import { resetEaExecutionSchemaForTests } from "../src/ea-execution.mjs";
 import { engineBehaviourSource } from "./fixtures/engine-behaviour.mjs";
 import { handInputs } from "./fixtures/omega-market-path.mjs";
-import { M1, M5, M15, C, WARM, key, levels, path, lerp, decision, sellTrade, dec, base, ladderCase } from "./fixtures/omega-v4-replay.mjs";
+import { M1, M5, M15, C, WARM, key, levels, path, lerp, decision, sellTrade, dec, base, ladderCase, retraceCase } from "./fixtures/omega-v4-replay.mjs";
 
 const OLD_BEHAVIOUR_HASH = "b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f";
 const OPEN = Object.freeze({ open: true, mfe_r: 1.4, mfe_atr: 1.7, mfe_px: 14, need_px: 10, tf: "M15", reason: "reached" });
@@ -358,6 +358,51 @@ test("SLG1-14 v4 replays the gate: the same facts as live (gatesFor over the 1m 
   const t2 = [];
   replayOmega4({ ...base(), ...ladderCase(), trace: t2 });
   assert.equal(firstLock(t2), null);
+});
+
+test("SLG1-18 the gate is the break-even's trigger: open, the first lock goes in inside the band too, without the council; no room waits (lock_waits_room); a stop past the entry is not moved; v4 the same", () => {
+  // +20 pips (0.2R), inside the 50-pip band: the target at TP1 with a key level beyond (3862), no ladder.
+  for (const council of [STRONG, null, { momentum: "steady", thesis: "weakening", reason: "r" }]) {
+    const a = positionAction(pmF(3877.8, OPEN), council);
+    assert.deepEqual(act(a), ["sl", "breakeven", 3879.6, null], JSON.stringify(council));
+    assert.deepEqual([a.mfe_r, a.mfe_atr], [1.4, 1.7]);
+    assert.match(a.why, /inside the band, the profit-lock gate open/);
+  }
+  // Closed, or legacy: as before (nothing inside the band; legacy TP2 at any profit).
+  assert.deepEqual(act(positionAction(pmF(3877.8, SHUT), STRONG)), ["hold", "inside_band", null, null]);
+  assert.deepEqual(act(positionAction(pmF(3877.8, undefined), STRONG)), ["tp", "tp2_target", null, 3862]);
+  assert.deepEqual(act(positionAction(pmF(3877.8, undefined), null)), ["hold", "tp2_waits_council", null, null]);
+  // No room for the stop at the gate's break-even (+3 pips, and 1 pip against): it waits, and the next run tries again.
+  for (const bid of [3879.5, 3880.1]) {
+    const w = positionAction(pmF(bid, OPEN), STRONG);
+    assert.deepEqual(act(w), ["hold", "lock_waits_room", null, null], String(bid));
+    assert.match(w.why, /no room for the stop at 3879\.6/);
+  }
+  assert.deepEqual(act(positionAction(pmF(3877.8, OPEN), STRONG)), ["sl", "breakeven", 3879.6, null], "the price back with room: locked");
+  // The stop already past the entry: not moved again (TP2 alone with the council, nothing without it).
+  assert.deepEqual(act(positionAction(pmF(3877.8, OPEN, { over: { sl: 3879 } }), STRONG)), ["tp", "tp2_target", null, 3862]);
+  assert.deepEqual(act(positionAction(pmF(3877.8, OPEN, { over: { sl: 3879 } }), null)), ["hold", "tp2_waits_council", null, null]);
+  assert.deepEqual(act(positionAction(pmF(3877.8, OPEN, { over: { sl: 3879, tp: 3862 } }), null)), ["hold", "inside_band", null, null]);
+  // Under the ladder with TP2 due, TP2 and the gate's break-even stay one modification.
+  assert.deepEqual(act(positionAction(pmF(3877.8, OPEN, { ladder: true }), STRONG)), ["tp", "tp2_breakeven", 3879.6, 3862]);
+  // cut_loss is still first at the cut band (the gate's break-even has no room under the entry).
+  const cut = positionAction(positionFacts({ position: SELLP, sym: pmSym(3886), openIntent: INTENT, levels: LV, decision: { ...DEC, stance: "BUY" }, gate: OPEN }), { momentum: "weakening", thesis: "broken" });
+  assert.equal(cut.rule, "cut_loss");
+  // v4: the peak past the gate, back inside the band at the next run: locked at the gate's first lock, out in profit;
+  // the same path before this rule (and legacy) rode it to the full stop.
+  const trace = [], legacyTrace = [];
+  const run = replayOmega4({ ...base(), ...retraceCase(), trace });
+  const old = replayOmega4({ ...base({ settings: { ...OMEGA_DEFAULTS, enabled: true, profit_lock_gate: "legacy" } }), ...retraceCase(), trace: legacyTrace });
+  const lock = firstLock(trace);
+  assert.ok(lock, "a lock after the retrace");
+  assert.equal(lock.reason, "pm_breakeven");
+  assert.equal(lock.gates[String(lock.ticket)].open, true);
+  assert.ok(lock.mfe_r >= 1, JSON.stringify(lock));
+  const step = trace.find((s) => s.now === lock.at);
+  assert.ok(step.input.pmActions.some((x) => x.rule === "breakeven"));
+  assert.deepEqual([run.records[key(C)].omega4_exit, run.records[key(C)].r_omega4 > 0], ["sl_plus", true]);
+  assert.equal(firstLock(legacyTrace), null);
+  assert.deepEqual([old.records[key(C)].omega4_exit, old.records[key(C)].r_omega4], ["stop", -1]);
 });
 
 test("SLG1-15 legacy is byte for byte the engine before the gate: the old behaviour hash, and gates are never read", async () => {

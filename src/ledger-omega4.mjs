@@ -603,7 +603,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "3f1febdcb6e764beb1f4828862dcbbdedc157367e780eaa825e299740f860947";
+export const ENGINE_CODE_HASH = "36dd2aa1886db76af44d2a642a6fe24800f038582ffd91454faeeb560a89b0fd";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -614,14 +614,14 @@ export const ENGINE_CODE_HASH = "3f1febdcb6e764beb1f4828862dcbbdedc157367e780eaa
  *   (test/fixtures/omega-v4-replay.mjs); planIntents over the hand inputs with the liquidity lens on (its default) and
  *   the live spread at 3x and 1x the hour's norm (docs/RFC_POSITIONING_LIQUIDITY.md: the gate and the deferral; this
  *   group moved the hash in 2026-11-20's lens PR, a new era at its deploy); planIntents over the hand inputs with every
- *   position's profit-lock gate open (SLG1). Only tests build the text, so the Worker bundle carries the value alone.
+ *   position's profit-lock gate open, and replayOmega4 over a peak past the gate pulled back inside the band (SLG1). Only tests build the text, so the Worker bundle carries the value alone.
  * SLG1 (owner 2026-11-23, a recorded exception): the profit-lock gate on by default moved it from
  * b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f, a new era at its deploy; with profit_lock_gate
  * "legacy" on every input the fixtures still give that old hash byte for byte (test/profit-lock-gate.test.mjs SLG1-15).
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "ddccddcd2904ee0878eb2286d3504772b40132951f570f1683c9e44c95347384";
+export const ENGINE_BEHAVIOUR_HASH = "94e6f50cb1d0f913fa332d43874b3622e1746dad7bce388eecb438ec73d3088e";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
