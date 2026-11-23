@@ -46,17 +46,17 @@ const clean = (html) => assert.doesNotMatch(html, /\bNaN\b|\bundefined\b|\[objec
 /** The page's text, one text node per line (the tags removed). */
 const textOf = (html) => html.replace(/<[^>]+>/g, "\n").split("\n").map((t) => t.trim()).filter(Boolean);
 
-test("LQ1 NAV and PAGES: Liquidity at /#/liquidity, key liquidity, icon Droplets, directly after Strategy agents", () => {
+test("LQ1 NAV and PAGES: Liquidity at /#/liquidity, key liquidity, icon Droplets, after Strategy agents and Chart patterns (C3)", () => {
   const shell = src("components/AppShell.tsx");
   const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf("] }\n];"));
   const labels = [...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ["Aether", "Model & Learning", "Strategy agents", "Liquidity", "Neuron allocation", "Decision audit", "Alerts"]);
+  assert.deepEqual(labels, ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Neuron allocation", "Decision audit", "Alerts"]);
   assert.match(intel, /\{ label: "Liquidity", href: "\/#\/liquidity", key: "liquidity", icon: Droplets \}/);
   assert.match(shell, /import \{[^}]*\bDroplets\b[^}]*\} from "lucide-react";/);
-  for (const t of ["Opening range", "Chart patterns"]) assert.ok(!shell.includes(t), `${t} comes with its own track`);
+  assert.ok(!shell.includes("Opening range"), "Opening range comes with its own track (C4)");
   const app = src("App.tsx");
   assert.match(app, /import Liquidity from "\.\/pages\/Liquidity";/);
-  assert.match(app, /strategy: Strategy, liquidity: Liquidity,/);
+  assert.match(app, /strategy: Strategy, patterns: Patterns, liquidity: Liquidity,/);
 });
 
 /** Every file under ui/src. */
@@ -328,7 +328,7 @@ test("LQ12 the chart is built only in useEffect; the deploy smoke step; SSOT and
   assert.match(step, /\\bjson\\b/);
   assert.match(step, /headers: token\.headers/, "under the CI token");
   const ssot = read("docs/SSOT.md");
-  assert.match(ssot, /Liquidity \(`#\/liquidity`, Track C2, directly after Strategy agents/);
+  assert.match(ssot, /Liquidity \(`#\/liquidity`, Track C2, after Chart patterns/);
   assert.match(ssot, /Nexus Liquidity page \(`#\/liquidity`, Track C2\) panel "Positioning & Liquidity analyst"/);
   const log = read("docs/CHANGELOG.md");
   assert.ok(log.indexOf("feat(nexus): the Liquidity page in Intelligence (Track C2)") > log.indexOf("## 2026-11-23") && log.indexOf("feat(nexus): the Liquidity page in Intelligence (Track C2)") < log.indexOf("## 2026-11-22"));

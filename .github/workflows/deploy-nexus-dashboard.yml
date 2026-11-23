@@ -159,9 +159,9 @@ jobs:
           NODE
 
       - name: Smoke test the Chart patterns view
-        # Track B9 (the Intelligence Chart patterns page's read): GET /api/chart-patterns through the Nexus proxy answers
-        # 200 JSON with no-store under the CI service token (cryptophys.chart-patterns-view.v1), and the Access login
-        # redirect without it.
+        # Track B9 and C3 (the Intelligence Chart patterns page, #/patterns, and its read): GET /api/chart-patterns through
+        # the Nexus proxy answers 200 JSON with no-store under the CI service token (cryptophys.chart-patterns-view.v1, the
+        # schema of test/fixtures/nexus-intel/chart-patterns.json), and the Access login redirect without it.
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
