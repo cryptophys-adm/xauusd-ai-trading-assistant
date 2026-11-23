@@ -28,7 +28,7 @@ async function ui() {
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, COND_WARN, COND_UNMEASURED, COND_EXCLUDED, COND_OFF, COND_BRIEF, COND_STALE, COND_NO_THRESHOLDS, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -345,7 +345,7 @@ test("LQ10 the states: intel views off, lens B off and at its floor, an old stat
   // lens B off: grey (off) chips from state.on and the owner's switch; the facts still show.
   const lensOff = await page(u.merged(LIQ, { state: { on: false } }), { lens: u.LENS_OFF });
   assert.match(lensOff, /class="chip [^"]*text-off">lens B off</);
-  assert.ok(lensOff.includes("Omega ignores these levels (lens B off)") && lensOff.includes("tick volume 62nd"), "facts shown while off");
+  assert.ok(lensOff.includes("Omega ignores these levels (lens B off)") && lensOff.includes("Activity normal · p62"), "facts shown while off (as B16's conditions)");
   const floor = await page(u.merged(LIQ, { state: { on: false }, score: { floored: true } }));
   assert.ok(floor.includes("Omega ignores these levels (lens B at its floor)"));
   const old = await page(u.merged(LIQ, { state: { at_ms: u.LIQUIDITY_NOW - 22 * 60_000, fresh: false, on: false } }));
@@ -375,6 +375,110 @@ test("LQ10 the states: intel views off, lens B off and at its floor, an old stat
   }
   assert.equal(u.chartZones({ levels, management: [], plane: null, zonesOn: false, dim: true, suffix: "", show: false, candleTimes: [] }).length, 0, "hidden past 2 hours");
   assert.match(pg, /const mark = planMark\(facts, localNow\(\)\);/);
+});
+
+/** The Facts panel's markup (its heading to the Sweeps panel). */
+const factsOf = (html) => { const i = html.indexOf("Facts, last 24 hours"); return i < 0 ? "" : html.slice(i, html.indexOf("Sweeps and outcomes", i)); };
+
+test("LQ10b lens B's conditions (B16) in the Facts panel: spread, depth and activity in words with their value, session, levels, the mode, baseline and time once, the rooms' line", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const c = LIQ.conditions;
+  assert.deepEqual(Object.keys(c).sort(), ["activity", "at_ms", "baseline", "baseline_weeks", "depth", "in_rooms", "levels", "line", "mode", "room_line", "session", "spread", "stale"].sort(), "the binding key tree");
+  const html = await page(LIQ);
+  clean(html);
+  const facts = factsOf(html);
+  const text = textOf(facts);
+  for (const t of ["Spread normal · 1.1× typical", "Depth normal · p41", "Activity normal · p62", "London + New York overlap · liquidity high", "outside a high-volume node · 0 nodes above, 1 below · pools 1 above, 0 below, 0 at price", "intraday mode · baseline insufficient, 2 of 4 weeks", "What the rooms read", c.line.replace(/'/g, "&#x27;")]) assert.ok(text.includes(t), t);
+  assert.ok(facts.includes("14:58 UTC · "), "at_ms in UTC and local");
+  // Normal states carry no tone; the conditions replace the facts' own chips (the same numbers, said once).
+  assert.match(facts, /<span>Spread normal · 1\.1× typical<\/span>/);
+  assert.doesNotMatch(facts, /tick volume 62nd|15m volume 41st|spread 1\.1x the hour/, "no repeated chips");
+  assert.equal((facts.match(/intraday mode ·/g) ?? []).length, 1, "the mode, baseline and weeks once, quietly (the legend names the thresholds' mode; the line is the rooms' own words)");
+  assert.ok(text.includes("percentile basis: same New York hour, rolling (baseline insufficient)"), "the basis chip kept (not in conditions)");
+  assert.doesNotMatch(facts, /stale|The rooms are not reading/);
+  // The line: no price (no price-shaped number) and no sweep.
+  assert.doesNotMatch(c.line, /\d,\d{3}\.\d{2}|\d{4}\.\d/);
+  assert.doesNotMatch(c.line, /sweep/i);
+  // The helpers.
+  assert.equal(u.sessionText({ names: [], overlap: false, liquidity: "thin", excluded: null }), "between sessions · liquidity thin");
+  assert.equal(u.sessionText({ names: [], overlap: false, liquidity: "closed", excluded: null }), "market closed");
+  assert.equal(u.sessionText({ names: [], overlap: false, liquidity: "paused", excluded: "market_paused" }), "the daily trading pause · minute excluded from the baseline (market paused)");
+  assert.equal(u.sessionText(null), "—");
+  assert.equal(u.levelsText({ inside_node: true, nodes_above: 1, nodes_below: 0, pools_above: 0, pools_below: 2, pools_at: 0 }), "inside a high-volume node · 1 node above, 0 below · pools 0 above, 2 below, 0 at price");
+  assert.equal(u.levelsText(null), "—");
+});
+
+test("LQ10c each state word and its tone: widened fault (Omega's entry gate refuses at that ratio), thin and spike late, normal and unmeasured none", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const states = { spread: ["normal", "widened", "unmeasured"], depth: ["normal", "thin", "unmeasured"], activity: ["normal", "spike", "unmeasured"] };
+  const lens = read("src/liquidity-lens.mjs");
+  for (const [k, list] of Object.entries(states)) {
+    assert.deepEqual(Object.keys(u.CONDITION_WORDS[k]).sort(), [...list].sort(), `${k}: every state liquidityConditions writes`);
+    for (const st of list) assert.ok(lens.includes(`"${st}"`), `${k} ${st} in src`);
+  }
+  assert.deepEqual([["spread", "widened"], ["depth", "thin"], ["activity", "spike"], ["spread", "normal"], ["depth", "unmeasured"], ["activity", "normal"]].map(([k, s]) => u.conditionTone(k, s)), ["fault", "late", "late", null, null, null]);
+  // The block the tone rests on: Omega refuses a new entry while the live spread is at or above the mode's spread_widen.
+  assert.match(read("src/omega-engine.mjs"), /liveSpreadSpike\(signal, sym\), "liquidity_spread_spike"\]/);
+  const warn = factsOf(await page({ ...LIQ, conditions: u.COND_WARN }));
+  assert.match(warn, /<span class="text-fault">Spread widened · 2\.3× typical<\/span>/);
+  assert.match(warn, /<span class="text-late">Depth thin · p12<\/span>/);
+  assert.match(warn, /<span class="text-late">Activity spike · p97<\/span>/);
+  const unm = factsOf(await page({ ...LIQ, conditions: u.COND_UNMEASURED }));
+  for (const t of ["Spread unmeasured", "Depth unmeasured", "Activity unmeasured"]) assert.match(unm, new RegExp(`<span>${t}</span>`), t);
+  assert.equal(u.conditionText("depth", { state: "new_state", vol_pctl_15m: 0.3 }), "Depth new state · p30", "an unknown state in its words");
+});
+
+test("LQ10d null, stale, session excluded, the levels line and the rooms not reading: one Empty, the late age, one note", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const none = factsOf(await page({ ...LIQ, conditions: null }));
+  clean(none);
+  assert.ok(none.includes("No conditions yet") && none.includes("The AI Worker gives none while lens B has no available facts."));
+  assert.ok(none.includes("tick volume 62nd"), "the facts' own chips without conditions");
+  assert.doesNotMatch(none, /What the rooms read|thresholds of the/);
+  // Facts unavailable (conditions null in the contract too): the facts' own Empty is the reason, no second one.
+  const unav = factsOf(await page(UNAV));
+  assert.equal(UNAV.conditions, null);
+  assert.ok(unav.includes("No recent broker bars") && !unav.includes("No conditions yet"));
+  const stale = factsOf(await page({ ...LIQ, conditions: u.COND_STALE }));
+  assert.match(stale, /<span class="text-late">stale 22m<\/span>/);
+  assert.ok(stale.includes("14:38 UTC · "));
+  const aged = factsOf(await page(LIQ, { now: LIQ.conditions.at_ms + 16 * 60_000 }));
+  assert.match(aged, /text-late">stale 16m</, "stale by the page's clock too");
+  const ex = textOf(factsOf(await page({ ...LIQ, conditions: u.COND_EXCLUDED })));
+  assert.ok(ex.includes("London · liquidity normal · minute excluded from the baseline (session open)"));
+  assert.ok(ex.includes("inside a high-volume node · 2 nodes above, 1 below · pools 1 above, 0 below, 1 at price"));
+  // The rooms: one note only when they are not reading (in_rooms false; room_line brief), the label otherwise.
+  const off = factsOf(await page({ ...LIQ, conditions: u.COND_OFF }));
+  assert.ok(off.includes("The rooms are not reading these now: lens B is off or at its floor, or its state is older than 15 minutes.") && !off.includes("What the rooms read"));
+  const brief = factsOf(await page({ ...LIQ, conditions: u.COND_BRIEF }));
+  assert.ok(brief.includes("The rooms read only lens B&#x27;s brief line, not these conditions (LENS_ROOM_LINE brief).") && !brief.includes("The rooms are not reading"));
+  assert.equal(u.roomsNote(LIQ.conditions), null);
+  // in_rooms and room_line as the view writes them.
+  assert.match(read("src/liquidity-view.mjs"), /in_rooms: roomLine === "conditions" && liquidityConditionsOn\(state, knobs, now\), room_line: roomLine/);
+});
+
+test("LQ10e thresholds only from the fields that carry them: the widen line and the legend's numbers; none invented", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const c = LIQ.conditions;
+  assert.deepEqual([c.spread.widen, c.activity.spike_pctl, c.depth.thin_pctl], [2, 0.95, 0.2], "the mode's knobs in the contract");
+  const facts = factsOf(await page(LIQ, { candles: null }));
+  for (const t of ["Spread 2× (widened)", "Spread above 2×", "Spike, 95th or more", "Thin, 20th or less", "thresholds of the intraday mode"]) assert.ok(textOf(facts).includes(t), t);
+  // The dashed amber line at 2x on the spread axis (the wide and the phone chart), its label amber.
+  assert.equal((facts.match(/<line[^>]*stroke-dasharray="4 3"[^>]*>/g) ?? []).filter((l) => !l.includes('x1="0"')).length, 2, "one widen line per chart");
+  const late = read("workers/xauusd-nexus-dashboard/ui/src/lib/tokens.ts").match(/\blate: "(#[0-9a-f]{6})"/)[1];
+  assert.equal((facts.match(new RegExp(`fill="${late}">2x</text>`, "g")) ?? []).length, 2, "the 2x label amber on both charts");
+  // Without the thresholds (knobs missing): no line, no number, the facts' own flags.
+  // (The rooms' line is the AI Worker's own words, thresholds included: left out of these checks.)
+  const noLine = (h) => h.replace(/<p class="text-\[12px\] leading-snug text-fg-2">[^<]*<\/p>/g, "");
+  const bare = noLine(factsOf(await page({ ...LIQ, conditions: u.COND_NO_THRESHOLDS })));
+  const bareText = textOf(bare);
+  for (const t of ["Spread widened", "Volume spike", "Thin", "as lens B flags them in the intraday mode"]) assert.ok(bareText.includes(t), t);
+  assert.doesNotMatch(bare, /thresholds of the|Spread 2×|Spread above|or more|or less|stroke-dasharray="4 3"/);
+  const none = factsOf(await page({ ...LIQ, conditions: null }));
+  assert.doesNotMatch(none, /thresholds of the|or more|or less|stroke-dasharray="4 3"/, "no threshold without conditions");
+  // No threshold number typed in the page: the legend's numbers come from the fields only.
+  const pg = src("pages/Liquidity.tsx");
+  assert.doesNotMatch(pg, /95th|20th|"2x"|spread_widen\s*[:=]\s*\d|thin_pctl\s*[:=]\s*0\.\d|spike_pctl\s*[:=]\s*0\.\d/);
 });
 
 test("LQ11 colours from tokens.ts only: no hex, no emerald or rose, green only for a bullish direction", () => {
