@@ -5,7 +5,7 @@
  *
  * - y: R ticks on clean steps (1, 2 or 5 × 10^k), always through 0;
  * - x: close time, ticks at 00:00 UTC: Mondays (every 2nd or 4th when they would crowd) in a window longer than about
- *   two weeks, days (every 2nd or 3rd when they would crowd) in a short one; a label that would pass either edge of the
+ *   two weeks, days (every 2nd to 6th when they would crowd) in a short one; a label that would pass either edge of the
  *   plot is skipped, so it never runs into the "UTC" tag or the drawdown's lowest R label;
  * - equity: a step line that starts at 0 at the window start and moves only at a close;
  * - peak and drawdown as the ledger counts them (src/signal-ledger.mjs performance: the points are cumulative R, the
@@ -48,12 +48,12 @@ export function niceTicks(lo: number, hi: number, maxTicks = 5): { lo: number; h
 }
 
 /** Day strides for a short window, then Monday strides; 7 and its multiples sit on Mondays. */
-const DAY_STRIDES = [1, 2, 3];
+const DAY_STRIDES = [1, 2, 3, 4, 5, 6];
 const WEEK_STRIDES = [7, 14, 28];
 /** A window longer than this many days takes Mondays only (a 30D window on a wide screen drifted to every 2nd day). */
 export const WEEKS_FROM_DAYS = 15;
 /** The least gap between two time labels, for the at-least-two rule. */
-const LABEL_GAP_PX = 8;
+export const LABEL_GAP_PX = 8;
 /** At most this many labels on the time axis (a 90D window on a desktop takes every 2nd Monday). */
 export const MAX_X_LABELS = 8;
 
@@ -73,7 +73,7 @@ function ticksFor(fromMs: number, toMs: number, stride: number): number[] {
 
 /**
  * Ticks at 00:00 UTC between `startMs` and `endMs` for a plot `widthPx` wide, at least `minPx` apart and at most
- * `maxLabels`: in a window of up to WEEKS_FROM_DAYS days every day, every 2nd or 3rd day, then Mondays; in a longer
+ * `maxLabels`: in a window of up to WEEKS_FROM_DAYS days every day or every 2nd … 6th day, then Mondays; in a longer
  * one every Monday, every 2nd or 4th Monday; at least two when a shorter stride leaves room between them. `edgePx`
  * (half a label's width) keeps every tick that far inside both edges, so its label clears the plot's edges
  * (fitAxisLabels), and the Monday strides count from the first Monday that clears the left edge (a phone's 30D window
@@ -151,12 +151,14 @@ export function rValue(v: number): string {
 }
 
 export type EquityIn = { t: string | number | null; r: number | null; id?: string };
-export type EquityRow = { t: number; r: number; trade: number; peak: number; dd: number; id: string };
+/** `key` names the trade for the selection: `id:<id>`, else `t:<close>#<k>` (k counts earlier id-less rows at that close). */
+export type EquityRow = { t: number; r: number; trade: number; peak: number; dd: number; id: string; key: string };
 
 /**
  * The ledger's points (cumulative R at each close) with close time in ms, the trade's own R, the running peak
  * (from 0, as the ledger counts it) and the drawdown from that peak (≤ 0). Points without a time or without an R
- * are dropped (a null R is no trade, not a close at 0R); the rest are sorted by close time.
+ * are dropped (a null R is no trade, not a close at 0R); the rest are sorted by close time (stable). Each row has a
+ * unique fallback key when it has no id: two id-less closes at one time are two trades (rowKey).
  */
 export function equityRows(points: EquityIn[]): EquityRow[] {
   const rows = points
@@ -165,9 +167,12 @@ export function equityRows(points: EquityIn[]): EquityRow[] {
     .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.r))
     .sort((a, b) => a.t - b.t);
   let peak = 0, prev = 0;
+  const seen = new Map<number, number>();
   return rows.map((p) => {
     peak = Math.max(peak, p.r);
-    const row = { t: p.t, r: p.r, trade: round(p.r - prev), peak, dd: round(p.r - peak), id: p.id };
+    let key = `id:${p.id}`;
+    if (!p.id) { const k = seen.get(p.t) ?? 0; seen.set(p.t, k + 1); key = `t:${p.t}#${k}`; }
+    const row = { t: p.t, r: p.r, trade: round(p.r - prev), peak, dd: round(p.r - peak), id: p.id, key };
     prev = p.r;
     return row;
   });
@@ -313,16 +318,28 @@ export function pointerIndex(m: Pick<ChartModel, "x0" | "x1" | "left" | "plotW" 
 }
 
 /**
- * The selection's key: the trade's id, else its close time. The selection follows its trade when the window slides
- * (an index would silently point at another trade) and clears when the trade leaves the window.
+ * The selection's key: the trade's id, else its close time and its place among id-less closes at that time
+ * (equityRows). The selection follows its trade when the window slides (an index would silently point at another
+ * trade) and clears when the trade leaves the window.
  */
-export function rowKey(row: Pick<EquityRow, "id" | "t">): string {
-  return row.id ? `id:${row.id}` : `t:${row.t}`;
+export function rowKey(row: Pick<EquityRow, "key">): string {
+  return row.key;
 }
 /** The index of the row with `key` in `rows`; -1 for none or when the trade has left the window. */
-export function indexOfKey(rows: Pick<EquityRow, "id" | "t">[], key: string | null): number {
+export function indexOfKey(rows: Pick<EquityRow, "key">[], key: string | null): number {
   if (key == null) return -1;
   return rows.findIndex((x) => rowKey(x) === key);
+}
+/** The selected index from indexOfKey's answer: null when the key is not in the rows (0 is the first trade). */
+export function activeIndex(found: number): number | null {
+  return found >= 0 ? found : null;
+}
+/**
+ * Whether leaving the chart clears the selection: only for a mouse. On touch, pointerleave fires with every
+ * pointerup, so a tap's card would vanish at once; a tap clears with a tap elsewhere.
+ */
+export function pointerClears(pointerType: string): boolean {
+  return pointerType === "mouse";
 }
 
 /**
@@ -350,8 +367,15 @@ export function cardFields(rows: EquityRow[], i: number | null): CardFields | nu
   return { ...f, live: `${ordinal}, closed ${f.utc}: trade ${f.trade}, equity at ${f.equity}, peak ${f.peak}, drawdown ${f.dd}.` };
 }
 
+/**
+ * The card's height in px as drawn, rounded up: the UTC close, the local close on its own line, which trade, and the
+ * Equity, Peak and Drawdown pairs (114.25 px in Chromium at 11px, in UTC, Asia/Jakarta and America/New_York, at 390,
+ * 1024 and 1440). The page measures the real card and passes that; this is the first frame's value and the phone
+ * box's minimum height (min-h-[115px]), so the first tap does not shift the page.
+ */
+export const CARD_H = 115;
 /** The desktop card beside the point: right of it when it fits, else left; kept inside the equity chart's height. */
-export function cardPosition(ax: number, ay: number, width: number, eqH: number, cardW = 236, cardH = 96): { left: number; top: number } {
+export function cardPosition(ax: number, ay: number, width: number, eqH: number, cardW = 236, cardH = CARD_H): { left: number; top: number } {
   return {
     left: ax + 14 + cardW <= width ? ax + 14 : Math.max(0, ax - 14 - cardW),
     top: Math.max(0, Math.min(eqH - cardH, ay - 60)),

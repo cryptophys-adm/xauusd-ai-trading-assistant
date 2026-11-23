@@ -26,7 +26,8 @@ import { T } from "../lib/tokens";
 import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import {
-  cardFields, cardPosition, chartModel, chartSummary, indexOfKey, keyStep, pointerIndex, rTick, rValue, rowKey,
+  CARD_H, activeIndex, cardFields, cardPosition, chartModel, chartSummary, indexOfKey, keyStep, pointerClears, pointerIndex, rTick,
+  rValue, rowKey,
 } from "../lib/chartScale";
 
 const pct = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
@@ -49,8 +50,9 @@ interface EquityPoint {
   id: string;
 }
 
-// The chart's hairlines on the dark panel. Under forced colours index.css draws them, the chart text, the crosshair
-// and the marker rings in system colours instead (.chart-grid, .chart-zero, .chart-cross, .chart-text, .chart-halo).
+// The chart's hairlines on the dark panel. Under forced colours index.css draws them, the chart text, the crosshair,
+// the series lines and the marker rings in system colours instead (.chart-grid, .chart-zero, .chart-cross,
+// .chart-text, .chart-series, .chart-peak, .chart-halo).
 const GRID = "rgba(255,255,255,0.06)";
 const ZERO = "rgba(255,255,255,0.24)";
 const CROSS = "rgba(255,255,255,0.35)";
@@ -72,11 +74,12 @@ function useMeasuredWidth<T extends HTMLElement>() {
 }
 
 /**
- * A legend swatch: a short line at the series' own weight, drawn as a top border (.chart-swatch keeps its colour under
- * forced colours, where a background would vanish).
+ * A legend swatch: a short line at the series' own weight, drawn as a top border, so under forced colours it takes the
+ * same system colour as its line (CanvasText; the peak's .chart-swatch-peak GrayText) where a background would vanish.
  */
 const Swatch = ({ color, h = 2, w = 14, opacity = 1 }: { color: string; h?: number; w?: number; opacity?: number }) => (
-  <span aria-hidden="true" className="chart-swatch inline-block border-t" style={{ width: w, height: 0, borderTopWidth: h, borderTopColor: color, opacity }} />
+  <span aria-hidden="true" className={`chart-swatch inline-block border-t${color === T.off ? " chart-swatch-peak" : ""}`}
+    style={{ width: w, height: 0, borderTopWidth: h, borderTopColor: color, opacity }} />
 );
 
 /**
@@ -104,6 +107,8 @@ function EquityDrawdownCharts({
 }) {
   const [wrapRef, width] = useMeasuredWidth<HTMLDivElement>();
   const [selected, setSelected] = useState<string | null>(null);
+  // The live line speaks for a user's pick only (a key, a pointer, a tap), never because a poll renumbered the trade.
+  const [said, setSaid] = useState("");
   const clipId = `eq-clip-${useId().replace(/:/g, "")}`;
 
   const m = useMemo(() => chartModel(points, startMs, endMs, width), [points, startMs, endMs, width]);
@@ -113,9 +118,13 @@ function EquityDrawdownCharts({
 
   // The selection is the trade's key, looked up again in each new set of rows; gone from the window, it clears.
   const found = indexOfKey(rows, selected);
-  const active = found >= 0 ? found : null;
-  useEffect(() => { if (selected != null && found < 0) setSelected(null); }, [selected, found]);
-  const select = (i: number | null) => setSelected(i == null || !rows[i] ? null : rowKey(rows[i]));
+  const active = activeIndex(found);
+  useEffect(() => { if (selected != null && found < 0) { setSelected(null); setSaid(""); } }, [selected, found]);
+  const select = (i: number | null) => {
+    const next = i == null || !rows[i] ? null : rowKey(rows[i]);
+    setSelected(next);
+    if (next !== selected) setSaid(i == null ? "" : cardFields(rows, i)?.live ?? "");
+  };
 
   const row = active != null ? rows[active] : null;
   const f = cardFields(rows, active);
@@ -123,10 +132,10 @@ function EquityDrawdownCharts({
 
   // Pointer: the nearest close to the pointer's x. A mouse clears on leave; a tap keeps the card until a tap elsewhere.
   const pick = (e: React.PointerEvent<SVGSVGElement>) => select(pointerIndex(m, e.clientX - e.currentTarget.getBoundingClientRect().left));
-  const leave = (e: React.PointerEvent<SVGSVGElement>) => { if (e.pointerType === "mouse") setSelected(null); };
+  const leave = (e: React.PointerEvent<SVGSVGElement>) => { if (pointerClears(e.pointerType)) select(null); };
   useEffect(() => {
     if (selected == null) return;
-    const away = (e: PointerEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setSelected(null); };
+    const away = (e: PointerEvent) => { if (!wrapRef.current?.contains(e.target as Node)) { setSelected(null); setSaid(""); } };
     document.addEventListener("pointerdown", away);
     return () => document.removeEventListener("pointerdown", away);
   }, [selected, wrapRef]);
@@ -143,7 +152,9 @@ function EquityDrawdownCharts({
   const card = f && (
     <div className="flex flex-col gap-2">
       <div className="mono flex flex-col gap-0.5 text-[11px]">
-        <span className="text-fg">{f.utc} <span className="text-fg-2">· {f.local}</span></span>
+        {/* The local close on its own line: in UTC+7 "Nov 16 23:37 UTC · Nov 17 06:37 local" wrapped and the card grew */}
+        <span className="text-fg">{f.utc}</span>
+        <span className="text-fg-2">{f.local}</span>
         <span className="text-fg-2">{f.ordinal} · trade <span className="text-fg">{f.trade}</span></span>
       </div>
       <div className="grid grid-cols-3 gap-2 text-[11px]">
@@ -157,7 +168,14 @@ function EquityDrawdownCharts({
     </div>
   );
   const cardW = 236;
-  const cardAt = cardPosition(ax, row ? Ye(row.r) : 0, width, eqH, cardW);
+  // The card's real height (it was assumed 96 px while it drew 112.5 in UTC+7), measured before paint.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [cardH, setCardH] = useState(CARD_H);
+  useLayoutEffect(() => {
+    const h = Math.ceil(cardRef.current?.getBoundingClientRect().height ?? 0);
+    if (h > 0 && h !== cardH) setCardH(h);
+  });
+  const cardAt = cardPosition(ax, row ? Ye(row.r) : 0, width, eqH, cardW, cardH);
 
   const axisText = { fontSize: font, fill: T.fg2, fontFamily: "JetBrains Mono, ui-monospace, monospace", className: "chart-text" } as const;
 
@@ -179,7 +197,7 @@ function EquityDrawdownCharts({
         aria-roledescription="chart"
         aria-label={summary}
         onKeyDown={onKey}
-        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSelected(null); }}
+        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) select(null); }}
         className="relative rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ok-fill/60 focus-visible:ring-offset-4 focus-visible:ring-offset-panel"
       >
         {width > 0 && (
@@ -198,8 +216,8 @@ function EquityDrawdownCharts({
                 <g clipPath={`url(#${clipId})`}>
                   <path d={m.eqArea} fill={lineColor} fillOpacity={0.1} />
                   {/* The peak (high-water mark): thin grey, it is no direction and no warning */}
-                  <path d={m.peakLine} fill="none" stroke={T.off} strokeOpacity={0.7} strokeWidth={1} />
-                  <path d={m.eqLine} fill="none" stroke={lineColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                  <path d={m.peakLine} fill="none" stroke={T.off} strokeOpacity={0.7} strokeWidth={1} className="chart-peak" />
+                  <path d={m.eqLine} fill="none" stroke={lineColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="chart-series" />
                 </g>
                 {last && (
                   <>
@@ -216,7 +234,7 @@ function EquityDrawdownCharts({
                 )}
               </svg>
               {row && !narrow && (
-                <div role="presentation" className="pointer-events-none absolute z-10 box-border rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+                <div ref={cardRef} role="presentation" className="pointer-events-none absolute z-10 box-border rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
                   style={{ left: cardAt.left, top: cardAt.top, width: cardW }}>
                   {card}
                 </div>
@@ -246,7 +264,7 @@ function EquityDrawdownCharts({
                 </g>
               ))}
               <path d={m.ddArea} fill={T.bearFill} fillOpacity={0.12} />
-              <path d={m.ddLine} fill="none" stroke={T.bearFill} strokeWidth={2} strokeLinejoin="round" />
+              <path d={m.ddLine} fill="none" stroke={T.bearFill} strokeWidth={2} strokeLinejoin="round" className="chart-series" />
               {m.ddMark && (
                 <>
                   <circle cx={m.ddMark.x} cy={m.ddMark.y} r={4} fill={T.bearFill} stroke={T.panel} strokeWidth={2} className="chart-halo" />
@@ -265,14 +283,14 @@ function EquityDrawdownCharts({
             </svg>
 
             {narrow && (
-              <div className="mt-2 min-h-[84px] rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5">
+              <div className="mt-2 min-h-[115px] rounded-[10px] border border-white/10 bg-bar/95 px-3 py-2.5">
                 {card || <span className="text-[11px] text-fg-2">Point at or tap the chart to see a trade.</span>}
               </div>
             )}
           </>
         )}
         {width === 0 && <div style={{ height: 380 }} />}
-        <span className="sr-only" aria-live="polite">{f ? f.live : ""}</span>
+        <span className="sr-only" aria-live="polite">{said}</span>
       </div>
     </div>
   );

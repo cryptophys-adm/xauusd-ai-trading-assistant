@@ -69,12 +69,17 @@
 }
 
 /* Forced colours (a contrast theme, light or dark): SVG fill and stroke keep their authored values, so the chart's
-   text, grid, zero line, crosshair and marker rings take system colours here; the legend swatches (top borders)
-   keep their series colours, which read on either palette (pages/Performance.tsx, review of #526). */
+   text, grid, zero line, crosshair, series lines and marker rings take system colours here (the equity and drawdown
+   lines CanvasText, the peak GrayText: the bull, bear and grey strokes fall below 3:1 on a light Canvas). The legend
+   swatches are top borders, which forced colours draw in CanvasText like their lines; the peak's in GrayText
+   (pages/Performance.tsx, reviews of #526). */
 @media (forced-colors: active) {
   .chart-text { fill: CanvasText; }
   .chart-halo { stroke: Canvas; }
   .chart-grid { stroke: GrayText; }
   .chart-zero, .chart-cross { stroke: CanvasText; }
-  .chart-swatch { forced-color-adjust: none; }
+  .chart-series { stroke: CanvasText; }
+  .chart-peak { stroke: GrayText; }
+  .chart-swatch { opacity: 1 !important; }
+  .chart-swatch-peak { forced-color-adjust: none; border-top-color: GrayText !important; }
 }

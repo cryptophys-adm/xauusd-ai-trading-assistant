@@ -9,8 +9,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  CHAR_EM, MAX_X_LABELS, NARROW, cardFields, cardPosition, chartLayout, chartModel, chartSummary, equityRows, fitAxisLabels, indexOfKey,
-  keyStep, labelWidth, linear, localStamp, maxDrawdownIndex, nearestIndex, niceStep, niceTicks, pointerIndex, rTick, rValue, rowKey,
+  CARD_H, CHAR_EM, LABEL_GAP_PX, MAX_X_LABELS, NARROW, activeIndex, cardFields, cardPosition, chartLayout, chartModel, chartSummary, equityRows, fitAxisLabels, indexOfKey,
+  keyStep, labelWidth, linear, localStamp, maxDrawdownIndex, nearestIndex, niceStep, niceTicks, pointerClears, pointerIndex, rTick, rValue, rowKey,
   stepPath, stepPoints, utcDayLabel, utcDayTicks, utcStamp
 } from "../workers/xauusd-nexus-dashboard/ui/src/lib/chartScale.ts";
 
@@ -39,7 +39,11 @@ test("PC1 R ticks on clean steps (1, 2, 5 × 10^k), always through 0, snapped ou
   assert.deepEqual(niceTicks(1.5, 4, 4).ticks, [0, 1, 2, 3, 4], "0 is always on the axis");
   assert.deepEqual(niceTicks(0, 0, 4).ticks, [0, 0.5, 1], "a flat line still gets one step");
   assert.deepEqual(niceTicks(-1, 0, 3).ticks, [-1, -0.5, 0]);
-  assert.ok(niceTicks(-0.3, 0.7, 5).ticks.every((v) => Object.is(v, 0) || v !== 0), "no −0 tick");
+  // −0.8 … 0 by 0.2 sums to −5.6e-17 at the last tick, which rounds to −0: it must be a plain 0.
+  const negZero = niceTicks(-0.7, 0, 5);
+  assert.deepEqual(negZero.ticks, [-0.8, -0.6, -0.4, -0.2, 0]);
+  assert.ok(Object.is(negZero.ticks.at(-1), 0), "no −0 tick");
+  assert.ok(negZero.ticks.every((v) => !Object.is(v, -0)), "no −0 tick");
   // Review of #526: a flat negative line gets a full step, and the step never rounds to 0 (it was a NaN domain).
   assert.deepEqual(niceTicks(-1e-10, -1e-10, 3), { lo: -1, hi: 0, step: 0.5, ticks: [-1, -0.5, 0] }, "flat just below 0: one full step");
   assert.deepEqual(niceTicks(-1e-8, 0, 3), { lo: -0.000001, hi: 0, step: 0.000001, ticks: [-0.000001, 0] }, "the step floors at 1e-6");
@@ -87,8 +91,22 @@ test("PC2 x ticks at 00:00 UTC: Mondays past two weeks, days in a short window, 
   assert.equal(at(1920, 14, mon5).stride, 2, "14D is a short window: days");
   // Phone 30D at 320: every 2nd Monday, counted from the first that clears the left edge, so two labels, not one.
   assert.deepEqual([at(320, 30).stride, labels(at(320, 30))], [14, ["Nov 02", "Nov 16"]], "phone 320, 30D");
-  assert.deepEqual([at(390, 14, mon5).stride, labels(at(390, 14, mon5)).length], [3, 4], "phone 390, 14D: at least two labels");
-  for (const vw of [320, 390, 1440, 1920]) for (const d of [7, 30, 90]) {
+  // 14D on a phone (re-review of #526): day strides up to 6 in a short window, so two labels at 320 and a steady
+  // stride 4 at 390 (it flipped between 3 and Mondays), never stride 3 at 4.5 px apart or a lone Monday.
+  assert.deepEqual([at(320, 14, mon5).stride, labels(at(320, 14, mon5))], [5, ["Nov 13", "Nov 18"]], "phone 320, 14D: stride 5");
+  assert.deepEqual([at(320, 14).stride, labels(at(320, 14)).length >= 2], [5, true]);
+  for (const end of [now, mon5, mon5 - 4 * 3_600_000, mon5 + 7 * 3_600_000, mon5 + 13 * 3_600_000, mon5 + 19 * 3_600_000]) {
+    assert.equal(at(390, 14, end).stride, 4, "phone 390, 14D: stride 4 at every end time");
+    assert.ok(labels(at(320, 14, end)).length >= 2, "phone 320, 14D: at least two labels at every end time");
+  }
+  assert.deepEqual(labels(at(390, 14, mon5)), ["Nov 11", "Nov 15", "Nov 19"]);
+  assert.equal(LABEL_GAP_PX, 8, "the least gap between two labels for the at-least-two rule");
+  // At least two: 320 7D ending Tue 08:00 UTC has one 3rd-day tick inside the edges, so every 2nd day (54 px apart,
+  // over 2 × 18.6 + 8) gives three.
+  const tue8 = Date.parse("2026-11-24T08:00:00Z");
+  assert.deepEqual(utcDayTicks(tue8 - 7 * DAY, tue8, 189, 56, labelWidth("Nov 23", 10) / 2, MAX_X_LABELS).stride, 2);
+  assert.deepEqual([at(320, 7, tue8).stride, labels(at(320, 7, tue8))], [2, ["Nov 19", "Nov 21", "Nov 23"]], "phone 320, 7D: at least two");
+  for (const vw of [320, 390, 1440, 1920]) for (const d of [7, 14, 30, 90]) {
     const m = at(vw, d);
     assert.ok(m.xTicks.length >= 2 && m.xTicks.length <= MAX_X_LABELS, `${vw} ${d}D: ${labels(m)}`);
     for (let i = 1; i < m.xTicks.length; i++) assert.ok(m.xTicks[i].x - m.xTicks[i - 1].x >= m.minTickPx - 1e-9, `${vw} ${d}D spacing`);
@@ -185,6 +203,12 @@ test("PC6 the deepest drawdown's index (first on a tie, -1 with none) and the ne
   const m = { x0: 0, x1: 100, left: 48, plotW: 200, times: [10, 50, 90] };
   assert.deepEqual([0, 48, 68, 107, 109, 148, 230, 400].map((x) => pointerIndex(m, x)), [0, 0, 0, 0, 1, 1, 2, 2]);
   assert.equal(pointerIndex({ ...m, times: [] }, 100), -1);
+  // A real window: x0 is an epoch time, so the pointer's time is x0 plus the fraction of the span.
+  const t0 = Date.parse("2026-10-23T14:00:00Z"), t1 = t0 + 30 * DAY;
+  const e = { x0: t0, x1: t1, left: 48, plotW: 1052, times: [t0 + 2 * DAY, t0 + 15 * DAY, t0 + 28 * DAY] };
+  // The closes sit at x 118.1, 574 and 1029.9; the midpoints between them at 346 and 801.9.
+  assert.deepEqual([48, 118, 345, 347, 573, 801, 803, 1100].map((x) => pointerIndex(e, x)), [0, 0, 0, 1, 1, 1, 2, 2]);
+  assert.equal(pointerIndex(e, 48 + (1052 * 15) / 30), 1, "the middle close at its own x");
 });
 
 test("PC7 Performance.tsx draws the pure model at the measured width: no stretched SVG, one crosshair, keys, a summary", () => {
@@ -199,17 +223,32 @@ test("PC7 Performance.tsx draws the pure model at the measured width: no stretch
   assert.match(p, /tabIndex=\{0\}/);
   assert.match(p, /const summary = chartSummary\(m, policyLabel, days\);/);
   assert.match(p, /aria-label=\{summary\}/);
-  assert.match(p, /aria-live="polite">\{f \? f\.live : ""\}/);
+  // The live line speaks for a user's pick only: select() sets it, a poll that renumbers the trade does not.
+  assert.match(p, /aria-live="polite">\{said\}<\/span>/);
+  assert.match(p, /if \(next !== selected\) setSaid\(i == null \? "" : cardFields\(rows, i\)\?\.live \?\? ""\);/);
+  assert.equal((p.match(/setSaid\(/g) ?? []).length, 3, "set on a pick; cleared when the trade leaves or a tap lands elsewhere, nowhere else");
   assert.match(p, /stroke=\{T\.off\} strokeOpacity=\{0\.7\} strokeWidth=\{1\}/, "the peak: a thin grey line");
   assert.match(p, /const lineColor = \(last\?\.r \?\? 0\) >= 0 \? T\.bullFill : T\.bearFill;/);
   assert.doesNotMatch(p, /strokeDasharray/, "solid grid, zero and peak; no dashes in the charts");
   assert.doesNotMatch(p, /Equity \(R\)/, "the legend left the panel title row");
-  assert.equal((p.match(/onPointerMove=\{pick\}/g) ?? []).length, 2, "one crosshair through both charts");
+  assert.equal((p.match(/onPointerMove=\{pick\} onPointerDown=\{pick\} onPointerLeave=\{leave\}>/g) ?? []).length, 2, "one crosshair through both charts; a still tap selects (pointerdown)");
+  assert.match(p, /const leave = \(e: React\.PointerEvent<SVGSVGElement>\) => \{ if \(pointerClears\(e\.pointerType\)\) select\(null\); \};/, "only a mouse clears on leave");
   assert.match(p, /const pick = \(e: React\.PointerEvent<SVGSVGElement>\) => select\(pointerIndex\(m, e\.clientX - e\.currentTarget\.getBoundingClientRect\(\)\.left\)\);/);
   assert.match(p, /\{m\.xTicks\.map\(\(\{ t, x, label \}\) => \(/, "the guarded ticks label the axis");
+  assert.match(p, /<text x=\{x\} y=\{ddAxisY\} textAnchor="middle" \{\.\.\.axisText\}>\{label\}<\/text>/, "labels centred on their tick, as the guard assumes");
+  // The wiring around the model: the window, the cleanups, which card shows where.
+  assert.match(p, /startMs=\{\(ledgerPoll\.lastOk \?\? Date\.now\(\)\) - days \* 86_400_000\}\n\s*endMs=\{ledgerPoll\.lastOk \?\? Date\.now\(\)\}/, "the window: the page's days up to the last good read");
+  assert.match(p, /ro\.observe\(el\);\n\s*return \(\) => ro\.disconnect\(\);/, "the ResizeObserver is let go");
+  assert.match(p, /document\.addEventListener\("pointerdown", away\);\n\s*return \(\) => document\.removeEventListener\("pointerdown", away\);/, "the tap-away listener is removed");
+  assert.match(p, /\{row && !narrow && \(\n\s*<div ref=\{cardRef\} role="presentation"/, "the floating card on a desktop only");
+  assert.match(p, /\{narrow && \(\n\s*<div className="mt-2 min-h-\[115px\][^"]*">\n\s*\{card \|\| <span className="text-\[11px\] text-fg-2">Point at or tap the chart to see a trade\.<\/span>\}/, "the phone's in-flow card shows the tapped trade");
+  assert.equal(CARD_H, 115, "min-h-[115px] is CARD_H: the first tap does not shift the page");
+  assert.match(p, /<span className="text-fg">\{f\.utc\}<\/span>\n\s*<span className="text-fg-2">\{f\.local\}<\/span>/, "the local close on its own line");
   assert.match(p, /<text x=\{left \+ plotW \+ 6\} y=\{ddAxisY\} \{\.\.\.axisText\}>UTC<\/text>/, "the UTC tag 6px right of the plot");
   assert.match(p, /<span className="mono">\{m\.ddHeadline\}<\/span>/, "the drawdown's headline, on a phone too");
-  assert.match(p, /const cardAt = cardPosition\(ax, row \? Ye\(row\.r\) : 0, width, eqH, cardW\);/);
+  assert.match(p, /const \[cardH, setCardH\] = useState\(CARD_H\);/);
+  assert.match(p, /const h = Math\.ceil\(cardRef\.current\?\.getBoundingClientRect\(\)\.height \?\? 0\);\n\s*if \(h > 0 && h !== cardH\) setCardH\(h\);/, "the real card's height");
+  assert.match(p, /const cardAt = cardPosition\(ax, row \? Ye\(row\.r\) : 0, width, eqH, cardW, cardH\);/);
   assert.match(p, /style=\{\{ left: cardAt\.left, top: cardAt\.top, width: cardW \}\}/);
 });
 
@@ -248,7 +287,13 @@ test("PC8 the chart model: layout, x domain, both scales, the deepest drawdown, 
   assert.deepEqual([m.ddIdx, m.ddRow.id, m.ddRow.dd, m.ddRow.peak], [2, "c", -1.5, 2]);
   assert.equal(m.ddHeadline, "max −1.50R · Nov 09");
   assert.equal(chartModel(POINTS, start, now, 339).ddHeadline, "max −1.50R · Nov 09", "the phone keeps the short date");
-  assert.equal(chartModel(fromTrades([1, 0.5]), start, now, 1172).ddHeadline, "no drawdown");
+  const flat = chartModel(fromTrades([1, 0.5]), start, now, 1172);
+  assert.equal(flat.ddHeadline, "no drawdown");
+  assert.equal(flat.ddMark, null);
+  assert.deepEqual(flat.ddScale, { lo: -1, hi: 0, step: 0.5, ticks: [-1, -0.5, 0] }, "no drawdown: a −1 … 0 axis, three labels on three rows");
+  assert.deepEqual(flat.ddScale.ticks.map(flat.Yd), [88, 46, 4], "distinct rows");
+  assert.equal(m.ddScale.ticks.length, 4, "the drawdown axis keeps about three steps (−1.5, −1, −0.5, 0)");
+  assert.ok([1, 2, 4.4, 9, 37].every((d) => { const k = chartModel(fromTrades([d, -d]), start, now, 1172).ddScale.ticks.length; return k >= 3 && k <= 5; }), "3 to 5 drawdown labels");
   assert.deepEqual(m.ddMark, { x: m.X(m.ddRow.t), y: 88, labelX: m.X(m.ddRow.t) + 6, labelY: 80, anchor: "start", text: "−1.50R" });
   const atEnd = chartModel([...fromTrades([12]), { t: now - 3_600_000, r: 2, id: "end" }], start, now, 339);
   assert.equal(atEnd.ddMark.text, "−10.00R");
@@ -277,13 +322,23 @@ test("PC9 the selection follows its trade by id (else close time) when the windo
   assert.deepEqual([cardFields(after, j).ordinal, cardFields(after, j).trade, cardFields(after, j).utc], ["Trade 9 of 10", "+0.60R", cardFields(before, i).utc], "the same trade");
   assert.equal(indexOfKey(after, rowKey(before[0])), -1, "it left the window: no selection");
   assert.equal(indexOfKey(after, null), -1);
-  assert.equal(rowKey({ id: "", t: 1700000000000 }), "t:1700000000000", "no id: the close time");
-  assert.equal(indexOfKey([{ id: "", t: 5 }, { id: "", t: 9 }], "t:9"), 1);
+  // No id: the close time and its place among the id-less closes at that time, so two trades never share a key.
+  const twins = equityRows([{ t: 1700000000000, r: 1 }, { t: 1700000000000, r: 0.4 }, { t: 1700000003000, r: 2 }, { t: 1700000000000, r: 0.5, id: "x" }]);
+  assert.deepEqual(twins.map(rowKey), ["t:1700000000000#0", "t:1700000000000#1", "id:x", "t:1700000003000#0"]);
+  assert.equal(new Set(twins.map(rowKey)).size, 4);
+  assert.deepEqual(twins.map((x) => indexOfKey(twins, rowKey(x))), [0, 1, 2, 3], "each reachable");
+  // → from the first id-less twin reaches the second (it stuck on the first with one shared key).
+  const k1 = keyStep("ArrowRight", activeIndex(indexOfKey(twins, rowKey(twins[0]))), twins.length).active;
+  assert.equal(activeIndex(indexOfKey(twins, rowKey(twins[k1]))), 1);
+  // The selected index: 0 is the first trade, not "none".
+  assert.deepEqual([activeIndex(0), activeIndex(3), activeIndex(-1)], [0, 3, null]);
+  assert.deepEqual(["mouse", "touch", "pen"].map(pointerClears), [true, false, false], "only a mouse clears on leave; a tap's pointerleave does not");
   const p = src("pages/Performance.tsx");
   assert.match(p, /const \[selected, setSelected\] = useState<string \| null>\(null\);/, "the selection is a key, not an index");
   assert.match(p, /const found = indexOfKey\(rows, selected\);/);
-  assert.match(p, /useEffect\(\(\) => \{ if \(selected != null && found < 0\) setSelected\(null\); \}, \[selected, found\]\);/, "gone from the window, it clears");
-  assert.match(p, /const select = \(i: number \| null\) => setSelected\(i == null \|\| !rows\[i\] \? null : rowKey\(rows\[i\]\)\);/);
+  assert.match(p, /const active = activeIndex\(found\);/);
+  assert.match(p, /useEffect\(\(\) => \{ if \(selected != null && found < 0\) \{ setSelected\(null\); setSaid\(""\); \} \}, \[selected, found\]\);/, "gone from the window, it clears");
+  assert.match(p, /const next = i == null \|\| !rows\[i\] \? null : rowKey\(rows\[i\]\);\n\s*setSelected\(next\);/);
   assert.doesNotMatch(p.slice(p.indexOf("function EquityDrawdownCharts"), p.indexOf("type Policy =")), /useState<number \| null>/, "no index state left");
 });
 
@@ -320,7 +375,8 @@ test("PC11 the card: UTC and local close, which trade of how many, its R, equity
   assert.deepEqual(cardPosition(100, 150, 1172, 240), { left: 114, top: 90 });
   assert.deepEqual(cardPosition(1000, 150, 1172, 240), { left: 750, top: 90 }, "left of a point near the right edge");
   assert.deepEqual(cardPosition(922, 30, 1172, 240), { left: 936, top: 0 }, "922 + 14 + 236 = 1172 still fits; the top clamps at 0");
-  assert.deepEqual(cardPosition(100, 239, 1172, 240), { left: 114, top: 144 }, "the bottom clamps at eqH − 96");
+  assert.deepEqual(cardPosition(100, 239, 1172, 240), { left: 114, top: 125 }, "the bottom clamps at eqH − CARD_H (115)");
+  assert.deepEqual(cardPosition(100, 239, 1172, 240, 236, 130), { left: 114, top: 110 }, "the measured height");
   assert.deepEqual(cardPosition(200, 100, 300, 240), { left: 0, top: 40 }, "never off the left");
   const m = chartModel(POINTS, now - 30 * DAY, now, 1172);
   assert.equal(chartSummary(m, "TP1", 30),
@@ -336,7 +392,10 @@ test("PC12 forced colours, the drawdown label's halo, and the smaller review fix
   assert.match(fc, /\.chart-halo \{ stroke: Canvas; \}/);
   assert.match(fc, /\.chart-grid \{ stroke: GrayText; \}/);
   assert.match(fc, /\.chart-zero, \.chart-cross \{ stroke: CanvasText; \}/);
-  assert.match(fc, /\.chart-swatch \{ forced-color-adjust: none; \}/);
+  assert.match(fc, /\.chart-series \{ stroke: CanvasText; \}/, "the equity and drawdown lines reach 3:1 on a light Canvas");
+  assert.match(fc, /\.chart-peak \{ stroke: GrayText; \}/);
+  assert.match(fc, /\.chart-swatch \{ opacity: 1 !important; \}/);
+  assert.match(fc, /\.chart-swatch-peak \{ forced-color-adjust: none; border-top-color: GrayText !important; \}/, "the legend's peak matches its line");
   const p = src("pages/Performance.tsx");
   const chart = p.slice(p.indexOf("function EquityDrawdownCharts"), p.indexOf("type Policy ="));
   assert.match(chart, /fontFamily: "JetBrains Mono, ui-monospace, monospace", className: "chart-text"/, "all axis text");
@@ -345,7 +404,10 @@ test("PC12 forced colours, the drawdown label's halo, and the smaller review fix
   }
   assert.equal((chart.match(/className=\{v === 0 \? "chart-zero" : "chart-grid"\}/g) ?? []).length, 2, "the R grid and zero line in both charts");
   assert.match(chart, /fill=\{T\.fg\} fontFamily=\{axisText\.fontFamily\} className="chart-text">\{rValue\(last\.r\)\}/, "the end value");
-  assert.match(p, /<span aria-hidden="true" className="chart-swatch inline-block border-t" style=\{\{ width: w, height: 0, borderTopWidth: h, borderTopColor: color, opacity \}\} \/>/, "swatches are borders");
+  assert.match(p, /<span aria-hidden="true" className=\{`chart-swatch inline-block border-t\$\{color === T\.off \? " chart-swatch-peak" : ""\}`\}\n\s*style=\{\{ width: w, height: 0, borderTopWidth: h, borderTopColor: color, opacity \}\} \/>/, "swatches are borders");
+  assert.match(chart, /<path d=\{m\.peakLine\}[^>]*className="chart-peak" \/>/);
+  assert.match(chart, /<path d=\{m\.eqLine\}[^>]*className="chart-series" \/>/);
+  assert.match(chart, /<path d=\{m\.ddLine\}[^>]*className="chart-series" \/>/);
   assert.doesNotMatch(p, /background: color/);
   // The deepest value reads over the line: a panel-coloured stroke painted under the fill.
   assert.match(chart, /stroke=\{T\.panel\} strokeWidth=\{3\} strokeLinejoin="round" paintOrder="stroke" className="chart-text chart-halo">\{m\.ddMark\.text\}/);
