@@ -26,6 +26,7 @@
 
 import { keyLevelPlan, isProtected, strategyExits, OMEGA_DEFAULTS } from "./omega-engine.mjs";
 import { flatConfidences } from "./agent-confidence.mjs";
+import { limitKnobs } from "./omega-limit-knobs.mjs";
 
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
 /** The ledger's own schedule (owner 2026-11-12): every 5 minutes, 2 minutes past each 5m close. */
@@ -619,24 +620,80 @@ export async function ingestStrategy(env, strategy, { now = Date.now() } = {}) {
   return Number(res?.meta?.changes) || 0;
 }
 
+/** Why a row holds a new same-side decision back (signal_ledger_held.reason). */
+export const HOLD_REASONS = Object.freeze({
+  pending: "an earlier signal of the same side still waits for its fill (inside Omega's entry window)",
+  open: "an earlier signal of the same side is open and not yet protected (no TP1, no SL+)"
+});
+const tms = (v) => (v == null ? NaN : toMs(v));
+const atOrBefore = (v, at) => finite(tms(v)) && tms(v) <= at;
+
+/**
+ * Pure, LH1 (2026-11-23): the end of Omega's own entry window for a ledger row: an ENTER_LIMIT plan rests at most the
+ * mode's max_pending_life from the decision (src/omega-limit-knobs.mjs); a market entry has until the next close or
+ * `maxAgeMs` after the decision, as omegaEntry. NaN without the times.
+ */
+export function omegaEntryWindowEnd(row, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
+  const opened = tms(row?.opened_at);
+  if (!finite(opened)) return NaN;
+  if (row.entry_action === "ENTER_LIMIT") return opened + limitKnobs(row.trading_mode).max_pending_life * 60_000;
+  const closeMs = decisionCloseMs(row.candle_key);
+  if (!finite(closeMs)) return opened + maxAgeMs;
+  return Math.min(closeMs + M15, Math.max(closeMs, opened) + maxAgeMs);
+}
+
+/**
+ * Pure, LH1 (2026-11-23): whether a same-side ledger row holds a new decision at `atMs` back, read from its times as
+ * they stood at `atMs` (so a replay of a past decision reads the row as it was then). "pending" or "open" (the reason)
+ * or null. Omega decides, as the rule says ("no stacking, as Omega"):
+ *   - Omega's side of the row skipped or closed by then: no hold;
+ *   - Omega's side filled and still open: a hold while it is unprotected (its protected_at not reached);
+ *   - Omega's side not filled yet: a hold only inside Omega's entry window (omegaEntryWindowEnd);
+ *   - a row without Omega's side (before the Omega policy): the TP policy's state, open and unprotected, or pending
+ *     inside the entry window.
+ * The TP-policy row's own fill window and result are unchanged.
+ */
+export function blocksNewDecision(row, atMs, { maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
+  if (!row || !atOrBefore(row.opened_at, atMs)) return null;
+  // Today's rule on the row's current state (before LH1): a pending row, or an open one without TP1 or SL+.
+  const legacy = () => (row.status === "pending" ? "pending" : row.status === "open" && row.tp1_closed_at == null && Number(row.sl_plus_triggered || 0) === 0 ? "open" : null);
+  if (row.omega_status == null) return legacy();
+  if (row.omega_status === "skipped" || atOrBefore(row.omega_closed_at, atMs)) return null;
+  if (atOrBefore(row.omega_filled_at, atMs)) {
+    let j = null;
+    try { j = row.omega_json ? JSON.parse(row.omega_json) : null; } catch { j = null; }
+    return j?.protected_at != null && atOrBefore(j.protected_at, atMs) ? null : "open";
+  }
+  // Omega's side not filled yet. A TP-policy row already open keeps today's rule (held only while unprotected); a
+  // pending one holds only inside Omega's entry window.
+  if (row.status === "open") return legacy();
+  if (atMs < omegaEntryWindowEnd(row, { maxAgeMs })) return "pending";
+  // Past Omega's entry window: a row Omega's simulation has already read (closed, skipped or filled would have
+  // returned above) holds nothing back; one still "pending" there has not been simulated yet (the 5-minute ledger run
+  // reads it next) and keeps today's rule until it is.
+  return row.omega_status === "pending" ? legacy() : null;
+}
+
 /**
  * A Decision Engine BUY or SELL (src/decision-engine.mjs), once per 15m key, and only without an open
  * decision of the same side. TP1 is the chosen target; TP2 the other one when it lies beyond it.
  */
-export async function ingestDecision(env, d, { now = Date.now() } = {}) {
+export async function ingestDecision(env, d, { now = Date.now(), maxAgeMs = OMEGA_DEFAULTS.max_signal_age_ms } = {}) {
   const t = d?.trade;
   if (!t || (d.stance !== "BUY" && d.stance !== "SELL") || t.side !== d.stance) return 0;
   const dir = d.stance === "BUY" ? 1 : -1;
   const other = t.target === "tp1" ? t.tp2 : null;
   const s = { side: d.stance, entry: t.entry, stop: t.stop, tp1: t.tp, tp2: finite(other) && dir * (other - t.tp) > 0 ? other : null };
   if (!validSignal(s)) return 0;
-  // No stacking, as Omega (owner 2026-11-13, "setuju"): a row on the same side holds new signals back only
-  // while it waits for its fill or is open and unprotected. A row past TP1 (still followed to TP2) or with
-  // its stop at break-even (SL+) no longer does: on 2026-11-12 one such row held back every SELL for 10 hours.
-  const live = await env.DB.prepare("SELECT id, status FROM signal_ledger WHERE source = 'decision' AND side = ? AND (status = 'pending' OR (status = 'open' AND tp1_closed_at IS NULL AND COALESCE(sl_plus_triggered, 0) = 0)) ORDER BY opened_at DESC LIMIT 1").bind(s.side).first();
-  if (live?.id) {
-    const reason = live.status === "pending" ? "an earlier signal of the same side still waits for its fill" : "an earlier signal of the same side is open and not yet protected (no TP1, no SL+)";
-    await env.DB.prepare("INSERT OR IGNORE INTO signal_ledger_held (decision_key, side, held_at, blocking_id, reason) VALUES (?, ?, ?, ?, ?)").bind(String(d.decision_key), s.side, d.decided_at ?? iso(now), String(live.id), reason).run();
+  // No stacking, as Omega (owner 2026-11-13, "setuju"; LH1 2026-11-23): an earlier row of the same side holds a new
+  // decision back only while Omega itself would still hold it back (blocksNewDecision): a row still inside Omega's own
+  // entry window, or a position Omega still holds unprotected. The TP-policy row keeps its own fill window for its
+  // own result; on 2026-11-23 its 8-hour window held back six BUYs after Omega's side of the row had closed.
+  const atMs = finite(toMs(d.decided_at)) ? toMs(d.decided_at) : now;
+  const rows = (await env.DB.prepare("SELECT id, status, opened_at, filled_at, closed_at, candle_key, trading_mode, entry_action, tp1_closed_at, sl_plus_triggered, sl_plus_at, omega_status, omega_filled_at, omega_closed_at, omega_json FROM signal_ledger WHERE source = 'decision' AND side = ? AND opened_at <= ? AND (closed_at IS NULL OR closed_at > ? OR omega_closed_at IS NULL OR omega_closed_at > ?) ORDER BY opened_at DESC LIMIT 20").bind(s.side, iso(atMs), iso(atMs), iso(atMs)).all()).results || [];
+  const blocking = rows.map((r) => ({ r, why: blocksNewDecision(r, atMs, { maxAgeMs }) })).find((x) => x.why);
+  if (blocking) {
+    await env.DB.prepare("INSERT OR IGNORE INTO signal_ledger_held (decision_key, side, held_at, blocking_id, reason) VALUES (?, ?, ?, ?, ?)").bind(String(d.decision_key), s.side, d.decided_at ?? iso(atMs), String(blocking.r.id), HOLD_REASONS[blocking.why]).run();
     return 0;
   }
   const res = await env.DB.prepare(insertSql).bind(`decision:${d.decision_key}`, "decision", d.decision_key, d.decided_at ?? iso(now), s.side, s.entry, s.stop, s.tp1, s.tp2, finite(t.progressive_stop) ? t.progressive_stop : null, finite(d.confidence) ? r3(d.confidence) : null, String(d.summary ?? "").slice(0, 300), iso(now)).run();
@@ -757,9 +814,50 @@ export async function runSignalLedger(env, { now = Date.now(), readStrategy = nu
   const added = { h1_decision: h1Decisions ? await ingestH1Decisions(env, { sinceIso: iso(now - 7 * 86_400_000), now }) : 0, strategy: 0 };
   if (readStrategy) { try { added.strategy = await ingestStrategy(env, await readStrategy(env, { now }), { now }); } catch { added.strategy = 0; } }
   const loaded = await ledgerSeries(env);
+  // LH1's one-shot re-ingest of the decisions the old hold-back held on 2026-11-23 (owner: "Ya, masukkan 6").
+  let reingest = null;
+  try { reingest = await reingestHeldOnce(env, { now, evaluate: () => evaluateOpenSignals(env, { now, bars: loaded.bars, m15: loaded.m15 }) }); } catch (e) { reingest = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
   const changed = await evaluateOpenSignals(env, { now, bars: loaded.bars, m15: loaded.m15 });
   const omega4 = omega4Enabled(env) ? await runOmega4Step(env, { now, bars: loaded.bars }) : { replay: { status: "off" }, parity: null };
-  return { status: "ok", added, changed, omega4 };
+  return { status: "ok", added, changed, omega4, ...(reingest && reingest.status !== "done" ? { reingest } : {}) };
+}
+
+/**
+ * LH1's one-shot re-ingest (owner 2026-11-23, relayed by the orchestrator: "Ya, masukkan 6"): the decisions the old
+ * hold-back held from 06:00 to 12:10 UTC that day, oldest first, each through ingestDecision from its own stored record
+ * (decided_at kept, so the hold-back reads the ledger as it stood then), INSERT OR IGNORE by decision id. After each
+ * insert the open rows are simulated (`evaluate`) so the next decision sees the fills and exits as live would have. A
+ * decision re-ingested leaves signal_ledger_held; one the new rule still holds stays there. Runs once: the KV marker
+ * keeps the report (decision, side, re-ingested or why not).
+ */
+export const LH1_REINGEST = Object.freeze({ key: "ledger:lh1:reingest:2026-11-23:v1", from: "2026-11-23T06:00:00.000Z", to: "2026-11-23T12:10:00.000Z" });
+export async function reingestHeldOnce(env, { now = Date.now(), evaluate = null, window = LH1_REINGEST } = {}) {
+  const kv = env?.SIGNAL_CACHE, db = env?.DB;
+  if (!db || !kv?.get || !kv?.put) return { status: "unavailable" };
+  if (await kv.get(window.key)) return { status: "done" };
+  const held = (await db.prepare("SELECT decision_key, side, held_at, blocking_id FROM signal_ledger_held WHERE held_at >= ? AND held_at <= ? ORDER BY held_at").bind(window.from, window.to).all()).results || [];
+  const report = [];
+  for (const h of held) {
+    const row = await db.prepare("SELECT decision_json FROM engine_decisions WHERE decision_key = ?").bind(h.decision_key).first();
+    let d = null;
+    try { d = row?.decision_json ? JSON.parse(row.decision_json) : null; } catch { d = null; }
+    if (!d) { report.push({ decision_key: h.decision_key, side: h.side, reingested: false, reason: "no stored decision" }); continue; }
+    d = { ...d, decision_key: d.decision_key ?? h.decision_key, decided_at: d.decided_at ?? h.held_at };
+    // The old hold's trace goes; the new rule writes its own if it still holds the decision back.
+    const old = await db.prepare("SELECT decision_key, side, held_at, blocking_id, reason FROM signal_ledger_held WHERE decision_key = ?").bind(h.decision_key).first();
+    await db.prepare("DELETE FROM signal_ledger_held WHERE decision_key = ?").bind(h.decision_key).run();
+    const added = await ingestDecision(env, d, { now });
+    if (added) {
+      if (typeof evaluate === "function") await evaluate();
+      report.push({ decision_key: h.decision_key, side: h.side, reingested: true, reason: null });
+      continue;
+    }
+    const still = await db.prepare("SELECT blocking_id, reason FROM signal_ledger_held WHERE decision_key = ?").bind(h.decision_key).first();
+    if (!still && old) await db.prepare("INSERT OR IGNORE INTO signal_ledger_held (decision_key, side, held_at, blocking_id, reason) VALUES (?, ?, ?, ?, ?)").bind(old.decision_key, old.side, old.held_at, old.blocking_id, old.reason).run();
+    report.push({ decision_key: h.decision_key, side: h.side, reingested: false, reason: still ? `still held by ${still.blocking_id}: ${still.reason}` : "not a valid signal (the old trace kept)" });
+  }
+  await kv.put(window.key, JSON.stringify({ at: iso(now), items: report }), { expirationTtl: 90 * 86_400 });
+  return { status: "ran", items: report };
 }
 
 /** LEDGER_OMEGA4 "off" stops the v4 replay and its parity check (default on). */
