@@ -231,7 +231,8 @@ test("S8 the pending council: a measured reason or the order is kept; a silent c
 });
 
 test("S9 the deterministic cancels, in their order, with no council (ADR-0020 A7)", () => {
-  const why = (over = {}) => pendingDeleteReason({ settings: LIMIT, signal: SIGNAL, control: { mode: "active" }, executor: EXECUTOR, account: { spec_status: "validated", profile: "aggressive" }, lossFloor: 9_800, budget: 100, order: ORDER, meta: META, now: NOW, ...over });
+  // CH1 (2026-11-23): today's cancels, with the change thresholds off (token limit: test/change-thresholds.test.mjs).
+  const why = (over = {}) => pendingDeleteReason({ settings: { ...LIMIT, change_thresholds: "off" }, signal: SIGNAL, control: { mode: "active" }, executor: EXECUTOR, account: { spec_status: "validated", profile: "aggressive" }, lossFloor: 9_800, budget: 100, order: ORDER, meta: META, now: NOW, ...over });
   assert.equal(why(), null, "nothing holds: kept");
   const newer = { power_ms: ISSUED + 900_000 };
   assert.equal(why({ signal: sig({ ...newer, quorum_long_share: 0.64 }) }), "quorum_share_drop", "0.70 to 0.64: more than 0.05");
@@ -253,7 +254,7 @@ test("S9 the deterministic cancels, in their order, with no council (ADR-0020 A7
   assert.equal(why({ account: { spec_status: "validated", profile: "safe" }, signal: sig({ veto_long: true }) }), "profile_downgrade");
   assert.equal(why({ signal: sig({ ...newer, veto_long: true, quorum_long_share: 0.1 }) }), "de_veto");
   assert.equal(why({ signal: sig({ ...newer, quorum_long_share: 0.1 }), now: NOW + 3_600_000 }), "quorum_share_drop");
-  assert.equal(why({ settings: { ...LIMIT, entry_order: "market" } }), "entry_order_market");
+  assert.equal(why({ settings: { ...LIMIT, entry_order: "market", change_thresholds: "off" } }), "entry_order_market");
   // In the plan: each reason is a delete_order with its reason; a kill closes all, Omega off deletes (stage 1).
   const r = plan({ executor: ex({ orders: [ORDER] }), pendingMeta: { 777: META }, signal: sig({ veto_long: true, side: "NONE" }) });
   assert.deepEqual(r.intents.map((x) => [x.kind, x.ticket, x.reason]), [["delete_order", 777, "de_veto"]]);
@@ -348,6 +349,8 @@ function d1() {
 test("S14 the council's runner: answers the filed entry, checks each resting limit once per 15m close, cancels when silent", async () => {
   resetLimitCouncilSchemaForTests();
   const env = { DB: d1(), POSITION_COUNCIL_DAILY_USD: "5" };
+  // CH1 (2026-11-23): the runner as it was, with the change thresholds off (one SELL decision is the stance against the
+  // BUY order; token stance needs two: test/change-thresholds.test.mjs).
   const now = ISSUED + 17 * 60_000; // after the 11:15 close
   const calls = [];
   const call = async (_env, req) => { calls.push(req); return !req.schema.properties.move_to ? { status: "answered", obj: { answer: "place", measured: [], reason: "a clean pullback" } } : { status: "answered", obj: { answer: "cancel", move_to: null, reason: "the decision turned" } }; };
@@ -356,16 +359,16 @@ test("S14 the council's runner: answers the filed entry, checks each resting lim
   await requestEntryCouncil(env.DB, { id: ID, side: "BUY", entry_order: "limit", limit: { price: 4100.2, away_r: 0.2 } }, { now: now - 60_000 });
   assert.equal(await readEntryCouncil(env.DB, ID), null, "asked, not answered");
   const executor = ex({ orders: [{ ...ORDER, placed_ms: ISSUED + 6 * 60_000 }] });
-  const r = await runLimitCouncil(env, { now, call, settings: { entry_order: "limit" }, executor, decision, rooms: [], atr: 4, signal: SIGNAL });
+  const r = await runLimitCouncil(env, { now, call, settings: { entry_order: "limit", change_thresholds: "off" }, executor, decision, rooms: [], atr: 4, signal: SIGNAL });
   assert.deepEqual(r.entries, [{ id: ID, status: "answered", choice: "place_limit", rule: "council_place" }]);
   assert.deepEqual(r.pending, [{ ticket: 777, action: "cancel", rule: "council_cancel" }]);
   assert.deepEqual(calls.map((c) => [c.schemaName, c.meterSource]), [["entry_council", "entry_council"], ["entry_council", "entry_council"]]);
   assert.deepEqual(await readEntryCouncil(env.DB, ID), { id: ID, status: "answered", choice: "place_limit", rule: "council_place", reason: "a clean pullback" });
   assert.deepEqual((await pendingLimitActions(env.DB, { now })).map((a) => [a.ticket, a.action, a.rule]), [[777, "cancel", "council_cancel"]]);
   // Once per order and 15m close.
-  assert.deepEqual((await runLimitCouncil(env, { now: now + 5 * 60_000, call, settings: { entry_order: "limit" }, executor, decision, rooms: [], atr: 4, signal: SIGNAL })).pending, []);
+  assert.deepEqual((await runLimitCouncil(env, { now: now + 5 * 60_000, call, settings: { entry_order: "limit", change_thresholds: "off" }, executor, decision, rooms: [], atr: 4, signal: SIGNAL })).pending, []);
   // The daily cap reached: no call, the order is cancelled at the next close (council_unavailable).
-  const capped = await runLimitCouncil(env, { now: now + 15 * 60_000, call, settings: { entry_order: "limit" }, executor, decision: { ...decision, bar_close: new Date(ISSUED + 1_800_000).toISOString() }, rooms: [], atr: 4, signal: SIGNAL, capUsd: 0 });
+  const capped = await runLimitCouncil(env, { now: now + 15 * 60_000, call, settings: { entry_order: "limit", change_thresholds: "off" }, executor, decision: { ...decision, bar_close: new Date(ISSUED + 1_800_000).toISOString() }, rooms: [], atr: 4, signal: SIGNAL, capUsd: 0 });
   assert.deepEqual(capped.pending, [{ ticket: 777, action: "cancel", rule: "council_unavailable" }]);
   assert.equal(calls.length, 2);
 });

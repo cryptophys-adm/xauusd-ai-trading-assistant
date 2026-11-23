@@ -34,6 +34,7 @@ import { gatedEvents } from "./econ-calendar.mjs";
 import { decisionEngineEnabled, readLatestDecision, keyCloseMs } from "./decision-engine.mjs";
 import { liveM5Inputs } from "./strategy-engine.mjs";
 import { flatConfidences } from "./agent-confidence.mjs";
+import { decisionHistory } from "./change-thresholds.mjs";
 import { liquidityFields, readLiquidityState } from "./liquidity-lens.mjs";
 import { lensKnobs, readLensState } from "./lens-policy.mjs";
 
@@ -199,8 +200,47 @@ export function managementFields(decision, { basis = null } = {}) {
     quorum_long_share: Number.isFinite(decision?.quorum?.long_share) ? decision.quorum.long_share : -1,
     quorum_short_share: Number.isFinite(decision?.quorum?.short_share) ? decision.quorum.short_share : -1,
     veto_long: Array.isArray(decision?.vetoes?.long) && decision.vetoes.long.length > 0,
-    veto_short: Array.isArray(decision?.vetoes?.short) && decision.vetoes.short.length > 0
+    veto_short: Array.isArray(decision?.vetoes?.short) && decision.vetoes.short.length > 0,
+    // CH1 (owner 2026-11-23, src/change-thresholds.mjs): with the decision's history (decisionHistory, the decision row
+    // before it), the quorum's shares of the decision 15 minutes before and its close (0 when that decision is not
+    // there), for a resting limit's cancel confirmed on 2 decisions; and the decision before's own agent confidences and
+    // the ones before them (the last known trend, Omega's extend gate). Only with a history: otherwise none of them.
+    ...historyFields(decision?.decision_history)
   };
+}
+/** Pure (CH1): the signal's flat fields of a decision's history, {} without one. */
+export function historyFields(h) {
+  if (!h || typeof h !== "object") return {};
+  const share = (v) => (Number.isFinite(v) ? v : -1);
+  return {
+    quorum_long_share_prev: share(h.prev?.long_share), quorum_short_share_prev: share(h.prev?.short_share), decision_prev_ms: Number.isFinite(h.prev?.close_ms) ? h.prev.close_ms : 0,
+    agent_conf_last: flatConfidences(h.last?.agent_confidence), agent_conf_last_prev: flatConfidences(h.last?.agent_confidence_prev)
+  };
+}
+
+/**
+ * The decision rows before the latest one (CH1): read once per decision per isolate (the bridge syncs about twice a
+ * second; the decision moves every 15 minutes), as the stored rows newest first. Never throws; [] when unreadable.
+ */
+let historyMemo = { key: null, db: null, rows: [] };
+export function resetDecisionHistoryMemoForTests() { historyMemo = { key: null, db: null, rows: [] }; }
+export async function decisionRowsBefore(env, decision) {
+  const key = decision?.decision_key ?? null, close = decision?.bar_close ?? null;
+  if (!key || !close || !env?.DB) return [];
+  if (historyMemo.key === key && historyMemo.db === env.DB) return historyMemo.rows;
+  let rows = [];
+  try {
+    rows = ((await env.DB.prepare("SELECT decision_json FROM engine_decisions WHERE bar_close < ? ORDER BY bar_close DESC LIMIT 2").bind(close).all()).results ?? [])
+      .map((r) => { try { return JSON.parse(r.decision_json); } catch { return null; } }).filter(Boolean);
+  } catch { rows = []; }
+  historyMemo = { key, db: env.DB, rows };
+  return rows;
+}
+/** The decision with its history (CH1 decisionHistory over the rows before it). */
+export async function withHistory(env, decision) {
+  if (!decision?.decision_key) return decision;
+  const [r1 = null, r2 = null] = await decisionRowsBefore(env, decision);
+  return { ...decision, decision_history: decisionHistory(decision, r1, r2) };
 }
 
 const BASIS_TTL_MS = 5 * 60_000;
@@ -295,7 +335,7 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
       } catch { basis = null; }
       basisMemo = { at: now, basis };
     }
-    const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(decision, { basis }), ...(await liquiditySignalFields(env, { now, mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "intraday" })), source: "decision_engine" };
+    const out = { ...eaSignalFromDecision({ decision, kill, killSource, paused, blackout, blackoutReason, marketPrice, marketMs, now, liveM5, broker }), ...brokerTriggerFields(broker), ...managementFields(await withHistory(env, decision), { basis }), ...(await liquiditySignalFields(env, { now, mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "intraday" })), source: "decision_engine" };
     // The grid's adapted entry and stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): plan by default.
     const adapted = gridAdaptMode(env) === "live" ? applyGridChoice(out, { decision, choices: await readGridChoices(env) }) : out;
     // Range mode step 1 (owner 2026-11-18, src/htf-cells.mjs): a range strategy trades only with the H4/D1 trend and only in a

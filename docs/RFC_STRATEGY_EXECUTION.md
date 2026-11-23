@@ -63,6 +63,7 @@ quality    = (voice − 0.5) / (1.5 − 0.5)             the agent's measured vo
   - **stable** is within ±0.02;
   - **rising** is more than 0.02 up.
   - The ±0.02 band (`CONFIDENCE_STABLE_BAND`) keeps rounding noise from closing a winner. With no previous value, the change is unknown, and the position is held but not extended.
+  - Since CH1 (owner 2026-11-23, docs/SSOT.md; the Omega setting `change_thresholds`' token `conf`, on by default), a drop or a rise needs a change of at least 0.05 (`CONFIDENCE_CHANGE_MIN`), and for the extend gate an unknown change reads as the last known one (the previous decision's own trend). With `conf` off, the ±0.02 band above.
 
 ### 3. Omega's exits (part B)
 

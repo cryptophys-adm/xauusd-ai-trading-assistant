@@ -36,7 +36,7 @@ Provenance: owner 2026-11-20 ("setuju", relayed by the orchestrator; confirmed t
 
 ## 4. The target
 
-- **Nearer** (`momentum_fading`: the quorum's share on the side fell by more than 0.05 since the bar before; `confidence_drop`: the agent's confidence dropped; `key_level_before`: a key level ahead of price before the target). The new target is the nearest such key level, else TP1 when the target is beyond it.
+- **Nearer** (`momentum_fading`: the quorum's share on the side fell by more than 0.05 since the bar before; `confidence_drop`: the agent's confidence dropped, by at least 0.05 since CH1, 2026-11-23, with the change threshold `conf` on, docs/SSOT.md; `key_level_before`: a key level ahead of price before the target). The new target is the nearest such key level, else TP1 when the target is beyond it.
 - **Further** (`key_level_beyond`: a key level beyond the target; `atr_expansion_trend`: the ATR expansion above with the agent's confidence rising). The new target is the next key level beyond. Under the TP ladder it waits for the TP1 lock (Amendment 4), and the plan's ladder filter still drops it. A nearer target is not an outward move and passes. A target further is refused against a veto of the side.
 - Never on the wrong side of price: a nearer target stays beyond the price by the spread and a buffer, and Omega checks it against the broker's stop distance.
 

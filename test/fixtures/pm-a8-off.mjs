@@ -8,8 +8,11 @@
 // test/position-manager-a8.test.mjs hashes the outputs and compares them with the hashes taken before the amendment.
 // `profitLockGate` (SLG1, 2026-11-23): "on" (the default) gives positionFacts a gate with no measurement (closed: the
 // fixtures carry no bars) and positionManagerIntents no gate facts; "legacy" is the code before the gate byte for byte.
+// `changeThresholds` (CH1, 2026-11-23): the change_thresholds value (the default all tokens on); positionFacts gets its
+// tokens as the runner passes them, planIntents the setting; "off" is the code before CH1 byte for byte.
 import { positionFacts as positionFactsOf, positionAction, positionCouncilMessages, cleanCouncil, POSITION_COUNCIL_SCHEMA } from "../../src/position-manager.mjs";
 import { positionManagerIntents, planIntents, OMEGA_DEFAULTS } from "../../src/omega-engine.mjs";
+import { changeTokens } from "../../src/change-thresholds.mjs";
 
 const sym = (bid, extra = {}) => ({ bid, ask: Math.round((bid + 0.2) * 100) / 100, point: 0.01, digits: 2, spread_points: 20, stops_level_points: 0, ...extra });
 const decision = (over = {}) => ({ stance: "SELL", quorum: { long_share: 0.05, short_share: 0.9 }, quorum_prev: { long_share: 0.05, short_share: 0.9 },
@@ -26,8 +29,9 @@ const DECISIONS = [decision(), decision({ stance: "BUY" }), decision({ stance: "
   decision({ agent_confidence: { zone_pullback: { long: 0.6, short: 0.6 } } }), decision({ quorum: { long_share: 0.3, short_share: 0.6 } })];
 
 /** The facts of every case: [name, facts]. */
-export function factCases({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate } = {}) {
-  const positionFacts = (input) => positionFactsOf({ ...input, ...(profitLockGate === "legacy" ? {} : { gate: null }) });
+export function factCases({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate, changeThresholds = OMEGA_DEFAULTS.change_thresholds } = {}) {
+  const changes = changeTokens({ change_thresholds: changeThresholds });
+  const positionFacts = (input) => positionFactsOf({ ...input, ...(profitLockGate === "legacy" ? {} : { gate: null }), ...(changes.length ? { changes } : {}) });
   const out = [];
   const sellBids = [3890.5, 3883, 3882.8, 3879.5, 3878.8, 3876.3, 3874, 3870.5, 3866.8, 3860];
   const buyBids = [3869.5, 3877, 3875, 3880.5, 3881.4, 3883.8, 3886, 3889.5, 3893.4, 3900];
@@ -53,8 +57,8 @@ export function factCases({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate } =
 }
 
 /** Everything the amendment must leave as it was with its switch off. */
-export function pmOffOutputs({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate } = {}) {
-  const facts = factCases({ profitLockGate });
+export function pmOffOutputs({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate, changeThresholds = OMEGA_DEFAULTS.change_thresholds } = {}) {
+  const facts = factCases({ profitLockGate, changeThresholds });
   const legacy = profitLockGate === "legacy";
   const actions = [];
   for (const [name, f] of facts) for (const [ci, c] of COUNCILS.entries()) actions.push([`${name}|${ci}`, positionAction(f, c)]);
@@ -87,7 +91,8 @@ export function pmOffOutputs({ profitLockGate = OMEGA_DEFAULTS.profit_lock_gate 
   const executor = (bid, version = "1.21") => ({ connected: true, received_ms: 1_000, positions, executor: { version }, account: { trade_mode: "demo", equity: 10_000, day_start_balance: 10_000 }, symbol: { ...sym(bid), atr_value: 4, tick_size: 0.01, tick_value: 1 } });
   const KL = { feed_basis: 0, feed_basis_known: true, key_levels: levels.map((z) => `${z.low}:${z.high}`).join(","), power: 0.6, power_ms: 1_000, m5_atr: 2, side: "NONE" };
   for (const settings0 of [{ ...OMEGA_DEFAULTS, enabled: true }, { ...OMEGA_DEFAULTS, enabled: true, tp_ladder: false }, { enabled: true, pm_loosen_enabled: false }, { enabled: true, tp_ladder: false, pm_loosen_enabled: false }]) {
-    const settings = legacy ? { ...settings0, profit_lock_gate: "legacy" } : settings0;
+    const settings0c = changeThresholds === OMEGA_DEFAULTS.change_thresholds ? settings0 : { ...settings0, change_thresholds: changeThresholds };
+    const settings = legacy ? { ...settings0c, profit_lock_gate: "legacy" } : settings0c;
     for (const bid of [3876.1, 3883.8]) {
       for (const version of ["1.17", "1.21"]) {
         // OMEGA_DEFAULTS carries the switch (false) since the amendment; the other two pass it explicitly.

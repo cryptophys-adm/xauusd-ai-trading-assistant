@@ -24,7 +24,7 @@
 
 import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS } from "./omega-engine.mjs";
 import { eaSignalFromDecision, managementFields, applyArmGate, blackoutWindow } from "./ea-signal.mjs";
-import { positionFacts, positionAction, brokerLevels } from "./position-manager.mjs";
+import { positionFacts, positionAction, brokerLevels, positionReport, PIP } from "./position-manager.mjs";
 import { lastClosedCandle } from "./omega-broker.mjs";
 import { gatesFor, gateReadSince, profitLockGateOn } from "./profit-lock-gate.mjs";
 import { applyGridChoice, gridAdaptMode, readGridChoices } from "./grid-adapt.mjs";
@@ -49,6 +49,8 @@ import * as pmLoosenKnobs from "./pm-loosen-knobs.mjs";
 import * as limitCouncil from "./limit-council.mjs";
 import * as liquidityLens from "./liquidity-lens.mjs";
 import * as profitLockGate from "./profit-lock-gate.mjs";
+import * as changeThresholds from "./change-thresholds.mjs";
+import { decisionHistory, changeTokens, CHANGE_TOKENS, heldTag } from "./change-thresholds.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -221,7 +223,12 @@ export function replayOmega4({
   const S = { ...OMEGA_DEFAULTS, ...(settings && typeof settings === "object" ? settings : {}), enabled: true, live_armed: true, entry_order: "market" };
   const m1 = Array.isArray(bars) && bars.length && finite(bars[0]?.t) ? bars : minuteBars(bars);
   const d5 = aggregate(m1, M5), d15 = aggregate(m1, M15);
-  const decs = (Array.isArray(decisions) ? decisions : []).filter((d) => d && finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+  // CH1 (2026-11-23): each decision with its history (decisionHistory over the two decision rows before it), as the
+  // live signal, the Position Manager and the limit council read it from engine_decisions.
+  const sorted = (Array.isArray(decisions) ? decisions : []).filter((d) => d && finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+  const decs = sorted.map((d, i) => ({ ...d, decision_history: decisionHistory(d, i > 0 ? sorted[i - 1] : null, i > 1 ? sorted[i - 2] : null) }));
+  // CH1: the change_thresholds tokens the Position Manager reads (planIntents reads them from S itself).
+  const changes = changeTokens(S);
   const start = finite(from) ? from : (m1.length ? m1[0].t + OMEGA4_SIM.warmup_ms : Infinity);
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
@@ -404,7 +411,7 @@ export function replayOmega4({
         for (const p of positions) {
           const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
           const council = parseCouncil(text);
-          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}) });
+          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}) });
           const a = positionAction(f, council);
           pmCalls += 1;
           const t = tradeOf(p);
@@ -553,23 +560,29 @@ export const ENGINE_CODE = Object.freeze({
     "a8Intent", "loosenRecords",
     // SLG1 (2026-11-23): the MFE each lock records.
     "stampGate"]],
+  // CH1 (2026-11-23): the change thresholds (their tokens, per-mode thresholds, the decision history, the measured falls).
+  "change-thresholds": [changeThresholds, ["normalizeChangeThresholds", "changeTokens", "changeOn", "changeRule", "trendFor", "decisionHistory", "sideReadings", "measuredFall", "stanceAgainstConfirmed", "pendingShareFall", "heldText", "heldTag", "CHANGE_TOKENS", "CHANGE_THRESHOLDS_ALL", "CHANGE_THRESHOLDS_OFF", "SHARE_FALL_MIN", "CONFIRM_DECISIONS", "CONFIDENCE_CHANGE_MIN"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
-    "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages"]],
+    "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages",
+    // CH1 (2026-11-23): the rules behind ruleAction and take_profit_weakening's measured reason.
+    "ruleCore", "weakeningReason"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
-  "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields"]],
+  "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields",
+    // CH1 (2026-11-23): the signal's decision history.
+    "historyFields", "decisionRowsBefore", "withHistory"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs",
     // Fail closed (2026-11-21): a limit intent the EA never answered or answered without a ticket sends Omega to market.
     "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER",
     // SLG1 (2026-11-23): the profit-lock gate's live bars and facts.
     "gateBars", "profitLockGates"]],
-  "omega-limit-knobs": [omegaLimitKnobs, ["limitKnobs", "LIMIT_KNOB_START", "LIMIT_KNOB_BOUNDS"]],
+  "omega-limit-knobs": [omegaLimitKnobs, ["limitKnobs", "LIMIT_KNOB_START", "LIMIT_KNOB_BOUNDS", "LIMIT_CANCEL_SHARE_DROP_CH1"]],
   "pm-loosen-knobs": [pmLoosenKnobs, ["pmLoosenKnobs", "PM_LOOSEN_KNOB_START", "PM_LOOSEN_KNOB_BOUNDS"]],
   "limit-council": [limitCouncil, ["entryFacts", "entryChoice", "pendingFacts", "pendingAction", "runLimitCouncil", "ENTRY_REASONS", "PULLBACK_MIN_R", "ENTRY_SHARE_DROP", "LIMIT_ACTION_TTL_MS"]],
   "account-spec": [accountSpec, ["effectiveLimits", "PROFILES", "versionAtLeast", "EXECUTOR_ENTRY_MIN_VERSION"]],
   "gold-symbol": [goldSymbol, ["goldSymbolCheck", "goldCheckOf", "goldPriceProblem", "GOLD_PRICE_TOLERANCE", "GOLD_CONTRACT_SIZE_MIN", "GOLD_CONTRACT_SIZE_MAX"]],
   "grid-adapt": [gridAdapt, ["applyGridChoice", "cellLevels"]],
   "htf-cells": [htfCells, ["applyRangeMode", "applyCellGate", "RANGE_GATED_AGENTS", "PROBATION"]],
-  "agent-confidence": [agentConfidence, ["confidenceTrend", "flatConfidences", "parseConfidences", "CONFIDENCE_STABLE_BAND"]],
+  "agent-confidence": [agentConfidence, ["confidenceTrend", "flatConfidences", "parseConfidences", "CONFIDENCE_STABLE_BAND", "CONFIDENCE_CHANGE_MIN"]],
   "broker-trigger": [brokerTrigger, ["brokerTriggerFields", "readBrokerTrigger", "BROKER_TRIGGER_FRESH_MS"]],
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4-§6): the signal's liquidity
   // fields and levels, the spread-spike entry gate and the modification deferral planIntents applies.
@@ -603,7 +616,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "36dd2aa1886db76af44d2a642a6fe24800f038582ffd91454faeeb560a89b0fd";
+export const ENGINE_CODE_HASH = "4fd189bd5234601781415f496580612f1c1fefccb35c060a524000b7e254cd71";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -614,14 +627,20 @@ export const ENGINE_CODE_HASH = "36dd2aa1886db76af44d2a642a6fe24800f038582ffd914
  *   (test/fixtures/omega-v4-replay.mjs); planIntents over the hand inputs with the liquidity lens on (its default) and
  *   the live spread at 3x and 1x the hour's norm (docs/RFC_POSITIONING_LIQUIDITY.md: the gate and the deferral; this
  *   group moved the hash in 2026-11-20's lens PR, a new era at its deploy); planIntents over the hand inputs with every
- *   position's profit-lock gate open, and replayOmega4 over a peak past the gate pulled back inside the band (SLG1). Only tests build the text, so the Worker bundle carries the value alone.
+ *   position's profit-lock gate open, and replayOmega4 over a peak past the gate pulled back inside the band (SLG1);
+ *   the change thresholds' cases (CH1, test/fixtures/change-thresholds.mjs, with the tokens on). Only tests build the
+ *   text, so the Worker bundle carries the value alone.
  * SLG1 (owner 2026-11-23, a recorded exception): the profit-lock gate on by default moved it from
  * b58968b207cfdeafa4e1ce5ad4363370c9ec1e6aa50ae2d23f3bbe3afed5c09f, a new era at its deploy; with profit_lock_gate
  * "legacy" on every input the fixtures still give that old hash byte for byte (test/profit-lock-gate.test.mjs SLG1-15).
+ * CH1 (owner 2026-11-23, "Live semua (Rekomendasi)", a recorded exception): the change thresholds on by default moved
+ * it from 94e6f50cb1d0f913fa332d43874b3622e1746dad7bce388eecb438ec73d3088e, a new era at its deploy; with
+ * change_thresholds "off" on every input the fixtures still give that hash byte for byte (test/change-thresholds.test.mjs
+ * CH1-12), and with "legacy" too the one before SLG1.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "94e6f50cb1d0f913fa332d43874b3622e1746dad7bce388eecb438ec73d3088e";
+export const ENGINE_BEHAVIOUR_HASH = "169243f2ba3780a7aa6d404d1227090fcbd5617a4b6f2a09dbb44883e5eafe28";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
@@ -633,7 +652,10 @@ export const ENGINE_BEHAVIOUR_HASH = "94e6f50cb1d0f913fa332d43874b3622e1746dad7b
 // owner turning a lens off writes "liquidity_enabled=false" and starts a new era at that time.
 // profit_lock_gate (SLG1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy;
 // the owner setting it to "legacy" writes "profit_lock_gate=legacy" and starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate"]);
+// change_thresholds (CH1, owner 2026-11-23) is every token on by default: its era starts with this behaviour hash at
+// the deploy; the owner turning a token off writes e.g. "change_thresholds=conf,limit,skip,stance" (or "=off") and
+// starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
@@ -1206,6 +1228,177 @@ export async function runProfitLockBrake(env, { now = Date.now(), send = null, t
     const deliver = send ?? (async (t) => { const ob = await import("./omega-broker.mjs"); await ob.sendOmegaTelegram(env, ob.escHtml(t)); });
     try { await deliver(line); } catch { /* said once per era; the verdict is in the step's result */ }
     return { ...b, status: "sent", since_ms: since };
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CH1's brake (owner 2026-11-23): read-only, plus the one switch the owner holds. Per token of the Omega setting
+// change_thresholds, once at least CH_BRAKE.min_cases cases (firings plus suppressions) are scored in the token's era and
+// the suppressed ones did worse held than acting would have (a positive mean gap in R), one Telegram line asks the owner
+// to consider switching the token off. It never changes the setting. Runs with the hourly parity check.
+//   the token's era   starts the first time this step sees the token on (CH_SINCE_KEY + token); the step seeing it off
+//                     clears it, so switching it on again starts a new era;
+//   what is measured  only what the existing tables hold (docs/SSOT.md, CH1):
+//     tpw, stance, conf  the Position Manager's rows (position_actions) since the era: a firing is a close the token
+//                     let through (tpw: take_profit_weakening; stance: cut_loss citing "the decision is <side> on 2
+//                     decisions"; conf: cut_loss citing a confidence drop), applied; a suppression is a row whose why
+//                     says the token held a close back (heldText). One case per ticket and kind, its earliest row.
+//                     Acting is the row's own pips (a close at that run's price); holding is positionReport's measure,
+//                     the first of the stop and target the position had at that run touched on the ledger's 1m bars
+//                     after it (else the last close). Both in R of the open intent's stop distance (r_dist); a ticket
+//                     whose open intent is not found is left out. Only cut_loss's confidence reason counts for conf
+//                     (Omega's confidence_drop close and extend gate leave no row);
+//     skip            the limit council's entry rows (limit_council kind 'entry') since the era: a firing is a skip that
+//                     held (rule council_skip:<reasons>, acting 0R), a suppression a skip that did not
+//                     (skip_no_measured_reason: the limit was placed); its held R is the live trade of that signal
+//                     (ea_deals joined to the open or place_limit intent of the same issue time and side), 0R when
+//                     none filled (an entry request older than CH_BRAKE.pending_ms), unscored while younger;
+//     limit           not measured: a pending order kept by the threshold leaves no row, and no table holds what its
+//                     cancel would have been worth (the brake says "unmeasured").
+// At most one line per token and era (CH_BRAKE_KEY + token + the era's start, in KV).
+
+export const CH_BRAKE = Object.freeze({ min_cases: 20, pending_ms: 6 * 3600_000 });
+export const CH_SINCE_KEY = "omega:ch1:since:v1:";
+export const CH_BRAKE_KEY = "omega:ch1:brake:v1:";
+/** The tokens the brake can measure from the existing tables (limit cannot: see above). */
+export const CH_BRAKE_MEASURED = Object.freeze(["conf", "tpw", "skip", "stance"]);
+const PM_FIRING = Object.freeze({
+  tpw: (r) => r.rule === "take_profit_weakening",
+  stance: (r) => r.rule === "cut_loss" && /the decision is (BUY|SELL) on 2 decisions/.test(String(r.why ?? "")),
+  conf: (r) => r.rule === "cut_loss" && /confidence dropped/.test(String(r.why ?? ""))
+});
+
+/**
+ * Pure: the Position Manager's cases of one token ({ kind: "fired" | "suppressed", ticket, at_ms, acted_r, held_r }) from
+ * position_actions rows, the ledger's 1m bars (feed scale; each row's basis maps them) and the stop distance in pips per
+ * ticket (`rDistPips`). Unscorable cases (no stop distance, no bar after them) are left out.
+ */
+export function changeBrakePmCases({ token, rows = [], bars = [], rDistPips = {}, now = Date.now() } = {}) {
+  const fired = PM_FIRING[token];
+  if (!fired) return [];
+  const tag = heldTag(token);
+  const first = new Map();
+  for (const r of [...rows].sort((a, b) => Number(a.at_ms) - Number(b.at_ms))) {
+    const kind = r.action === "close" && r.status === "applied" && fired(r) ? "fired" : String(r.why ?? "").includes(tag) ? "suppressed" : null;
+    if (!kind) continue;
+    const key = `${kind}|${r.ticket}`;
+    if (!first.has(key)) first.set(key, { ...r, kind });
+  }
+  const out = [];
+  for (const r of first.values()) {
+    const rd = Number(rDistPips[String(r.ticket)]);
+    if (!(rd > 0) || !finite(Number(r.pips))) continue;
+    const held = positionReport([{ ...r, action: "close", status: "applied" }], bars, { now }).items[0]?.held_pips;
+    if (!finite(held)) continue;
+    out.push({ kind: r.kind, ticket: r.ticket, at_ms: Number(r.at_ms), acted_r: r3(Number(r.pips) / rd), held_r: r3(held / rd) });
+  }
+  return out;
+}
+
+/**
+ * Pure: the skip token's cases from limit_council entry rows ({ open_id, rule, at_ms, facts }) and the live trades
+ * ({ signal_issued_ms, side, r }): a suppressed skip is scored at its trade's R (held) against 0R (acted).
+ */
+export function changeBrakeSkipCases({ rows = [], trades = [], now = Date.now() } = {}) {
+  const out = [];
+  for (const r of rows) {
+    const rule = String(r.rule ?? "");
+    if (rule.startsWith("council_skip:")) { out.push({ kind: "fired", at_ms: Number(r.at_ms), acted_r: 0, held_r: null }); continue; }
+    if (rule !== "skip_no_measured_reason") continue;
+    const f = parse(r.facts, {}) ?? {};
+    const issued = Number(f.issued_ms), side = f.side;
+    const t = trades.find((x) => x.signal_issued_ms === issued && x.side === side && finite(x.r));
+    if (t) out.push({ kind: "suppressed", at_ms: Number(r.at_ms), acted_r: 0, held_r: t.r });
+    else if (now - Number(r.at_ms) >= CH_BRAKE.pending_ms) out.push({ kind: "suppressed", at_ms: Number(r.at_ms), acted_r: 0, held_r: 0 });
+  }
+  return out;
+}
+
+/**
+ * Pure: the brake's verdict of one token over its cases: { token, fire, status, cases, fired, suppressed, gap_r } with
+ * gap_r the mean over the suppressed cases of (acting R - holding R): above 0, holding them did worse than acting.
+ */
+export function changeBrake(token, cases = []) {
+  const sup = cases.filter((c) => c.kind === "suppressed" && finite(c.acted_r) && finite(c.held_r));
+  const n = cases.length;
+  const gap = sup.length ? r3(sup.reduce((a, c) => a + (c.acted_r - c.held_r), 0) / sup.length) : null;
+  const out = { token, cases: n, fired: cases.filter((c) => c.kind === "fired").length, suppressed: sup.length, gap_r: gap };
+  if (n < CH_BRAKE.min_cases || !sup.length) return { ...out, fire: false, status: "insufficient" };
+  return gap > 0 ? { ...out, fire: true, status: "worse" } : { ...out, fire: false, status: "holds" };
+}
+
+/** Pure: the brake's one Telegram line (plain text; escaped for Telegram's HTML by the caller). */
+export function changeBrakeMessage(b) {
+  return `XAUUSD OMEGA · Change threshold brake (${b.token}): over ${b.cases} cases (${b.fired} acted, ${b.suppressed} held back), the ones the threshold held back did ${b.gap_r}R per case worse than acting would have. Consider turning '${b.token}' off in the Omega setting change_thresholds. The threshold never switches itself off.`;
+}
+
+/** The trades of Omega's live USD account (as loadLiveTrades) whose open was a market open or a filled limit. */
+async function liveTradesWithLimits(env, { sinceMs }) {
+  const db = env.DB;
+  const deals = (await db.prepare("SELECT position_ticket, side, volume, entry_price, stop_loss, profit, reason, opened_ms, closed_ms FROM ea_deals WHERE source = 'omega' AND currency = 'USD' AND mode <> 'demo' AND closed_ms >= ? ORDER BY closed_ms").bind(sinceMs).all()).results ?? [];
+  const tickets = [...new Set(deals.map((d) => Number(d.position_ticket)).filter((t) => t > 0))];
+  const opens = {};
+  for (let i = 0; i < tickets.length; i += 50) {
+    const part = tickets.slice(i, i + 50), marks = part.map(() => "?").join(", ");
+    for (const r of (await db.prepare(`SELECT payload, json_extract(result, '$.ticket') AS ticket FROM omega_intents WHERE kind IN ('open', 'place_limit') AND json_extract(result, '$.ticket') IN (${marks})`).bind(...part).all()).results ?? []) {
+      const p = parse(r.payload, {});
+      const vol = typeof p.volume === "string" ? Number(p.volume.split("@")[0]) : p.volume;
+      opens[Number(r.ticket)] = { entry: p.entry, sl: p.sl, volume: Number.isFinite(Number(p.lot)) ? Number(p.lot) : vol, r_dist: p.r_dist, signal_issued_ms: p.signal_issued_ms, side: p.side, mode: p.mode ?? null };
+    }
+  }
+  return liveTradesFrom({ deals, opens, closes: {} });
+}
+
+/** The brake's step (from runOmega4Step, after the hourly parity check). Read-only in D1; KV for the eras and the dedupe. Never throws. */
+export async function runChangeThresholdBrake(env, { now = Date.now(), send = null, bars: barsIn = undefined } = {}) {
+  const kv = env?.SIGNAL_CACHE;
+  if (!env?.DB || !kv?.put) return { status: "unavailable" };
+  try {
+    let stored = {};
+    try { stored = parse((await env.DB.prepare("SELECT settings FROM omega_settings WHERE id = 1").first())?.settings, {}) ?? {}; } catch { stored = {}; }
+    const on = changeTokens({ ...OMEGA_DEFAULTS, ...stored });
+    const out = {};
+    let bars = barsIn;
+    for (const token of CHANGE_TOKENS) {
+      const sinceKey = `${CH_SINCE_KEY}${token}`;
+      if (!on.includes(token)) { if (await kv.get(sinceKey)) await kv.delete?.(sinceKey); out[token] = { status: "off" }; continue; }
+      const since = Number(await kv.get(sinceKey));
+      if (!(since > 0)) { await kv.put(sinceKey, String(now)); out[token] = { status: "started", since_ms: now }; continue; }
+      if (!CH_BRAKE_MEASURED.includes(token)) { out[token] = { status: "unmeasured", since_ms: since }; continue; }
+      if (await kv.get(`${CH_BRAKE_KEY}${token}:${since}`)) { out[token] = { status: "sent_before", since_ms: since }; continue; }
+      let cases = [];
+      if (token === "skip") {
+        let rows = [];
+        try { rows = (await env.DB.prepare("SELECT open_id, rule, at_ms, facts FROM limit_council WHERE kind = 'entry' AND at_ms >= ? AND (rule = 'skip_no_measured_reason' OR rule LIKE 'council_skip:%')").bind(since).all()).results ?? []; } catch { rows = []; }
+        const trades = rows.length ? await liveTradesWithLimits(env, { sinceMs: since }) : [];
+        cases = changeBrakeSkipCases({ rows, trades, now });
+      } else {
+        let rows = [];
+        try { rows = (await env.DB.prepare("SELECT ticket, at_ms, side, pips, price, action, rule, why, orig_sl, orig_tp, basis, status FROM position_actions WHERE at_ms >= ? AND (rule IN ('take_profit_weakening', 'cut_loss') OR why LIKE ?)").bind(since, `%${heldTag(token)}%`).all()).results ?? []; } catch { rows = []; }
+        const rDistPips = {};
+        const tickets = [...new Set(rows.map((r) => Number(r.ticket)).filter((t) => t > 0))];
+        for (let i = 0; i < tickets.length; i += 50) {
+          const part = tickets.slice(i, i + 50);
+          for (const r of (await env.DB.prepare(`SELECT payload, json_extract(result, '$.ticket') AS ticket FROM omega_intents WHERE kind IN ('open', 'place_limit') AND json_extract(result, '$.ticket') IN (${part.map(() => "?").join(", ")})`).bind(...part).all()).results ?? []) {
+            const p = parse(r.payload, {});
+            const rd = finite(Number(p.r_dist)) && Number(p.r_dist) > 0 ? Number(p.r_dist) : finite(Number(p.entry)) && finite(Number(p.sl)) ? Math.abs(Number(p.entry) - Number(p.sl)) : null;
+            if (rd > 0) rDistPips[String(r.ticket)] = rd / PIP;
+          }
+        }
+        if (rows.length && bars === undefined) { try { bars = (await (await import("./signal-ledger.mjs")).ledgerBars(env)) ?? []; } catch { bars = []; } }
+        cases = changeBrakePmCases({ token, rows, bars: bars ?? [], rDistPips, now });
+      }
+      const b = changeBrake(token, cases);
+      if (!b.fire) { out[token] = { ...b, since_ms: since }; continue; }
+      await kv.put(`${CH_BRAKE_KEY}${token}:${since}`, String(now), { expirationTtl: 180 * 86_400 });
+      const line = changeBrakeMessage(b);
+      const deliver = send ?? (async (t) => { const ob = await import("./omega-broker.mjs"); await ob.sendOmegaTelegram(env, ob.escHtml(t)); });
+      try { await deliver(line); } catch { /* said once per era; the verdict is in the step's result */ }
+      out[token] = { ...b, status: "sent", since_ms: since };
+    }
+    return { status: "checked", tokens: out };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }

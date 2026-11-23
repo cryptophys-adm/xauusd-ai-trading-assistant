@@ -732,6 +732,8 @@ export async function runOmega4Step(env, { now = Date.now(), bars = null } = {})
     const parity = await v4.runOmegaParity(env, { now });
     // SLG1's brake (read-only, one Telegram line per gate era at most), with the hourly parity check.
     const brake = parity?.status === "checked" ? await v4.runProfitLockBrake(env, { now }) : { status: "waits_parity" };
+    // CH1's brake (read-only, one Telegram line per change-threshold token and era at most), with it.
+    const changeBrake = parity?.status === "checked" ? await v4.runChangeThresholdBrake(env, { now }) : { status: "waits_parity" };
     // The limit entry (src/ledger-omega-limit.mjs): after v4, never past the minute v4 has replayed, within what v4 left
     // of the run's bound (MAX_REPLAY_MINUTES minutes between them), so the run's CPU bound is unchanged.
     let limit = { status: "off" };
@@ -739,7 +741,7 @@ export async function runOmega4Step(env, { now = Date.now(), bars = null } = {})
       const lim = await import("./ledger-omega-limit.mjs");
       if (lim.omegaLimitEnabled(env)) limit = await lim.runOmegaLimit(env, { now, bars, shared, maxMinutes: v4.MAX_REPLAY_MINUTES - (Number(replay?.minutes) || 0) });
     } catch (e) { limit = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
-    return { replay, parity, limit, brake };
+    return { replay, parity, limit, brake, change_brake: changeBrake };
   } catch (e) {
     return { replay: { status: "failed", error: String(e?.message ?? e).slice(0, 200) }, parity: null };
   }

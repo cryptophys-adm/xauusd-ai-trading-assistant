@@ -133,6 +133,10 @@ function memDb() {
 test("PM5. the runner: once per position and 5m bar, live only, no Telegram line before the broker answers, the daily cap stops the council", async () => {
   resetPositionSchemaCacheForTests();
   const db = memDb(), sent = [], calls = [];
+  // CH1 (2026-11-23): the runner's rules as they were, with the change thresholds off in Omega's settings (token tpw
+  // would need a measured reason for this weakening close: test/change-thresholds.test.mjs).
+  db.raw.exec("CREATE TABLE omega_settings (id INTEGER PRIMARY KEY, settings TEXT)");
+  db.raw.prepare("INSERT INTO omega_settings VALUES (1, ?)").run(JSON.stringify({ change_thresholds: "off" }));
   const kv = new Map();
   const env = { DB: db, POSITION_MANAGER_MODE: "live", POSITION_COUNCIL_DAILY_USD: "5", SIGNAL_CACHE: { get: async (k) => kv.get(k) ?? null, put: async (k, v) => kv.set(k, v) } };
   const call = async (_e, req) => { calls.push(req); return { status: "answered", obj: { momentum: "weakening", thesis: "weakening", reason: "momentum fading at the zone" } }; };

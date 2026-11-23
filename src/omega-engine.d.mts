@@ -8,6 +8,7 @@ export interface OmegaSettings {
   max_signal_age_ms: number;
   entry_order?: "market" | "limit" | "council";
   profit_lock_gate?: "on" | "legacy";
+  change_thresholds?: string;
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;

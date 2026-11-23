@@ -1902,11 +1902,12 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const worse = after.profit_factor != null && after.profit_factor < 1 && (before?.profit_factor == null || after.profit_factor < before.profit_factor);
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
-        // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so is the
-        // profit-lock gate's (SLG1).
+        // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
+        // profit-lock gate's (SLG1) and the change thresholds' (CH1).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
+        delete back.change_thresholds;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -1927,10 +1928,11 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   if (policy.doctrine_sha && (applied?.rejected_shas || []).includes(policy.doctrine_sha)) return { status: "rejected_sha" };
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
-  // Amendment 8) nor profit_lock_gate (SLG1): the owner's switches are carried as stored.
+  // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1): the owner's switches are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
+  delete body.change_thresholds;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }
