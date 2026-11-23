@@ -11,11 +11,14 @@ import { CANDLE, CHIP, KWW, T, directionGlyph, directionTone, rgba } from "../wo
 const ui = (p) => readFileSync(new URL(`../workers/xauusd-nexus-dashboard/ui/${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const src = (p) => ui(`src/${p}`);
 
-/** The files the mockup migrates, with direction colours (bear red, neutral amber). */
+/**
+ * The files the mockup migrates, with direction colours (bear red, neutral amber). Performance.tsx since the review
+ * of #526: its equity and drawdown charts carry P&L in bull green and bear red.
+ */
 const DIRECTION_FILES = [
   "components/Stance.tsx", "components/CrowdLine.tsx", "components/MetricChips.tsx", "components/Post.tsx", "pages/Audit.tsx",
   "components/GlobalDecision.tsx", "components/SetupLifecycle.tsx", "components/ThreadsPanel.tsx", "pages/Correlations.tsx",
-  "components/charts.tsx", "components/PriceChart.tsx"
+  "components/charts.tsx", "components/PriceChart.tsx", "pages/Performance.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {
@@ -141,7 +144,7 @@ test("NT10 the owner's decisions on the open questions", () => {
   assert.match(omega, /setupTab === key \? "border-white\/30 bg-white\/8 text-fg"/, "the active Setup tab is white 8%");
   assert.doesNotMatch(omega, /bg-\[#0[0-9a-f]{5}\]|from-\[#|to-\[#/, "no hard-coded panel colours");
   const perf = src("pages/Performance.tsx");
-  assert.match(perf, /stroke=\{T\.fg2\}/, "the equity peak line is grey");
+  assert.match(perf, /stroke=\{T\.off\} strokeOpacity=\{0\.7\}/, "the equity peak line is grey (mockup \"Nexus data states\", part B: off, thin)");
   assert.doesNotMatch(perf, /stroke=\{C\.wait\}/);
   assert.match(perf, /dynamicAvgSlippage <= 3 \? T\.ok :/, "good slippage is ok cyan");
   assert.match(perf, /<Badge tone=\{dynamicAvgLatency <= 1500 \? "ok" : "late"\}>/, "good latency is ok cyan");
