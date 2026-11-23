@@ -1,8 +1,8 @@
 // The lightweight-charts licence's attribution on every Nexus chart (a reviewer ruling after OM-LEAN #553): the library's
 // logo injects a <style> that the CSP blocks, so every createChart sets layout.attributionLogo false, and each page with
-// a chart shows a quiet "Charts by TradingView" caption link (components/ui.tsx ChartCredit; pages/Omega.tsx its own).
+// a chart shows a quiet "Charts by TradingView" caption link (components/ui.tsx ChartCredit).
 // The charts: components/IntelChart.tsx (Liquidity, Chart patterns), components/PriceChart.tsx (War Room) and the Omega
-// page's chart.
+// page's chart (pages/Omega.tsx Mt5ChartCanvas, its caption under the chart since the OM-LEAN revert).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -14,7 +14,7 @@ const UI = fileURLToPath(new URL("../workers/xauusd-nexus-dashboard/ui/", import
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const fixture = (f) => JSON.parse(read(`test/fixtures/${f}`));
 const files = (dir = `${UI}src`) => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
-/** The link, as Omega's caption has it: the TradingView site in a new tab, no opener, no referrer. */
+/** The link, as ChartCredit renders it: the TradingView site in a new tab, no opener, no referrer. */
 const LINK = /<a href="https:\/\/www\.tradingview\.com\/" target="_blank" rel="noopener noreferrer"[^>]*>Charts by TradingView<\/a>/;
 
 /** Each createChart(...) call's own text, its parentheses matched. */
@@ -39,7 +39,7 @@ test("CA1 every createChart in the UI sets attributionLogo false, and each chart
   }
   const ui = read("workers/xauusd-nexus-dashboard/ui/src/components/ui.tsx");
   assert.match(ui, /export const TRADINGVIEW_URL = "https:\/\/www\.tradingview\.com\/";/);
-  assert.match(ui, /<a href=\{TRADINGVIEW_URL\} target="_blank" rel="noopener noreferrer" className="text-fg-2 underline decoration-white\/20 hover:text-fg">Charts by TradingView<\/a>/, "Omega's quiet style");
+  assert.match(ui, /<a href=\{TRADINGVIEW_URL\} target="_blank" rel="noopener noreferrer" className="text-fg-2 underline decoration-white\/20 hover:text-fg">Charts by TradingView<\/a>/, "the quiet style");
   // No other chart library draws in the UI (a second one would need its own attribution).
   const pkg = JSON.parse(read("workers/xauusd-nexus-dashboard/ui/package.json"));
   assert.deepEqual(Object.keys(pkg.dependencies).filter((d) => /chart|plot|d3|echarts|highcharts/i.test(d)), ["lightweight-charts"]);
@@ -53,7 +53,7 @@ test("CA2 each page with a chart renders the caption link: Liquidity, Chart patt
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export { LiquidityView } from "./src/pages/Liquidity"; export { default as PriceChart } from "./src/components/PriceChart"; export { render, VIEWS, LIQUIDITY_NOW, OMEGA_NOW } from "./scripts/render-entry"; export { createElement } from "react"; export { renderToStaticMarkup } from "react-dom/server";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export { LiquidityView } from "./src/pages/Liquidity"; export { default as PriceChart } from "./src/components/PriceChart"; export { Mt5ChartCanvas } from "./src/pages/Omega"; export { render, VIEWS, LIQUIDITY_NOW } from "./scripts/render-entry"; export { createElement } from "react"; export { renderToStaticMarkup } from "react-dom/server";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -74,7 +74,9 @@ test("CA2 each page with a chart renders the caption link: Liquidity, Chart patt
   assert.match(u.render(patterns.View, patterns.fixture), LINK, "Chart patterns");
   // War Room: the PriceChart panel's footer.
   assert.match(u.renderToStaticMarkup(u.createElement(u.PriceChart)), LINK, "War Room");
-  // Omega: the chart's caption in Details.
-  const omega = view("OmegaLeanDetails");
-  assert.match(u.render(omega.View, omega.fixture), LINK, "Omega");
+  // Omega: the chart's caption, under the terminal's chart (the page as before OM-LEAN), once.
+  const omega = u.renderToStaticMarkup(u.createElement(u.Mt5ChartCanvas, { tf: "M15", symbol: "XAUUSD", server: "", digits: 2, signal: null, positions: [], showBidAsk: true, showPlan: true, showPositions: true, keyZones: [], showKeyLevels: true, feedBasis: null, limit: null }));
+  assert.match(omega, LINK, "Omega");
+  assert.equal((omega.match(/Charts by TradingView/g) ?? []).length, 1, "once, in the chart's caption");
+  assert.match(omega, /candles, PLAN lines: TradingView feed · times GMT\+7<\/span>.*<a href="https:\/\/www\.tradingview\.com\/"/s, "in the caption, after its scale lines");
 });

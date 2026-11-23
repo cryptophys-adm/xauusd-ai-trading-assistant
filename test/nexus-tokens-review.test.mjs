@@ -52,10 +52,11 @@ test("NR2 axis tags: dark text on the green, amber, red and cyan fills (4.5:1 or
   assert.match(src("pages/Omega.tsx"), /const opts = \{ price: close, color, axisLabelTextColor: tagText\(color\) \}/);
 });
 
-test("NR3 Omega's chart labels are in the text tokens, not a fill at 85% (OM-LEAN: the key levels left the Omega chart)", () => {
+test("NR3 Omega's key-level labels are in the text tokens, not the fill at 85%", () => {
   const omega = src("pages/Omega.tsx");
-  assert.doesNotMatch(omega, /KEY_ROLE_TEXT|withAlpha/, "no key-level blocks on Omega's chart");
-  assert.match(omega, /color: T\.fg, alpha: 0\.07, text: T\.fg, label: chartZoneLabel/, "the zone's label in the text token");
+  assert.match(omega, /const KEY_ROLE_TEXT: Record<string, string> = \{ support: T\.bull, resistance: T\.bear, "at price": T\.ok \};/);
+  assert.match(omega, /text: KEY_ROLE_TEXT\[z\.role \?\? ""\] \?\? T\.fg2/);
+  assert.doesNotMatch(omega, /withAlpha\(base, 0\.85\)/);
   for (const c of [T.bull, T.bear, T.ok]) assert.ok(contrast(c, T.ground) >= 4.5 && contrast(c, T.panel) >= 4.5, c);
 });
 
@@ -114,11 +115,10 @@ test("NR5 status on the War Room cards is ok / late / fault / off, not the bull 
 
 test("NR7 one red and one green: SELL/BUY and SL/TP in the bear and bull text tokens", () => {
   const omega = src("pages/Omega.tsx"), perf = src("pages/Performance.tsx");
-  // OM-LEAN (the reviewer's rulings): on Omega green and red are the direction only (SideWord); prices, SL and TP are in
-  // one neutral tone, and the "—" of a missing SL or TP is muted.
-  assert.match(omega, /side === "BUY" \? <b className="font-sans font-semibold text-bull">BUY<\/b> : side === "SELL" \? <b className="font-sans font-semibold text-bear">SELL<\/b> : null/);
-  assert.match(omega, /<td className=\{p\.sl \? "" : "text-muted"\}>\{p\.sl \? num\(p\.sl, digits\) : "—"\}<\/td>/);
-  assert.match(omega, /<td className=\{p\.tp \? "" : "text-muted"\}>\{p\.tp \? num\(p\.tp, digits\) : "—"\}<\/td>/);
+  assert.match(omega, /<td className=\{`mono font-bold \$\{isBuy \? "text-bull" : "text-bear"\}`\}>\{p\.side\}<\/td>/);
+  // Follow-up of #518: the "—" of a missing SL or TP is muted, not red or green.
+  assert.match(omega, /<td className=\{`mono \$\{p\.sl \? "text-bear" : "text-muted"\}`\}>\{p\.sl \? num\(p\.sl, digits\) : "—"\}<\/td>/);
+  assert.match(omega, /<td className=\{`mono \$\{p\.tp \? "text-bull" : "text-muted"\}`\}>\{p\.tp \? num\(p\.tp, digits\) : "—"\}<\/td>/);
   assert.match(perf, /\$\{t\.side === "BUY" \? "text-bull" : "text-bear"\}/, "the parity table");
   assert.match(perf, /\$\{h\.side === "BUY" \? "text-bull" : "text-bear"\}/, "the history table");
   assert.match(perf, /<td className="mono text-bear">\{px\(x\.stop\)\}<\/td>/);
