@@ -13,7 +13,9 @@ const src = (p) => readFileSync(new URL(`../workers/xauusd-nexus-dashboard/ui/sr
 const REVIEW_FILES = [
   "components/GlobalDecision.tsx", "components/PriceChart.tsx", "components/charts.tsx", "components/AssistantPanel.tsx",
   "components/FeedFallbackCard.tsx", "components/ShadowSwitchCard.tsx", "components/Roster.tsx", "components/OrganismCard.tsx",
-  "components/KeyLevels.tsx", "pages/Omega.tsx", "pages/Performance.tsx", "pages/Councils.tsx", "lib/tokens.ts", "lib/format.ts"
+  "components/KeyLevels.tsx", "pages/Omega.tsx", "pages/Performance.tsx", "pages/Councils.tsx", "lib/tokens.ts", "lib/format.ts",
+  // Track C1: LensView, split from the polled LensPanel.
+  "components/LensPanel.tsx"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {
@@ -87,6 +89,21 @@ test("NR5 status on the War Room cards is ok / late / fault / off, not the bull 
   const perf = src("pages/Performance.tsx");
   assert.match(perf, /Math\.abs\(itSlip\) <= 3 \? T\.ok :/, "intent slippage as the Disparity panel");
   assert.match(perf, /t\.same_exit \? T\.ok : undefined/, "same exit cyan, as the yes beside it");
+  // Track C1, the lens badges: on ok / switched off off, at floor late, the CFTC report fresh ok / stale late, lens B's
+  // baseline sufficient ok / insufficient late (anything else off), the mode in sentence case. Never the bull green.
+  const lens = src("components/LensPanel.tsx");
+  assert.match(lens, /<Badge tone=\{on \? "ok" : "off"\}>\{on \? "on" : "switched off"\}<\/Badge>/);
+  assert.match(lens, /<Badge tone="late">at floor<\/Badge>/);
+  assert.match(lens, /cot\?\.stale === true \? <Badge tone="late">stale<\/Badge> : cot\?\.stale === false \? <Badge tone="ok">fresh<\/Badge> : null/);
+  assert.match(lens, /export const BASELINE_TONE: Record<string, Tone> = \{ sufficient: "ok", insufficient: "late" \};/);
+  assert.match(lens, /export const baselineTone = \(x: unknown\): Tone => BASELINE_TONE\[str\(x\) \?\? ""\] \?\? "off";/);
+  assert.match(lens, /Baseline: <Badge tone=\{baselineTone\(b\)\}>/);
+  assert.match(lens, /\{mode \? `\$\{mode\} mode` : "Mode unknown"\}/, "\"Intraday mode\", not \"mode intraday\"");
+  assert.match(lens, /const SOURCE: Record<string, string> = \{ anchor: "Anchor", aether: "Aether", floor_rollback: "Floor", switch_off: "Off", anchor_baseline_insufficient: "Anchor \(baseline\)" \};/);
+  const tones = [...lens.matchAll(/tone=\{?"([a-z]+)"|tone=\{[^}]*\? "([a-z]+)" : "([a-z]+)"\}|: "(ok|late|off|fault)"/g)].flatMap((m) => m.slice(1).filter(Boolean));
+  assert.ok(tones.length >= 6, `lens tones found: ${tones.length}`);
+  for (const t of tones) assert.ok(["ok", "late", "off", "plain"].includes(t), `LensPanel: ${t}`);
+  assert.doesNotMatch(lens, /"(green|bull)"|text-(bull|green|emerald)|text-ok"|text-late"/, "the states are chips in ok / late / off, never the bull green");
   for (const f of REVIEW_FILES.filter((x) => x.endsWith(".tsx"))) {
     assert.doesNotMatch(src(f), /tone=\{?[^}\n]*"green"/, `${f}: no legacy green tone (it is the bull green)`);
   }

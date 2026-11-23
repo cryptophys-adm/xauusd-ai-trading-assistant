@@ -4,6 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
 import {
   parseCotRows, scheduledReleaseMs, COT_PUBLICATION_OUTAGES, cotAt, positioningFactsAt, positioningLean, positioningCard, positioningLine, storeCotRows, readCotRows, runCotStep,
   resetCotSchemaForTests, resetPositioningMemoForTests, usFederalHolidays, priceChangeFor, positioningReadings, COT_BACKFILL_KEY, POSITIONING_LEAN_CAP, cotUrl
@@ -601,6 +602,57 @@ test("PL21. the ledger step end to end on D1 and KV: the active account's archiv
   assert.equal(await spikeSince(e, true, { now }), now);
   assert.equal(await spikeSince(e, true, { now: now + 60_000 }), now);
   assert.equal(await spikeSince(e, false, { now: now + 120_000 }), null);
+});
+
+test("PL21b. the page's fixture (test/fixtures/nexus-intel/lens.json, Track C1) carries every key GET /api/lens returns, with its type, and no price", async () => {
+  // The route's body ({ status: "ok", ...lensStatus }) with every part present: lens B's facts from the ledger step, lens A's
+  // report and facts, scored readings of each kind, Aether's policy and lens A at its floor (lens B not).
+  reset();
+  const { runLiquidityStep, lensStatus } = await import("../src/lens-steps.mjs");
+  const e = env({ CORPUS_ORACLE_MODE: "shadow" });
+  const now = T0 + 200 * M1;
+  e.DB.raw.exec("CREATE TABLE omega_bridge (id INTEGER PRIMARY KEY, state TEXT); CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT); CREATE TABLE omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER, actor TEXT, action TEXT, detail TEXT); CREATE TABLE omega_settings (id INTEGER PRIMARY KEY, settings TEXT, version INTEGER)");
+  const ref = "acct_00112233aabbccdd";
+  e.DB.raw.prepare("INSERT INTO omega_bridge (id, state) VALUES (1, ?)").run(JSON.stringify({ account_ref: ref, server: "Demo-MT5", connected: true, received_ms: now - 1000, account: { login_hash: "f".repeat(64) }, symbol: { name: "XAUUSD", digits: 2, spread_points: 20 } }));
+  e.DB.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Demo-MT5')").run();
+  await archiveBrokerBars(e.DB, { accountRef: ref, source: "mt5:demo-mt5:XAUUSD", digits: 2, connectionVersion: 3, bars: barsOf(T0, 200, { p: (i) => 4100 + Math.sin(i / 5) }), now });
+  assert.equal((await runLiquidityStep(e, { now })).status, "ok");
+  await storeCotRows(e.DB, parseCotRows("disaggregated", socrata(200, { net: (i) => 100_000 + 400 * i + (i % 7) * 900 })), { now: now - DAY, backfill: true });
+  for (let i = 0; i < 24; i++) await recordLensReading(e.DB, { id: `h4:${i}`, lens: "positioning", kind: "h4", at_ms: now - i * 4 * HOUR, outcome: i % 3 ? "miss" : "hit" }, { now });
+  for (let i = 0; i < 11; i++) await recordLensReading(e.DB, { id: `liq:${i}`, lens: "liquidity", kind: i % 3 ? "sweep" : "block", at_ms: now - i * HOUR, outcome: i % 4 ? "hit" : "miss" }, { now });
+  await e.SIGNAL_CACHE.put(LENS_POLICY_KEY, JSON.stringify({ values: { "liquidity.council_weight_scalp": 0.36 }, doctrine_sha: "b".repeat(64), version: 4, pulled_at: new Date(now - HOUR).toISOString() }));
+  await e.SIGNAL_CACHE.put(LENS_FLOOR_KEY, JSON.stringify({ positioning: { at_ms: now - DAY, doctrine_sha: "b".repeat(64), score: 0.417, n: 24, score_floor: 0.45 } }));
+  resetLensStateMemoForTests();
+  const route = { status: "ok", ...(await lensStatus(e, { now })) };
+  assert.ok(route.positioning.facts && route.liquidity.facts && route.positioning.floor && route.liquidity.score.kinds.sweep, "every part of the body is present");
+
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/nexus-intel/lens.json", import.meta.url), "utf8"));
+  const kind = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+  const gaps = [];
+  (function walk(r, f, at) {
+    for (const [k, v] of Object.entries(r)) {
+      const p = at ? `${at}.${k}` : k;
+      if (f == null || !Object.hasOwn(f, k)) { gaps.push(`${p}: missing from lens.json`); continue; }
+      // A null from the route says nothing about the type; anything else is the same type in the fixture.
+      if (v !== null && kind(f[k]) !== kind(v)) { gaps.push(`${p}: ${kind(f[k])} in lens.json, ${kind(v)} from the route`); continue; }
+      if (kind(v) === "object") walk(v, f[k], p);
+      if (kind(v) === "array" && v.length && kind(v[0]) === "object") {
+        if (!f[k].length) gaps.push(`${p}: an empty array in lens.json`); else walk(v[0], f[k][0], `${p}[0]`);
+      }
+    }
+  })(route, fixture, "");
+  assert.deepEqual(gaps, [], "lens.json follows the route (regenerate it from src/lens-steps.mjs lensStatus when the body changes)");
+  assert.equal(fixture.status, "ok");
+  assert.equal(forbiddenReportKeys(fixture).length, 0, "the fixture carries no price key either");
+  // Values the route can return: the weight sources, the baselines, the modes and the CFTC series.
+  for (const l of ["positioning", "liquidity"]) {
+    assert.deepEqual(Object.keys(fixture[l].weights), ["scalp", "intraday", "swing", "range"]);
+    for (const w of Object.values(fixture[l].weights)) assert.ok(["anchor", "aether", "floor_rollback", "switch_off", "anchor_baseline_insufficient"].includes(w.source), w.source);
+  }
+  assert.ok(["sufficient", "insufficient", "unavailable"].includes(fixture.liquidity.baseline));
+  assert.ok(["scalp", "intraday", "swing", "range"].includes(fixture.mode));
+  assert.ok(["disaggregated", "legacy"].includes(fixture.positioning.cot.series));
+  assert.equal(fixture.liquidity.line, liquidityLine(fixture.liquidity.facts), "lens B's line is the route's own text of its facts");
 });
 
 // ---------------------------------------------------------------- B2: the backfill within D1's 100 bound parameters
