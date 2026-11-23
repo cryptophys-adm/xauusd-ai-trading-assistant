@@ -50,20 +50,32 @@ export function merged(base: any, add: any): any {
 /**
  * The Liquidity page (Track C2) over its reads. /api/liquidity is the contract (test/fixtures/nexus-intel/
  * liquidity.json, and liquidity-unavailable.json: no recent broker bar). Since B15 the fixture carries the LIQUIDITY
- * card and the quorum with liquidity (the latest decision's decision.liquidity), and since B16 conditions;
+ * card and the quorum with liquidity (the latest decision's decision.liquidity), and since B16 lens B's conditions;
  * effects.level_moves is still null. LATER is the page's own stand-in for the level moves until backends B17-B19
- * publish theirs (the mockup's "all backend PRs deployed" board), with conditions emptied; it is not a contract. The clock is the fixture's (lens B's state 2 minutes old, the
- * card 13 minutes old).
+ * publish theirs (the mockup's "all backend PRs deployed" board); it is not a contract. The clock is the fixture's
+ * (lens B's state 2 minutes old, the card 13 minutes old).
  */
 export const LIQUIDITY_NOW = (liquidity as any).state.at_ms + 2 * 60_000;
 export const LATER = {
-  conditions: {},
   effects: { level_moves: [{ at_ms: (liquidity as any).state.at_ms - 3_600_000, side: "BUY", action: "level", outcome: "hit" }] }
 };
 export const LIQUIDITY_FULL = merged(liquidity, LATER);
 /** The B15 fields null: the latest decision has no decision.liquidity (the switch off; lens B off, floored or stale; a decision before B15). */
 export const NO_CARD = { card: null, quorum_with_liquidity: null };
 const CARD = (liquidity as any).card;
+/**
+ * Lens B's conditions (B16) in their other shapes, as src/liquidity-lens.mjs liquidityConditions and src/liquidity-view.mjs
+ * viewConditions write them: each warning state, unmeasured, an excluded minute in one session, a node at price, the
+ * rooms not reading them (lens B off or floored, or LENS_ROOM_LINE brief), stale, and no thresholds (knobs without them).
+ */
+const COND = (liquidity as any).conditions;
+export const COND_WARN = { ...COND, spread: { ...COND.spread, ratio: 2.3, state: "widened" }, depth: { ...COND.depth, vol_pctl_15m: 0.12, state: "thin" }, activity: { ...COND.activity, vol_pctl: 0.97, state: "spike" } };
+export const COND_UNMEASURED = { ...COND, spread: { ...COND.spread, ratio: null, state: "unmeasured" }, depth: { ...COND.depth, vol_pctl_15m: null, state: "unmeasured" }, activity: { ...COND.activity, vol_pctl: null, state: "unmeasured" } };
+export const COND_EXCLUDED = { ...COND, session: { names: ["London"], overlap: false, liquidity: "normal", excluded: "session_open" }, levels: { inside_node: true, nodes_above: 2, nodes_below: 1, pools_above: 1, pools_below: 0, pools_at: 1 } };
+export const COND_OFF = { ...COND, in_rooms: false };
+export const COND_BRIEF = { ...COND, in_rooms: false, room_line: "brief" };
+export const COND_STALE = { ...COND, at_ms: LIQUIDITY_NOW - 22 * 60_000, stale: true, in_rooms: false };
+export const COND_NO_THRESHOLDS = { ...COND, spread: { ...COND.spread, widen: null }, depth: { ...COND.depth, thin_pctl: null }, activity: { ...COND.activity, spike_pctl: null } };
 /**
  * The card's other shapes, as src/decision-engine.mjs liquidityCard writes them (the fixture's card is the agreeing one):
  * one per lean_reason, a bearish lean, and a stale card (the latest decision 22 minutes old).
@@ -221,6 +233,18 @@ export const VIEWS: Entry[] = [
   { name: "LiquidityViewCardBearish", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_BEARISH }, shows: ["▼ −0.60 bearish", "▼ buy-side", "6 min ago", "fresh sweep, M15 agrees"] },
   { name: "LiquidityViewCardStale", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_STALE }, shows: ["stale 22m", "▲ +0.60 bullish", "14:38 UTC"], hides: ["fresh 13m"] },
   { name: "LiquidityViewQuorumNotMet", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), quorum_with_liquidity: QUORUM_NOT_MET }, shows: ["Quorum with liquidity", "▲ 0.48", "+0.08"], hides: ["▲ long"] },
+  // Lens B's conditions (B16) in the Facts panel; the conditions as the varied body, so each of their paths is nulled.
+  { name: "LiquidityViewConditions", View: ({ d }) => <LiquidityView d={{ ...(liquidity as any), conditions: d }} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: COND,
+    shows: ["Spread normal · 1.1× typical", "Depth normal · p41", "Activity normal · p62", "London + New York overlap · liquidity high", "outside a high-volume node · 0 nodes above, 1 below · pools 1 above, 0 below, 0 at price", "intraday mode · baseline insufficient, 2 of 4 weeks", "14:58 UTC", "What the rooms read", "Spread 2× (widened)", "Spread above 2×", "Spike, 95th or more", "Thin, 20th or less", "thresholds of the intraday mode"],
+    hides: ["No conditions yet", "stale", "tick volume 62nd", "The rooms are not reading"] },
+  { name: "LiquidityViewNoConditions", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: null }, shows: ["No conditions yet", "The AI Worker gives none while lens B has no available facts.", "tick volume 62nd", "as lens B flags them in the intraday mode"], hides: ["What the rooms read", "thresholds of the", "Spread 2×"] },
+  { name: "LiquidityViewConditionsWarn", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_WARN }, shows: ["Spread widened · 2.3× typical", "Depth thin · p12", "Activity spike · p97"] },
+  { name: "LiquidityViewConditionsUnmeasured", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_UNMEASURED }, shows: ["Spread unmeasured", "Depth unmeasured", "Activity unmeasured"] },
+  { name: "LiquidityViewConditionsExcluded", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_EXCLUDED }, shows: ["London · liquidity normal · minute excluded from the baseline (session open)", "inside a high-volume node · 2 nodes above, 1 below · pools 1 above, 0 below, 1 at price"] },
+  { name: "LiquidityViewConditionsOff", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_OFF }, shows: ["The rooms are not reading these now: lens B is off or at its floor, or its state is older than 15 minutes."], hides: ["What the rooms read"] },
+  { name: "LiquidityViewConditionsBrief", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_BRIEF }, shows: ["The rooms read only lens B&#x27;s brief line, not these conditions (LENS_ROOM_LINE brief)."], hides: ["What the rooms read"] },
+  { name: "LiquidityViewConditionsStale", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_STALE }, shows: ["stale 22m", "14:38 UTC"] },
+  { name: "LiquidityViewConditionsNoThresholds", View: ({ d }: { d: any }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), conditions: COND_NO_THRESHOLDS }, shows: ["Spread widened", "Volume spike", "as lens B flags them in the intraday mode"], hides: ["thresholds of the", "Spread 2×", "95th or more", "20th or less"] },
   {
     name: "LiquidityViewUnavailable", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: unavailable,
     shows: [...PANELS, HINT, "lens B off", "No recent broker bars", "No levels yet", "No sweep yet"],

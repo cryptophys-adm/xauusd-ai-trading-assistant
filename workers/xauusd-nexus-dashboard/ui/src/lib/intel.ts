@@ -155,6 +155,65 @@ export function leanReasonText(code: unknown, agreeing: unknown = []): string {
 /** The card's summary without its closing "Council only: …" sentence (the card says that once, from counts). */
 export const cardSummary = (s: unknown): string | null => str(typeof s === "string" ? s.replace(/\s*Council only:[^.]*\.\s*$/, "").trim() : null);
 
+// ---------------------------------------------------------------- lens B's conditions (backend B16)
+
+/** A percentile in short: 0.41 reads "p41". */
+export const pShort = (x: unknown): string => (num(x) ? `p${Math.round(x * 100)}` : "—");
+/** A ratio as a multiple: 1.1 reads "1.1×", 2 "2×". */
+export const timesText = (x: unknown): string => (num(x) ? `${Number(x.toFixed(2))}×` : "—");
+/** Each condition's states (src/liquidity-lens.mjs liquidityConditions) in short words. */
+export const CONDITION_WORDS: Record<"spread" | "depth" | "activity", Record<string, string>> = {
+  spread: { normal: "normal", widened: "widened", unmeasured: "unmeasured" },
+  depth: { normal: "normal", thin: "thin", unmeasured: "unmeasured" },
+  activity: { normal: "normal", spike: "spike", unmeasured: "unmeasured" }
+};
+/**
+ * A condition's status tone, only where the state is a warning. Spread widened is fault: at that ratio of the hour's
+ * norm (the mode's spread_widen) Omega's entry gate holds a new entry back (src/omega-engine.mjs liveSpreadSpike,
+ * liquidity_spread_spike). Depth thin and an activity spike are cautions (late): no gate refuses on them (thin steers
+ * the limit council to a limit). Normal and unmeasured carry no tone.
+ */
+export function conditionTone(kind: "spread" | "depth" | "activity", state: unknown): "fault" | "late" | null {
+  if (kind === "spread" && state === "widened") return "fault";
+  if ((kind === "depth" && state === "thin") || (kind === "activity" && state === "spike")) return "late";
+  return null;
+}
+/** "Spread normal · 1.1× typical", "Depth thin · p12", "Activity spike · p97". */
+export function conditionText(kind: "spread" | "depth" | "activity", part: any): string {
+  const state = str(part?.state);
+  const word = state ? CONDITION_WORDS[kind][state] ?? words(state) : "—";
+  const value = kind === "spread" ? (num(part?.ratio) ? `${timesText(part.ratio)} typical` : null) : kind === "depth" ? (num(part?.vol_pctl_15m) ? pShort(part.vol_pctl_15m) : null) : num(part?.vol_pctl) ? pShort(part.vol_pctl) : null;
+  return `${kind[0].toUpperCase()}${kind.slice(1)} ${word}${value ? ` · ${value}` : ""}`;
+}
+const SESSION_LIQUIDITY: Record<string, string> = { high: "liquidity high", normal: "liquidity normal", thin: "liquidity thin", paused: "the daily trading pause", closed: "market closed" };
+/** "London + New York overlap · liquidity high"; "between sessions · liquidity thin"; the excluded minute after it. */
+export function sessionText(session: any): string {
+  const names = arr(session?.names).filter((n): n is string => typeof n === "string" && n !== "");
+  const liq = str(session?.liquidity);
+  const where = liq === "closed" || liq === "paused" ? null : names.length ? `${names.join(" + ")}${session?.overlap === true && names.length > 1 ? " overlap" : ""}` : liq ? "between sessions" : null;
+  const parts = [where, liq ? SESSION_LIQUIDITY[liq] ?? `liquidity ${words(liq)}` : null].filter(Boolean);
+  const ex = str(session?.excluded);
+  if (ex) parts.push(`minute excluded from the baseline (${words(ex)})`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+const count = (x: unknown): number => (num(x) && x >= 0 ? x : 0);
+/** "inside a high-volume node · 2 nodes above, 1 below · pools 1 above, 0 below, 1 at price". Counts only, no price. */
+export function levelsText(levels: any): string {
+  if (!obj(levels)) return "—";
+  const na = count(levels.nodes_above), nb = count(levels.nodes_below);
+  return `${levels.inside_node === true ? "inside" : "outside"} a high-volume node · ${na} ${na === 1 ? "node" : "nodes"} above, ${nb} below · pools ${count(levels.pools_above)} above, ${count(levels.pools_below)} below, ${count(levels.pools_at)} at price`;
+}
+/**
+ * Why the 15m and 1H rooms are not reading these conditions, or null while they are (src/liquidity-view.mjs
+ * viewConditions: in_rooms is room_line "conditions" and liquidityConditionsOn, lens B on, above its floor, facts
+ * available and its state at most 15 minutes old). LENS_ROOM_LINE "brief": the rooms read the brief's line only.
+ */
+export function roomsNote(c: any): string | null {
+  if (c?.room_line === "brief") return "The rooms read only lens B's brief line, not these conditions (LENS_ROOM_LINE brief).";
+  if (c?.in_rooms === false) return "The rooms are not reading these now: lens B is off or at its floor, or its state is older than 15 minutes.";
+  return null;
+}
+
 // ---------------------------------------------------------------- scores
 
 /** The decisive readings a lens needs before its floor can act (src/lens-policy.mjs LENS_SCORE_MIN_N). */
