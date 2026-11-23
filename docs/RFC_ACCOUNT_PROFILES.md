@@ -311,6 +311,7 @@ selector. That holds as long as:
   Engine reads at its next 15m close.
 - **Evidence.** Each mode's resolved setups in `plan_setups` (control-arm R, the last 90 days), in the current 1H regime
   (30 or more setups), else across regimes. The walk-forward is the strategy council's: pass, fail or collecting.
+  The setups load by `opened_at`, then `setup_key` (MS1, 2026-11-23), so the holdout is the same on every run.
 - **Feasibility.** The mode's median stop at the broker's minimum lot must risk no more than the profile's hard cap
   (Custom: the risk setting).
 - **Fail-safe moves, no council.**
@@ -333,6 +334,13 @@ selector. That holds as long as:
   - an Omega event (actor `agent:mode`);
   - one Telegram line naming each seat;
   - a `mode.v1` digest item (from, to, actor, reason, evidence ref, at; no price, no lot), at most one report per 30 min.
+- **The daily outcome** (MS1, 2026-11-23). Every daily run, a change or not, is one Omega event `mode_selector_run`
+  (actor `agent:mode`): status (`pinned_by_server`, `pinned`, `unchanged`, `changed`, `failed`), reason, the step's
+  action, and each mode's evidence (n, mean R, status, scope), on a pinned day too. A run already made today records
+  nothing.
+- **The server pin.** Only the configured `TRADING_MODE` pins the mode. The Decision Engine reads the mode in force
+  on a copy of env for its decision and never writes env (MS1), so the mode the selector wrote to KV never reads as the
+  server's pin to the selector's next run in the same isolate.
 - **Not yet.** The ladder's lock distance in R per mode (it is 30 pips for every mode) is the next step. It needs the
   initial stop from the open intent.
 

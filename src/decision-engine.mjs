@@ -1364,13 +1364,21 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     await ensureDecisionSchema(env.DB);
     if (await env.DB.prepare("SELECT 1 AS x FROM engine_decisions WHERE decision_key = ?").bind(key).first()) return { status: "already_decided", decision_key: key };
     const previous = await readLatestDecision(env);
-    try { env.TRADING_MODE = await tradingMode(env); } catch { /* keep env */ }
+    // MS1 (2026-11-23): the mode in force (the configured TRADING_MODE, else KV trading:mode, else intraday), the
+    // council's knobs and the room travel on a copy of env for this decision only. env itself is never written: a mode
+    // the selector or a person chose must never read as the server's TRADING_MODE pin to later code in this isolate
+    // (the ledger cron's mode selector, the owner's pin, the range exit, readStrategy, the page's "pinned").
+    let mode = env?.TRADING_MODE;
+    try { mode = await tradingMode(env); } catch { /* the configured value */ }
     // The council's live knob values (owner 2026-11-17, docs/RFC_COUNCIL_PROPOSALS.md): loaded lazily, so this module
     // and the knob registry (which reads this module's constants) do not import each other. Unreadable: none.
-    try { env.COUNCIL_KNOBS = await (await import("./council-knobs.mjs")).readKnobOverrides(env, { now }); } catch { env.COUNCIL_KNOBS = {}; }
+    let knobs = {};
+    try { knobs = await (await import("./council-knobs.mjs")).readKnobOverrides(env, { now }); } catch { knobs = {}; }
     // The room guardrail's value for this mode (owner 2026-11-19: the learning protocol adjusts it, src/room-tuning.mjs);
     // loaded lazily (that module reads this one). Unreadable: the rule's 1.
-    try { env.ROOM_CORRIDOR_ATR = (await (await import("./room-tuning.mjs")).activeRoom(env, env.TRADING_MODE, { now })).value; } catch { env.ROOM_CORRIDOR_ATR = SQUEEZE_RULE.corridor_atr; }
+    let room = SQUEEZE_RULE.corridor_atr;
+    try { room = (await (await import("./room-tuning.mjs")).activeRoom(env, mode, { now })).value; } catch { room = SQUEEZE_RULE.corridor_atr; }
+    env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room };
     const data = loaded ?? await loadDecisionInputs(env, { now });
     // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens A's facts known at this close
     // (cotAt: released before now) at the mode's knobs, lens B's state for the council's sweep evidence.
