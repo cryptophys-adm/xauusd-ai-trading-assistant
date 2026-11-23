@@ -81,8 +81,31 @@ test("LV1. the fixture is the view's answer: keys and types, the outcomes and st
   assert.deepEqual([down.levels, down.sweeps], [[], []]);
   assert.equal(down.state.on, false, "no facts, so lens B is off for the signal");
   assert.ok(down.management.every((z) => z.source === "key_level"));
-  // B15 (card, quorum_with_liquidity), B16 (conditions) and B17/B19 (level_moves) are null until they merge.
-  for (const f of [main, down, v]) assert.deepEqual([f.card, f.quorum_with_liquidity, f.conditions, f.effects.level_moves], [null, null, null, null]);
+  // B16 (conditions) and B17/B19 (level_moves) are null until they merge.
+  for (const f of [main, down, v]) assert.deepEqual([f.conditions, f.effects.level_moves], [null, null]);
+  // B15: the card and the quorum with liquidity come from the latest decision's decision.liquidity; with no recent broker
+  // bar the seeded decision had none, so both are null there.
+  assert.deepEqual(Object.keys(main.card).sort(), ["agreeing", "at_ms", "bar_close", "counts", "lean", "lean_reason", "lens_weight", "side", "stale", "state_at_ms", "summary", "sweep", "sweep_age_min", "weight"]);
+  assert.deepEqual(Object.keys(main.quorum_with_liquidity).sort(), ["bias", "long_met", "long_share", "met", "neutral_share", "quorum_min", "score", "share_needed_above", "short_met", "short_share"]);
+  assert.deepEqual([main.card.counts, main.card.weight, main.card.lean, main.card.sweep, main.card.lean_reason], [false, 0.03, 0.6, "sell_side", "sweep_with_agreeing_witness"]);
+  assert.deepEqual(v.card, main.card);
+  assert.deepEqual(v.quorum_with_liquidity, main.quorum_with_liquidity);
+  for (const f of [down, (await view({ available: false })).v]) assert.deepEqual([f.card, f.quorum_with_liquidity], [null, null]);
+});
+
+test("LV1b. B15: the card and the quorum with liquidity from the latest decision; no price-like number; stale after 15 minutes; none without decision.liquidity", async () => {
+  const { viewCard, viewQuorumWithLiquidity } = await import("../src/liquidity-view.mjs");
+  const main = fixture("liquidity.json");
+  const { PRICE_LIKE } = await import("../src/public-projection.mjs");
+  assert.doesNotMatch(main.card.summary, PRICE_LIKE);
+  for (const k of keysIn({ card: main.card, q: main.quorum_with_liquidity })) assert.doesNotMatch(k, /price|entry|stop|target|level|zone|^tp|^sl$/i, k);
+  const decided = Date.parse("2026-11-23T14:47:00Z");
+  const d = { decided_at: new Date(decided).toISOString(), bar_close: "2026-11-23T14:45:00.000Z", liquidity: { card: { weight: 0.03, lean: -0.6, side: "BEARISH", sweep: "buy_side", sweep_age_min: 4, at_ms: decided - 60_000, lean_reason: "sweep_with_agreeing_witness", agreeing: ["H4"], summary: "x", lens_weight: 0.3 }, quorum_with_liquidity: { score: -0.2, bias: "BEARISH", long_share: 0.1, short_share: 0.7, neutral_share: 0.2, share_needed_above: 0.5, quorum_min: 0.5, long_met: false, short_met: true, met: true, witnesses: 9, weight: 1 } } };
+  assert.deepEqual([viewCard(d, decided + 15 * 60_000).stale, viewCard(d, decided + 15 * 60_000 + 1).stale], [false, true]);
+  assert.deepEqual([viewCard(d, decided).at_ms, viewCard(d, decided).state_at_ms, viewCard(d, decided).counts], [decided, decided - 60_000, false]);
+  assert.equal(viewCard({ ...d, liquidity: { ...d.liquidity, card: { ...d.liquidity.card, sweep: "sweep_with" } } }, decided).sweep, null, "only a side names the sweep");
+  assert.deepEqual(viewQuorumWithLiquidity(d), { score: -0.2, bias: "BEARISH", long_share: 0.1, short_share: 0.7, neutral_share: 0.2, share_needed_above: 0.5, quorum_min: 0.5, long_met: false, short_met: true, met: true });
+  for (const x of [null, {}, { liquidity: null }, { liquidity: {} }]) assert.deepEqual([viewCard(x), viewQuorumWithLiquidity(x)], [null, null]);
 });
 
 test("LV2. without a known basis the feed's scale is null: low_feed, high_feed, in_key_zone; only lens B's own levels manage", async () => {
