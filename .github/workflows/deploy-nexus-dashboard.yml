@@ -156,3 +156,38 @@ jobs:
           if (body?.schema !== "cryptophys.liquidity-view.v1") { console.error(`/api/liquidity: schema ${body?.schema}`); process.exit(1); }
           console.log(JSON.stringify({ liquidity: { schema: body.schema, on: body.state?.on ?? null, fresh: body.state?.fresh ?? null, levels: Array.isArray(body.levels) ? body.levels.length : null, basis_known: body.scale?.feed_basis_known ?? null } }));
           NODE
+
+      - name: Smoke test the Chart patterns view
+        # Track B9 (the Intelligence Chart patterns page's read): GET /api/chart-patterns through the Nexus proxy answers
+        # 200 JSON with no-store under the CI service token (cryptophys.chart-patterns-view.v1), and the Access login
+        # redirect without it.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
+          const URL_ = "https://nexus.cryptophys.work/api/chart-patterns";
+          const token = accessToken();
+          if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
+          // Without the token: Cloudflare Access answers with its login redirect, never the view.
+          const bare = await fetch(URL_, { redirect: "manual", signal: AbortSignal.timeout(20000) });
+          if (!isAccessLogin(bare)) { console.error(`/api/chart-patterns without the token: expected the Access login redirect, got ${bare.status}`); process.exit(1); }
+          console.log(`/api/chart-patterns without the token: Access login redirect (${bare.status})`);
+          // With the token: 200 JSON, no-store, the view's schema (the AI Worker may still be deploying: retry).
+          let r = null, body = null;
+          for (let i = 0; i < 6; i++) {
+            try {
+              r = await fetch(URL_, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+              body = await r.json().catch(() => null);
+              if (r.status === 200) break;
+              console.log("chart patterns view not ready:", r.status, JSON.stringify(body).slice(0, 200));
+            } catch (e) { console.log("chart patterns view error:", e?.name); }
+            await new Promise((res) => setTimeout(res, 10000));
+          }
+          if (!r || r.status !== 200) { console.error(`/api/chart-patterns: HTTP ${r?.status ?? "no answer"} ${JSON.stringify(body).slice(0, 200)}`); process.exit(1); }
+          if (!/\bjson\b/i.test(r.headers.get("content-type") ?? "")) { console.error(`/api/chart-patterns: not JSON (${r.headers.get("content-type")})`); process.exit(1); }
+          if (!/no-store/i.test(r.headers.get("cache-control") ?? "")) { console.error(`/api/chart-patterns: cache-control ${r.headers.get("cache-control")}, expected no-store`); process.exit(1); }
+          if (body?.schema !== "cryptophys.chart-patterns-view.v1") { console.error(`/api/chart-patterns: schema ${body?.schema}`); process.exit(1); }
+          console.log(JSON.stringify({ chart_patterns: { schema: body.schema, mode: body.mode ?? null, patterns: Array.isArray(body.patterns) ? body.patterns.length : null, far_targets: Array.isArray(body.far_targets) ? body.far_targets.length : null, calibrated: body.calibration?.computed_at ?? null } }));
+          NODE

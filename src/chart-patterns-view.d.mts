@@ -1,0 +1,15 @@
+export const CHART_PATTERNS_VIEW_SCHEMA: string;
+export const VIEW_CHART_BARS: number;
+export const HISTORY_DEFAULT: number;
+export const HISTORY_MAX: number;
+export const PROJECTION_SUBJECT: string;
+export const VIEW_CHARTS: ReadonlyArray<Readonly<{ tf: string; label: string; interval: string; interval_s: number }>>;
+export function historyParam(value: unknown): number;
+export function ohlcvRow(candle: unknown, intervalS: number): { time: number | null; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null };
+export function patternZone(pattern: Record<string, any>, zones: unknown): Record<string, any> | null;
+export function patternPlan(pattern: Record<string, any>, plans: unknown): Record<string, any> | null;
+export function viewPattern(pattern: Record<string, any>, options?: { calibration?: Record<string, any> | null; zones?: unknown; plans?: unknown }): Record<string, any>;
+export function farTargets(patterns: Array<Record<string, any>>, options?: { price?: number | null; atrH1?: number | null }): Array<Record<string, any>>;
+export function viewCalibration(calibration: unknown): Record<string, any>;
+export function seatRoom(timeframe: string, rows: Array<Record<string, any>>): Record<string, any>;
+export function readChartPatternsView(env: unknown, options?: { now?: number; strategy?: Record<string, any> | null; history?: unknown }): Promise<Record<string, any>>;
