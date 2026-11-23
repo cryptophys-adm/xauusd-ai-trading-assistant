@@ -45,7 +45,9 @@ export const TOLD_ELSEWHERE = Object.freeze([
 /** Not a change of what Omega trades with: a state, a reading or a refused attempt (health alerts carry the problems). */
 export const NOT_A_CHANGE = Object.freeze([
   "plan", "intent_reconciled", "symbol_refused", "terminal_error", "account_seen", "spec_validated", "account_ref_upgraded",
-  "owner_sub_seen", "profile_control_refused", "profile_review_pending", "mode_unchanged", "liquidity_backfill_failed"
+  "owner_sub_seen", "profile_control_refused", "profile_review_pending", "mode_unchanged", "liquidity_backfill_failed",
+  // MS1: the mode selector's daily outcome (src/mode-selector.mjs), a reading; a change is its own mode_changed.
+  "mode_selector_run"
 ]);
 
 /** The settings keys in words (anything else is shown by its own name). */

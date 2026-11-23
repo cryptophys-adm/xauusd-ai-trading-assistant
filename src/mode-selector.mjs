@@ -181,12 +181,47 @@ async function record(env, { from, to, actor, reason, evidence = null }, { now, 
   return id;
 }
 
-/** The resolved setups the selector reads (the control arm's R), the last MODE_LEARN_DAYS. */
+/**
+ * The resolved setups the selector reads (the control arm's R), the last MODE_LEARN_DAYS, by opened_at and then
+ * setup_key (MS1): the walk-forward's holdout is the last share of this order, so setups opened at the same time keep
+ * one order on every run.
+ */
 async function loadSetups(db, now) {
   try {
-    const rows = (await db.prepare("SELECT mode, regime, agent, entry, stop, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at").bind(new Date(now - MODE_LEARN_DAYS * DAY).toISOString()).all()).results ?? [];
+    const rows = (await db.prepare("SELECT mode, regime, agent, entry, stop, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at, setup_key").bind(new Date(now - MODE_LEARN_DAYS * DAY).toISOString()).all()).results ?? [];
     return rows.map((r) => ({ mode: r.mode, regime: r.regime, agent: r.agent ?? null, entry: Number(r.entry), stop: Number(r.stop), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r) })).filter((s) => finite(s.r));
   } catch { return []; }
+}
+
+/** Each mode's evidence for the daily step: the setups' walk-forward per mode, range's from its passing cells. */
+async function selectorEvidence(env, { now, regime }) {
+  const setups = await loadSetups(env.DB, now);
+  const evidence = modeEvidence(setups, { regime });
+  // Range's evidence is its strategies' passing cells (src/htf-cells.mjs), not setups decided in range mode.
+  const rangeStops = setups.filter((s) => RANGE_GATED_AGENTS.includes(s.agent)).map((s) => Math.abs(s.entry - s.stop)).filter((x) => finite(x) && x > 0).sort((a, b) => a - b);
+  evidence.range = rangeEvidence((await readPlanLearning(env))?.cells ?? [], { medianStop: rangeStops.length ? rangeStops[Math.floor(rangeStops.length / 2)] : null });
+  return evidence;
+}
+
+/** Pure: the per-mode evidence summary of a daily outcome: n, mean R, walk-forward status and scope; no price. */
+export function outcomeEvidence(evidence) {
+  if (!evidence || typeof evidence !== "object") return null;
+  return Object.fromEntries(TRADING_MODES_LIST.map((m) => {
+    const e = evidence[m];
+    return [m, e ? { n: Number.isFinite(Number(e.n)) ? Number(e.n) : null, mean_r: finite(e.mean_r) ? e.mean_r : null, status: e.status ?? null, scope: e.scope ?? null } : null];
+  }));
+}
+
+export const MODE_RUN_EVENT = "mode_selector_run";
+/**
+ * MS1: every daily outcome is one event (actor agent:mode, action mode_selector_run, through `log`, which the ledger
+ * cron's modeSelectorTick writes to omega_events): { day, status, reason, action, mode, to, proposed, regime, evidence }, the
+ * outcomes pinned_by_server, pinned, unchanged (the step's "none" and a refused proposal), changed and failed. Best
+ * effort: it never throws and never changes the outcome.
+ */
+async function recordOutcome(log, detail) {
+  if (typeof log !== "function") return;
+  try { await log("mode_selector_run", detail); } catch { /* audit best effort */ }
 }
 
 /**
@@ -196,23 +231,31 @@ async function loadSetups(db, now) {
 export async function runModeSelector(env, { now = Date.now(), account = null, regime = null, forcedDay = false, call = callBusModel, log = null, notify = null, force = false } = {}) {
   const db = env?.DB;
   if (!db || !env?.SIGNAL_CACHE) return { status: "unavailable" };
+  const day = new Date(now).toISOString().slice(0, 10);
+  let mode = null;
   try {
     await ensureModeSchema(db);
     const control = await readModeControl(env);
-    const day = new Date(now).toISOString().slice(0, 10);
+    mode = control.mode;
     if (!force && control.last_run_day === day) return { status: "fresh" };
+    // A pinned day still records each mode's evidence; the evidence is read only, so it cannot change the outcome.
+    const pinnedEvidence = async () => { try { return outcomeEvidence(await selectorEvidence(env, { now, regime })); } catch { return null; } };
     const envMode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
-    if (TRADING_MODES_LIST.includes(envMode)) { await writeModeControl(env, { ...control, last_run_day: day }); return { status: "pinned_by_server" }; }
-    if (!control.auto || control.pinned) { await writeModeControl(env, { ...control, last_run_day: day }); return { status: "pinned" }; }
-    const setups = await loadSetups(db, now);
-    const evidence = modeEvidence(setups, { regime });
-    // Range's evidence is its strategies' passing cells (src/htf-cells.mjs), not setups decided in range mode.
-    const rangeStops = setups.filter((s) => RANGE_GATED_AGENTS.includes(s.agent)).map((s) => Math.abs(s.entry - s.stop)).filter((x) => finite(x) && x > 0).sort((a, b) => a - b);
-    evidence.range = rangeEvidence((await readPlanLearning(env))?.cells ?? [], { medianStop: rangeStops.length ? rangeStops[Math.floor(rangeStops.length / 2)] : null });
+    if (TRADING_MODES_LIST.includes(envMode)) {
+      await writeModeControl(env, { ...control, last_run_day: day });
+      await recordOutcome(log, { day, status: "pinned_by_server", reason: "server_trading_mode", action: null, mode: envMode, to: null, proposed: null, regime, evidence: await pinnedEvidence() });
+      return { status: "pinned_by_server" };
+    }
+    if (!control.auto || control.pinned) {
+      await writeModeControl(env, { ...control, last_run_day: day });
+      await recordOutcome(log, { day, status: "pinned", reason: control.pinned ? "owner_pin" : "auto_off", action: null, mode: control.mode, to: null, proposed: null, regime, evidence: await pinnedEvidence() });
+      return { status: "pinned" };
+    }
+    const evidence = await selectorEvidence(env, { now, regime });
     const feasible = Object.fromEntries(TRADING_MODES_LIST.map((m) => [m, account ? modeFeasible(evidence[m], { equity: account.equity, volumeMin: account.volume_min, contractSize: account.contract_size, capPct: account.cap_pct }) : true]));
     const d = decideMode({ mode: control.mode, baseline: control.baseline, evidence, feasible, forcedDay, streak: control.streak, regime, rangeReturn: returnOf(control) });
     const summary = { regime, evidence: Object.fromEntries(Object.entries(evidence).map(([m, e]) => [m, { status: e.status, n: e.n, mean_r: e.mean_r, holdout_mean_r: e.holdout_mean_r, scope: e.scope, median_stop: r3(e.median_stop), feasible: feasible[m] }])) };
-    let applied = null;
+    let applied = null, reason = d.reason;
     if (d.action === "revert" || d.action === "drop") {
       await env.SIGNAL_CACHE.put(TRADING_MODE_KEY, d.to);
       const id = await record(env, { from: control.mode, to: d.to, actor: "selector", reason: d.reason, evidence: summary }, { now, log, notify });
@@ -228,15 +271,20 @@ export async function runModeSelector(env, { now = Date.now(), account = null, r
         const id = await record(env, { from: control.mode, to: d.to, actor: "council", reason: "evidence", evidence: { ...summary, council } }, { now, log, notify });
         applied = { from: control.mode, to: d.to, actor: "council", reason: "evidence", at_ms: now, id };
       } else {
+        reason = "council_rejected";
         await record(env, { from: control.mode, to: control.mode, actor: "council", reason: "council_rejected", evidence: { ...summary, proposed: d.to, council } }, { now, log, notify });
       }
     }
     // Entering range remembers where to return on a breakout.
     const rangeReturn = applied?.to === "range" ? (control.mode !== "range" ? control.mode : returnOf(control)) : control.range_return;
     await writeModeControl(env, { ...control, last_run_day: day, streak: applied ? null : d.streak, last_switch: applied ?? control.last_switch, range_return: rangeReturn ?? null });
-    return { status: applied ? "changed" : "unchanged", decision: d, applied, evidence: summary };
+    const status = applied ? "changed" : "unchanged";
+    await recordOutcome(log, { day, status, reason, action: d.action, mode: control.mode, to: applied?.to ?? null, proposed: d.action === "propose" ? d.to : null, regime, evidence: outcomeEvidence(evidence) });
+    return { status, decision: d, applied, evidence: summary };
   } catch (e) {
-    return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
+    const reason = String(e?.message ?? e).slice(0, 200);
+    await recordOutcome(log, { day, status: "failed", reason, action: null, mode, to: null, proposed: null, regime, evidence: null });
+    return { status: "failed", reason };
   }
 }
 

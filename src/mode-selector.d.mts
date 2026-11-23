@@ -14,3 +14,5 @@ export function modeStatus(env: unknown): Promise<Record<string, any>>;
 export function modeReport(rows: Record<string, any>[]): Record<string, any>;
 export function relayModeChanges(env: unknown, options?: { now?: number; publish?: unknown }): Promise<Record<string, any>>;
 export function capOf(profile: string, settings: Record<string, any> | null): number | null;
+export const MODE_RUN_EVENT: string;
+export function outcomeEvidence(evidence: Record<string, any> | null): Record<string, { n: number | null; mean_r: number | null; status: string | null; scope: string | null } | null> | null;

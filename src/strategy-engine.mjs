@@ -545,8 +545,8 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
 /** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off" (src/projection-agent.mjs). */
 export { chartPatternsMode };
 
-/** The strategy from the live inputs (GET /api/strategy). */
-export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
+/** The mode readStrategy builds in: the configured TRADING_MODE (the server's pin), else KV trading:mode, else intraday. */
+export async function strategyMode(env) {
   let mode = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
   if (!["scalp", "intraday", "swing", "range"].includes(mode)) {
     try {
@@ -554,5 +554,11 @@ export async function readStrategy(env, { now = Date.now(), m5Context = null } =
       if (["scalp", "intraday", "swing", "range"].includes(v)) mode = v; else mode = "intraday";
     } catch { mode = "intraday"; }
   }
+  return mode;
+}
+
+/** The strategy from the live inputs (GET /api/strategy). */
+export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
+  const mode = await strategyMode(env);
   return buildStrategy(await loadStrategyInputs(env, { now, m5Context }), { mode });
 }

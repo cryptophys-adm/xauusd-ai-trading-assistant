@@ -10,6 +10,7 @@ export function buildStrategy(input?: Record<string, any>, params?: Partial<{ mi
 export const M5_LIVE_MAX_AGE_MS: number;
 export function liveM5Inputs(env: any, options?: { now?: number; context?: any }): Promise<{ confirmation: Record<string, any>; price: number | null } | null>;
 export function loadStrategyInputs(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
+export function strategyMode(env: any): Promise<string>;
 export function readStrategy(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
 export function planForDirection(strategy: any, dir: number, options?: { scalp?: boolean }): Record<string, any> | null;
 export const SCALP_TARGET: Readonly<{ targetGapAtr: number; qualified: boolean }>;
