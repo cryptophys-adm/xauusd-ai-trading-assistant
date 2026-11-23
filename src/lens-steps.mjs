@@ -5,12 +5,12 @@
 import { corpusSource } from "./corpus-oracle.mjs";
 import { goldPausedAt } from "./market-hours.mjs";
 import {
-  LENS_MODES, LENS_NAME, LENS_SWITCHES, lensKnobs, lensWeights, readLensState, recordLensReading, ensureLensReadingsSchema, lensScore, lensFloorStep, lensReport, lensReportDraft, forbiddenReportKeys, floorHolds, LENS_FLOOR_KEY
+  LENS_MODES, LENS_NAME, LENS_SWITCHES, lensKnobs, lensWeights, readLensState, recordLensReading, ensureLensReadingsSchema, lensReadingStatements, lensScore, lensFloorStep, lensReport, lensReportDraft, forbiddenReportKeys, floorHolds, LENS_FLOOR_KEY
 } from "./lens-policy.mjs";
 import { positioningNow, scorePositioning, cotFreshness, positioningLine, positioningLean, positioningPackFact } from "./positioning-lens.mjs";
 import {
   LIQUIDITY_BASELINE_WEEKS, LIQUIDITY_STATE_KEY, LIQUIDITY_SPIKE_KEY, baselineKey, baselineIdentity, buildBaseline, finishBaseline, hourBaseline, eligibleMinutes,
-  nyHourOfWeek, readBrokerBars, backfillBrokerBars, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine
+  nyHourOfWeek, readBrokerBars, backfillBrokerBars, markBackfillRebuilt, SWEEP_SCORE_BARS_15M, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine
 } from "./liquidity-lens.mjs";
 
 const M1 = 60_000, HOUR = 3_600_000, DAY = 86_400_000, WEEK = 7 * DAY;
@@ -18,6 +18,8 @@ const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const parse = (s, d = null) => { try { return typeof s === "string" ? JSON.parse(s) : (s ?? d); } catch { return d; } };
 const MODES = new Set(LENS_MODES);
 export const LIQUIDITY_REPLAY_KEY = "liquidity:replay:v1";
+/** B2: the sweep replay of the minutes a backfill added, once per backfill identity. */
+export const liquidityReplayKey = (identity) => `liquidity:replay:v2:${identity}`;
 
 async function modeNow(env) {
   const pinned = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
@@ -54,14 +56,14 @@ export async function upsertReading(db, r, { lens, kind, mode = null, now = Date
  * server, symbol or digits: a reset, with an event), else the hours that ended since the last update recomputed from
  * their 8 weeks. Returns { baseline, reset }.
  */
-export async function updateBaseline(env, acct, { now = Date.now(), log = null } = {}) {
+export async function updateBaseline(env, acct, { now = Date.now(), log = null, rebuild = false } = {}) {
   const kv = env.SIGNAL_CACHE, db = env.DB;
   const identity = baselineIdentity(acct);
   let stored = parse(await kv.get(baselineKey(acct.accountRef)), null);
   const prevIdentity = parse(await kv.get(LIQUIDITY_STATE_KEY), null)?.identity ?? null;
   const eligible = eligibleMinutes(now);
   let reset = false;
-  if (!stored || stored.identity !== identity) {
+  if (!stored || stored.identity !== identity || rebuild) {
     const from = now - LIQUIDITY_BASELINE_WEEKS * WEEK;
     const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: from, toMs: Math.floor(now / HOUR) * HOUR, digits: acct.digits ?? undefined });
     reset = Boolean(prevIdentity && prevIdentity !== identity) || Boolean(stored && stored.identity !== identity);
@@ -107,11 +109,17 @@ export async function runLiquidityStep(env, { now = Date.now(), log = null } = {
     if (!acct) return { status: "no_account" };
     await ensureLiquiditySchema(db);
     await ensureLensReadingsSchema(db);
-    const backfill = await backfillBrokerBars(env, { ...acct, now });
+    const backfill = await backfillBrokerBars(env, { ...acct, now, log });
+    // B2: rows a backfill added rebuild the baseline once and replay their sweeps once, driven by the stored marker (so
+    // a step that fails after the marker was written still does both at the next step).
+    const marker = backfill.marker ?? null;
+    const pending = Boolean(marker && (marker.added > 0 || marker.resumed === true));
+    const rebuild = pending && marker.rebuilt !== true;
     const prev = await readLiquidityState(env);
-    const hourly = !prev || !finite(prev.baseline_at) || Math.floor(now / HOUR) !== Math.floor(prev.baseline_at / HOUR) || prev.identity !== baselineIdentity(acct);
+    const hourly = rebuild || !prev || !finite(prev.baseline_at) || Math.floor(now / HOUR) !== Math.floor(prev.baseline_at / HOUR) || prev.identity !== baselineIdentity(acct);
     let baseline = hourly ? null : parse(await kv.get(baselineKey(acct.accountRef)), null), reset = false;
-    if (!baseline) ({ baseline, reset } = await updateBaseline(env, acct, { now, log }));
+    if (!baseline) ({ baseline, reset } = await updateBaseline(env, acct, { now, log, rebuild }));
+    if (rebuild) await markBackfillRebuilt(env, backfill.identity, marker);
     const mode = await modeNow(env);
     const lens = await readLensState(env, { now });
     const knobs = lensKnobs("liquidity", mode, { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: baseline.baseline });
@@ -128,30 +136,49 @@ export async function runLiquidityStep(env, { now = Date.now(), log = null } = {
     // Sweeps: each detected sweep (not excluded) is a reading; scored on the bars after it (eight 15m bars).
     const atr = atr15(bars);
     let replay = null;
-    if (!(await kv.get(LIQUIDITY_REPLAY_KEY))) replay = await replaySweeps(env, acct, { baseline, knobs, now, mode });
+    if (!(await kv.get(LIQUIDITY_REPLAY_KEY))) replay = await replaySweeps(env, acct, { baseline, knobs, now, mode, key: LIQUIDITY_REPLAY_KEY });
+    else if (pending && finite(marker.from_ms) && finite(marker.to_ms) && !(await kv.get(liquidityReplayKey(backfill.identity)))) {
+      replay = await replaySweeps(env, acct, { baseline, knobs, now, mode, key: liquidityReplayKey(backfill.identity), fromMs: marker.from_ms, toMs: marker.to_ms });
+    }
     else for (const s of sweeps) await upsertReading(db, { id: `sweep:${s.t}:${s.side}`, at_ms: s.t, side: s.side === "buy_side" ? -1 : 1, detail: { vol_pctl: s.vol_pctl, atr15: finite(atr) ? Math.round(atr * 1000) / 1000 : null } }, { lens: "liquidity", kind: "sweep", mode, now });
     const scored = await scorePendingSweeps(env, acct, { now });
-    return { status: "ok", baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, reset, backfill: backfill.status, available: facts.available, sweeps: sweeps.length, scored, ...(replay ? { replay } : {}) };
+    return { status: "ok", baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, reset, backfill: backfill.status, ...(backfill.status === "backfilled" && backfill.added > 0 ? { backfill_added: backfill.added } : {}), ...(rebuild ? { rebuilt: true } : {}), available: facts.available, sweeps: sweeps.length, scored, ...(replay ? { replay } : {}) };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }
 }
 
-/** The day-one replay (RFC §7.2): every sweep of the archive's bars, recorded and scored at once. Once (KV marker). */
-async function replaySweeps(env, acct, { baseline, knobs, now, mode }) {
+/**
+ * The day-one replay (RFC §7.2): every sweep of the archive's bars, recorded and scored at once. Once (KV marker). B2's
+ * replay of a backfill covers only the minutes it added (`fromMs`..`toMs`, with the lookback and the scoring bars around
+ * them). The readings go through db.batch (two statements a sweep at most), so the replay stays far under D1's
+ * queries per invocation.
+ */
+async function replaySweeps(env, acct, { baseline, knobs, now, mode, key = LIQUIDITY_REPLAY_KEY, fromMs = null, toMs = null }) {
   const db = env.DB;
-  const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: now - 30 * DAY, digits: acct.digits ?? undefined });
-  const sweeps = detectSweeps(bars.slice(-30_000), { baseline, lookbackMin: knobs.sweep_lookback_min, spikePctl: knobs.spike_pctl });
-  let added = 0;
+  const span = finite(fromMs) && finite(toMs);
+  const lead = (knobs.sweep_lookback_min + 16 * 15) * M1, tail = (SWEEP_SCORE_BARS_15M + 1) * 15 * M1;
+  const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: span ? Math.max(now - 30 * DAY, fromMs - lead) : now - 30 * DAY, toMs: span ? toMs + tail : Infinity, digits: acct.digits ?? undefined });
+  const sweeps = detectSweeps(bars.slice(-30_000), { baseline, lookbackMin: knobs.sweep_lookback_min, spikePctl: knobs.spike_pctl, ...(span ? { fromMs } : {}) }).filter((s) => !span || s.t <= toMs);
+  const statements = [];
   for (const s of sweeps) {
     const before = bars.filter((b) => b.t <= s.t && b.t > s.t - 16 * 15 * M1);
     const atr = atr15(before);
     const outcome = scoreSweep(s, bars, { atr, now });
-    if ((await upsertReading(db, { id: `sweep:${s.t}:${s.side}`, at_ms: s.t, side: s.side === "buy_side" ? -1 : 1, outcome, detail: { vol_pctl: s.vol_pctl, replay: true, atr15: finite(atr) ? Math.round(atr * 1000) / 1000 : null } }, { lens: "liquidity", kind: "sweep", mode, now })) === "added") added += 1;
+    // The INSERT first, then (with an outcome) the UPDATE: only the INSERT's changes count a reading added.
+    lensReadingStatements(db, { id: `sweep:${s.t}:${s.side}`, lens: "liquidity", kind: "sweep", at_ms: s.t, mode, side: s.side === "buy_side" ? -1 : 1, outcome, detail: { vol_pctl: s.vol_pctl, replay: true, atr15: finite(atr) ? Math.round(atr * 1000) / 1000 : null } }, { now })
+      .forEach((st, j) => statements.push({ st, insert: j === 0 }));
   }
-  await env.SIGNAL_CACHE.put(LIQUIDITY_REPLAY_KEY, JSON.stringify({ at: new Date(now).toISOString(), sweeps: sweeps.length }));
+  let added = 0;
+  for (let i = 0; i < statements.length; i += 50) {
+    const part = statements.slice(i, i + 50);
+    const results = typeof db.batch === "function" ? (await db.batch(part.map((x) => x.st))) ?? [] : await (async () => { const out = []; for (const x of part) out.push(await x.st.run()); return out; })();
+    added += part.filter((x, j) => x.insert && Number(results[j]?.meta?.changes) > 0).length;
+  }
+  await env.SIGNAL_CACHE.put(key, JSON.stringify({ at: new Date(now).toISOString(), sweeps: sweeps.length, ...(span ? { from_ms: fromMs, to_ms: toMs } : {}) }));
   return { sweeps: sweeps.length, added };
 }
+
 
 /** Scores the pending sweep readings of the last two days on the archive's bars. */
 async function scorePendingSweeps(env, acct, { now }) {

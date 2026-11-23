@@ -182,6 +182,16 @@ All fact names below pass the platform's prohibited filter `/trad(e|ing)\b|order
 - **Backfill.** The first run copies every `corpus_bars` row of the traded pair (`mt5:%`, never `mt5macro:%`) into the
   archive, under the account_ref of the connection that stored it. With `CORPUS_ORACLE_MODE = "shadow"` in production
   that is up to 14 days.
+  - B2 (2026-11-22): the backfill reads the active connection version and every version already archived for the
+    account_ref and source, and copies each group under its own version, 7 rows a statement (13 columns x 7 = 91 of
+    D1's 100 bound parameters; 8 rows bound 104 and every batch rolled back). It runs once per identity (account_ref,
+    source, versions: KV `liquidity:backfill:v2:<identity>`), so a new connection version backfills again. Rows it adds
+    rebuild the baseline once and replay the sweeps of the minutes it added once (`liquidity:replay:v2:<identity>`,
+    readings through `db.batch`), driven by the stored marker, so a step that fails after it still does both; the
+    identity carries a short hash of the versions (the list is in the marker's value); a failure writes no finished
+    marker, is retried at the next step and logs one `liquidity_backfill_failed` per identity. The backfill replay is
+    expected to floor lens B on day one (production's backfilled history scores about 30 %): §7.2-§7.3 working as
+    designed, the floor only lowers lens B's weight.
 - **A deeper backfill needs the EA and the bridge (optional stage 2b).** The bridge sends only bars after the server's
   cursor (`readCorpus(..., { afterMs: corpusCursorMs })`), so older bars cannot ride in `corpus.json`. A later EA (1.23+) would
   write `omega/corpus_history.json` (pages of 1,440 bars before a `corpus_history_before_ms` the sync response names,
@@ -562,7 +572,7 @@ divergence). Readings at each 4H close the feed's series holds (the first run re
 with `scoreStance` on 6 bars.
 
 **Lens B.** D1 `broker_bars_1m` written in `ingestCorpus` under `executor.account_ref` (`acct_<16 hex>` only),
-pruned at 120 days, backfilled once from `corpus_bars` of the active connection version. The 5-minute ledger step
+pruned at 120 days, backfilled from `corpus_bars` once per identity: the active connection version and every version already archived for the account_ref and source, each under its own version (B2, see §4.1). The 5-minute ledger step
 (`runLiquidityStep`, before the Position Manager): the baseline per NY hour of the week over 8 weeks (KV
 `liquidity:baseline:<account_ref>`, rebuilt on a new identity `account|source|digits` with a `liquidity_baseline_reset`
 event, else the hours that ended recomputed), the facts of the last closed bar for the mode in force, one
@@ -611,7 +621,7 @@ replays without lens B's gate and deferral, and `omegaParity` treats a v4-only t
    handful of early readings cannot floor it. §7.3 sets no minimum.
 4. **Floor lift.** "A newer doctrine version" is read as a weight for the lens under a `doctrine_sha` other than the one
    in force at the rollback, pulled after it (shas have no order).
-5. **Batch size.** `broker_bars_1m` rows are written 8 a statement (13 columns; D1 binds at most 100 parameters), not 20.
+5. **Batch size.** `broker_bars_1m` rows are written 7 a statement (13 columns, 91 parameters; D1 binds at most 100), not 20. The first version wrote 8 (104 parameters), so every backfill batch rolled back (B2, 2026-11-22).
 6. **The 45-bar rule.** An hour whose exclusions (rollover quarantine, the daily reopen, a session open) leave fewer
    than 60 eligible minutes needs 75 % of its eligible minutes, not 45 bars, else it could never be sufficient.
 7. **Lens A's day-one replay** covers the feed's 4H series (500 bars, about 83 days), not the last year: the AI Worker

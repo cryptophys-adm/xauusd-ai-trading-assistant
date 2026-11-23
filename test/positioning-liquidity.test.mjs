@@ -14,7 +14,8 @@ import {
 } from "../src/lens-policy.mjs";
 import {
   nyHourOfWeek, buildBaseline, baselinePctl, liquidityFacts, detectSweeps, poolsOf, hvnOf, liquidityFields, signalLiquidityLevels, liveSpreadSpike, deferModifications,
-  excludedWhy, scoreSweep, sweepFor, liquidityLine, archiveBrokerBars, readBrokerBars, resetLiquiditySchemaForTests, LIQUIDITY_MODIFY_DEFER_MAX_MS, BROKER_ROWS_PER_STATEMENT, eligibleMinutes
+  excludedWhy, scoreSweep, sweepFor, liquidityLine, archiveBrokerBars, readBrokerBars, resetLiquiditySchemaForTests, LIQUIDITY_MODIFY_DEFER_MAX_MS, BROKER_ROWS_PER_STATEMENT, eligibleMinutes,
+  BROKER_BAR_COLUMNS, backfillBrokerBars, backfillIdentity, backfillKey, backfillFailedKey, backfillVersionsKey, LIQUIDITY_BACKFILL_KEY, shortHash
 } from "../src/liquidity-lens.mjs";
 import { withPositioning, liquidityEvidence, councilEvidence } from "../src/decision-engine.mjs";
 import { planIntents, OMEGA_DEFAULTS, brokerKeyLevels, settingsFrom } from "../src/omega-engine.mjs";
@@ -359,7 +360,10 @@ test("PL11. the archive is keyed by the opaque account_ref, never an account num
   assert.equal(await archiveBrokerBars(db, { accountRef: "acct_0123456789abcdef", source: "mt5macro:x:EURUSD", bars, now: T0 + DAY }), 0, "never a macro source");
   assert.equal(await archiveBrokerBars(db, { accountRef: "acct_0123456789abcdef", source: "mt5:x:XAUUSD", digits: 2, bars, now: T0 + DAY }), 30);
   assert.equal((await readBrokerBars(db, { accountRef: "acct_0123456789abcdef", source: "mt5:x:XAUUSD", fromMs: 0 })).length, 30);
-  assert.ok(BROKER_ROWS_PER_STATEMENT * 13 <= 104 && BROKER_ROWS_PER_STATEMENT * 13 < 105);
+  assert.equal(BROKER_BAR_COLUMNS.length, 13);
+  assert.deepEqual(db.raw.prepare("PRAGMA table_info(broker_bars_1m)").all().map((c) => c.name), [...BROKER_BAR_COLUMNS], "the INSERT's columns are the table's, in order");
+  assert.ok(BROKER_ROWS_PER_STATEMENT * 13 <= 100, "D1 binds at most 100 parameters a statement");
+  assert.equal(BROKER_ROWS_PER_STATEMENT, 7);
   const cols = db.raw.prepare("PRAGMA table_info(broker_bars_1m)").all().map((c) => c.name);
   assert.ok(cols.includes("account_ref") && !cols.some((c) => /login|number/.test(c)));
 });
@@ -595,4 +599,252 @@ test("PL21. the ledger step end to end on D1 and KV: the active account's archiv
   assert.equal(await spikeSince(e, true, { now }), now);
   assert.equal(await spikeSince(e, true, { now: now + 60_000 }), now);
   assert.equal(await spikeSince(e, false, { now: now + 120_000 }), null);
+});
+
+// ---------------------------------------------------------------- B2: the backfill within D1's 100 bound parameters
+
+/**
+ * A D1 as Cloudflare runs it: a statement binding more than 100 parameters fails when it runs, and db.batch is one
+ * transaction (a failing statement rolls back the whole batch, which is how every 104-parameter backfill batch was
+ * lost). It records the largest statement bound and every statement run.
+ */
+function strictD1() {
+  const raw = new DatabaseSync(":memory:"), seen = { max: 0, queries: 0, batches: 0 };
+  const stmt = (sql, params = []) => ({
+    sql, params,
+    bind: (...a) => stmt(sql, a.map((v) => (v === undefined ? null : v))),
+    check() {
+      if (params.length > 100) throw new Error(`D1_ERROR: too many SQL variables (${params.length})`);
+      seen.max = Math.max(seen.max, params.length); seen.queries += 1;
+    },
+    async run() { this.check(); const r = raw.prepare(sql).run(...params); return { meta: { changes: Number(r.changes) } }; },
+    async first() { this.check(); return raw.prepare(sql).get(...params) ?? null; },
+    async all() { this.check(); return { results: raw.prepare(sql).all(...params) }; }
+  });
+  return {
+    raw, seen, prepare: (sql) => stmt(sql),
+    async batch(list) {
+      seen.batches += 1;
+      raw.exec("BEGIN");
+      try { const out = []; for (const st of list) out.push(await st.run()); raw.exec("COMMIT"); return out; } catch (e) { raw.exec("ROLLBACK"); throw e; }
+    }
+  };
+}
+const corpusSql = "CREATE TABLE corpus_bars (source TEXT NOT NULL, minute_ms INTEGER NOT NULL, o REAL NOT NULL, h REAL NOT NULL, l REAL NOT NULL, c REAL NOT NULL, tick_volume INTEGER, spread_points INTEGER, connection_version INTEGER NOT NULL, received_ms INTEGER NOT NULL, PRIMARY KEY (source, minute_ms))";
+function seedCorpus(db, source, version, from, n, { bars = null } = {}) {
+  const ins = db.raw.prepare("INSERT INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const b of bars ?? barsOf(from, n, { p: (i) => 4100 + Math.sin(i / 7) })) ins.run(source, b.t, b.o, b.h, b.l, b.c, b.v, b.s, version, b.t + M1);
+}
+const SRC = "mt5:demo-mt5:XAUUSD", REF = "acct_00112233aabbccdd";
+const omegaTables = "CREATE TABLE omega_bridge (id INTEGER PRIMARY KEY, state TEXT); CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT); CREATE TABLE omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER, actor TEXT, action TEXT, detail TEXT); CREATE TABLE omega_settings (id INTEGER PRIMARY KEY, settings TEXT, version INTEGER)";
+function connected(db, now, version = 92) {
+  db.raw.exec(omegaTables);
+  db.raw.prepare("INSERT INTO omega_bridge (id, state) VALUES (1, ?)").run(JSON.stringify({ account_ref: REF, server: "Demo-MT5", connected: true, received_ms: now - 1000, account: { login_hash: "f".repeat(64) }, symbol: { name: "XAUUSD", digits: 2, spread_points: 20 } }));
+  db.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, ?, 'stored', 'Demo-MT5')").run(version);
+}
+// A seeded walk with volume spikes: the sweep detector finds sweeps in it, so a replay records and scores readings.
+function walk(from, n, seed = 7) {
+  let s = seed, p = 4100;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  return Array.from({ length: n }, (_, i) => { const o = p; p += (rnd() - 0.5) * 1.2; const spike = rnd() < 0.06; return { t: from + i * M1, o, h: Math.max(o, p) + rnd() * (spike ? 2.5 : 0.4), l: Math.min(o, p) - rnd() * (spike ? 2.5 : 0.4), c: p, v: Math.round(spike ? 900 + rnd() * 200 : 80 + rnd() * 40), s: 20 }; });
+}
+
+test("PL22. the backfill lands 1, 7, 8, 240 and 2,419 bars on a D1 that runs a batch as one transaction and refuses more than 100 bound parameters", async () => {
+  for (const n of [1, 7, 8, 240, 2419]) {
+    reset();
+    const db = strictD1();
+    db.raw.exec(corpusSql);
+    seedCorpus(db, SRC, 90, T0, n);
+    const e = { DB: db, SIGNAL_CACHE: kv() };
+    const r = await backfillBrokerBars(e, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 90, now: T0 + 10 * DAY });
+    assert.deepEqual([r.status, r.sent, r.added, r.versions], ["backfilled", n, n, [90]], `${n} bars`);
+    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM broker_bars_1m WHERE connection_version = 90").get().n, n);
+    assert.equal(db.seen.max, Math.min(n, 7) * 13, `13 x ${Math.min(n, 7)} bound (${db.seen.max})`);
+    const marker = JSON.parse(await e.SIGNAL_CACHE.get(backfillKey(backfillIdentity(REF, SRC, [90]))));
+    assert.deepEqual([marker.added, marker.from_ms, marker.to_ms, marker.versions], [n, T0, T0 + (n - 1) * M1, [90]]);
+  }
+  // The production failure: one 104-parameter statement rolls back its whole batch, the statements before it too.
+  const db = strictD1();
+  db.raw.exec("CREATE TABLE x (a INTEGER)");
+  const ok = db.prepare("INSERT INTO x (a) VALUES (?)").bind(1);
+  const big = db.prepare(`INSERT INTO x (a) VALUES ${Array(104).fill("(?)").join(", ")}`).bind(...Array(104).fill(2));
+  await assert.rejects(db.batch([ok, big]), /too many SQL variables \(104\)/);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM x").get().n, 0, "rolled back");
+});
+
+test("PL23. archived versions are backfilled under their own version, with the live rows' legacy flag: v90 rows keep 90 under connection 92; a rerun is a no-op; a failure logs once and retries", async () => {
+  reset();
+  const db = strictD1();
+  db.raw.exec(corpusSql);
+  // Connection 90: 300 minutes in the corpus, the last 50 archived live; connection 92 (now): 10 minutes, all archived.
+  seedCorpus(db, SRC, 90, T0, 300);
+  seedCorpus(db, SRC, 92, T0 + 400 * M1, 10);
+  const now = T0 + 2 * DAY;
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 90, bars: barsOf(T0 + 250 * M1, 50, { p: (i) => 4100 + Math.sin((i + 250) / 7) }), now });
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, bars: barsOf(T0 + 400 * M1, 10, { p: (i) => 4100 + Math.sin(i / 7) }), now });
+  // Another account's source and a macro source are never read.
+  seedCorpus(db, "mt5:other:XAUUSD", 90, T0, 20);
+  seedCorpus(db, "mt5macro:demo-mt5:XAGUSD", 90, T0, 20);
+  const store = kv();
+  store.m.set(LIQUIDITY_BACKFILL_KEY, JSON.stringify({ at: "2026-11-22T23:03:16.663Z", rows: 4 }));
+  const e = { DB: db, SIGNAL_CACHE: store };
+  // The bridge state lags (no login hash: legacy): the backfill takes the live rows' flag (0) instead.
+  const r = await backfillBrokerBars(e, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, legacy: true, now });
+  assert.deepEqual([r.status, r.versions, r.sent, r.added], ["backfilled", [90, 92], 310, 250], "the v1 marker does not stop it");
+  const byVersion = Object.fromEntries(db.raw.prepare("SELECT connection_version AS v, COUNT(*) AS n FROM broker_bars_1m WHERE account_ref = ? AND source = ? GROUP BY v").all(REF, SRC).map((x) => [x.v, x.n]));
+  assert.deepEqual(byVersion, { 90: 300, 92: 10 }, "v90 rows keep 90 under connection 92");
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM broker_bars_1m WHERE legacy_ref <> 0").get().n, 0, "the live rows' legacy flag");
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM broker_bars_1m WHERE source <> ?").get(SRC).n, 0);
+  // The marker: the span the rows added cover (minutes 0-249 of connection 90).
+  const marker = JSON.parse(await store.get(backfillKey(r.identity)));
+  assert.deepEqual([marker.added, marker.from_ms, marker.to_ms >= T0 + 249 * M1, marker.rebuilt], [250, T0, true, false]);
+  const queries = db.seen.queries;
+  const again = await backfillBrokerBars(e, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, now: now + HOUR });
+  assert.deepEqual([again.status, again.identity], ["done", backfillIdentity(REF, SRC, [90, 92])], "a rerun is a no-op");
+  assert.ok(db.seen.queries - queries <= 1, `the version list comes from KV, not a scan of the archive (${db.seen.queries - queries} queries)`);
+  assert.deepEqual(JSON.parse(await store.get(backfillVersionsKey(REF, SRC))).versions, [90, 92]);
+  // A new connection version is a new identity: it backfills again, adding nothing already archived.
+  seedCorpus(db, SRC, 93, T0 + 500 * M1, 5);
+  const v93 = await backfillBrokerBars(e, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 93, now: now + 2 * HOUR });
+  assert.deepEqual([v93.versions, v93.added], [[90, 92, 93], 5]);
+  // The keys stay short whatever the number of versions (KV keys are at most 512 bytes).
+  const many = Array.from({ length: 400 }, (_, i) => i + 1);
+  assert.ok(backfillKey(backfillIdentity(REF, SRC, many)).length < 120);
+  assert.equal(backfillIdentity(REF, SRC, [92, 90]), backfillIdentity(REF, SRC, [90, 92]), "sorted");
+  assert.match(shortHash("90,92"), /^[0-9a-f]{8}$/);
+  // A failure: no marker, one liquidity_backfill_failed per identity, retried next step.
+  reset();
+  const broken = strictD1();
+  broken.raw.exec(corpusSql);
+  seedCorpus(broken, SRC, 90, T0, 30);
+  let fail = true;
+  const flaky = { raw: broken.raw, batch: (l) => broken.batch(l), prepare: (sql) => { if (fail && sql.startsWith("INSERT OR IGNORE INTO broker_bars_1m")) throw new Error("D1_ERROR: overloaded"); return broken.prepare(sql); } };
+  const logs = [];
+  const e2 = { DB: flaky, SIGNAL_CACHE: kv() };
+  const log = async (action, detail) => { logs.push([action, detail]); };
+  const f1 = await backfillBrokerBars(e2, { accountRef: REF, source: SRC, connectionVersion: 90, now, log });
+  const f2 = await backfillBrokerBars(e2, { accountRef: REF, source: SRC, connectionVersion: 90, now: now + 5 * M1, log });
+  assert.deepEqual([f1.status, f2.status], ["failed", "failed"]);
+  assert.deepEqual(logs, [["liquidity_backfill_failed", { error: "D1_ERROR: overloaded" }]], "one event per identity");
+  assert.equal(JSON.parse(await e2.SIGNAL_CACHE.get(backfillKey(backfillIdentity(REF, SRC, [90])))).status, "copying", "no finished marker after a failure");
+  assert.ok(await e2.SIGNAL_CACHE.get(backfillFailedKey(backfillIdentity(REF, SRC, [90]))));
+  fail = false;
+  const ok = await backfillBrokerBars(e2, { accountRef: REF, source: SRC, connectionVersion: 90, now: now + 10 * M1, log });
+  assert.deepEqual([ok.status, ok.added, logs.length], ["backfilled", 30, 1]);
+});
+
+test("PL24. the ledger step rebuilds the baseline (no reset) and replays only the minutes the backfill added, once, in batches; a rerun changes neither", async () => {
+  reset();
+  const { runLiquidityStep, liquidityReplayKey, LIQUIDITY_REPLAY_KEY } = await import("../src/lens-steps.mjs");
+  const { baselineKey, baselineIdentity, LIQUIDITY_STATE_KEY } = await import("../src/liquidity-lens.mjs");
+  const db = strictD1();
+  db.raw.exec(corpusSql);
+  const now = T0 + 2600 * M1;
+  connected(db, now);
+  // Connection 90: 2,400 minutes of a walk with sweeps, only the last 100 archived live; connection 92: 20, archived.
+  const v90 = walk(T0, 2400);
+  seedCorpus(db, SRC, 90, 0, 0, { bars: v90 });
+  seedCorpus(db, SRC, 92, T0 + 2450 * M1, 20);
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 90, bars: v90.slice(-100), now });
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, bars: barsOf(T0 + 2450 * M1, 20), now });
+  const store = kv();
+  // Production today: the day-one replay and the v1 backfill marker are written; the baseline and the state are
+  // current for this identity (same hour), so only the backfill can force the rebuild.
+  const acct = { accountRef: REF, source: SRC, digits: 2 };
+  store.m.set(LIQUIDITY_REPLAY_KEY, JSON.stringify({ at: "2026-11-20T10:57:32.094Z", sweeps: 0 }));
+  store.m.set(LIQUIDITY_BACKFILL_KEY, JSON.stringify({ at: "2026-11-22T23:03:16.663Z", rows: 4 }));
+  store.m.set(baselineKey(REF), JSON.stringify({ identity: baselineIdentity(acct), updated_ms: now - 10 * M1, hours: {}, baseline: "insufficient", baseline_weeks: 0, reset_at: "2026-11-01T00:00:00.000Z", hour_ms: Math.floor(now / HOUR) * HOUR }));
+  store.m.set(LIQUIDITY_STATE_KEY, JSON.stringify({ at_ms: now - 5 * M1, identity: baselineIdentity(acct), baseline_at: now - 10 * M1 }));
+  const logs = [];
+  const e = { DB: db, SIGNAL_CACHE: store };
+  const first = await runLiquidityStep(e, { now, log: async (action, detail) => { logs.push(action); } });
+  assert.deepEqual([first.status, first.backfill, first.backfill_added, first.rebuilt], ["ok", "backfilled", 2300, true]);
+  const built = JSON.parse(await store.get(baselineKey(REF)));
+  assert.equal(built.updated_ms, now, "rebuilt from the archive");
+  assert.ok(Object.keys(built.hours).length > 0);
+  assert.equal(built.reset_at, "2026-11-01T00:00:00.000Z", "a rebuild, not a reset");
+  assert.ok(!logs.includes("liquidity_baseline_reset"));
+  const identity = backfillIdentity(REF, SRC, [90, 92]);
+  assert.ok(first.replay && first.replay.sweeps > 0, `the added minutes' sweeps are replayed (${first.replay?.sweeps})`);
+  const replayed = JSON.parse(await store.get(liquidityReplayKey(identity)));
+  // The span the backfill added: minutes 0 to 2,299, to the statement (7 rows) that held the last added minute.
+  assert.deepEqual([replayed.from_ms, replayed.to_ms >= T0 + 2299 * M1 && replayed.to_ms < T0 + 2306 * M1], [T0, true], "only the span the backfill added");
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM lens_readings WHERE lens = 'liquidity' AND kind = 'sweep' AND at_ms > ?").get(replayed.to_ms).n, 0, "no reading from minutes that were already archived");
+  assert.equal(first.replay.added, db.raw.prepare("SELECT COUNT(*) AS n FROM lens_readings WHERE lens = 'liquidity' AND kind = 'sweep'").get().n);
+  assert.ok(db.seen.batches >= 1 && db.seen.max > 80 && db.seen.max <= 91, `7-row statements ran (${db.seen.max} bound)`);
+  assert.ok(JSON.parse(await store.get(backfillKey(identity))).rebuilt);
+  const second = await runLiquidityStep(e, { now: now + 5 * M1 });
+  assert.deepEqual([second.status, second.backfill, "backfill_added" in second, "replay" in second, "rebuilt" in second], ["ok", "done", false, false, false], "idempotent");
+});
+
+test("PL25. a step that fails after the marker still rebuilds and replays at the next step; a marker cut off before its final write is resumed", async () => {
+  const { runLiquidityStep, liquidityReplayKey } = await import("../src/lens-steps.mjs");
+  for (const cut of ["replay", "marker"]) {
+    reset();
+    const db = strictD1();
+    db.raw.exec(corpusSql);
+    const now = T0 + 2600 * M1;
+    connected(db, now);
+    const v90 = walk(T0, 2400);
+    seedCorpus(db, SRC, 90, 0, 0, { bars: v90 });
+    seedCorpus(db, SRC, 92, T0 + 2450 * M1, 20);
+    await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 90, bars: v90.slice(-100), now });
+    await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, bars: barsOf(T0 + 2450 * M1, 20), now });
+    const inner = kv();
+    inner.m.set("liquidity:replay:v1", JSON.stringify({ at: "2026-11-20T10:57:32.094Z", sweeps: 0 }));
+    const identity = backfillIdentity(REF, SRC, [90, 92]);
+    let failOnce = true;
+    // KV refuses one write once (a 429): the replay's marker, or the backfill's final marker after its rows committed.
+    const put = async (k, v, o) => {
+      const finalMarker = k === backfillKey(identity) && JSON.parse(v).status === "copied";
+      if (failOnce && ((cut === "replay" && k === liquidityReplayKey(identity)) || (cut === "marker" && finalMarker))) { failOnce = false; throw new Error("KV 429"); }
+      return inner.put(k, v, o);
+    };
+    const e = { DB: db, SIGNAL_CACHE: { ...inner, get: inner.get, put } };
+    const down = await runLiquidityStep(e, { now });
+    // The replay's marker failing fails the step; the backfill's final marker failing fails only the backfill.
+    assert.equal(cut === "replay" ? down.status : down.backfill, "failed", cut);
+    const back = await runLiquidityStep(e, { now: now + 5 * M1 });
+    assert.equal(back.status, "ok", cut);
+    assert.ok(back.replay && back.replay.sweeps > 0, `${cut}: replayed at the next step`);
+    assert.ok(await inner.get(liquidityReplayKey(identity)), cut);
+    const marker = JSON.parse(await inner.get(backfillKey(identity)));
+    assert.equal(marker.rebuilt, true, cut);
+    if (cut === "marker") assert.deepEqual([marker.resumed, marker.added, marker.from_ms], [true, 0, T0], "resumed over the whole span copied (what it added is no longer known)");
+    const third = await runLiquidityStep(e, { now: now + 10 * M1 });
+    assert.equal("replay" in third, false, `${cut}: once`);
+  }
+});
+
+test("PL26. runLensStep end to end over a backfill: the replayed readings reach the floor step (the backfill replay may floor lens B on day one, RFC §7.2-§7.3)", async () => {
+  reset();
+  const { runLensStep } = await import("../src/lens-steps.mjs");
+  const { belowFloor, LENS_FLOOR_KEY: FLOOR } = await import("../src/lens-policy.mjs");
+  const db = strictD1();
+  db.raw.exec(corpusSql);
+  const now = T0 + 2600 * M1;
+  connected(db, now);
+  const v90 = walk(T0, 2400, 11);
+  seedCorpus(db, SRC, 90, 0, 0, { bars: v90 });
+  seedCorpus(db, SRC, 92, T0 + 2450 * M1, 20);
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 90, bars: v90.slice(-100), now });
+  await archiveBrokerBars(db, { accountRef: REF, source: SRC, digits: 2, connectionVersion: 92, bars: barsOf(T0 + 2450 * M1, 20), now });
+  const store = kv();
+  store.m.set("liquidity:replay:v1", JSON.stringify({ at: "2026-11-20T10:57:32.094Z", sweeps: 0 }));
+  const e = { DB: db, SIGNAL_CACHE: store };
+  const out = await runLensStep(e, { now });
+  assert.equal(out.liquidity.status, "ok");
+  assert.ok(out.liquidity.replay.sweeps > 0);
+  const decisive = db.raw.prepare("SELECT outcome FROM lens_readings WHERE lens = 'liquidity' AND outcome IN ('hit', 'miss')").all();
+  assert.ok(decisive.length >= 20, `enough replayed readings to be scored (${decisive.length})`);
+  assert.ok(["ok", "floored"].includes(out.floor.status));
+  const score = out.floor.lenses.liquidity.score;
+  assert.equal(score.n, Math.min(decisive.length, score.n), "the floor step scores the replayed readings");
+  assert.ok(score.n >= 20);
+  // This walk's replay scores 40 hits of 93 (0.43): under the floor, so lens B drops to its floor at once, as the
+  // production backfill is expected to on day one (RFC §7.2-§7.3 working as designed: the floor lowers lens B's weight).
+  assert.deepEqual([score.hits, score.n, belowFloor(score, {})], [40, 93, true]);
+  assert.deepEqual([out.floor.status, out.floor.lenses.liquidity.floored], ["floored", true]);
+  assert.ok(JSON.parse(await store.get(FLOOR)).liquidity);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM omega_events WHERE action = 'lens_weight_floor'").get().n, 1);
 });

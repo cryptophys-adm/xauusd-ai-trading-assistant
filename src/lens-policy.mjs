@@ -204,6 +204,17 @@ export async function recordLensReading(db, { id, lens, kind, at_ms, mode = null
   return Number(r?.meta?.changes) > 0;
 }
 
+/**
+ * The statements of one reading, for a batch: the INSERT OR IGNORE, and with an outcome the UPDATE that scores a
+ * pending row (upsertReading's two steps; B2's replay sends them through db.batch). The schema must exist.
+ */
+export function lensReadingStatements(db, { id, lens, kind, at_ms, mode = null, side = null, outcome = null, detail = null }, { now = Date.now() } = {}) {
+  const out = [db.prepare("INSERT OR IGNORE INTO lens_readings (id, lens, kind, at_ms, mode, side, outcome, detail_json, scored_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(String(id), lens, kind, at_ms, mode, side, outcome, detail ? JSON.stringify(detail) : null, outcome ? now : null)];
+  if (outcome) out.push(db.prepare("UPDATE lens_readings SET outcome = ?, scored_ms = ? WHERE id = ? AND outcome IS NULL").bind(outcome, now, String(id)));
+  return out;
+}
+
 /** Pure: the score of readings (newest first): hits / (hits + misses) over the newest `window` decisive ones, per kind too. */
 export function lensScore(rows, { window = 60 } = {}) {
   const decisive = (rows || []).filter((r) => r.outcome === "hit" || r.outcome === "miss").slice(0, window);
