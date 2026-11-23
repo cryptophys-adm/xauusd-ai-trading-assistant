@@ -101,9 +101,14 @@ test("CP3 the page renders over B9's contract on each tab, each top-level key nu
   clean(await page(CP, { agents: { status: "error" }, alloc: { error: "Not found" } }));
   // The heading: the view's own values on the feed scale; the decision's time in UTC and local.
   const html = await page(CP);
-  for (const t of ["patterns on", "calibration auto", "calibrated 22m ago · hourly", "no horizon yet", "price 4,100.00 · feed scale", "ATR (1H) 2.19", "decision 15:00 UTC"]) assert.ok(html.includes(t), t);
-  // OM-LEAN: one scale per row of chips (the price's), no heading chip repeating the market-closed panel.
-  assert.ok(!html.includes("ATR (1H) 2.19 · feed scale"));
+  for (const t of ["patterns on", "calibration auto", "calibrated 22m ago", "price 4,100.00 · feed scale", "ATR (1H) 2.19", "decision 15:00 UTC"]) assert.ok(html.includes(t), t);
+  // OM-LEAN: one scale per row of chips (the price's), no heading chip repeating the market-closed panel, no "· hourly"
+  // beside the record panel's "replayed hourly", no "no horizon yet" chip beside the horizon Empties, no "reach: later
+  // PR" on each plan row beside the "No plan reach yet" Empty, and the chart's scale once (its axis caption).
+  assert.ok(!html.includes("ATR (1H) 2.19 · feed scale") && !html.includes("ago · hourly") && !html.includes("no horizon yet") && !html.includes("reach: later PR"));
+  assert.ok(html.includes("No plan reach yet") && html.includes("No horizon yet") && html.includes("replayed hourly"));
+  assert.equal((html.match(/Prices on the feed scale/g) ?? []).length, 1, "the patterns' note only; no legend phrase");
+  assert.match(src("components/IntelChart.tsx"), /caption = "feed scale"/, "the axis caption keeps the scale");
   // The mockup's "sample data" chip labelled invented values: the page shows none.
   assert.ok(!html.includes("sample data"));
   // A registry entry for each state in the render check.
@@ -118,7 +123,7 @@ test("CP4 the later backend PR's fields null: the not-yet Empties; filled: the r
   for (const p of CP.patterns) for (const k of ["held", "breakout_bars_ago", "bars_since_breakout", "horizon_bars", "bars_left"]) assert.equal(p[k], null, `${p.id}.${k} null at B9`);
   assert.equal(CP.seat.horizon_bars, null);
   const launch = await page(CP);
-  for (const t of ["No held breakouts yet", "No horizon yet", "No plan reach yet", "No horizon for the seat yet", "Filled by a later backend PR.", "reach: later PR", "judged on 4 bars"]) assert.ok(launch.includes(t), t);
+  for (const t of ["No held breakouts yet", "No horizon yet", "No plan reach yet", "No horizon for the seat yet", "Filled by a later backend PR.", "judged on 4 bars"]) assert.ok(launch.includes(t), t);
   assert.ok(!launch.includes("Since breakout") && !/\d bars left/.test(launch), "bars left only when present");
   const later = await page(u.PATTERNS_FULL);
   clean(later);
@@ -171,7 +176,8 @@ test("CP5 snapToCandle: 15m and 1H exact, a daily close to the day it closes, nu
   assert.equal(CP.charts.D.label, "daily");
   assert.deepEqual(Object.values(u.TF_ROOM), Object.keys(CP.seat.rooms));
   const daily = await page(CP, { tf: "D" });
-  assert.ok(daily.includes("1D (daily) · last 60 closed bars"));
+  assert.ok(daily.includes("(daily) · last 60 closed bars") && !daily.includes("1D (daily)"), "the tab names the chart; B9's own label where it differs");
+  assert.ok((await page(CP, { tf: "60" })).includes(">last 60 closed bars<"));
   assert.doesNotMatch(textOf(daily).filter((t) => !t.includes("(daily)")).join("\n"), /\bdaily\b/, "1D everywhere else");
 });
 
@@ -278,7 +284,7 @@ test("CP9 the states: mode off, intel_views_off, 500 and 404 with the code, no p
   const u = await ui();
   const off = await page(u.PATTERNS_OFF);
   assert.ok(off.includes("Chart patterns off") && off.includes("Switched off by the owner: the Projection Agent reads no chart pattern. Its projection levels stay."));
-  assert.match(off, /class="chip [^"]*text-off">patterns off</);
+  assert.equal((off.match(/class="chip [^"]*text-off">patterns off</g) ?? []).length, 1, "the heading's chip only (OM-LEAN)");
   assert.ok(!off.includes("Lines on the chart"), "no chart while off");
   const views = await page({ status: "not_found", reason: "intel_views_off" });
   assert.ok(views.includes("intel_views_off") && views.includes("The Intelligence views are off on the AI Worker."));
@@ -302,6 +308,7 @@ test("CP9 the states: mode off, intel_views_off, 500 and 404 with the code, no p
   const NOCAL = { version: null, computed_at: null, base_rate: null, resolved: null, pending: null, patterns: null, by_tf: null, open: null };
   const calOff = await page(u.merged(CP, { calibration_mode: "off", calibration: NOCAL }));
   assert.ok(calOff.includes("No measured record") && calOff.includes("Calibration is switched off by the owner: every pattern keeps its default weights.") && calOff.includes("calibration off"));
+  assert.equal((calOff.match(/>calibration off</g) ?? []).length, 1, "the heading's chip only (OM-LEAN)");
   assert.ok((await page(u.merged(CP, { calibration: NOCAL }))).includes("No measured record yet"));
   const noBars = await page(u.merged(CP, { charts: { "60": { ohlcv: [] } } }), { tf: "60" });
   assert.ok(noBars.includes("No 1H candles yet") && noBars.includes("The chart&#x27;s closed bars come with /api/chart-patterns every 2 minutes."));
@@ -362,7 +369,7 @@ test("CP12 every price carries its scale (the feed's)", { skip: NO_UI_DEPS }, as
     const html = await page(CP, { tf });
     // A table of prices names the feed scale in its head; a panel of prices says "Feed scale." or "feed scale" in its note.
     for (const t of [...html.matchAll(/<table[\s\S]*?<\/table>/g)].map((m) => m[0]).filter((x) => PRICE.test(x))) assert.match(t.slice(0, t.indexOf("</thead>")), /[Ff]eed scale/, "the feed scale in the head");
-    assert.ok(html.includes("Prices on the feed scale"), "the chart's legend and the patterns' note");
+    assert.ok(html.includes("Prices on the feed scale."), "the patterns' note");
     if (tf === "15" || tf === "60") assert.ok(html.includes("trade agent. Feed scale."), "the plan box");
     for (const t of textOf(html.replace(/<table[\s\S]*?<\/table>/g, "")).filter((x) => PRICE.test(x) && /price|ATR/.test(x))) assert.match(t, /feed scale/, t);
   }

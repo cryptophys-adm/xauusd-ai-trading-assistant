@@ -59,8 +59,6 @@ export const sideOf = (plan: any): Dir => (plan?.side === "BUY" ? 1 : plan?.side
 const sideWord = (s: Dir) => (s === 1 ? "▲ long" : s === -1 ? "▼ short" : "· no side");
 /** An R multiple, one decimal: "1.4R". */
 const rText = (x: unknown): string | null => (num(x) ? `${x.toFixed(1)}R` : null);
-/** A chart key's label with B9's own when it differs: "1D (daily)". */
-const chartWord = (d: any, tf: TfKey) => { const own = str(d?.charts?.[tf]?.label); return own && own !== TF_LABEL[tf] ? `${TF_LABEL[tf]} (${own})` : TF_LABEL[tf]; };
 const nameOf = (p: any) => str(p?.name) ?? words(p?.id);
 
 /** One agent plan of the latest decision, with its pattern and chart. */
@@ -213,8 +211,9 @@ function headingChips(d: any, now: number) {
     <>
       <Badge tone={d?.mode === "off" ? "off" : "ok"}>{d?.mode === "off" ? "patterns off" : "patterns on"}</Badge>
       <Badge tone={d?.calibration_mode === "off" ? "off" : "ok"}>{d?.calibration_mode === "off" ? "calibration off" : `calibration ${str(d?.calibration_mode) ?? "auto"}`}</Badge>
-      {Number.isFinite(computed) ? <Badge tone="plain">{now >= computed ? `calibrated ${ageText(now - computed)} ago` : `calibrated ${clockPair(computed)}`} · hourly</Badge> : null}
-      {horizonOn(d) ? <Badge tone="ok">horizon on</Badge> : <Badge tone="off">no horizon yet</Badge>}
+      {Number.isFinite(computed) ? <Badge tone="plain">{now >= computed ? `calibrated ${ageText(now - computed)} ago` : `calibrated ${clockPair(computed)}`}</Badge> : null}
+      {/* While the horizon is not filled, its Empties say so (OM-LEAN: no chip repeating them). */}
+      {horizonOn(d) ? <Badge tone="ok">horizon on</Badge> : null}
       {num(d?.price) ? <Badge tone="plain">price {price(d.price)} · feed scale</Badge> : null}
       {num(d?.atr_h1) ? <Badge tone="plain">ATR (1H) {d.atr_h1.toFixed(2)}</Badge> : null}
       {Number.isFinite(close) ? <Badge tone="plain">decision {clockPair(close)}</Badge> : null}
@@ -248,7 +247,6 @@ const Item = ({ swatch, children }: { swatch?: ReactNode; children: ReactNode })
 function Legend({ plan, band, later }: { plan: boolean; band: boolean; later: boolean }) {
   return (
     <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1.5 text-[11px] text-fg-2">
-      <span>Prices on the feed scale</span>
       <Item swatch={<LineSwatch color={T.bullFill} />}><span className="text-bull">▲ up</span></Item>
       <Item swatch={<LineSwatch color={T.bearFill} />}><span className="text-bear">▼ down</span></Item>
       <Item swatch={<LineSwatch color={T.neutralFill} dash="4 3" />}><span className="text-neutral">· forming</span></Item>
@@ -413,8 +411,8 @@ function planCell(agents: any, p: any) {
   return (
     <>
       {labelOf(agents, plan.agent)}<br />
-      <span className={s === 1 ? "text-bull" : s === -1 ? "text-bear" : "text-neutral"}>{sideWord(s)}</span> <Muted>·</Muted> {str(plan.status) ?? "—"}<br />
-      {reach ? REACH[reach] ?? words(reach) : <Muted>reach: later PR</Muted>}
+      <span className={s === 1 ? "text-bull" : s === -1 ? "text-bear" : "text-neutral"}>{sideWord(s)}</span> <Muted>·</Muted> {str(plan.status) ?? "—"}
+      {reach ? <><br />{REACH[reach] ?? words(reach)}</> : null}
     </>
   );
 }
@@ -428,7 +426,9 @@ function PatternsPanel({ d, tf, agents, poll }: { d: any; tf: TfKey; agents: any
   const pats = arr(d?.patterns).filter((p) => p?.tf === tf && p != null && typeof p === "object");
   const rows = plansOf(d);
   const n = arr(d?.charts?.[tf]?.ohlcv).length;
-  const right = <Badge tone="plain">{chartWord(d, tf)} · last {n} closed bars</Badge>;
+  // The active tab names the chart; B9's own label only where it differs ("(daily)" on 1D).
+  const own = str(d?.charts?.[tf]?.label);
+  const right = <Badge tone="plain">{own && own !== TF_LABEL[tf] ? `(${own}) · ` : ""}last {n} closed bars</Badge>;
   if (!pats.length) {
     return (
       <Panel title="Patterns on this chart" icon={<Shapes className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} right={right}>
@@ -516,7 +516,7 @@ function RecordPanel({ d, poll }: { d: any; poll?: Poll }) {
   const c = obj(d?.calibration);
   const off = d?.calibration_mode === "off";
   const empty = !c || [c.version, c.computed_at, c.resolved, c.base_rate].every((x) => x == null);
-  const right = off ? <Badge tone="off">calibration off</Badge> : !empty ? (
+  const right = off ? undefined : !empty ? (
     <span className="flex flex-wrap items-center gap-1.5">{num(c!.base_rate) && num(c!.resolved) ? <Badge tone="plain">pooled {pc(c!.base_rate)} of {c!.resolved}</Badge> : null}<Badge tone="plain">replayed hourly</Badge></span>
   ) : undefined;
   const body = (() => {
@@ -765,7 +765,7 @@ export function PatternsView({ d, agents = null, alloc = null, now = Date.now(),
     <Page heading={<Heading chips={headingChips(d, now)} />}>
       {marketClosedAt(now) ? <MarketClosed now={now} /> : null}
       {off ? (
-        <Panel title="Chart patterns" icon={<Shapes className="h-3.5 w-3.5 text-cyan-300" />} right={<Badge tone="off">patterns off</Badge>}>
+        <Panel title="Chart patterns" icon={<Shapes className="h-3.5 w-3.5 text-cyan-300" />}>
           <Empty when="Switched off by the owner: the Projection Agent reads no chart pattern. Its projection levels stay.">Chart patterns off</Empty>
         </Panel>
       ) : (
