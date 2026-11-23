@@ -10,7 +10,7 @@ import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
 import { T, rgba, type Tone } from "../lib/tokens";
 import {
   LIQUIDITY_READS, LENS_MIN_N, ROLE_WORD, SCALE, WEEKDAYS, ZONE_COLOR, ZONE_TEXT, ageText, arr, atrDistance, clockPair, closedHour,
-  LIQUIDITY_CARD_MAX, cardSummary, cardWeightText, feedLevels, intelGet, kindWord, kindsInOrder, knownBasis, leanReasonText, localDayTime, localTime, marketClosedAt, nextOpenMs, num, nyClock,
+  LIQUIDITY_CARD_MAX, cardSummary, conditionText, conditionTone, levelsText, roomsNote, sessionText, timesText, cardWeightText, feedLevels, intelGet, kindWord, kindsInOrder, knownBasis, leanReasonText, localDayTime, localTime, marketClosedAt, nextOpenMs, num, nyClock,
   nyHourOfWeek, nyZoneText, obj, openText, pc, pctl, price, priceRange, roleOf, scoreKindWord, signed, str, utcDayTime, utcTime, words, zoneLabel,
   type FeedLevel, type Role
 } from "../lib/intel";
@@ -388,7 +388,7 @@ const M15 = 900_000;
 const DAY = 96 * M15;
 
 /** The facts chart of the last 24 hours, one SVG per width (the phone's with fewer time ticks). Pure. */
-function FactsSvg({ readings, sweeps, phone, id }: { readings: any[]; sweeps: any[]; phone: boolean; id: string }) {
+function FactsSvg({ readings, sweeps, phone, id, widen = null }: { readings: any[]; sweeps: any[]; phone: boolean; id: string; widen?: number | null }) {
   const W = phone ? 334 : 640, H = phone ? 200 : 230;
   const left = 30, right = 34, top = 10, bot = 34;
   const pw = W - left - right, ph = H - top - bot;
@@ -409,13 +409,17 @@ function FactsSvg({ readings, sweeps, phone, id }: { readings: any[]; sweeps: an
   const lines = (key: string, f: (v: number) => number) => runs((r) => !excluded(r) && num(r?.[key])).map((seg) => seg.map((r) => `${x(r.at_ms).toFixed(1)},${f(r[key]).toFixed(1)}`).join(" "));
   const ticks = (phone ? [16, 48, 80] : [8, 24, 40, 56, 72, 88]).map((k) => start + k * M15);
   const local = (t: number) => { const u = utcDayTime(t).slice(0, 3), l = localDayTime(t); return l.slice(0, 3) !== u ? l : localTime(t); };
+  const wide = num(widen) && widen > 0 && widen <= 4 ? widen : null;
   return (
     <svg role="img" aria-label="Tick volume percentile, 15m volume percentile and spread against the hour's median, last 24 hours" viewBox={`0 0 ${W} ${H}`} className={clsx("block h-auto w-full", phone ? "sm:hidden" : "hidden sm:block")} style={{ fontFamily: "ui-monospace, JetBrains Mono, monospace" }}>
       <defs><pattern id={id} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="1.5" height="5" fill={rgba(T.offFill, 0.25)} /></pattern></defs>
       {runs(closed).map((seg, i) => { const a = x(seg[0].at_ms) - 2, b = x(seg[seg.length - 1].at_ms) + 2; return <g key={`c${i}`}><rect x={a} y={top} width={b - a} height={ph} fill={`url(#${id})`} stroke="rgba(255,255,255,0.06)" /><text x={(a + b) / 2} y={top + 10} fontSize="9" fill={T.off} textAnchor="middle">closed</text></g>; })}
       {runs((r) => !excluded(r) && r?.thin === true).map((seg, i) => { const a = x(seg[0].at_ms) - 2, b = x(seg[seg.length - 1].at_ms) + 2; return <g key={`t${i}`}><rect x={a} y={top} width={b - a} height={ph} fill={rgba(T.offFill, 0.14)} /><text x={(a + b) / 2} y={top + 10} fontSize="9" fill={T.off} textAnchor="middle">thin</text></g>; })}
       {[0, 0.5, 1].map((v) => <g key={v}><line x1={left} x2={left + pw} y1={y(v)} y2={y(v)} stroke="rgba(255,255,255,0.05)" /><text x={left - 5} y={y(v) + 3} fontSize="9" fill={T.fg2} textAnchor="end">{v * 100}</text></g>)}
-      {[1, 2, 3, 4].map((s) => <text key={s} x={left + pw + 5} y={ys(s) + 3} fontSize="9" fill={T.fg2}>{s}x</text>)}
+      {[1, 2, 3, 4].map((s) => <text key={s} x={left + pw + 5} y={ys(s) + 3} fontSize="9" fill={s === wide ? T.late : T.fg2}>{s}x</text>)}
+      {/* The mode's spread_widen (conditions.spread.widen, B16): a dashed amber line on the spread axis, only with that field. */}
+      {wide != null ? <line x1={left} x2={left + pw} y1={ys(wide)} y2={ys(wide)} stroke={T.lateFill} strokeWidth="1" strokeDasharray="4 3" /> : null}
+      {wide != null && ![1, 2, 3, 4].includes(wide) ? <text x={left + pw + 5} y={ys(wide) + 3} fontSize="9" fill={T.late}>{Number(wide.toFixed(2))}x</text> : null}
       <text x={left - 4} y={top + ph + 13} fontSize="8" fill={T.muted} textAnchor="end">UTC</text>
       <text x={left - 4} y={top + ph + 24} fontSize="8" fill={T.muted} textAnchor="end">{zoneLabel(end)}</text>
       {ticks.map((t) => <g key={t}><text x={x(t)} y={top + ph + 13} fontSize="9" fill={T.fg2} textAnchor="middle">{utcTime(t)}</text><text x={x(t)} y={top + ph + 24} fontSize="9" fill={T.muted} textAnchor="middle">{local(t)}</text></g>)}
@@ -431,20 +435,75 @@ function FactsSvg({ readings, sweeps, phone, id }: { readings: any[]; sweeps: an
   );
 }
 
-/** The facts chart's legend. The mode's thresholds come with backend B16 (conditions); until then the marks are the facts' own flags. */
-function FactsLegend({ mode }: { mode: string | null }) {
+/**
+ * The facts chart's legend. With B16's conditions it names the mode's thresholds (spread.widen, activity.spike_pctl,
+ * depth.thin_pctl; "thresholds of the intraday mode") and the chart draws the widen line; without them, the marks are
+ * the facts' own flags and no threshold is named.
+ */
+function FactsLegend({ mode, c }: { mode: string | null; c: any }) {
   const sw = (props: SVGProps<SVGLineElement>) => <svg aria-hidden="true" width="18" height="6" viewBox="0 0 18 6"><line x1="0" x2="18" y1="3" y2="3" {...props} /></svg>;
+  const widen = num(c?.spread?.widen) && c.spread.widen > 0 ? c.spread.widen : null;
+  const spike = num(c?.activity?.spike_pctl) ? c.activity.spike_pctl : null;
+  const thin = num(c?.depth?.thin_pctl) ? c.depth.thin_pctl : null;
+  const cmode = str(c?.mode);
   return (
     <div className="mb-2 flex flex-wrap gap-x-3.5 gap-y-1.5 text-[11px] text-fg-2">
       <Item swatch={sw({ stroke: T.fg, strokeWidth: 1.5 })}>Tick volume percentile</Item>
       <Item swatch={sw({ stroke: T.fg2, strokeWidth: 1.25 })}>15m volume percentile</Item>
       <Item swatch={sw({ stroke: T.fg2, strokeWidth: 1.25, strokeDasharray: "1 2.5" })}>Spread vs the hour's median (right axis)</Item>
-      <Item swatch={<svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="2.6" fill="none" stroke={T.lateFill} strokeWidth="1.25" /></svg>}>Spread widened</Item>
-      <Item swatch={<span aria-hidden="true" className="inline-block h-[7px] w-[7px] rounded-full bg-late-fill" />}>Volume spike</Item>
-      <Item swatch={<Swatch style={{ background: rgba(T.offFill, 0.25) }} />}>Thin</Item>
+      {widen != null ? <Item swatch={sw({ stroke: T.lateFill, strokeWidth: 1, strokeDasharray: "4 3" })}>Spread {timesText(widen)} (widened)</Item> : null}
+      <Item swatch={<svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="2.6" fill="none" stroke={T.lateFill} strokeWidth="1.25" /></svg>}>{widen != null ? `Spread above ${timesText(widen)}` : "Spread widened"}</Item>
+      <Item swatch={<span aria-hidden="true" className="inline-block h-[7px] w-[7px] rounded-full bg-late-fill" />}>{spike != null ? `Spike, ${pctl(spike)} or more` : "Volume spike"}</Item>
+      <Item swatch={<Swatch style={{ background: rgba(T.offFill, 0.25) }} />}>{thin != null ? `Thin, ${pctl(thin)} or less` : "Thin"}</Item>
       <Item swatch={<Swatch style={HATCH} />}>Closed: daily break and rollover</Item>
       <Item swatch={<span><span className="text-bull">▲</span><span className="text-bear">▼</span></span>}>Sweep</Item>
-      {mode ? <span className="text-muted">as lens B flags them in the {mode} mode</span> : null}
+      {cmode && (widen != null || spike != null || thin != null) ? <span className="text-muted">thresholds of the {cmode} mode</span> : mode ? <span className="text-muted">as lens B flags them in the {mode} mode</span> : null}
+    </div>
+  );
+}
+
+const TONE_TEXT: Record<string, string> = { fault: "text-fault", late: "text-late" };
+
+/**
+ * Lens B's conditions (backend B16, /api/liquidity `conditions`): spread, depth and activity in words with their ratio or
+ * percentile (a status tone only on a warning, conditionTone), the session and the levels in one line each, then the
+ * mode, the baseline and the time once, quietly; stale (older than 15 minutes) in the late tone with its age.
+ */
+function ConditionsBlock({ c, now, need }: { c: any; now: number; need: number }) {
+  const at = num(c?.at_ms) ? c.at_ms : null;
+  const age = at != null ? now - at : null;
+  const stale = c?.stale === true || (age != null && age > STATE_FRESH_MS);
+  const baseline = str(c?.baseline);
+  const weeks = num(c?.baseline_weeks) ? c.baseline_weeks : null;
+  const meta = [str(c?.mode) ? `${c.mode} mode` : null, baseline ? `baseline ${baseline}${baseline !== "sufficient" && weeks != null ? `, ${weeks} of ${need} weeks` : ""}` : null].filter(Boolean).join(" · ");
+  return (
+    <div className="mb-3 flex flex-col gap-1.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-fg">
+        {(["spread", "depth", "activity"] as const).map((k) => {
+          const tone = conditionTone(k, c?.[k]?.state);
+          return <span key={k} className={tone ? TONE_TEXT[tone] : undefined}>{conditionText(k, c?.[k])}</span>;
+        })}
+      </div>
+      <div className="text-[12px] text-fg-2">{sessionText(c?.session)}</div>
+      <div className="text-[12px] text-fg-2">{levelsText(c?.levels)}</div>
+      <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+        {meta ? <span>{meta}</span> : null}
+        {at != null ? <span className="mono whitespace-nowrap text-fg-2">{clockPair(at)}</span> : null}
+        {stale ? <span className="text-late">stale{age != null ? ` ${ageText(age)}` : ""}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/** The words the 15m and 1H risk desks and moderators read (conditions.line), or why the rooms are not reading them. */
+function RoomsLine({ c }: { c: any }) {
+  const line = str(c?.line);
+  if (!line) return null;
+  const note = roomsNote(c);
+  return (
+    <div className="mt-3 flex flex-col gap-1 border-t border-white/5 pt-2.5">
+      <span className="text-[11px] text-muted">{note ?? "What the rooms read"}</span>
+      <p className="text-[12px] leading-snug text-fg-2">{line}</p>
     </div>
   );
 }
@@ -471,6 +530,8 @@ export function factsGone(d: any, now: number): { title: string; when: string; c
 
 function FactsPanel({ d, now, polls }: { d: any; now: number; polls: Polls }) {
   const f = obj(d?.facts);
+  // Lens B's conditions (B16): null while its facts are unavailable (then factsGone's Empty says why).
+  const c = obj(d?.conditions);
   const gone = factsGone(d, now);
   const readings = arr(d?.readings).filter((r) => num(r?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const at = d?.state?.at_ms;
@@ -479,6 +540,12 @@ function FactsPanel({ d, now, polls }: { d: any; now: number; polls: Polls }) {
     if (!f) return <Empty when="Lens B writes them each minute while the market is open.">No facts yet</Empty>;
     return (
       <>
+        {c ? (
+          <>
+            <ConditionsBlock c={c} now={now} need={num(d?.baseline?.sufficient_weeks) ? d.baseline.sufficient_weeks : 4} />
+            {str(f.basis) ? <Row className="mb-2.5"><Badge tone="plain">{BASIS_WORDS[f.basis] ?? `percentile basis: ${words(f.basis)}`}</Badge></Row> : null}
+          </>
+        ) : (
         <Row className="mb-2.5">
           <Badge tone={f.vol_spike ? "late" : "plain"}>tick volume {pctl(f.vol_pctl)}{f.vol_spike ? " · spike" : ""}</Badge>
           <Badge tone={f.thin ? "off" : "plain"}>15m volume {pctl(f.vol_pctl_15m)}{f.thin ? " · thin" : ""}</Badge>
@@ -486,13 +553,16 @@ function FactsPanel({ d, now, polls }: { d: any; now: number; polls: Polls }) {
           {str(f.basis) ? <Badge tone="plain">{BASIS_WORDS[f.basis] ?? `percentile basis: ${words(f.basis)}`}</Badge> : null}
           {str(f.excluded) ? <Badge tone="off">excluded minute ({words(f.excluded)})</Badge> : null}
         </Row>
-        <FactsLegend mode={str(d?.state?.mode)} />
+        )}
+        {!c ? <div className="mb-2.5"><Empty when="The AI Worker gives none while lens B has no available facts.">No conditions yet</Empty></div> : null}
+        <FactsLegend mode={str(d?.state?.mode)} c={c} />
         {readings.length ? (
           <>
-            <FactsSvg readings={readings} sweeps={arr(d?.sweeps)} phone={false} id="liq-hatch-wide" />
-            <FactsSvg readings={readings} sweeps={arr(d?.sweeps)} phone id="liq-hatch-phone" />
+            <FactsSvg readings={readings} sweeps={arr(d?.sweeps)} phone={false} id="liq-hatch-wide" widen={c?.spread?.widen} />
+            <FactsSvg readings={readings} sweeps={arr(d?.sweeps)} phone id="liq-hatch-phone" widen={c?.spread?.widen} />
           </>
         ) : <Empty when="The ledger step records one every 5 minutes while the market is open.">No readings in the last 24 hours</Empty>}
+        {c ? <RoomsLine c={c} /> : null}
       </>
     );
   })();
