@@ -6,7 +6,10 @@ import { DivergingBar, leanColor } from "./charts";
 import { GLOBAL_PATH, useMarket, leanLabel } from "../lib/market";
 import { useWarRoom } from "../lib/warroom";
 import { candleWhen, pct, utc } from "../lib/format";
-import SetupLifecycle, { zoneAt } from "./SetupLifecycle";
+import SetupLifecycle from "./SetupLifecycle";
+import { EntryZoneCell, OmegaLimitNote, PlanLadder, tradePlan } from "./PlanLadder";
+import { bandSource, gmt7ClockOf } from "../lib/entryZone";
+import { localNow, planMark } from "../lib/pollState";
 import { TEXT, directionGlyph, edgeTone, type Tone } from "../lib/tokens";
 
 /** The strategy's state as a status: ok, late (needs attention), fault, off. */
@@ -25,34 +28,6 @@ function Pass({ v }: { v: boolean | null | undefined }) {
   if (v === true) return <Check className="h-3.5 w-3.5 shrink-0 text-ok" aria-label="passes" />;
   if (v === false) return <X className="h-3.5 w-3.5 shrink-0 text-fault" aria-label="fails" />;
   return <Minus className="h-3.5 w-3.5 shrink-0 text-muted" aria-label="not applicable" />;
-}
-
-/** The trade plan as a price ladder: targets above, entry, stop below (mirrored for a short). */
-function PlanLadder({ plan, long, minRrr }: { plan: any; long: boolean; minRrr: number | null }) {
-  const rows = [
-    { k: "TP2", price: plan.tp2, note: plan.tp2_note, rr: plan.rrr?.tp2, tone: "text-bull" },
-    { k: "TP1", price: plan.tp1, note: plan.tp1_note, rr: plan.rrr?.tp1, tone: "text-bull" },
-    { k: "Entry", price: plan.entry, note: plan.entry_note, rr: null, tone: "text-fg" },
-    { k: "Stop", price: plan.stop, note: plan.stop_note, rr: null, tone: "text-bear" },
-    { k: "SL+", price: plan.progressive_stop, note: "breakeven stop", rr: null, tone: "text-neutral" }
-  ];
-  const ordered = long ? rows : [...rows].reverse();
-  return (
-    <div className="glass-inner mt-3 divide-y divide-white/5" role="table" aria-label="Key levels of the trade plan">
-      {ordered.map((r) => (
-        <div key={r.k} className="flex items-center gap-2 px-3 py-1.5" role="row">
-          <span className={`mono w-11 text-[11px] font-semibold ${r.tone}`}>{r.k}</span>
-          <span className="mono w-16 text-[12.5px] font-semibold text-fg">{r.price?.toFixed?.(2) ?? "—"}</span>
-          <span className="min-w-0 flex-1 truncate text-[11px] text-fg-2" title={r.note}>{r.note}</span>
-          {r.rr != null && <span className={`mono text-[11px] ${minRrr == null || r.rr >= minRrr ? "text-ok" : "text-late"}`}>{r.rr}R</span>}
-        </div>
-      ))}
-      <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-muted">
-        <span>risk {plan.risk?.toFixed?.(2)}{minRrr == null ? "" : minRrr > 0 ? ` · min ${minRrr}R` : " · target at nearest level"}</span>
-        {!plan.at_level && <span className="text-violet-300">pullback entry</span>}
-      </div>
-    </div>
-  );
 }
 
 const CHECK_TEXT: Record<string, string> = { market_open: "market open", fresh: "rooms current", quorum: "quorum", confirmation: "confirmation", no_veto: "no veto", levels: "key-level plan", reward: "reward", room: "room between zones", confidence: "confidence" };
@@ -189,12 +164,6 @@ const STATUS_NOTE: Record<WitnessStatus, string | null> = {
   no_data: "nothing to read: left out of the quorum"
 };
 
-/** The trade of a decision as the plan ladder's input (the chosen target carries its note; the entry its key-level zone). */
-function tradePlan(t: any, levels?: any[]) {
-  const z = zoneAt(levels, t.entry);
-  return { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, risk: t.risk, rrr: t.rrr_all, at_level: t.at_level, entry_note: [z ? `zone ${z.low.toFixed(2)}–${z.high.toFixed(2)}` : null, t.entry_note].filter(Boolean).join(" · "), stop_note: t.stop_note, progressive_stop: t.progressive_stop, tp1_note: t.target === "tp1" ? `target · ${t.tp_note ?? ""}` : "", tp2_note: t.target === "tp2" ? `target · ${t.tp_note ?? ""}` : "" };
-}
-
 /**
  * The witnesses' lean split into the technical side (the rooms, the strategy engine, the strategy agents, key levels, regime,
  * trend) and the fundamental side (news, the macro room, the dollar and yields, the calendar), each the
@@ -293,6 +262,11 @@ export default function GlobalDecision() {
   };
   const changeMode = (next: string) => postMode({ mode: next });
   const lastAuto = modeSel?.last_switch && modeSel.last_switch.actor !== "owner" && modeSel.last_switch.to === mode && (Date.now() - Number(modeSel.last_switch.at_ms ?? 0)) < 86_400_000 ? modeSel.last_switch : null;
+  // EZ1 (owner-approved mockup, 2026-11-23): the entry zone from the plan the chart's Entry band reads too (the engine's
+  // trade when the engine is on, else the strategy plan); a stale decision marks it as the chart marks its plan.
+  const band = bandSource({ engine: e, strategy: s });
+  const zoneMark = planMark({ hasData: poll.data != null, error: poll.error, lastOk: poll.lastOk, replayed: poll.replayed, replayAt: poll.replayAt, checking: poll.checking, intervalMs: poll.intervalMs }, localNow());
+  const zoneSuffix = /stale/.test(zoneMark.suffix) ? zoneMark.suffix : "";
   const lead = e ? (e.stance === "SELL" ? "short" : e.stance === "BUY" ? "long" : (e.quorum?.short_share ?? 0) > (e.quorum?.long_share ?? 0) ? "short" : "long") : null;
   return (
     <Panel title={e ? "Decision Engine" : "Global decision"} icon={<Target className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} staleOpen
@@ -338,6 +312,7 @@ export default function GlobalDecision() {
                     </span>
                   </div>
                 )}
+                <EntryZoneCell zone={band.zone} suffix={zoneSuffix} />
               </>
             ) : (
               <>
@@ -351,17 +326,18 @@ export default function GlobalDecision() {
                   <span className="eyebrow" title="The weighted lean of every room and the news">Bias</span>
                   <span className={`mono whitespace-nowrap text-[13px] font-semibold ${stanceColor(g.bias)}`}>{g.bias}{g.score != null ? ` ${g.score > 0 ? "+" : ""}${Math.round(g.score * 100)}` : ""}</span>
                 </div>
+                <EntryZoneCell zone={band.zone} suffix={zoneSuffix} />
               </>
             )}
           </div>
           {e ? (
             <div className="mono mt-2 text-[11px] text-fg-2">
-              confidence {pct(e.confidence)} · 15m close {utc(e.bar_close)} · decided in {e.latency_seconds}s{e.strategy?.price != null ? ` · price ${e.strategy.price.toFixed(2)}` : ""}
+              confidence {pct(e.confidence)} · 15m close {utc(e.bar_close)}{e.bar_close && Number.isFinite(Date.parse(e.bar_close)) ? ` · ${gmt7ClockOf(Date.parse(e.bar_close))} GMT+7` : ""} · decided in {e.latency_seconds}s{e.strategy?.price != null ? ` · price ${e.strategy.price.toFixed(2)} feed` : ""}
               {left != null && <span className={left > 0 ? "text-fg" : "text-muted"} title={e.trade ? "The next decision replaces this one after the next 15m close. Omega enters only within its signal-age limit after the decision (see the Omega page)." : "The next decision comes after the next 15m close"}> · next decision {left > 0 ? `${mmss(left)}` : "due"}</span>}
             </div>
           ) : s && (
             <div className="mono mt-2 text-[11px] text-fg-2">
-              confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)}` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
+              confidence {pct(s.confidence)}{s.price != null ? ` · price ${s.price.toFixed(2)} feed` : ""}{s.atr_h1 != null ? ` · 1H ATR ${s.atr_h1}` : ""}
             </div>
           )}
           {e?.structure && (e.structure.h4 || e.structure.h1 || e.structure.m15) && (
@@ -432,7 +408,8 @@ export default function GlobalDecision() {
           {e && <ModelAdvice m={e.context?.model ?? null} />}
           {e && <MarketContext c={e.context?.market} calendar={(e.witnesses ?? []).find((w: any) => w.key === "CALENDAR")} />}
 
-          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} /> : <p className="mt-3 text-[11px] text-muted">{e.trade.side} confirms the live setup; levels unchanged.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} />}
+          {e?.trade ? (planIsNew ? <PlanLadder plan={tradePlan(e.trade, e.key_levels)} long={e.trade.side === "BUY"} minRrr={e.rules?.min_rrr ?? null} zone={band.zone} suffix={zoneSuffix} /> : <p className="mt-3 text-[11px] text-muted">{e.trade.side} confirms the live setup; levels unchanged.</p>) : !e && s?.plan && <PlanLadder plan={s.plan} long={s.direction === "LONG"} minRrr={s.min_rrr ?? 1.5} zone={band.zone} suffix={zoneSuffix} />}
+          {(e?.trade ? planIsNew : !e && !!s?.plan) && <OmegaLimitNote zone={band.zone} side={band.side} edge={band.edge} />}
 
           {e ? !!e.cautions?.length && (
             <ul className="mt-3 space-y-1 text-[11px]">

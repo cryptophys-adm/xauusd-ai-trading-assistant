@@ -80,7 +80,8 @@ test("the UI keeps the Console's obsidian palette and calls only same-origin rea
   assert.match(assistant, /\/api\/hud\/levels\?tf=/);
   // Owner decision 2026-11-06: the Global Conclusion and the strategy engine are one card, the
   // Global decision, which leads the panel: decision, bias, per-timeframe lean, plan, RRR.
-  const decision = ui("src/components/GlobalDecision.tsx");
+  // The plan ladder moved to its own pure file with the EZ1 entry zone (components/PlanLadder.tsx, 2026-11-23).
+  const decision = ui("src/components/GlobalDecision.tsx") + ui("src/components/PlanLadder.tsx");
   for (const word of ["Global decision", "Decision", "Bias", "Direction", "TP1", "TP2", "Stop", "Entry", "R</span>", "H1 chain"]) assert.ok(decision.includes(word), word);
   assert.ok(assistant.indexOf("<GlobalDecision") >= 0 && assistant.indexOf("<GlobalDecision") < assistant.indexOf("<SentimentCard"), "the global decision leads the right panel");
   assert.doesNotMatch(assistant, /GlobalConclusion|StrategyPanel/, "the two former cards are merged");

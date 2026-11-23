@@ -16,7 +16,7 @@ import {
   Terminal,
   Zap,
 } from "lucide-react";
-import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
+import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type TickMarkType, type Time, type UTCTimestamp } from "lightweight-charts";
 import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import OmegaWhy from "../components/OmegaWhy";
@@ -26,6 +26,9 @@ import { CANDLE, T, tagText, volumeColor } from "../lib/tokens";
 import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
 import { KeyZoneBands } from "../lib/keyZoneBands";
 import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
+import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
+import { CreatedCell, IntentCards, IntentEntry, SignalRows } from "../components/OmegaZone";
+import { basisText, brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, knownFeedBasis, limitTitle, quoteTitle, restingLimit, signalZoneOf, zoneText, zoneToBroker, zoneToFeed, type Zone } from "../lib/entryZone";
 
 /**
  * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
@@ -175,6 +178,8 @@ function Mt5ChartCanvas({
   showPositions,
   keyZones,
   showKeyLevels,
+  feedBasis,
+  limit,
 }: {
   tf: Mt5Tf;
   symbol: string;
@@ -190,6 +195,10 @@ function Mt5ChartCanvas({
   showPositions: boolean;
   keyZones: KeyZone[];
   showKeyLevels: boolean;
+  /** EZ1: the signal's broker − feed basis (signal.feed_basis when feed_basis_known), else null. */
+  feedBasis: number | null;
+  /** EZ1: Omega's resting limit (broker scale) and the entry zone its intent carries (broker). */
+  limit: { price: number; side: "BUY" | "SELL" | null; zone: Zone | null } | null;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -198,6 +207,8 @@ function Mt5ChartCanvas({
   const linesRef = useRef<IPriceLine[]>([]);
   const lastLineRef = useRef<IPriceLine | null>(null);
   const bandsRef = useRef<KeyZoneBands | null>(null);
+  // EZ1: the entry zone and the bid/ask labels, each label next to its own line (zones-primitive's anchored mode).
+  const ezRef = useRef<ZonesPrimitive | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [hover, setHover] = useState<Candle | null>(null);
 
@@ -236,7 +247,9 @@ function Mt5ChartCanvas({
       },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.09)" },
-      timeScale: { borderColor: "rgba(255,255,255,0.09)", timeVisible: true, secondsVisible: false },
+      // The time axis in the owner's GMT+7 (the EZ1 mockup); the candles stay the feed's.
+      timeScale: { borderColor: "rgba(255,255,255,0.09)", timeVisible: true, secondsVisible: false, tickMarkFormatter: (t: Time, type: TickMarkType) => gmt7Tick(t, type) },
+      localization: { timeFormatter: (t: Time) => gmt7Crosshair(t) },
     });
     // The last price is our own price line (setLastLine), so its axis tag carries dark text on the green and red fills:
     // the library's own tag is white there (2.3 to 1 on the bull fill).
@@ -254,6 +267,9 @@ function Mt5ChartCanvas({
     const bands = new KeyZoneBands();
     series.attachPrimitive(bands);
     bandsRef.current = bands;
+    const ez = new ZonesPrimitive("anchored");
+    series.attachPrimitive(ez);
+    ezRef.current = ez;
     chartRef.current = chart;
     seriesRef.current = series;
     volRef.current = vol;
@@ -264,6 +280,7 @@ function Mt5ChartCanvas({
       seriesRef.current = null;
       volRef.current = null;
       bandsRef.current = null;
+      ezRef.current = null;
       linesRef.current = [];
       lastLineRef.current = null;
     };
@@ -308,25 +325,28 @@ function Mt5ChartCanvas({
     return () => chart.unsubscribeCrosshairMove(sub);
   }, [candles]);
 
-  // Real-time tick update on the active candlestick bar as MT5 broker ticks stream in
+  // Real-time tick update on the active candlestick bar as MT5 broker ticks stream in. EZ1 (the reviewer's ruling 4):
+  // the candles are the feed's, so the broker's bid is painted on the feed scale (bid − feed_basis), and not at all
+  // while the basis is unknown.
   useEffect(() => {
     const series = seriesRef.current;
-    if (!series || typeof bid !== "number" || !Number.isFinite(bid) || bid <= 0 || candles.length === 0) return;
+    const feedBid = brokerToFeed(bid, feedBasis);
+    if (!series || feedBid == null || candles.length === 0) return;
     const lastBar = candles[candles.length - 1];
     if (!lastBar || !Number.isFinite(lastBar.time)) return;
     try {
       series.update({
         time: lastBar.time as UTCTimestamp,
         open: lastBar.open,
-        high: Math.max(lastBar.high, bid),
-        low: Math.min(lastBar.low, bid),
-        close: bid,
+        high: Math.max(lastBar.high, feedBid),
+        low: Math.min(lastBar.low, feedBid),
+        close: feedBid,
       });
-      setLastLine(series, lastBar.open, bid);
+      setLastLine(series, lastBar.open, feedBid);
     } catch {
       // ignore if chart series is resetting
     }
-  }, [bid, candles]);
+  }, [bid, candles, feedBasis]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -339,9 +359,9 @@ function Mt5ChartCanvas({
       }
     }
     linesRef.current = [];
-    const addLine = (price: number | null | undefined, title: string, color: string, style = LineStyle.Dashed, lineWidth: 1 | 2 = 1) => {
+    const addLine = (price: number | null | undefined, title: string, color: string, style = LineStyle.Dashed, lineWidth: 1 | 2 = 1, axis = true) => {
       if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) return;
-      linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: true, axisLabelTextColor: tagText(color), title }));
+      linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: axis, axisLabelTextColor: tagText(color), title }));
     };
 
     // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price, as
@@ -353,9 +373,22 @@ function Mt5ChartCanvas({
       const base = KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted;
       return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: KEY_ROLE_TEXT[z.role ?? ""] ?? T.fg2, label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
     }) : []);
+    // EZ1 (the reviewer's ruling 4): the broker's bid, ask, resting limit and entry zone on the feed chart, converted
+    // (broker − feed_basis) and labelled with both prices. The bid and ask labels sit at the left next to their lines
+    // (the axis keeps the limit's tag); while the basis is unknown the bid and ask stay at the broker's prices, marked so.
+    const narrow = (hostRef.current?.clientWidth ?? 1000) < 480;
+    const labels: ChartZone[] = [];
+    const feedBid = brokerToFeed(bid, feedBasis), feedAsk = brokerToFeed(ask, feedBasis);
     if (showBidAsk) {
-      addLine(bid, "BID", T.bullFill, LineStyle.Solid, 1);
-      addLine(ask, "ASK", T.bearFill, LineStyle.Solid, 1);
+      if (feedBasis != null) {
+        addLine(feedBid, "", T.bullFill, LineStyle.Solid, 1, false);
+        addLine(feedAsk, "", T.bearFill, LineStyle.Solid, 1, false);
+        if (!narrow && feedBid != null && typeof bid === "number") labels.push({ low: feedBid, high: feedBid, color: T.bullFill, alpha: 0, text: T.bull, label: quoteTitle("bid", bid, feedBid, digits) });
+        if (!narrow && feedAsk != null && typeof ask === "number") labels.push({ low: feedAsk, high: feedAsk, color: T.bearFill, alpha: 0, text: T.bear, label: quoteTitle("ask", ask, feedAsk, digits) });
+      } else {
+        addLine(bid, "BID broker", T.bullFill, LineStyle.Solid, 1);
+        addLine(ask, "ASK broker", T.bearFill, LineStyle.Solid, 1);
+      }
     }
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
     const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
@@ -364,6 +397,15 @@ function Mt5ChartCanvas({
       addLine(signal.stop, "PLAN SL", T.bearFill, LineStyle.Dashed, 1);
       addLine(signal.tp1, "PLAN TP1", T.bullFill, LineStyle.Dashed, 1);
     }
+    // The entry zone: the resting limit's own (broker, converted), else the clear decision's (signal, feed).
+    const limitFeed = limit ? brokerToFeed(limit.price, feedBasis) : null;
+    const zoneFeed = limit?.zone ? zoneToFeed(limit.zone, feedBasis) : hasClearDecision ? signalZoneOf(signal) : null;
+    const zoneBroker = limit?.zone ? limit.zone : zoneToBroker(zoneFeed, feedBasis);
+    if (showPlan && zoneFeed) {
+      labels.unshift({ low: zoneFeed.low, high: zoneFeed.high, color: T.okFill, alpha: 0.16, text: T.ok, label: zoneBroker && feedBasis != null ? chartZoneLabel(zoneBroker, zoneFeed, feedBasis, narrow) : `Entry zone · feed ${zoneText(zoneFeed)}` });
+    }
+    if (showPositions && limit && limitFeed != null) addLine(limitFeed, limitTitle(limit.price, limitFeed, digits), limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
+    ezRef.current?.setZones(labels);
     if (showPositions && Array.isArray(positions)) {
       for (const p of positions) {
         const entryPrice = p.open_price ?? p.entry;
@@ -373,15 +415,15 @@ function Mt5ChartCanvas({
         addLine(p.tp, `#${p.ticket} TP`, T.bullFill, LineStyle.Dotted, 1);
       }
     }
-  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, keyZones, showKeyLevels, digits]);
+  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, feedBasis, limit, keyZones, showKeyLevels, digits]);
 
   const last = hover || candles[candles.length - 1];
 
   return (
     // Fills the whole chart column (owner 2026-11-12: "tidak ada space kosong dibawah sumbu waktu"); at least 430 px.
-    <div className="relative h-full min-h-[430px] w-full flex-1 bg-ground">
+    <div className="relative flex h-full min-h-[430px] w-full flex-1 flex-col bg-ground">
       {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
-      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex flex-col gap-0.5 rounded-sm bg-black/55 px-2.5 py-1.5 backdrop-blur-xs border border-white/5">
+      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col gap-0.5 rounded-sm bg-black/55 px-2.5 py-1.5 backdrop-blur-xs border border-white/5">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           <span className="mono font-bold text-cyan-300">
             {symbol}, {tf}
@@ -396,23 +438,35 @@ function Mt5ChartCanvas({
             <span>L {num(last.low, digits)}</span>
             <span className={last.close >= last.open ? "text-bull" : "text-bear"}>C {num(last.close, digits)}</span>
             {last.volume != null ? <span>V {Math.round(last.volume)}</span> : null}
+            <span className="text-fg-2">feed</span>
           </div>
         ) : (
           <div className="mono text-[10.5px] text-slate-500">Loading…</div>
         )}
+        {/* The live broker bid and ask (EZ1: with their feed prices), a line of this box so it never covers it on a narrow chart. */}
+        <div className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
+          <span className="text-slate-400">Bid</span>
+          <span className="mono font-bold text-bull">{num(bid, digits)}</span>
+          {feedBasis != null && brokerToFeed(bid, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(bid, feedBasis), digits)})</span> : null}
+          <span className="text-slate-600">/</span>
+          <span className="text-slate-400">Ask</span>
+          <span className="mono font-bold text-bear">{num(ask, digits)}</span>
+          {feedBasis != null && brokerToFeed(ask, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(ask, feedBasis), digits)})</span> : null}
+          <span className="text-fg-2">· broker</span>
+          {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
+        </div>
       </div>
 
-      {/* Live Broker Bid/Ask Overlay Pill */}
-      <div className="pointer-events-none absolute right-16 top-2 z-10 flex items-center gap-1.5 rounded-sm bg-black/65 px-2.5 py-1 text-[11px] backdrop-blur-xs border border-white/10">
-        <span className="text-slate-400">Bid</span>
-        <span className="mono font-bold text-bull">{num(bid, digits)}</span>
-        <span className="text-slate-600">/</span>
-        <span className="text-slate-400">Ask</span>
-        <span className="mono font-bold text-bear">{num(ask, digits)}</span>
-        {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
+      {/* EZ1: every price on the chart's axis is the feed's, its times GMT+7; the broker's prices are converted. */}
+      <div className="relative min-h-[380px] flex-1">
+        <span className="mono pointer-events-none absolute right-1 top-0.5 z-10 text-[9.5px] text-fg-2">feed</span>
+        <div ref={hostRef} className="absolute inset-x-0 bottom-0 top-4" />
+        <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9.5px] text-fg-2">GMT+7</span>
       </div>
-
-      <div ref={hostRef} className="h-full w-full" />
+      <div className="mono flex flex-col gap-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
+        <span>candles, PLAN lines: TradingView feed · times GMT+7</span>
+        <span>{feedBasis != null ? `zone, limit, bid, ask: broker − ${basisText(feedBasis, 2).replace(/^\+/, "")} basis (intents[].entry_zone, the order, the terminal)` : "bid, ask: broker prices, not converted (the basis is unknown)"}</span>
+      </div>
     </div>
   );
 }
@@ -789,6 +843,11 @@ export default function Omega() {
   const serverName = br.server || conn.server || "no server";
   const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
   const ordersList: any[] = br?.orders || [];
+  // EZ1 (owner-approved mockup, 2026-11-23): the signal's broker − feed basis (signal.feed_basis, when the server knows
+  // it) converts the broker's prices to the feed chart; Omega's resting limit and the entry zone its intent carries.
+  const feedBasis = knownFeedBasis(s);
+  const signalZone = signalZoneOf(s);
+  const resting = restingLimit(ordersList, b?.intents || []);
   const dealsList: any[] = (Array.isArray(data?.deals) && data.deals.length > 0)
     ? data.deals
     : (Array.isArray(br?.deals) ? br.deals : []);
@@ -1357,7 +1416,7 @@ export default function Omega() {
                       s.side === "BUY" ? "text-bull" : s.side === "SELL" ? "text-bear" : "text-slate-400"
                     }`}
                   >
-                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)})`}
+                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)} feed)`}
                   </span>
                 </div>
               </div>
@@ -1381,6 +1440,8 @@ export default function Omega() {
               showPositions={showPositions}
               keyZones={keyZones}
               showKeyLevels={showKeyLevels}
+              feedBasis={feedBasis}
+              limit={resting}
             />
           </div>
         </div>
@@ -1804,17 +1865,20 @@ export default function Omega() {
                   <Empty>No intents yet.</Empty>
                 </div>
               ) : (
-                <table className="tbl">
+                <>
+                {/* EZ1 (the approved mockup): on a phone one card per intent; from sm up the table. Every price is the broker's. */}
+                <IntentCards intents={b.intents || []} digits={digits} />
+                <table className="tbl hidden sm:table">
                   <thead>
                     <tr>
-                      <th>Created (UTC)</th>
+                      <th>Created</th>
                       <th>Intent</th>
                       <th>Kind</th>
                       <th>Side</th>
                       <th>Volume</th>
-                      <th>Entry</th>
-                      <th>SL</th>
-                      <th>TP</th>
+                      <th>Entry · broker</th>
+                      <th>SL · broker</th>
+                      <th>TP · broker</th>
                       <th>Status</th>
                       <th>Result</th>
                     </tr>
@@ -1822,14 +1886,14 @@ export default function Omega() {
                   <tbody>
                     {(b.intents || []).map((i: any) => (
                       <tr key={i.id}>
-                        <td className="mono">{timeUtc(i.created_ms)}</td>
+                        <td className="mono"><CreatedCell ms={i.created_ms} /></td>
                         <td className="mono">{i.id}</td>
                         <td className="mono">{i.kind}</td>
                         <td className={`mono font-bold ${i.side === "BUY" ? "text-bull" : i.side === "SELL" ? "text-bear" : ""}`}>
                           {i.side || "—"}
                         </td>
-                        <td className="mono">{i.volume != null ? num(i.volume, 2) : "—"}</td>
-                        <td className="mono">{i.entry != null ? num(i.entry, digits) : (i.side === "BUY" ? "Market (Ask)" : i.side === "SELL" ? "Market (Bid)" : "—")}</td>
+                        <td className="mono">{typeof i.lot === "number" ? num(i.lot, 2) : i.volume != null ? num(i.volume, 2) : "—"}</td>
+                        <td className="mono"><IntentEntry i={i} digits={digits} /></td>
                         <td className="mono">{i.sl != null ? num(i.sl, digits) : "—"}</td>
                         <td className="mono">{i.tp != null ? num(i.tp, digits) : "—"}</td>
                         <td>
@@ -1842,6 +1906,7 @@ export default function Omega() {
                     ))}
                   </tbody>
                 </table>
+                </>
               )}
             </div>
           ) : null}
@@ -2307,18 +2372,7 @@ export default function Omega() {
           >
             {!s.side || s.side === "NONE" ? "NO TRADE" : `${s.side} · ${String(s.action || "").replace("ENTER_", "")}`}
           </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Entry</dt><dd className="mono text-slate-200">{num(s.entry, 3)}</dd>
-            <dt className="text-slate-500">Stop</dt><dd className="mono text-slate-200">{num(s.stop, 3)}</dd>
-            <dt className="text-slate-500">Target</dt><dd className="mono text-slate-200">{num(s.tp1, 3)}</dd>
-            <dt className="text-slate-500">Risk : reward</dt><dd className="mono text-slate-200">{s.risk_reward ? num(s.risk_reward, 2) : "—"}</dd>
-            <dt className="text-slate-500">Confidence</dt><dd className="mono text-slate-200">{s.confidence ? `${Math.round(s.confidence * 100)}%` : "—"}</dd>
-            <dt className="text-slate-500">Issued</dt><dd className="mono text-slate-300">{timeUtc(s.issued_ms)}</dd>
-            <dt className="text-slate-500">Expires</dt><dd className="mono text-slate-300">{timeUtc(s.expires_ms)}</dd>
-            <dt className="text-slate-500">Feed price</dt><dd className="mono text-slate-300">{s.market_price ? `${num(s.market_price, 3)} (${timeUtc(s.market_ms)})` : "—"}</dd>
-            <dt className="text-slate-500">Blackout</dt><dd className={`mono ${s.blackout ? "text-amber-200" : "text-slate-300"}`}>{s.blackout ? s.blackout_reason || "yes" : "no"}</dd>
-            <dt className="text-slate-500">Signal id</dt><dd className="mono truncate text-slate-400">{s.signal_id || "—"}</dd>
-          </dl>
+          <SignalRows s={s} />
           {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
           <div className="mt-3 border-t border-white/5 pt-3">
             <div className="mb-1.5 text-[11px] font-medium text-muted">Entry status</div>
