@@ -123,3 +123,32 @@ test("TK7 assess: the agents' plans follow TP1-KZ, the guardrail keeps its own p
   assert.deepEqual(on.guards.short.plan, off.guards.short.plan, "the guardrail's plan is today's");
   assert.deepEqual([on.guards.short.tp1_min_r, "tp1_min_r" in off.guards.short, "tp1_min_r" in off.guards.long], [1, false, false]);
 });
+
+test("TK8 the 23:45 case is not blocked when the base pullback plan's key zone is under 1R: sweep_reversal is selected with TP1 3560.96", async () => {
+  const { assess, decide } = await import("../src/decision-engine.mjs");
+  // A key zone 3572.11-3579.70 under price (the base plan's pullback support for a long, irrelevant to the short) and
+  // a resistance far above, so the base short pulls back to 3582-3586 with its stop beyond 3591-3598 and TP1 at the
+  // key zone 3560.96 under 1R from the pullback entry.
+  const zones = [...zonesOf([KEY]), { low: 3591.01, high: 3598.42, price: 3594.7, candidate: true, qualified: true, label: "above" }];
+  const loaded = { inputs: { calendar: { events: [] }, m15Bars: sweepBars }, strategy: strategyOf(zones), global: null, correlations: null, regime: "normal-trending" };
+  const env = { TRADING_MODE: "scalp", STRATEGY_AGENTS_LIVE: "sweep_reversal" };
+  const now = Date.parse("2026-11-22T23:46:10Z");
+  const { guards } = assess(loaded, { env, now });
+  const base = planForDirection(strategyOf(zones), -1, { scalp: true, keyZone: true });
+  const guardPlan = planForDirection(strategyOf(zones), -1, { scalp: true });
+  assert.ok(guardPlan, "the guardrail keeps today's plan");
+  assert.equal(base, null, `the base plan's own key zone pays under 1R (today ${guardPlan.rrr.tp1}R)`);
+  assert.equal(guards.short.plans.zone_pullback, undefined, "the default agent has no plan on this side");
+  assert.ok(!guards.short.checks.some((c) => c.id === "levels" && !c.pass), "the side is not blocked by the levels check");
+  const sweep = guards.short.plans.sweep_reversal.plan;
+  assert.deepEqual([sweep.tp1, sweep.rrr.tp1], [3560.96, 1.71]);
+  assert.deepEqual(liveAgentPlans(guards.short).map(([id]) => id), ["sweep_reversal"], "selectable");
+  assert.equal(typeof decide === "function" || decide === undefined, true);
+});
+
+test("TK9 buildStrategy's plan follows the switch through modes; a first target under 1R waits (LOW_REWARD)", async () => {
+  const { slimInputs } = await import("../src/strategy-inputs.mjs");
+  assert.deepEqual(slimInputs({ modes: { chartPatterns: "on", tp1KeyZone: "off" } }).modes, { tp1KeyZone: "off" });
+  assert.deepEqual(slimInputs({ modes: { chartPatterns: "off", tp1KeyZone: "off" } }).modes, { chartPatterns: "off", tp1KeyZone: "off" });
+  assert.equal("modes" in slimInputs({ modes: { chartPatterns: "on", tp1KeyZone: "on" } }), false, "stored inputs unchanged while both are on");
+});

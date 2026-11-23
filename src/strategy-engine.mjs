@@ -385,7 +385,14 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   // location with the trade, like a demand or supply zone.
   const setup = setupType({ dir, price, m15Plane: m15Snapshot?.chart_plane ?? null, h1Plane: h1Snapshot?.chart_plane ?? null, near: isNum(atrH1) ? P.near_atr * atrH1 : null });
   const setupNote = setup.type === "none" ? null : `${setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${setup.evidence.join(", ")}`;
-  const plan = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
+  const base = dir ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr }) : null;
+  // TP1-KZ (owner 2026-11-23; the switch travels in the inputs as modes.tp1KeyZone): the strategy's plan takes TP1 at
+  // the nearest key zone, at least 1R. Under 1R the plan stays today's for its location (the guardrails read its
+  // at_level), and the decision waits (state LOW_REWARD): no trade comes from a first target under 1R.
+  const keyZone = modes?.tp1KeyZone !== "off" && tp1KeyZoneMode(env) === "on";
+  const kz = keyZone && base ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, keyZone: true }) : null;
+  const plan = keyZone && kz ? kz : base;
+  const tp1Short = keyZone && base && !kz;
   const { vetoes, cautions, supports } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
 
@@ -399,6 +406,7 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   else if (!plan) { state = "NO_LEVELS"; headline = `A ${side} bias, but the key levels or the 1-hour range are not available yet.`; }
   else if (!plan.at_level) { state = "SETUP_FORMING"; headline = `A ${side} setup is forming: wait for ${plan.entry_note} near ${fmt(plan.entry)}.`; }
   else if (!trigger.fired) { state = "SETUP_READY"; headline = `The ${side} setup is ready at ${fmt(plan.entry)} (${plan.entry_note}); ${trigger.note}.`; }
+  else if (tp1Short) { state = "LOW_REWARD"; headline = `The ${side} trigger fired, but the nearest key zone ahead pays under ${TP1_MIN_R}R to the first target.`; }
   else if (plan.rrr.tp2 < MIN_RRR) { state = "LOW_REWARD"; headline = `The ${side} trigger fired, but the reward to the final target is only ${plan.rrr.tp2}R (at least ${MIN_RRR}R is needed).`; }
   else if (confidence < MIN_CONFIDENCE) { state = "LOW_CONFIDENCE"; headline = `The ${side} trigger fired, but the agents' alignment is too weak (confidence ${Math.round(confidence * 100)}%).`; }
   else { state = "TRIGGERED"; decision = dir > 0 ? "BUY" : "SELL"; headline = `${decision}: ${trigger.note}, with the trend and setup aligned; ${plan.rrr.tp2}R to the final target.`; }
@@ -490,7 +498,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env) },
     now
   };
 }
