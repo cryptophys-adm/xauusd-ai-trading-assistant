@@ -5,3 +5,5 @@ export function readTldr(db: unknown): Promise<Record<string, any>>;
 export function agentName(id: string): string;
 export const MISSED_ROOM_AFTER_MS: number;
 export function runMissedWarRoom(env: any, options?: { now?: number; clock?: () => number }): Promise<Record<string, any>>;
+/** B16: the label of lens B's liquidity conditions in the 15m and 1H moderators' prompts. */
+export const LIQUIDITY_CONDITIONS_LABEL: string;

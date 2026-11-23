@@ -1,5 +1,6 @@
-import { Badge } from "./ui";
+import { Dot } from "./ui";
 import { EZ_CODES, gmt7ClockOf, plannerDetail } from "../lib/entryZone";
+import { ENGINE_OFF_TEXT, engineOffText } from "../lib/omegaLean";
 
 // Why Omega is or is not entering right now (owner 2026-11-13: "pastikan semua ada visualisasi, sehingga
 // owner/user mengetahui dan memahami"). The planner (src/omega-engine.mjs planIntents) leaves short codes on
@@ -8,7 +9,8 @@ import { EZ_CODES, gmt7ClockOf, plannerDetail } from "../lib/entryZone";
 type Kind = "block" | "adjust" | "info";
 const CODES: Record<string, { kind: Kind; text: string }> = {
   kill: { kind: "block", text: "Kill switch: every position is being closed and nothing new opens." },
-  engine_off: { kind: "block", text: "The engine is switched off (server switch or the setting below)." },
+  // OM-LEAN (the reviewer's final ruling): the wording branches on which switch is off (omegaReason's envEnabled).
+  engine_off: { kind: "block", text: ENGINE_OFF_TEXT.local },
   executor_stale: { kind: "block", text: "The MT5 terminal has not reported recently, so Omega does not act blind." },
   ea_local_management: { kind: "info", text: "The EA manages its positions locally." },
   mean_reversal_exit: { kind: "adjust", text: "A position is being closed because the decision's power reversed." },
@@ -77,27 +79,32 @@ const EZ = new Set<string>(EZ_CODES);
 // In the status tones; info is ok, as severityTone (owner 2026-11-22).
 const TONE: Record<Kind, "fault" | "late" | "ok"> = { block: "fault", adjust: "late", info: "ok" };
 
-export function omegaReason(code: string) {
+/** A planner code in words. `envEnabled` (broker.engine.env_enabled) picks engine_off's wording: false is the server switch. */
+export function omegaReason(code: string, envEnabled?: unknown) {
+  if (code === "engine_off") return { kind: "block" as Kind, text: engineOffText(envEnabled) };
   return CODES[code] ?? { kind: "info" as Kind, text: code.replace(/_/g, " ") };
 }
 
-/** The planner's current notes as a short list; `sinceMs` is when they last changed. */
-export default function OmegaWhy({ codes, sinceMs, details }: { codes: string[] | null | undefined; sinceMs?: number | null; details?: Record<string, string> | null }) {
-  if (!codes?.length) return <p className="text-[11px] text-slate-500">No planner notes yet.</p>;
-  const items = codes.filter((c) => typeof c === "string" && c !== "").map((c) => ({ code: c, ...omegaReason(c) }));
+/**
+ * The planner's current notes (Details → Signal, the mockup's "Planner, since 14:06 UTC"): one line each with a dot in
+ * its kind's tone (block red, adjust amber, info cyan), the sentence, the code and its detail. `sinceMs` is when they
+ * last changed. The first screen's one-line verdict is lib/omegaLean.ts verdict over the same codes.
+ */
+export default function OmegaWhy({ codes, sinceMs, details, envEnabled }: { codes: string[] | null | undefined; sinceMs?: number | null; details?: Record<string, string> | null; envEnabled?: unknown }) {
+  if (!codes?.length) return <p className="text-[11px] text-muted">No planner notes yet.</p>;
+  const items = codes.filter((c) => typeof c === "string" && c !== "").map((c) => ({ code: c, ...omegaReason(c, envEnabled) }));
   const blocked = items.some((i) => i.kind === "block");
   return (
     <div className="space-y-1.5" aria-label="Why Omega is or is not entering now">
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <Badge tone={blocked ? "late" : "ok"}>{blocked ? "NOT ENTERING" : "READY / MANAGING"}</Badge>
-        {sinceMs ? <span className="mono text-slate-500">since {new Date(sinceMs).toISOString().slice(11, 16)} UTC · {gmt7ClockOf(sinceMs)} GMT+7</span> : null}
+      <div className="text-[11px] text-fg-2">
+        {`Planner${blocked ? ", not entering" : ""}${sinceMs ? `, since ${new Date(sinceMs).toISOString().slice(11, 16)} UTC · ${gmt7ClockOf(sinceMs)} GMT+7` : ""}`}
       </div>
       <ul className="space-y-1">
         {items.map((i) => { const detail = plannerDetail(i.code, details?.[i.code]); return (
-          <li key={i.code} className="flex items-start gap-2 text-[11.5px] text-slate-300">
-            <span className="mt-0.5"><Badge tone={TONE[i.kind]}>{i.kind === "block" ? "why" : i.kind}</Badge></span>
+          <li key={i.code} className="flex items-start gap-2 text-[11.5px] text-slate-300" data-kind={i.kind}>
+            <span className="mt-1"><Dot tone={TONE[i.kind]} /></span>
             <span className="min-w-0 flex-1">
-              {i.text} <span className="mono text-[10px] text-slate-600">{i.code}</span>
+              {i.text} <span className="mono text-[10px] text-muted">{i.code}</span>
               {detail ? <span className={EZ.has(i.code) ? "mono mt-0.5 block text-[10.5px] text-fg-2" : "block text-[11px] text-slate-400"}>{detail}</span> : null}
             </span>
           </li>

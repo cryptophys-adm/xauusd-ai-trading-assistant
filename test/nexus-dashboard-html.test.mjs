@@ -154,11 +154,13 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
   for (const term of [
     "/omega/api/overview",
     "/api/ohlcv?timeframe=",
-    "MetaTrader 5 Web Terminal",
-    "Market Watch",
-    "Navigator",
+    // OM-LEAN (owner-approved mockup 1795450033-0f25): the lean Terminal view replaced the MT5 imitation (Market Watch,
+    // Navigator, the Session chip); its blocks, its Details disclosure and Setup.
+    "Open &amp; resting",
+    "Last actions",
+    "omega-details-toggle",
     "Algo Trading",
-    "Setup & Configuration Center",
+    "SEPARATED SETUP & CONFIGURATION CENTER",
     "b-server",
     "b-gold-pair",
     "b-units-usd",
@@ -168,7 +170,6 @@ test("Omega: /omega and /omega/ render inside the Nexus SPA with the left panel;
     "e-quick-toggle",
     "configLocked",
     "Locked:",
-    "Session:",
   ]) {
     assert.ok(omegaUi.includes(term), term);
   }
