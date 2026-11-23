@@ -26,6 +26,7 @@
 // It never feeds a room, a prompt or a decision. R multiples and times only reach Aether (executionReport's limit block).
 import { replayOmega4, minuteBars, decisionFromRow, DECISION_SQL, loadOmega4Context, windowBars, MAX_REPLAY_MINUTES, OMEGA4_SIM, OMEGA4_CHECKPOINT_KEY } from "./ledger-omega4.mjs";
 import { effectiveLimits } from "./account-spec.mjs";
+import { signalEntryZone, zoneLimit } from "./omega-engine.mjs";
 import { LIMIT_KNOB_START, LIMIT_KNOB_BOUNDS, LIMIT_KNOB_FACTS, LIMIT_KNOBS_SOURCE, limitKnobs } from "./omega-limit-knobs.mjs";
 import { TRADING_MODES, ensureLedgerSchema, ledgerSeries, OMEGA_LIMIT_VERSION } from "./signal-ledger.mjs";
 
@@ -69,7 +70,7 @@ export function limitCancelReason({ pending, now, decision = null, mode = "activ
 }
 
 /** The reasons a limit entry was missed (never filled): at placement, then while it rested. */
-export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap"]);
+export const LIMIT_MISSED_REASONS = Object.freeze(["limit_through_price", "zone_passed", "zone_tight", "zone_rr", "limit_out_of_band", "pending_expired", "decision_against", "quorum_share_drop", "blackout", "daily_loss_limit", "profile_downgrade", "kill", "paused", "data_gap"]);
 
 /**
  * The limit entry policy for replayOmega4 (`entry`). `state` is the checkpoint's `entry` of the run before. `knobsFor(mode)`
@@ -103,15 +104,26 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
       lastMs = now;
       if (!entryKey || !entryLive || trades.has(entryKey) || decided.has(entryKey) || (signal.side !== "BUY" && signal.side !== "SELL")) return;
       if (pending) { notes.set(entryKey, { gate: "pending_order_exists", last_ms: now }); return; }
-      const buy = signal.side === "BUY", level = r2(Number(signal.entry)), planStop = Math.abs(Number(signal.entry) - Number(signal.stop));
+      const buy = signal.side === "BUY", planStop = Math.abs(Number(signal.entry) - Number(signal.stop));
+      let level = r2(Number(signal.entry));
       if (!(level > 0) || !(planStop > 0)) { notes.set(entryKey, { gate: "bad_input", last_ms: now }); return; }
+      // EZ1 (as the live limitPlacement): a level through price may rest inside the signal's entry zone instead, the
+      // plan's stop and target kept; the whole zone passed is zone_passed, a moved level under half the plan's risk zone_tight, one paying under 1R
+      // zone_rr.
+      let zoned = null;
+      const zone = signalEntryZone(signal, 2);
+      if (zone && !((buy ? ask0 - level : level - bid0) > 0)) {
+        zoned = zoneLimit({ signal, sym: { ...sym, bid: bid0, ask: ask0, spread_points: Math.round(spread / OMEGA4_SIM.point), point: OMEGA4_SIM.point }, zone, digits: 2, planStopDist: planStop, minDist: 0, knobs: knobsFor(signal.trading_mode), from: level });
+        if (zoned.ok) level = zoned.price;
+      }
       // planIntents' own gates and sizing, as if filled at the limit: the symbol shows the level as the price it enters at.
       const probeSym = { ...sym, bid: buy ? r2(level - spread) : level, ask: buy ? level : r2(level + spread) };
       const executor = executorFor(probeSym);
       const out = plan({ ...input, executor, pmActions: [], recentIntentIds: recentIntentIds() });
       stats.probes += 1;
-      const it = out.intents.find((x) => x.kind === "open");
+      let it = out.intents.find((x) => x.kind === "open");
       if (!it) { notes.set(entryKey, { gate: out.notes.at(-1)?.code ?? "no_note", last_ms: now }); return; }
+      if (zoned?.ok) it = { ...it, sl: zoned.sl, tp: zoned.tp, r_dist: r2(Math.abs(level - zoned.sl)), zone_from: zoned.from };
       const knobs = knobsFor(signal.trading_mode);
       const away = buy ? ask0 - level : level - bid0;
       const p = {
@@ -121,6 +133,7 @@ export function limitEntryPolicy({ state = null, knobsFor = (m) => limitKnobs(m)
         equity: executor.account.equity, note_codes: out.notes.map((n) => n.code), away_r: r3(away / planStop), knobs
       };
       decided.set(entryKey, now);
+      if (zoned && !zoned.ok) { pending = p; end(zoned.code, now); return; }
       if (away <= 0) { pending = p; end("limit_through_price", now); return; }
       if (away > knobs.placement_band * planStop + 1e-9) { pending = p; end("limit_out_of_band", now); return; }
       pending = p;

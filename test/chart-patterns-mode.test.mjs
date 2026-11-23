@@ -54,8 +54,8 @@ test("PM2 buildStrategy: modes.chartPatterns \"off\" leaves no pattern, no patte
 
 test("PM3 the inputs carry the switch: loadStrategyInputs, the capture's slim inputs, and the replay builds what was live", async () => {
   // TP1-KZ (2026-11-23) travels in the same modes.
-  assert.deepEqual((await loadStrategyInputs({ CHART_PATTERNS_MODE: "off" }, { now: NOW })).modes, { chartPatterns: "off", tp1KeyZone: "on" });
-  assert.deepEqual((await loadStrategyInputs({}, { now: NOW })).modes, { chartPatterns: "on", tp1KeyZone: "on" });
+  assert.deepEqual((await loadStrategyInputs({ CHART_PATTERNS_MODE: "off" }, { now: NOW })).modes, { chartPatterns: "off", tp1KeyZone: "on", entryZone: "on" });
+  assert.deepEqual((await loadStrategyInputs({}, { now: NOW })).modes, { chartPatterns: "on", tp1KeyZone: "on", entryZone: "on" });
   // The capture keeps "off" (so its replay builds what the live strategy built) and adds nothing when on.
   assert.deepEqual(slimInputs({ ...input(), modes: { chartPatterns: "off" } }).modes, { chartPatterns: "off" });
   assert.equal("modes" in slimInputs({ ...input(), modes: { chartPatterns: "on" } }), false, "stored inputs are unchanged while on");

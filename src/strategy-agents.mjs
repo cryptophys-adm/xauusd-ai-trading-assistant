@@ -22,7 +22,7 @@
 // negative measured record back to shadow by itself. STRATEGY_AGENTS_MODE =
 // "on" (default) | "off" (only zone_pullback; nothing else is computed or recorded).
 
-import { planForDirection, zoneLevels, SCALP_TARGET, TP1_MIN_R, tp1KeyZoneOf } from "./strategy-engine.mjs";
+import { planForDirection, zoneLevels, SCALP_TARGET, TP1_MIN_R, tp1KeyZoneOf, entryZoneOf } from "./strategy-engine.mjs";
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
@@ -77,8 +77,10 @@ export function finishPlan(agent, dir, { entry, stop, atLevel, entryNote, stopNo
   if (!t) return null;
   if (!(dir * (t.tp1 - entry) > 0) || !(dir * (t.tp2 - t.tp1) >= 0)) return null;
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
+  // EZ1 (src/strategy-engine.mjs ENTRY_ZONE): a structural plan's entry zone, the entry +/- 0.15 x ATR(1H).
+  const zone = ctx.entryZone === true ? entryZoneOf({ dir, entry, stop: s, atrH1: atr }) : null;
   return {
-    agent, setup, at_level: atLevel === true, entry: r2(entry), entry_note: entryNote, stop: r2(s), stop_note: note, risk: r2(risk),
+    agent, setup, at_level: atLevel === true, entry: r2(entry), entry_note: entryNote, ...(zone ?? {}), stop: r2(s), stop_note: note, risk: r2(risk),
     tp1: r2(t.tp1), tp1_note: t.tp1_note, tp2: r2(t.tp2), tp2_note: t.tp2_note, progressive_stop: r2(entry), rrr: { tp1: rr(t.tp1), tp2: rr(t.tp2) }
   };
 }
@@ -87,7 +89,7 @@ const zonePullback = Object.freeze({
   id: DEFAULT_AGENT, version: 1, label: "Zone pullback",
   fits: "Any market: enter at the nearest key zone behind price (or at price when it already holds there), the stop behind the next zone, the target at the next key level. The plan of every decision before the agents.",
   plan(dir, ctx) {
-    const p = ctx.basePlan ?? planForDirection(ctx.strategy, dir, { scalp: ctx.scalp === true, keyZone: ctx.keyZone === true });
+    const p = ctx.basePlan ?? planForDirection(ctx.strategy, dir, { scalp: ctx.scalp === true, keyZone: ctx.keyZone === true, entryZone: ctx.entryZone === true });
     return p ? { ...p, agent: DEFAULT_AGENT, setup: p.at_level ? "price holds at a key zone" : "a pullback to the nearest key zone" } : null;
   }
 });
@@ -431,9 +433,9 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
-export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [], keyZone = false } = {}) {
+export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [], keyZone = false, entryZone = false } = {}) {
   return {
-    strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan, ...(keyZone === true ? { keyZone: true } : {}),
+    strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan, ...(keyZone === true ? { keyZone: true } : {}), ...(entryZone === true ? { entryZone: true } : {}),
     // The Projection Agent's reading (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya
     // knowledge terkait price action"): the chart patterns it detected on each chart and each pattern's
     // measured record on gold.
@@ -542,7 +544,7 @@ export function priceActionReading(patterns, calibration = null) {
 }
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
-export const slimPlan = (p) => ({ entry: p.entry, stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}) });
+export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}) });
 
 /**
  * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): a BUY or SELL trades only

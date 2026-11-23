@@ -224,7 +224,8 @@ test("end to end: a sweep on the 15m bars reaches the record in shadow, and the 
   // Shadow (the default): the agent's plan is in the record, the trade is the plan of before.
   const shadow = record({}, "sweep_reversal");
   assert.deepEqual(Object.keys(shadow.strategy_plans.long), ["zone_pullback", "sweep_reversal"]);
-  assert.deepEqual(shadow.strategy_plans.long.sweep_reversal, { status: "shadow", entry: 4000, stop: 3992.5, tp1: 4030, tp2: 4050, at_level: true, rrr: { tp1: 4, tp2: 6.67 }, setup: shadow.strategy_plans.long.sweep_reversal.setup });
+  // EZ1 (ENTRY_ZONE_MODE on by default): the structural plan carries its entry zone, entry +/- 0.15 x ATR(1H).
+  assert.deepEqual(shadow.strategy_plans.long.sweep_reversal, { status: "shadow", entry: 4000, entry_low: 3998.5, entry_high: 4001.5, stop: 3992.5, tp1: 4030, tp2: 4050, at_level: true, rrr: { tp1: 4, tp2: 6.67 }, setup: shadow.strategy_plans.long.sweep_reversal.setup });
   assert.match(shadow.strategy_plans.long.sweep_reversal.setup, /^a sweep of the 3995\.00–3998\.00 key zone/);
   assert.equal(shadow.stance, "BUY");
   assert.equal("strategy" in shadow.trade, false);

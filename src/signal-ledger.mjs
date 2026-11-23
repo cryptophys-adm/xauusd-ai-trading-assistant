@@ -397,7 +397,7 @@ export function limitStats(rows) {
   const sum = (k) => r3(pairs.reduce((a, p) => a + p[k], 0));
   return {
     decisions: list.length, pending: count("pending"), resting: count("resting"), filled, open: count("open"), missed,
-    placed: filled + count("resting") + missed - (missedBy.limit_through_price || 0) - (missedBy.limit_out_of_band || 0),
+    placed: filled + count("resting") + missed - (missedBy.limit_through_price || 0) - (missedBy.zone_passed || 0) - (missedBy.zone_tight || 0) - (missedBy.zone_rr || 0) - (missedBy.limit_out_of_band || 0),
     fill_rate: filled + missed ? r3(filled / (filled + missed)) : null,
     missed_by: missedBy, skipped: tally("skipped"),
     paired: { n: pairs.length, both_traded: pairs.filter((p) => p.both_traded).length, maker_better: pairs.filter((p) => p.better === "maker").length, taker_better: pairs.filter((p) => p.better === "taker").length, even: pairs.filter((p) => p.better === "even").length, maker_r: sum("maker_r"), taker_r: sum("taker_r"), mean_dr: pairs.length ? r3(pairs.reduce((a, p) => a + p.dr, 0) / pairs.length) : null }
@@ -414,7 +414,7 @@ function limitBlock(v4) {
 export const OMEGA_LIMIT_RULES = Object.freeze({
   version: OMEGA_LIMIT_VERSION,
   placement: "a resting limit at the decision's level (feed scale, basis 0), placed at the first minute planIntents' gates pass, sized by planIntents as if filled at the limit; filled when a 1m bar's range reaches it (a BUY when the ask's low does, a SELL when the bid's high does); never a market fallback",
-  missed: "limit_through_price (price already through the level at placement), limit_out_of_band (further than placement_band x the plan's stop from price), pending_expired (max_pending_life minutes), decision_against, quorum_share_drop (its side's quorum share fell by more than cancel_share_drop from the placing decision), blackout, daily_loss_limit, profile_downgrade, kill, paused",
+  missed: "limit_through_price (price already through the level at placement, with no entry zone), zone_passed (price through the whole entry zone, EZ1), zone_tight (a limit moved inside the entry zone keeps under half the plan's risk), zone_rr (a limit moved inside the entry zone pays under 1R), limit_out_of_band (further than placement_band x the plan's stop from price), pending_expired (max_pending_life minutes), decision_against, quorum_share_drop (its side's quorum share fell by more than cancel_share_drop from the placing decision), blackout, daily_loss_limit, profile_downgrade, kill, paused",
   management: "after the fill exactly v4: planIntents, the TP ladder and the Position Manager on the same simulated account (replayOmega4 with the limit entry policy)",
   knobs: "per mode, the RFC's start values clamped to ADR-0020 A7's bounds: max_pending_life 30/60/240/60 minutes (scalp/intraday/swing/range), move_max_atr 0.25/0.5/0.5/0.25 (recorded; no council moves in a replay), cancel_share_drop 0.05, placement_band 0.35; no platform reader of omega.limit_* yet",
   pairing: "per decision, maker (limit) against taker (v4's market entry); a missed or skipped side counts 0R; pairs only once both are final and at least one traded",

@@ -93,6 +93,22 @@ Then Omega asks the **entry council** (under `"council"`, the same call answers 
 - It must be no further than `placement_band` × the plan's stop from the current price. Otherwise: `limit_out_of_band`.
 - A limit that would fill at once (price already through it) is not placed. In limit mode there is no market fallback, so
   this is a **missed entry** (`limit_through_price`), and the ledger counts it as one (§8).
+- **The entry zone (EZ1, owner 2026-11-23: "decision & signal harusnya memberi nilai zone bukan exact, sehingga omega tidak
+  akan info limit through price").** A signal may carry `entry_zone_low`/`entry_zone_high` (feed scale, beside `entry`; the
+  plan's key zone band clipped to 0.5 x ATR(1H) around the entry, or a structural plan's entry +/- 0.15 x ATR(1H), its stop
+  side never past half the risk; `src/strategy-engine.mjs` ENTRY_ZONE). It counts only while it holds the signal's entry and
+  stays short of its stop (`signalEntryZone`; a grid adaptation that moved them drops it). Where the plan's own level is
+  through price or within the stop level, `limitPlacement` asks `zoneLimit`: the level nearest the plan's inside the zone
+  (broker scale, + `feed_basis`) at least max(the stop level, 1 spread) from price on the correct side. The order keeps
+  the plan's stop and target where the plan put them (not their distances), keeps at least `ZONE_MIN_RISK_SHARE` = half
+  of the plan's risk (max of that and the stop level, else `zone_tight`), pays at least `ZONE_MIN_RR` = 1R to the
+  target or is refused (`zone_rr`), and its lot is capped at `tight_stop_max_lot_factor` x the lot at the plan's stop
+  (`lot_capped_zone`). The whole zone passed is `zone_passed`, a missed entry like `limit_through_price` (the entry
+  council's `price_at_level` holds for it). A placement away from price is today's, at the plan's entry: the entry lies
+  inside the zone, nearer its best edge than its near edge is. The place_limit intent records `entry_zone` (broker
+  scale) and, for a moved one, `zone_from` (note `limit_in_zone`); a council move never leaves the zone (Omega drops it,
+  and the pending council is offered only levels inside it), and a conversion's market leg does not enter once the zone
+  is passed. Without a zone (`ENTRY_ZONE_MODE` "off", a decision made before EZ1) everything is as above, byte for byte.
 
 **Sizing at placement, as if filled**
 - The lot uses today's formula: risk_pct, the profile caps, `volume_below_min`, `tick_value_mismatch`, the open-risk cap and
@@ -252,7 +268,8 @@ Policy Engine's prohibited filter refuses them; platform test K2):
   the limit (a probe call with the symbol priced at the level). It fills when a 1m bar's range reaches it (a buy when the
   ask's low does, a sell when the bid's high does). After the fill the position is a v4 trade: planIntents, the TP ladder
   and the Position Manager. v4's results and its `ENGINE_CODE_HASH` are unchanged.
-- **Missed:** `limit_through_price`, `limit_out_of_band` (at placement); `pending_expired` (at `max_pending_life`);
+- **Missed:** `limit_through_price`, `zone_passed`, `zone_tight`, `zone_rr` (EZ1: the replay places inside the signal's entry zone as
+  the live `zoneLimit` does), `limit_out_of_band` (at placement); `pending_expired` (at `max_pending_life`);
   `decision_against`, `quorum_share_drop`, `blackout`, `daily_loss_limit`, `profile_downgrade`, `kill`, `paused` (checked
   at every minute's open while it rests). One resting order at a time (`pending_order_exists`).
 - **Knobs:** the start values of §7, clamped to A7's bounds; no reader of the `omega.limit_*` facts exists yet.

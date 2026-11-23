@@ -134,10 +134,21 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
   return {
     ...base, trigger_required: trigger.required, trigger_source: String(trigger.source ?? ""),
     signal_id: decision.decision_key, side, action: t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", entry, stop, tp1,
+    // EZ1 (src/strategy-engine.mjs ENTRY_ZONE): the plan's entry zone on the feed's scale, flat, only when it holds the
+    // entry and stays on the entry's side of the stop. The EA never reads these keys (its needle is `"<key>":`).
+    ...entryZoneFields(t, side),
     risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
     // A market entry triggered live by a later 5m candle is as fresh as that candle (Omega's signal-age gate).
     issued_ms: close, expires_ms: close + M15_MS, decided_ms: Number.isFinite(trigger.at_ms) && trigger.at_ms > decidedMs ? trigger.at_ms : decidedMs
   };
+}
+
+/** Pure: { entry_zone_low, entry_zone_high } of a trade whose zone holds its entry, short of its stop; else {}. */
+export function entryZoneFields(t, side) {
+  const low = t?.entry_low, high = t?.entry_high, buy = side === "BUY";
+  if (![low, high, t?.entry, t?.stop].every(isPrice) || !(low < high) || !(low <= t.entry && t.entry <= high)) return {};
+  if (buy ? !(t.stop < low) : !(high < t.stop)) return {};
+  return { entry_zone_low: low, entry_zone_high: high };
 }
 
 /**

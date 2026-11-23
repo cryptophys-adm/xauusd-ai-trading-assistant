@@ -903,6 +903,54 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
 /**
+ * EZ1 (owner 2026-11-23: "decision & signal harusnya memberi nilai zone bukan exact, sehingga omega tidak akan info limit
+ * through price"; src/strategy-engine.mjs ENTRY_ZONE): the least reward a limit moved inside the entry zone keeps to its
+ * first target, as TP1-KZ's floor (TP1_MIN_R).
+ */
+export const ZONE_MIN_RR = 1;
+/** The least share of the plan's risk (its stop distance) a limit moved inside the entry zone keeps (zone_tight). */
+export const ZONE_MIN_RISK_SHARE = 0.5;
+/**
+ * Pure: the signal's entry zone on the broker's scale ({ low, high }, entry_zone_low/high + feed_basis), or null: none
+ * sent, or one that no longer holds the signal's entry or reaches its stop (a grid adaptation moved them).
+ */
+export function signalEntryZone(signal, digits = 2) {
+  const lo = Number(signal?.entry_zone_low), hi = Number(signal?.entry_zone_high), entry = Number(signal?.entry), stop = Number(signal?.stop);
+  if (![lo, hi, entry, stop].every(positive) || !(lo < hi) || !(lo <= entry && entry <= hi) || !finite(signal?.feed_basis)) return null;
+  if (signal.side === "BUY" ? !(stop < lo) : signal.side === "SELL" ? !(hi < stop) : true) return null;
+  return { low: roundTo(lo + signal.feed_basis, digits), high: roundTo(hi + signal.feed_basis, digits) };
+}
+/**
+ * Pure: a limit inside the entry zone where the plan's own level cannot rest (through price, or within the stop level):
+ * the level nearest the plan's inside the zone that is at least max(the stop level, 1 spread) from price on the
+ * correct side (above the bid for a SELL, below the ask for a BUY). The stop and the target stay the plan's (broker
+ * scale); the moved limit keeps at least ZONE_MIN_RISK_SHARE of the plan's risk (zone_tight) and must still pay
+ * ZONE_MIN_RR to the target, with both at least the stop level away (zone_rr).
+ * The whole zone passed (no such level inside it): zone_passed, a missed entry as limit_through_price is.
+ */
+export function zoneLimit({ signal, sym = {}, zone, digits = 2, planStopDist, minDist = 0, knobs, from }) {
+  const buy = signal.side === "BUY";
+  const step = Math.pow(10, -digits);
+  const spreadPx = positive(sym.spread_points) && positive(sym.point) ? sym.spread_points * sym.point : finite(sym.ask) && finite(sym.bid) ? Math.max(0, sym.ask - sym.bid) : 0;
+  const gap = Math.max(minDist, spreadPx, step);
+  // Rounded away from price, so the gap holds after rounding.
+  const scale = Math.pow(10, digits);
+  const at = buy ? Math.min(from, Math.floor((sym.ask - gap) * scale + 1e-6) / scale) : Math.max(from, Math.ceil((sym.bid + gap) * scale - 1e-6) / scale);
+  const price = roundTo(at, digits);
+  const away = roundTo(buy ? sym.ask - price : price - sym.bid, digits + 2);
+  const awayR = planStopDist > 0 ? round3(away / planStopDist) : null;
+  const out = { price, away, away_r: awayR, knobs, zone, from };
+  if (!finite(price) || (buy ? price < zone.low - step / 2 : price > zone.high + step / 2)) return { ok: false, code: "zone_passed", detail: `the entry zone ${zone.low}-${zone.high} is passed`, ...out };
+  const sl = roundTo(Number(signal.stop) + signal.feed_basis, digits), tp = roundTo(Number(signal.tp1) + signal.feed_basis, digits);
+  const risk = buy ? price - sl : sl - price, reward = buy ? tp - price : price - tp;
+  // A move inside the zone never cuts the plan's risk below half (a stop that tight is hit far more often): zone_tight.
+  const floor = Math.max(minDist, ZONE_MIN_RISK_SHARE * planStopDist);
+  if (!(risk >= floor - 1e-9)) return { ok: false, code: "zone_tight", detail: `a limit at ${price} leaves ${round3(risk)} of risk to the plan's stop, under ${round3(floor)} (${ZONE_MIN_RISK_SHARE} x the plan's ${round3(planStopDist)})`, ...out };
+  if (!(risk > minDist) || !(reward > minDist) || !(reward / risk >= ZONE_MIN_RR - 1e-9)) return { ok: false, code: "zone_rr", detail: `a limit at ${price} pays ${risk > 0 ? round3(reward / risk) : "no"} R to the target, under ${ZONE_MIN_RR}`, ...out };
+  return { ok: true, moved: true, sl, tp, rr: round3(reward / risk), ...out };
+}
+
+/**
  * Pure: whether the signal's level can rest at the broker as a limit now (RFC §3), before any council is asked:
  * { ok: true, price, away, away_r, knobs } or { ok: false, code }. The limit is the decision's level on the broker's
  * scale (signal.entry + feed_basis); a buy limit waits below the ask, a sell limit above the bid, at most
@@ -919,6 +967,9 @@ export function limitPlacement({ signal, sym = {}, account = {}, planStopDist, m
   const away = roundTo(buy ? sym.ask - price : price - sym.bid, digits + 2);
   const awayR = planStopDist > 0 ? round3(away / planStopDist) : null;
   const out = { price, away, away_r: awayR, knobs };
+  // EZ1: where the plan's level is through price or within the stop level, its entry zone may still hold a limit.
+  const zone = signalEntryZone(signal, digits);
+  if (zone && (!(away > 0) || (minDist > 0 && away < minDist))) return zoneLimit({ signal, sym, zone, digits, planStopDist, minDist, knobs, from: price });
   if (!(away > 0)) return { ok: false, code: "limit_through_price", ...out };
   if (minDist > 0 && away < minDist) return { ok: false, code: "limit_stops_level", ...out };
   if (away > knobs.placement_band * planStopDist + 1e-9) return { ok: false, code: "limit_out_of_band", detail: `${awayR} x the stop from price, the band is ${knobs.placement_band}`, ...out };
@@ -964,6 +1015,9 @@ export function limitActionIntents({ orders = [], sym = {}, actions = [], entryO
       if (!toward) { drop(a, `a move to ${to} is not toward price (the order rests at ${from})`); continue; }
       if (Math.abs(delta) > a.max_move + point / 2) { drop(a, `a move of ${Math.abs(delta)} is more than ${roundTo(a.max_move, digits)} (move_max_atr x ATR)`); continue; }
       if (!(gap > 0) || gap < minDist) { drop(a, `the live price leaves no room for a limit at ${to}`); continue; }
+      // EZ1: an order placed with an entry zone is never moved out of it.
+      const z = meta?.[o.ticket]?.entry_zone;
+      if (z && finite(z.low) && finite(z.high) && (to < z.low - point / 2 || to > z.high + point / 2)) { drop(a, `a move to ${to} leaves the entry zone ${z.low}-${z.high}`); continue; }
       if (!(Number(o.sl) > 0)) { drop(a, "the order has no stop"); continue; }
       const sl = roundTo(Number(o.sl) + delta, digits), tp = Number(o.tp) > 0 ? roundTo(Number(o.tp) + delta, digits) : 0;
       // The bridge's line has no price field: a modify_order carries the order's new price in the volume field (EA 1.18+).
@@ -1359,7 +1413,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       if (!lim.ok) { note(lim.code, lim.detail); return done(); }
       route = "limit";
     } else note("council_enter_market", council.rule ?? null);
-  } else if (leg) note("conversion_market_leg", String(leg.ticket ?? ""));
+  } else if (leg) {
+    // EZ1: the market leg of a conversion enters only while price has not passed the signal's entry zone.
+    const zone = signalEntryZone(signal, sym.digits);
+    if (zone && (buy ? sym.ask < zone.low : sym.bid > zone.high)) { note("zone_passed", `the entry zone ${zone.low}-${zone.high} is passed`); return done(); }
+    note("conversion_market_leg", String(leg.ticket ?? ""));
+  }
 
   // 5m execution (docs/RFC_OMEGA_5M_EXECUTION.md, owner 2026-11-12): a market entry's stop moves to the
   // broker's 5m structure (the swing of the last 3 broker 5m bars beyond a buffer of 2 spreads or 0.1
@@ -1399,14 +1458,15 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // The sizing of an entry at `price` with its stop `sl` (today's formula and every hard guard), or null with its note.
   const pctOf = (money) => roundTo((money / account.equity) * 100, 2);
   const label = limits ? (PROFILES[limits.profile]?.label ?? limits.profile) : null;
-  const sizeEntry = (price, sl) => {
+  const sizeEntry = (price, sl, { zoneMoved = false } = {}) => {
     const lossPerLot = (Math.abs(price - sl) / sym.tick_size) * sym.tick_value;
     let volume = floorToStep((account.equity * S.risk_pct / 100) / lossPerLot, sym.volume_step);
-    if (tight) {
-      // The money at risk stays within risk_pct; the lot is capped at tight_stop_max_lot_factor x the lot at the plan's stop.
+    if (tight || zoneMoved) {
+      // The money at risk stays within risk_pct; the lot is capped at tight_stop_max_lot_factor x the lot at the plan's stop
+      // (a 5m stop, or EZ1's limit moved inside the entry zone toward the plan's stop).
       const planVolume = (account.equity * S.risk_pct / 100) / ((planStopDist / sym.tick_size) * sym.tick_value);
       const cap = floorToStep(planVolume * (finite(S.tight_stop_max_lot_factor) ? S.tight_stop_max_lot_factor : 1.5), sym.volume_step);
-      if (volume > cap) { volume = cap; note("lot_capped_5m"); }
+      if (volume > cap) { volume = cap; note(zoneMoved ? "lot_capped_zone" : "lot_capped_5m"); }
     }
     if (volume > sym.volume_max) volume = floorToStep(sym.volume_max, sym.volume_step);
     if (!positive(volume) || volume < sym.volume_min) {
@@ -1473,9 +1533,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // The limit (RFC §3): the stop and the target keep their distances from the limit price (the adaptive stop above
     // included), sized as if filled there; it expires max_pending_life after placement (never GTC, the EA enforces it).
     const price = lim.price;
-    const sl = roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
-    const tp = roundTo(buy ? price + tpDist : price - tpDist, sym.digits);
-    const sized = sizeEntry(price, sl);
+    // EZ1: a limit moved inside the entry zone keeps the plan's stop and target where the plan put them.
+    const sl = lim.moved === true ? lim.sl : roundTo(buy ? price - stopDist : price + stopDist, sym.digits);
+    const tp = lim.moved === true ? lim.tp : roundTo(buy ? price + tpDist : price - tpDist, sym.digits);
+    const sized = sizeEntry(price, sl, { zoneMoved: lim.moved === true });
     if (!sized) return done();
     const { volume, lossPerLot } = sized;
     const expiryMs = now + lim.knobs.max_pending_life * 60_000;
@@ -1487,6 +1548,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     Object.assign(it, { lot: volume, entry_order: S.entry_order, placed_ms: now, expiry_ms: expiryMs, share0: share0 >= 0 ? share0 : null,
       decision_ms: finite(signal.power_ms) && signal.power_ms > 0 ? signal.power_ms : issued, profile: typeof accountSpec?.profile === "string" ? accountSpec.profile : null,
       knobs: { max_pending_life: lim.knobs.max_pending_life, move_max_atr: lim.knobs.move_max_atr, cancel_share_drop: lim.knobs.cancel_share_drop, placement_band: lim.knobs.placement_band }, away_r: lim.away_r, basis: signal.feed_basis });
+    // EZ1: the entry zone (broker scale) the order may never be moved out of, and where a zone move put it from.
+    const zone = signalEntryZone(signal, sym.digits);
+    if (zone) it.entry_zone = zone;
+    if (lim.moved === true) { it.zone_from = lim.from; note("limit_in_zone", `${lim.from} -> ${price}`); }
     intents.push(it);
     return done();
   }
