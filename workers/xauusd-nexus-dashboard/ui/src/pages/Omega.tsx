@@ -1,42 +1,28 @@
 import OmegaProfile from "../components/OmegaProfile";
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import clsx from "clsx";
 import { usePushMany } from "../lib/push";
-import {
-  Activity,
-  AlertTriangle,
-  Bot,
-  CandlestickChart,
-  Cpu,
-  KeyRound,
-  Layers,
-  Power,
-  Radio,
-  ShieldCheck,
-  Sliders,
-  Terminal,
-  Zap,
-} from "lucide-react";
+import { AlertTriangle, ChevronRight, KeyRound, Sliders, Terminal } from "lucide-react";
 import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type TickMarkType, type Time, type UTCTimestamp } from "lightweight-charts";
-import { Badge, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
+import { Badge, Dot, Empty, Hint, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
-import OmegaWhy from "../components/OmegaWhy";
+import OmegaWhy, { omegaReason } from "../components/OmegaWhy";
 import { CHART_READ, get } from "../lib/api";
-import { C } from "../components/charts";
-import { CANDLE, T, tagText, volumeColor } from "../lib/tokens";
-import { nearestCandidates, withAlpha, type KeyZone } from "../lib/keyZones";
-import { KeyZoneBands } from "../lib/keyZoneBands";
+import { CANDLE, T, tagText } from "../lib/tokens";
 import { appliedNotes, engineDefaultsFor } from "../lib/engineDefaults";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { CreatedCell, IntentCards, IntentEntry, SignalRows } from "../components/OmegaZone";
-import { basisText, brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, knownFeedBasis, limitTitle, positionLines, quoteTitle, restingLimit, signalZoneOf, zoneText, zoneToBroker, zoneToFeed, type Zone } from "../lib/entryZone";
+import { brokerToFeed, chartZoneLabel, gmt7Crosshair, gmt7Tick, isNum, knownFeedBasis, limitTitle, positionLines, restingLimit, signalZoneOf, utcClockOf, zoneText, zoneToFeed, type Zone } from "../lib/entryZone";
+import { amount, atStops, connState, dailyLoss, isLiveAccount, lastActions, orderAsPosition, orderKind, riskToSl, scaleNote, shortAge, signalLine, signedMoney, signedPct, sourceOf, stateChip, verdict, type Risk } from "../lib/omegaLean";
 
 /**
- * Omega Execution Engine & Windows MetaTrader 5 Web Terminal inside the Nexus SPA
- * (owner 2026-11-09: integrated into the Nexus left sidebar navigation at
- * nexus.cryptophys.work/omega/ and /#/omega behind Cloudflare Access, upgraded with a
- * full Windows MT5 Terminal — Web Edition workstation).
- * Calls same-origin /omega/api/* routes forwarded to xauusd-omega (OMEGA_PAGE binding)
- * and /api/ohlcv for the MT5 terminal candlestick chart.
+ * The Omega page inside the Nexus SPA (owner 2026-11-09: nexus.cryptophys.work/omega/ and /#/omega behind Cloudflare
+ * Access). OM-LEAN (owner-approved mockup 1795450033-0f25, 2026-11-23: "Setuju, bangun (Rekomendasi)"): the Terminal
+ * view is one screen that answers four questions (running and connected? what is open or resting, and its risk? the
+ * signal and what Omega did, in one line? the last few actions?), with everything else behind one Details disclosure;
+ * the MT5 window imitation, Market Watch, the Navigator and the Expert Advisor panel are gone. Setup is unchanged.
+ * Calls same-origin /omega/api/* routes forwarded to xauusd-omega (OMEGA_PAGE) and, with Details open, /api/ohlcv for
+ * the chart's candles.
  */
 
 interface Candle {
@@ -48,8 +34,8 @@ interface Candle {
   volume?: number;
 }
 
-type Mt5Tf = "M5" | "M15" | "H1" | "H4" | "D1";
-type ToolboxTab = "trade" | "history" | "intents" | "state_machine" | "tca_sor" | "events";
+type ChartTf = "M5" | "M15" | "H1" | "H4" | "D1";
+type DetailsTab = "history" | "intents" | "journal";
 // The account's gold symbol (owner 2026-11-19, universal): found automatically by OmegaExecutor 1.19 on any broker, by its
 // contract and its price against the reference gold price; a typed name is only a hint tried first, under the same checks.
 const GOLD_PAIR_OPTIONS = [
@@ -59,13 +45,7 @@ const GOLD_PAIR_OPTIONS = [
 // The same rule as src/gold-symbol.mjs TRADE_SYMBOL_RE.
 const TRADE_SYMBOL_RE = /^[A-Za-z0-9._#+-]{1,32}$/;
 
-const MT5_TFS: { key: Mt5Tf; label: string }[] = [
-  { key: "M5", label: "M5" },
-  { key: "M15", label: "M15" },
-  { key: "H1", label: "H1" },
-  { key: "H4", label: "H4" },
-  { key: "D1", label: "D1" },
-];
+const CHART_TFS: ChartTf[] = ["M5", "M15", "H1", "H4", "D1"];
 
 const b64 = (bytes: ArrayBuffer | Uint8Array) => {
   let s = "";
@@ -91,15 +71,10 @@ async function buildEnvelope(publicKeySpkiBase64: string, kid: string, creds: { 
 }
 
 const num = (v?: number | null, d = 2) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "—");
-const money = (v?: number | null, cur = "") =>
-  typeof v === "number" && Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}${cur ? " " + cur : ""}` : "—";
-/** A P&L in its direction's colour: a loss red, a gain green, zero in the text colour; no value (its "—") muted. */
-const pnlColor = (v?: number | null) => (typeof v !== "number" || !Number.isFinite(v) ? T.muted : v < 0 ? T.bear : v > 0 ? T.bull : T.fg);
 const balFmt = (v?: number | null, cur = "") =>
   typeof v === "number" && Number.isFinite(v)
     ? `${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`
     : "—";
-const toneCls = (v?: number | null) => (typeof v !== "number" || v === 0 ? "text-slate-300" : v > 0 ? "text-bull" : "text-bear");
 const timeUtc = (ms?: number | null) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "—");
 const agoMs = (ms?: number | null) => {
   if (ms == null) return "never";
@@ -108,6 +83,11 @@ const agoMs = (ms?: number | null) => {
   const m = Math.round(ms / 60000);
   return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
 };
+const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "");
+const arr = (v: unknown): any[] => (Array.isArray(v) ? v.filter((x) => x != null && typeof x === "object") : []);
+const obj = (v: unknown): any => (v != null && typeof v === "object" && !Array.isArray(v) ? v : {});
+/** "11-19 13:53" (UTC), for the Details tables. */
+const dayClock = (ms: unknown) => (isNum(ms) && ms > 0 ? new Date(ms).toISOString().slice(5, 16).replace("T", " ") : "—");
 
 const CONNECTION_TEXT: Record<string, string> = {
   none: "Not connected.",
@@ -139,78 +119,61 @@ async function omegaJson(path: string, method = "GET", body?: unknown) {
   return data;
 }
 
-const KEY_ROLE_COLOR: Record<string, string> = { support: C.bullFill, resistance: C.bearFill, "at price": C.cyan };
-/** The zone labels (9.5 px) in the text tokens at full strength: the bear fill at 85% was 4.0 to 1 on the ground. */
-const KEY_ROLE_TEXT: Record<string, string> = { support: T.bull, resistance: T.bear, "at price": T.ok };
-const KEY_ROLE_SHORT: Record<string, string> = { support: "S", resistance: "R", "at price": "at price" };
-// Transparent blocks (owner 2026-11-12): the fill's opacity by strength, the label's readable.
-const KEY_STRENGTH_FILL: Record<string, number> = { strong: 0.2, medium: 0.13, weak: 0.08 };
+// The profiles' caps (src/account-spec.mjs PROFILES): risk per trade (target), max positions, daily loss.
+const PROFILE_CAPS: Record<string, { risk: number; positions: number; daily: number }> = {
+  safe: { risk: 1, positions: 1, daily: 3 },
+  conservative: { risk: 2, positions: 2, daily: 6 },
+  aggressive: { risk: 5, positions: 3, daily: 10 },
+};
+const appliedLimit = (setting: unknown, cap: number | undefined) => {
+  const v = Number(setting);
+  if (!Number.isFinite(v)) return cap ?? "—";
+  return cap == null ? v : Math.min(v, cap);
+};
 
-/** The War Room's key-level zones (GET /api/conclusion/global → strategy.key_levels), refreshed every 60 s. */
-function useKeyZones(): KeyZone[] {
-  const [zones, setZones] = useState<KeyZone[]>([]);
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      get<any>("/api/conclusion/global")
-        .then((r) => { if (alive) setZones(nearestCandidates(r?.global?.strategy?.key_levels, 6)); })
-        .catch(() => { if (alive) setZones([]); });
-    };
-    load();
-    const id = window.setInterval(load, 60_000);
-    return () => { alive = false; window.clearInterval(id); };
-  }, []);
-  return zones;
-}
+// A reported leverage this high is a broker's "unlimited" (FxPro demo: 1:2,000,000,000), not a real ratio.
+const LEVERAGE_UNLIMITED_FROM = 100_000;
 
-function Mt5ChartCanvas({
-  tf,
-  symbol,
-  server,
-  digits,
-  bid,
-  ask,
-  spreadPoints,
-  signal,
-  positions,
-  showBidAsk,
-  showPlan,
-  showPositions,
-  keyZones,
-  showKeyLevels,
-  feedBasis,
-  limit,
-}: {
-  tf: Mt5Tf;
-  symbol: string;
-  server: string;
+// ---------------------------------------------------------------- shared classes (the mockup's .btn, .st, .panel)
+
+const PANEL = "rounded-xl border border-white/10 bg-panel/90";
+const BTN_BASE = "inline-flex h-[44px] items-center justify-center gap-[8px] whitespace-nowrap rounded-[7px] border bg-white/3 px-[12px] text-[13px] font-semibold transition hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-45 lg:h-[34px] lg:text-[12px]";
+const BTN_SM_BASE = "inline-flex h-[44px] items-center justify-center whitespace-nowrap rounded-[7px] border bg-white/3 px-[10px] text-[13px] font-semibold transition hover:bg-white/6 disabled:cursor-not-allowed disabled:opacity-45 lg:h-[30px] lg:text-[12px]";
+const BTN_TONE = { plain: "border-white/14 text-fg hover:border-white/25", fault: "border-fault-fill/45 text-fault hover:border-fault-fill/70", late: "border-late-fill/50 text-late hover:border-late-fill/70", ok: "border-ok-fill/45 text-ok hover:border-ok-fill/70" } as const;
+/** The mockup's .btn (34 px at 1440, 44 px on a phone) and .btn.sm, in one tone: plain, or a status tone for a destructive or arming step. */
+const btn = (tone: keyof typeof BTN_TONE = "plain", ...more: (string | false | null | undefined)[]) => clsx(BTN_BASE, BTN_TONE[tone], ...more);
+const btnSm = (tone: keyof typeof BTN_TONE = "plain", ...more: (string | false | null | undefined)[]) => clsx(BTN_SM_BASE, BTN_TONE[tone], ...more);
+const TONE_TEXT: Record<string, string> = { ok: "text-ok", late: "text-late", fault: "text-fault", off: "text-off" };
+const TONE_BORDER: Record<string, string> = { ok: "border-ok-fill/45", late: "border-late-fill/50", fault: "border-fault-fill/50", off: "border-off-fill/40" };
+const SideWord = ({ side }: { side: unknown }) =>
+  side === "BUY" ? <b className="font-sans font-semibold text-bull">BUY</b> : side === "SELL" ? <b className="font-sans font-semibold text-bear">SELL</b> : null;
+
+/**
+ * The Details chart (OM-LEAN): the feed's candles in GMT+7 and only Omega's own lines (its open positions' entry, SL and
+ * TP, its resting limit and that limit's entry zone), each labelled with one price on the axis' scale (the feed: broker −
+ * basis); without a basis the lines stay at the broker's prices, labelled "broker". The caption states the basis once.
+ */
+function OmegaChart({ digits, bid, positions, feedBasis, limit, signal }: {
   digits: number;
   bid?: number | null;
-  ask?: number | null;
-  spreadPoints?: number | null;
-  signal: any;
   positions: any[];
-  showBidAsk: boolean;
-  showPlan: boolean;
-  showPositions: boolean;
-  keyZones: KeyZone[];
-  showKeyLevels: boolean;
   /** EZ1: the signal's broker − feed basis (signal.feed_basis when feed_basis_known), else null. */
   feedBasis: number | null;
-  /** EZ1: Omega's resting limit (broker scale) and the entry zone its intent carries (broker). */
-  limit: { price: number; side: "BUY" | "SELL" | null; zone: Zone | null } | null;
+  /** Omega's resting limit (broker scale), its ticket and the entry zone its intent carries (broker). */
+  limit: { price: number; side: "BUY" | "SELL" | null; zone: Zone | null; ticket: number | null } | null;
+  signal: any;
 }) {
+  const [tf, setTf] = useState<ChartTf>("M15");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const linesRef = useRef<IPriceLine[]>([]);
   const lastLineRef = useRef<IPriceLine | null>(null);
-  const bandsRef = useRef<KeyZoneBands | null>(null);
-  // EZ1: the entry zone and the bid/ask labels, each label next to its own line (zones-primitive's anchored mode).
+  // The entry zone as a band with its label at the left (zones-primitive's anchored mode).
   const ezRef = useRef<ZonesPrimitive | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [hover, setHover] = useState<Candle | null>(null);
+  // The prices of Omega's lines, so the price scale keeps them in view (a stop below the candles still shows).
+  const linePricesRef = useRef<number[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -236,50 +199,34 @@ function Mt5ChartCanvas({
     if (!el) return;
     const chart = createChart(el, {
       autoSize: true,
-      layout: {
-        background: { color: T.ground },
-        textColor: T.fg2,
-        fontFamily: "ui-monospace, JetBrains Mono, monospace",
-      },
-      grid: {
-        vertLines: { color: "rgba(34, 211, 238, 0.05)" },
-        horzLines: { color: "rgba(34, 211, 238, 0.05)" },
-      },
+      // No library logo: it injects a <style> element, which the page's CSP (style-src 'self') refuses; the caption credits TradingView.
+      layout: { background: { color: T.ground }, textColor: T.fg2, fontFamily: "ui-monospace, JetBrains Mono, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "rgba(255,255,255,0.03)" }, horzLines: { color: "rgba(255,255,255,0.03)" } },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.09)" },
-      // The time axis in the owner's GMT+7 (the EZ1 mockup); the candles stay the feed's.
+      // The time axis in the owner's GMT+7; the candles stay the feed's.
       timeScale: { borderColor: "rgba(255,255,255,0.09)", timeVisible: true, secondsVisible: false, tickMarkFormatter: (t: Time, type: TickMarkType) => gmt7Tick(t, type) },
       localization: { timeFormatter: (t: Time) => gmt7Crosshair(t) },
     });
-    // The last price is our own price line (setLastLine), so its axis tag carries dark text on the green and red fills:
-    // the library's own tag is white there (2.3 to 1 on the bull fill).
+    // The last price is our own price line (setLastLine), so its axis tag carries dark text on the green and red fills.
     const series = chart.addCandlestickSeries({
-      ...CANDLE,
-      lastValueVisible: false,
-      priceLineVisible: false,
-      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      ...CANDLE, lastValueVisible: false, priceLineVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      autoscaleInfoProvider: (base: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const r = base();
+        const ps = linePricesRef.current;
+        if (!r || !ps.length) return r;
+        return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...ps), maxValue: Math.max(r.priceRange.maxValue, ...ps) } };
+      },
     });
-    const vol = chart.addHistogramSeries({
-      priceFormat: { type: "volume" },
-      priceScaleId: "vol",
-    });
-    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
-    const bands = new KeyZoneBands();
-    series.attachPrimitive(bands);
-    bandsRef.current = bands;
     const ez = new ZonesPrimitive("anchored");
     series.attachPrimitive(ez);
     ezRef.current = ez;
     chartRef.current = chart;
     seriesRef.current = series;
-    volRef.current = vol;
-
     return () => {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
-      volRef.current = null;
-      bandsRef.current = null;
       ezRef.current = null;
       linesRef.current = [];
       lastLineRef.current = null;
@@ -296,38 +243,14 @@ function Mt5ChartCanvas({
 
   useEffect(() => {
     const series = seriesRef.current;
-    const vol = volRef.current;
-    const chart = chartRef.current;
-    if (!series || !vol || !chart) return;
-    const sorted = [...candles]
-      .filter((c) => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.close))
-      .sort((a, b) => a.time - b.time);
+    if (!series) return;
+    const sorted = [...candles].filter((c) => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.close)).sort((a, b) => a.time - b.time);
     series.setData(sorted.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close })));
     const lastBar = sorted[sorted.length - 1];
     if (lastBar) setLastLine(series, lastBar.open, lastBar.close);
-    vol.setData(
-      sorted.map((c) => ({
-        time: c.time as UTCTimestamp,
-        value: c.volume ?? 0,
-        color: volumeColor(c.close >= c.open, 0.28),
-      }))
-    );
-
-    const sub = (param: any) => {
-      if (!param?.time) {
-        setHover(null);
-        return;
-      }
-      const found = sorted.find((c) => c.time === param.time);
-      setHover(found || null);
-    };
-    chart.subscribeCrosshairMove(sub);
-    return () => chart.unsubscribeCrosshairMove(sub);
   }, [candles]);
 
-  // Real-time tick update on the active candlestick bar as MT5 broker ticks stream in. EZ1 (the reviewer's ruling 4):
-  // the candles are the feed's, so the broker's bid is painted on the feed scale (bid − feed_basis), and not at all
-  // while the basis is unknown.
+  // The broker's live bid in the last candle, on the feed scale (bid − feed_basis), and not at all while the basis is unknown.
   useEffect(() => {
     const series = seriesRef.current;
     const feedBid = brokerToFeed(bid, feedBasis, digits);
@@ -335,13 +258,7 @@ function Mt5ChartCanvas({
     const lastBar = candles[candles.length - 1];
     if (!lastBar || !Number.isFinite(lastBar.time)) return;
     try {
-      series.update({
-        time: lastBar.time as UTCTimestamp,
-        open: lastBar.open,
-        high: Math.max(lastBar.high, feedBid),
-        low: Math.min(lastBar.low, feedBid),
-        close: feedBid,
-      });
+      series.update({ time: lastBar.time as UTCTimestamp, open: lastBar.open, high: Math.max(lastBar.high, feedBid), low: Math.min(lastBar.low, feedBid), close: feedBid });
       setLastLine(series, lastBar.open, feedBid);
     } catch {
       // ignore if chart series is resetting
@@ -352,199 +269,816 @@ function Mt5ChartCanvas({
     const series = seriesRef.current;
     if (!series) return;
     for (const l of linesRef.current) {
-      try {
-        series.removePriceLine(l);
-      } catch {
-        // ignore removed line
-      }
+      try { series.removePriceLine(l); } catch { /* ignore removed line */ }
     }
     linesRef.current = [];
-    const addLine = (price: number | null | undefined, title: string, color: string, style = LineStyle.Dashed, lineWidth: 1 | 2 = 1, axis = true) => {
+    linePricesRef.current = [];
+    const addLine = (price: number | null | undefined, title: string, color: string, style = LineStyle.Dashed, lineWidth: 1 | 2 = 1) => {
       if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) return;
-      linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: axis, axisLabelTextColor: tagText(color), title }));
+      linePricesRef.current.push(price);
+      linesRef.current.push(series.createPriceLine({ price, color, lineWidth, lineStyle: style, axisLabelVisible: true, axisLabelTextColor: tagText(color), title }));
     };
-
-    // Key levels from the War Room (owner 2026-11-12): the Key Level Agent's six candidate zones nearest to price, as
-    // transparent blocks from low to high behind the candles, coloured by role and shaded by strength, never as lines,
-    // each labelled above with its role, strength and price range (owner 2026-11-12),
-    // so every line on the chart is the bid, ask, plan or a position. They are on the feed's prices (OANDA via
-    // TradingView), like the candles; the broker's bid, ask and positions may differ by a few cents.
-    bandsRef.current?.setZones(showKeyLevels ? keyZones.map((z) => {
-      const base = KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted;
-      return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: KEY_ROLE_TEXT[z.role ?? ""] ?? T.fg2, label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
-    }) : []);
-    // EZ1 (the reviewer's ruling 4): the broker's bid, ask, resting limit and entry zone on the feed chart, converted
-    // (broker − feed_basis) and labelled with both prices. The bid and ask labels sit at the left next to their lines
-    // (the axis keeps the limit's tag); while the basis is unknown the bid and ask stay at the broker's prices, marked so.
-    const narrow = (hostRef.current?.clientWidth ?? 1000) < 480;
-    const labels: ChartZone[] = [];
-    const feedBid = brokerToFeed(bid, feedBasis, digits), feedAsk = brokerToFeed(ask, feedBasis, digits);
-    if (showBidAsk) {
-      if (feedBasis != null) {
-        addLine(feedBid, "", T.bullFill, LineStyle.Solid, 1, false);
-        addLine(feedAsk, "", T.bearFill, LineStyle.Solid, 1, false);
-        if (!narrow && feedBid != null && typeof bid === "number") labels.push({ low: feedBid, high: feedBid, color: T.bullFill, alpha: 0, text: T.bull, label: quoteTitle("bid", bid, feedBid, digits) });
-        if (!narrow && feedAsk != null && typeof ask === "number") labels.push({ low: feedAsk, high: feedAsk, color: T.bearFill, alpha: 0, text: T.bear, label: quoteTitle("ask", ask, feedAsk, digits) });
-      } else {
-        addLine(bid, "BID broker", T.bullFill, LineStyle.Solid, 1);
-        addLine(ask, "ASK broker", T.bearFill, LineStyle.Solid, 1);
-      }
-    }
-    // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
-    const hasClearDecision = showPlan && signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
-    if (hasClearDecision) {
-      addLine(signal.entry, `PLAN ${signal.side}`, T.okFill, LineStyle.Dashed, 1);
-      addLine(signal.stop, "PLAN SL", T.bearFill, LineStyle.Dashed, 1);
-      addLine(signal.tp1, "PLAN TP1", T.bullFill, LineStyle.Dashed, 1);
-    }
-    // The entry zone: the resting limit's own (broker, converted), else the clear decision's (signal, feed).
-    const limitFeed = limit ? brokerToFeed(limit.price, feedBasis, digits) : null;
-    const zoneFeed = limit?.zone ? zoneToFeed(limit.zone, feedBasis) : hasClearDecision ? signalZoneOf(signal) : null;
-    const zoneBroker = limit?.zone ? limit.zone : zoneToBroker(zoneFeed, feedBasis);
-    if (showPlan && zoneFeed) {
-      labels.unshift({ low: zoneFeed.low, high: zoneFeed.high, color: T.okFill, alpha: 0.16, text: T.ok, label: zoneBroker && feedBasis != null ? chartZoneLabel(zoneBroker, zoneFeed, feedBasis, narrow) : `Entry zone · feed ${zoneText(zoneFeed)}` });
-    }
-    if (showPositions && limit && limitFeed != null) addLine(limitFeed, limitTitle(limit.price, limitFeed, digits), limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
+    const known = feedBasis != null;
+    // The entry zone: the resting limit's own (its intent's, broker), else the clear signal's (feed); one price per label.
+    const clear = signal && (signal.side === "BUY" || signal.side === "SELL") && !signal.paused && !signal.kill;
+    const zoneFeed = limit?.zone ? (known ? zoneToFeed(limit.zone, feedBasis) : limit.zone) : clear ? signalZoneOf(signal) : null;
+    const labels: ChartZone[] = zoneFeed ? [{ low: zoneFeed.low, high: zoneFeed.high, color: T.fg, alpha: 0.07, text: T.fg, label: chartZoneLabel(zoneFeed, known || !limit?.zone, digits) }] : [];
     ezRef.current?.setZones(labels);
-    // The open positions (broker scale): entry, SL and TP converted to the feed as the bid and ask are, each titled
-    // "broker X · feed Y"; without a basis at the broker's prices, titled "broker" (lib/entryZone.ts positionLines).
-    if (showPositions && Array.isArray(positions)) {
-      for (const p of positions) {
-        const isBuy = p?.side === "BUY";
-        for (const l of positionLines(p, feedBasis, digits)) {
-          if (l.kind === "entry") addLine(l.price, l.title, isBuy ? T.bullFill : T.bearFill, LineStyle.Solid, 2);
-          else addLine(l.price, l.title, l.kind === "sl" ? T.bearFill : T.bullFill, LineStyle.Dotted, 1);
-        }
+    if (limit) {
+      const at = known ? brokerToFeed(limit.price, feedBasis, digits) : limit.price;
+      if (at != null) addLine(at, limitTitle(limit.ticket, at, known, digits), limit.side === "SELL" ? T.bearFill : T.bullFill, LineStyle.Dashed, 1);
+    }
+    // The open positions: entry, SL and TP through positionLines, on the feed with a basis (labelled broker without one).
+    for (const p of Array.isArray(positions) ? positions : []) {
+      const isBuy = p?.side === "BUY";
+      for (const l of positionLines(p, feedBasis, digits)) {
+        if (l.kind === "entry") addLine(l.price, l.title, isBuy ? T.bullFill : T.bearFill, LineStyle.Solid, 2);
+        else addLine(l.price, l.title, l.kind === "sl" ? T.bearFill : T.bullFill, LineStyle.Solid, 1);
       }
     }
-  }, [candles, bid, ask, signal, positions, showBidAsk, showPlan, showPositions, feedBasis, limit, keyZones, showKeyLevels, digits]);
-
-  const last = hover || candles[candles.length - 1];
+    // Re-fit the price scale with the lines in view (autoscaleInfoProvider above).
+    chartRef.current?.priceScale("right").applyOptions({ autoScale: true });
+  }, [candles, signal, positions, feedBasis, limit, digits]);
 
   return (
-    // Fills the whole chart column (owner 2026-11-12: "tidak ada space kosong dibawah sumbu waktu"); at least 430 px.
-    <div className="relative flex h-full min-h-[430px] w-full flex-1 flex-col bg-ground">
-      {/* MT5 Top-Left Chart Watermark & OHLC Bar */}
-      <div className="pointer-events-none absolute left-2.5 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col gap-0.5 rounded-sm bg-black/55 px-2.5 py-1.5 backdrop-blur-xs border border-white/5">
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <span className="mono font-bold text-cyan-300">
-            {symbol}, {tf}
-          </span>
-          <span className="text-slate-400">·</span>
-          <span className="text-slate-300">{server || "MT5"}</span>
-        </div>
-        {last ? (
-          <div className="mono flex flex-wrap items-center gap-2.5 text-[10.5px] text-slate-400">
-            <span>O {num(last.open, digits)}</span>
-            <span>H {num(last.high, digits)}</span>
-            <span>L {num(last.low, digits)}</span>
-            <span className={last.close >= last.open ? "text-bull" : "text-bear"}>C {num(last.close, digits)}</span>
-            {last.volume != null ? <span>V {Math.round(last.volume)}</span> : null}
-            <span className="text-fg-2">feed</span>
-          </div>
-        ) : (
-          <div className="mono text-[10.5px] text-slate-500">Loading…</div>
-        )}
-        {/* The live broker bid and ask (EZ1: with their feed prices), a line of this box so it never covers it on a narrow chart. */}
-        <div className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
-          <span className="text-slate-400">Bid</span>
-          <span className="mono font-bold text-bull">{num(bid, digits)}</span>
-          {feedBasis != null && brokerToFeed(bid, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(bid, feedBasis, digits), digits)})</span> : null}
-          <span className="text-slate-600">/</span>
-          <span className="text-slate-400">Ask</span>
-          <span className="mono font-bold text-bear">{num(ask, digits)}</span>
-          {feedBasis != null && brokerToFeed(ask, feedBasis) != null ? <span className="mono text-fg-2">(feed {num(brokerToFeed(ask, feedBasis, digits), digits)})</span> : null}
-          <span className="text-fg-2">· broker</span>
-          {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
+    <section className={clsx(PANEL, "px-[14px] py-[12px] lg:px-[16px]")} aria-label="Chart">
+      <div className="mb-[10px] flex items-center justify-between gap-[8px]">
+        <h2 className="text-[12px] font-semibold text-slate-300">Chart</h2>
+        <div className="flex overflow-hidden rounded-[7px] border border-white/12" role="group" aria-label="Timeframe">
+          {CHART_TFS.map((k) => (
+            <button key={k} type="button" aria-pressed={tf === k} onClick={() => setTf(k)}
+              className={clsx("h-[36px] px-[12px] text-[12px] font-medium lg:h-[30px]", tf === k ? "bg-white/8 text-fg" : "text-fg-2 hover:text-fg")}>{k}</button>
+          ))}
         </div>
       </div>
+      <div className="relative h-[300px] overflow-hidden rounded-lg bg-ground lg:h-[350px]">
+        <div ref={hostRef} className="absolute inset-0" />
+      </div>
+      <p className="mono mt-[8px] text-[11px] text-fg-2">
+        {feedBasis != null
+          ? `Feed prices (OANDA): broker ${feedBasis >= 0 ? "−" : "+"} ${Math.abs(feedBasis).toFixed(2)}. Times GMT+7. Only Omega's own lines.`
+          : "Feed candles (OANDA); Omega's lines at broker prices, the basis is unknown. Times GMT+7. Only Omega's own lines."}
+        {" "}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer" className="text-fg-2 underline decoration-white/20 hover:text-fg">Charts by TradingView</a>
+      </p>
+    </section>
+  );
+}
 
-      {/* EZ1: every price on the chart's axis is the feed's, its times GMT+7; the broker's prices are converted. */}
-      <div className="relative min-h-[380px] flex-1">
-        <span className="mono pointer-events-none absolute right-1 top-0.5 z-10 text-[9.5px] text-fg-2">feed</span>
-        <div ref={hostRef} className="absolute inset-x-0 bottom-0 top-4" />
-        <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9.5px] text-fg-2">GMT+7</span>
+// ---------------------------------------------------------------- the actions the lean view calls
+
+/** What the Terminal view can do; the render check passes no-ops (NOOP_ACTIONS). Each returns whether it went through. */
+export type OmegaActions = {
+  canControl: boolean;
+  busy: boolean;
+  hitlBusy: boolean;
+  closingTicket: number | null;
+  sendControl: (mode: "active" | "paused" | "killed", reason: string, confirm?: string) => Promise<boolean>;
+  setEngine: (on: boolean) => void;
+  armLive: () => Promise<boolean>;
+  disarmLive: () => void;
+  saveModify: (row: EditRow) => Promise<boolean>;
+  delegate: (ticket: number, on: boolean) => void;
+  delegateMode: (on: boolean) => void;
+  requestClose: (pos: ExitTargetPosition) => void;
+  setView: (v: "terminal" | "setup") => void;
+};
+export type EditRow = { target: "position" | "order"; ticket: number; sl: string; tp: string; price: string };
+const yes = async () => true;
+export const NOOP_ACTIONS: OmegaActions = {
+  canControl: true, busy: false, hitlBusy: false, closingTicket: null,
+  sendControl: yes, setEngine: () => {}, armLive: yes, disarmLive: () => {}, saveModify: yes, delegate: () => {}, delegateMode: () => {}, requestClose: () => {}, setView: () => {},
+};
+
+/** Everything the lean view reads, derived once from one overview body (null-safe: the render check nulls each path). */
+function derive(d: any, now: number) {
+  const data = obj(d);
+  const s = obj(data.signal);
+  const c = obj(data.control);
+  const hb = data.heartbeat != null && typeof data.heartbeat === "object" ? data.heartbeat : null;
+  const b = obj(data.broker);
+  const e = obj(b.engine);
+  const br = obj(b.bridge);
+  const st = obj(data.stats);
+  const accounts = arr(b.accounts);
+  const account = accounts.find((a) => a?.connected === true) ?? null;
+  const entryOrder = obj(b.entry_order);
+  const limitByTicket: Record<string, any> = Object.fromEntries(arr(entryOrder.pending).map((x: any) => [String(x.ticket), x]));
+  const delegation = b.delegation != null && typeof b.delegation === "object" ? b.delegation : null;
+  const loosened = arr([]).concat(Array.isArray(b.pm_loosen?.loosened) ? b.pm_loosen.loosened : []).map(Number);
+  const positions = arr(hb?.positions_detail).length ? arr(hb.positions_detail) : arr(br.positions);
+  const orders = arr(br.orders);
+  const intents = arr(b.intents);
+  const deals = arr(data.deals).length > 0 ? arr(data.deals) : arr(br.deals);
+  const digits = isNum(br.digits) && br.digits >= 0 && br.digits <= 8 ? br.digits : 2;
+  const inUsd = Number(account?.money?.units_per_usd) > 0;
+  const cur = inUsd ? "USD" : str(br.currency) || str(hb?.currency) || "USD";
+  const feedBasis = knownFeedBasis(s);
+  const resting = restingLimit(orders, intents);
+  const floating = isNum(hb?.floating_pnl) ? hb.floating_pnl : isNum(br.equity) && isNum(br.balance) ? br.equity - br.balance : positions.reduce((acc, p) => acc + (isNum(p.profit) ? p.profit : 0), 0);
+  const capOf = (k: "risk" | "positions" | "daily") => (account && account.profile !== "custom" ? PROFILE_CAPS[str(account.profile)]?.[k] : undefined);
+  const applied = (v: unknown, k: "risk" | "positions" | "daily") => (isNum(v) ? appliedLimit(v, capOf(k)) : null);
+  const appliedRisk = applied(e.risk_pct, "risk"), appliedPositions = applied(e.max_positions, "positions"), appliedDaily = applied(e.max_daily_loss_pct, "daily");
+  const codes = Array.isArray(b.planner?.codes) ? b.planner.codes.filter((x: unknown) => typeof x === "string") : [];
+  const conn = connState(br);
+  const chip = stateChip(c.mode, e, s);
+  const brokerName = str(br.broker) || "MT5 broker";
+  const brokerLabel = account?.spec_status === "validated" ? brokerName : "broker unknown";
+  const daily = dailyLoss({ codes, dayPct: account?.day_pl_pct, cap: appliedDaily, blockReason: account?.upgrade_block_reason, blockUntil: account?.upgrade_block_until_ms, now });
+  return { data, s, c, hb, b, e, br, st, account, entryOrder, limitByTicket, delegation, loosened, positions, orders, intents, deals, digits, cur, feedBasis, resting, floating, appliedRisk, appliedPositions, appliedDaily, codes, conn, chip, brokerName, brokerLabel, daily };
+}
+type Derived = ReturnType<typeof deriveAll>;
+
+/** A control change's who, when and why: owner, 13:10 UTC: "reason". */
+function controlMeta(c: any): string {
+  const at = Date.parse(str(c.at));
+  const who = str(c.actor);
+  const why = str(c.reason);
+  return [[who, Number.isFinite(at) ? `${utcClockOf(at)} UTC` : ""].filter(Boolean).join(", "), why ? `"${why}"` : ""].filter(Boolean).join(": ");
+}
+
+// ---------------------------------------------------------------- 1. the header: running and connected?
+
+/** A small popover under a header button: a reason (and a typed confirmation) before a control goes out. */
+function Popover({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="dialog" aria-label={label} className="absolute right-0 top-full z-30 mt-[8px] flex w-[min(320px,calc(100vw-40px))] flex-col gap-[8px] rounded-[10px] border border-white/18 bg-bar p-[12px] text-[12px] shadow-[0_12px_40px_rgba(0,0,0,0.6)]">
+      {children}
+    </div>
+  );
+}
+const INPUT = "h-[44px] w-full rounded-md border border-white/14 bg-black/35 px-[10px] text-[13px] text-fg focus:border-cyan-400/50 focus:outline-hidden lg:h-[32px] lg:text-[12px]";
+
+function OmegaHeader({ x, view, act, now, error, attention }: { x: Derived; view: "terminal" | "setup"; act: OmegaActions; now: number; error: string | null; attention: string }) {
+  const [open, setOpen] = useState<"pause" | "kill" | "live" | null>(null);
+  const [reason, setReason] = useState("");
+  const [typed, setTyped] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const { c, e, br, s, account, conn, chip } = x;
+  const live = isLiveAccount(br.trade_mode);
+  const mode = c.mode === "paused" || c.mode === "killed" ? c.mode : "active";
+  const serverKill = s.kill === true && s.kill_source === "env";
+  const close = () => { setOpen(null); setReason(""); setTyped(""); setMsg(null); };
+  const toggle = (k: "pause" | "kill" | "live") => (open === k ? close() : (setOpen(k), setReason(""), setTyped(""), setMsg(null)));
+  const go = async (m: "paused" | "killed") => {
+    if (!reason.trim()) { setMsg("Write a reason first."); return; }
+    if (m === "killed" && typed.trim() !== "KILL") { setMsg("Type KILL exactly."); return; }
+    if (await act.sendControl(m, reason, m === "killed" ? "KILL" : undefined)) close();
+  };
+  const arm = async () => {
+    if (typed.trim() !== "LIVE") { setMsg("Type LIVE exactly."); return; }
+    if (await act.armLive()) close();
+  };
+  const at = x.atStopsText;
+  const disconnected = conn.key === "disconnected";
+  const asOf = disconnected && isNum(br.synced_age_ms) ? `as of ${utcClockOf(now - br.synced_age_ms)} UTC` : null;
+  const limitsLabel = account ? `${str(account.profile_label) || "Profile"}:` : "Limits:";
+  const pct = (v: unknown) => (v == null || v === "—" ? "—" : `${v}%`);
+  const capTone = x.daily.reached ? "text-fault" : "";
+  const until = x.daily.blockedUntil != null ? ` · upgrades blocked until ${utcClockOf(x.daily.blockedUntil)} UTC` : "";
+  const today = isNum(account?.day_pl_pct) ? signedPct(account.day_pl_pct) : null;
+  const longLimits = <>risk {pct(x.appliedRisk)} · max {x.appliedPositions ?? "—"} positions · <span className={capTone}>daily loss cap {pct(x.appliedDaily)}{x.daily.reached ? " reached" : ""}{today ? `, today ${today}` : ""}</span>{today && !x.daily.reached ? <span className="text-fg-2"> (equity vs day start)</span> : null}<span className={capTone}>{until}</span></>;
+  const shortLimits = <>{str(account?.profile_label) || "Limits"} {pct(x.appliedRisk)} · max {x.appliedPositions ?? "—"} · <span className={capTone}>loss cap {pct(x.appliedDaily)}{x.daily.reached ? " reached" : ""}{today ? `, day ${today}` : ""}</span></>;
+  const money = (
+    <>
+      <span><span className="text-fg-2">Equity</span> {amount(br.equity)} <span className="text-fg-2">{x.cur}</span></span>
+      <span><span className="text-fg-2">Floating</span> {signedMoney(x.floating)}</span>
+      {!disconnected ? <span><span className="text-fg-2">Day realized</span> {signedMoney(br.day_realized_pl)}</span> : null}
+      <span><span className="text-fg-2">At stops</span> {at}</span>
+      {!disconnected ? <span><span className="text-fg-2">Bid</span> {num(br.bid, x.digits)}</span> : null}
+      {!disconnected ? <span><span className="text-fg-2">{"Spread "}</span>{isNum(br.spread_points) ? `${br.spread_points} pts` : "—"}</span> : null}
+      {asOf ? <span className="text-fg-2">{asOf}</span> : null}
+    </>
+  );
+  return (
+    <section className={clsx(PANEL, "flex flex-col gap-[10px] px-[12px] py-[12px] lg:px-[16px] lg:py-[14px]")} aria-label="Omega status">
+      <div className="flex flex-col gap-[10px] lg:flex-row lg:items-center lg:justify-between lg:gap-[16px]">
+        <div className="flex flex-col gap-[8px] lg:flex-row lg:items-center lg:gap-[14px]">
+          <div className="flex items-center justify-between gap-[12px]">
+            <h1 className="m-0 text-[16px] font-semibold">Omega</h1>
+            <div className="flex overflow-hidden rounded-[7px] border border-white/12" role="group" aria-label="View">
+              <button type="button" id="tab-terminal-mode" aria-pressed={view === "terminal"} onClick={() => act.setView("terminal")}
+                className={clsx("h-[36px] px-[12px] text-[12px] font-medium lg:h-[30px]", view === "terminal" ? "bg-white/8 text-fg" : "text-fg-2 hover:text-fg")}>Terminal</button>
+              <button type="button" id="tab-setup-mode" aria-pressed={view === "setup"} onClick={() => act.setView("setup")}
+                className={clsx("inline-flex h-[36px] items-center gap-[6px] px-[12px] text-[12px] font-medium lg:h-[30px]", view === "setup" ? "bg-white/8 text-fg" : "text-fg-2 hover:text-fg")}>
+                Setup
+                {attention ? <span id="setup-attention" className="rounded-full bg-amber-400 px-[6px] text-[10px] font-bold text-black" title={attention}>1</span> : null}
+              </button>
+            </div>
+          </div>
+          <div className="mono flex flex-wrap items-center gap-x-[8px] gap-y-0 text-[12px] leading-[16px] lg:flex-nowrap lg:gap-0 lg:overflow-hidden lg:rounded-lg lg:border lg:border-white/10">
+            <span className="flex items-center gap-[8px] whitespace-nowrap lg:min-h-[34px] lg:px-[12px]" aria-label="Connection">
+              <Dot tone={conn.tone} /><span className={TONE_TEXT[conn.tone]}>{conn.label}</span><span className="text-fg-2">{conn.detail}</span>
+            </span>
+            <span className="flex items-center gap-[8px] whitespace-nowrap lg:min-h-[34px] lg:border-l lg:border-white/10 lg:px-[12px]" aria-label="Account">
+              <span>{x.brokerLabel}</span>
+              {live ? <b className="font-semibold text-late">LIVE</b> : br.trade_mode === "demo" ? <span className="text-fg-2">demo</span> : null}
+              <span>{str(br.symbol) || "—"}</span>
+              {live ? <span className={x.e.live_armed === true ? "text-late" : "text-fg-2"}>{x.e.live_armed === true ? "armed" : "not armed"}</span> : null}
+            </span>
+          </div>
+        </div>
+        <div className="relative flex flex-wrap items-center gap-[8px] lg:flex-nowrap">
+          <span className={clsx("inline-flex h-[44px] items-center gap-[6px] whitespace-nowrap rounded-[7px] border px-[10px] text-[13px] font-semibold lg:h-[34px] lg:px-[12px] lg:text-[12px]", TONE_BORDER[chip.tone], TONE_TEXT[chip.tone])} aria-label="State">{chip.label}</span>
+          {s.blackout === true ? <span className={clsx("inline-flex h-[44px] items-center whitespace-nowrap rounded-[7px] border px-[10px] text-[12px] font-semibold lg:h-[34px]", TONE_BORDER.late, TONE_TEXT.late)} title={str(s.blackout_reason) || undefined}>Event blackout</span> : null}
+          <button type="button" role="switch" aria-checked={e.enabled === true} aria-label="Engine" disabled={!act.canControl} onClick={() => act.setEngine(!(e.enabled === true))}
+            className={btn("plain", "flex-1 lg:flex-none")} title={e.env_enabled === false ? "The server switch OMEGA_ENGINE_ENABLED is off; this switch is the page's own." : "Omega's engine switch (saved at once)"}>
+            Engine
+            <span className={clsx("relative inline-block h-[16px] w-[30px] rounded-full", e.enabled === true ? "bg-ok-fill/35" : "bg-off-fill/25")}>
+              <i className={clsx("absolute top-[2px] h-[12px] w-[12px] rounded-full", e.enabled === true ? "right-[2px] bg-ok" : "left-[2px] bg-off")} />
+            </span>
+          </button>
+          {live ? (
+            x.e.live_armed === true
+              ? <button type="button" id="lean-disarm" disabled={!act.canControl} onClick={act.disarmLive} className={btn()}>Disarm live</button>
+              : <button type="button" id="lean-arm" disabled={!act.canControl || e.enabled !== true} onClick={() => toggle("live")} aria-expanded={open === "live"}
+                  className={btn("late")} title={e.enabled !== true ? "Turn the engine on first" : undefined}>Arm live…</button>
+          ) : null}
+          {mode !== "active" ? (
+            <>
+              <span className="mono order-last w-full text-[11.5px] text-fg-2 lg:order-none lg:w-auto lg:max-w-[260px] lg:truncate" title={controlMeta(c)}>{controlMeta(c)}</span>
+              <button type="button" disabled={act.busy || !act.canControl || serverKill} onClick={() => act.sendControl("active", "")} className={btn("ok")}
+                title={serverKill ? "The server kill switch (EA_SIGNALS_ENABLED) overrides this control" : undefined}>Resume</button>
+            </>
+          ) : (
+            <button type="button" id="lean-pause" disabled={act.busy || !act.canControl} onClick={() => toggle("pause")} aria-expanded={open === "pause"} className={btn("plain", "flex-1 lg:flex-none")}><span className="lg:hidden">Pause…</span><span className="hidden lg:inline">Pause entries…</span></button>
+          )}
+          {mode !== "killed" ? <button type="button" id="lean-kill" disabled={act.busy || !act.canControl} onClick={() => toggle("kill")} aria-expanded={open === "kill"} className={btn("fault")}>Kill…</button> : null}
+          {!act.canControl ? <span className="text-[11px] text-fg-2">read only</span> : null}
+          {open === "pause" ? (
+            <Popover label="Pause entries">
+              <label className="text-[11.5px] text-slate-300" htmlFor="lean-reason">Reason (required)</label>
+              <input id="lean-reason" className={INPUT} maxLength={200} value={reason} onChange={(ev) => setReason(ev.target.value)} />
+              {msg ? <p className="text-[11.5px] text-late">{msg}</p> : null}
+              <div className="flex justify-end gap-[8px]">
+                <button type="button" className={btnSm()} onClick={close}>Cancel</button>
+                <button type="button" id="lean-pause-go" className={btnSm("late")} disabled={act.busy} onClick={() => go("paused")}>Pause entries</button>
+              </div>
+            </Popover>
+          ) : null}
+          {open === "kill" ? (
+            <Popover label="Kill">
+              <label className="text-[11.5px] text-slate-300" htmlFor="lean-kill-reason">Reason (required)</label>
+              <input id="lean-kill-reason" className={INPUT} maxLength={200} value={reason} onChange={(ev) => setReason(ev.target.value)} />
+              <label className="text-[11.5px] text-fault" htmlFor="confirm">Type KILL to close every EA position and stop the EA</label>
+              <input id="confirm" className={clsx(INPUT, "lg:w-[112px]")} maxLength={8} value={typed} onChange={(ev) => setTyped(ev.target.value)} />
+              {msg ? <p className="text-[11.5px] text-late">{msg}</p> : null}
+              <div className="flex justify-end gap-[8px]">
+                <button type="button" id="kill-cancel" className={btnSm()} onClick={close}>Cancel</button>
+                <button type="button" id="kill-go" className={btnSm("fault")} disabled={act.busy} onClick={() => go("killed")}>Confirm kill</button>
+              </div>
+            </Popover>
+          ) : null}
+          {open === "live" ? (
+            <Popover label="Arm live">
+              <label className="text-[11.5px] text-fault" htmlFor="lean-live">Type LIVE to let Omega trade a real account</label>
+              <input id="lean-live" className={clsx(INPUT, "lg:w-[112px]")} maxLength={8} value={typed} onChange={(ev) => setTyped(ev.target.value)} />
+              {msg ? <p className="text-[11.5px] text-late">{msg}</p> : null}
+              <div className="flex justify-end gap-[8px]">
+                <button type="button" className={btnSm()} onClick={close}>Cancel</button>
+                <button type="button" id="lean-live-go" className={btnSm("late")} onClick={arm}>Arm live</button>
+              </div>
+            </Popover>
+          ) : null}
+        </div>
       </div>
-      <div className="mono flex flex-col gap-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
-        <span>candles, PLAN lines: TradingView feed · times GMT+7</span>
-        <span>{feedBasis != null ? `zone, limit, bid, ask, positions: broker − ${basisText(feedBasis, 2).replace(/^\+/, "")} basis (intents[].entry_zone, the order, the terminal)` : "bid, ask, positions: broker prices, not converted (the basis is unknown)"}</span>
+      <div className="mono grid grid-cols-2 gap-x-[12px] gap-y-0 text-[12px] leading-[16px] lg:flex lg:flex-wrap lg:gap-x-[22px]" aria-label="Money">{money}</div>
+      <div className="mono flex flex-col gap-0 text-[11.5px] leading-[16px] lg:flex-row lg:text-[12px] lg:items-baseline lg:justify-between lg:gap-[16px]">
+        <span aria-label="Limits"><span className="hidden lg:inline"><span className="text-fg-2">{limitsLabel}</span> {longLimits}</span><span className="lg:hidden">{shortLimits}</span></span>
+        <span className="text-fg-2">{scaleNote(x.feedBasis)}</span>
+      </div>
+      {error ? <p className="text-[12px] text-fault">Error: {error}</p> : null}
+    </section>
+  );
+}
+
+/** The alert line under the header when the terminal is not OK, or the server's kill switch overrides the control. */
+function OmegaAlerts({ x }: { x: Derived }) {
+  const { conn, br, s } = x;
+  const lines: { tone: "fault" | "late"; text: ReactNode; aside?: string }[] = [];
+  if (conn.key === "disconnected") {
+    const err = str(br.terminal_error);
+    lines.push({ tone: "fault", text: err ? `Terminal: ${err}` : `Bridge offline: no sync ${isNum(br.synced_age_ms) ? `for ${shortAge(br.synced_age_ms)}` : "yet"}.`, aside: "rows below are as of the last sync" });
+  } else if (conn.key === "algo_off") {
+    lines.push({ tone: "late", text: "Algo trading is off in the MT5 terminal: no order can be sent. Turn on Algo Trading in the terminal." });
+  }
+  if (s.kill === true && s.kill_source === "env") lines.push({ tone: "fault", text: "Server kill switch is on; it overrides this control." });
+  if (!lines.length) return null;
+  return (
+    <>
+      {lines.map((l, i) => (
+        <div key={i} role="status" className={clsx("flex flex-wrap items-center gap-x-[10px] gap-y-[4px] rounded-[10px] border px-[14px] py-[8px] text-[12.5px]", l.tone === "fault" ? "border-fault-fill/40 bg-fault-fill/8 text-fault" : "border-late-fill/40 bg-late-fill/8 text-late")}>
+          <Dot tone={l.tone} /><span className="min-w-0 flex-1">{l.text}</span>{l.aside ? <span className="mono text-[11px] text-fg-2">{l.aside}</span> : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- 2. open and resting
+
+const GRID = "lg:grid lg:grid-cols-[118px_100px_80px_44px_80px_80px_80px_70px_minmax(0,1fr)_230px] lg:items-center lg:gap-x-[12px]";
+
+function riskCell(r: Risk | null, sl: unknown, closing: boolean) {
+  if (closing) return <span className="text-late">closing</span>;
+  if (!(Number(sl) > 0)) return <span className="text-fg-2">no stop</span>;
+  if (!r) return <span className="text-fg-2">—</span>;
+  if (r.locked) return <>locked +{r.amount.toFixed(2)}</>;
+  return <>{r.amount.toFixed(2)}{r.pct != null ? <span className="text-fg-2"> {r.pct}%</span> : null}</>;
+}
+
+function ModifyForm({ row, set, act, note }: { row: EditRow; set: (r: EditRow | null) => void; act: OmegaActions; note: string }) {
+  const field = (k: "price" | "sl" | "tp", label: string) => (
+    <label className="flex items-center gap-[6px] text-fg-2">{label}
+      <input inputMode="decimal" className="mono h-[36px] w-[96px] rounded-sm border border-white/15 bg-black/40 px-[6px] text-slate-100 lg:h-[28px]" value={row[k]} placeholder={k === "price" ? undefined : "none"} onChange={(ev) => set({ ...row, [k]: ev.target.value })} />
+    </label>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-[8px] border-t border-white/6 bg-white/2 px-[14px] py-[8px] text-[11.5px] lg:px-[16px]">
+      <span className="text-fg-2">Modify #{row.ticket}:</span>
+      {row.target === "order" ? field("price", "Price") : null}
+      {field("sl", "S/L")}
+      {field("tp", "T/P")}
+      <button type="button" disabled={act.hitlBusy} onClick={async () => { if (await act.saveModify(row)) set(null); }} className={btnSm("ok")}>Send</button>
+      <span className="text-fg-2">{note}</span>
+    </div>
+  );
+}
+
+function OpenResting({ x, act, now, hitlMsg }: { x: Derived; act: OmegaActions; now: number; hitlMsg: { tone: string; text: string } | null }) {
+  const [edit, setEdit] = useState<EditRow | null>(null);
+  const { positions, orders, br, delegation, loosened, limitByTicket, digits } = x;
+  const tickets = Array.isArray(delegation?.tickets) ? delegation.tickets : [];
+  const supported = delegation?.supported === true;
+  const killing = x.chip.key === "killed";
+  const nPos = positions.length, nOrd = orders.length;
+  const manual = positions.filter((p) => sourceOf(p, tickets) === "manual" || sourceOf(p, tickets) === "delegated").length;
+  const summary = [nPos ? `${nPos}${manual === nPos ? " manual" : ""} position${nPos === 1 ? "" : "s"}` : "", nOrd ? `${nOrd} ${nOrd === 1 && orders[0]?.type?.endsWith?.("LIMIT") ? "limit" : nOrd === 1 ? "order" : "orders"}` : ""].filter(Boolean).join(" · ");
+  const lastDeal = [...x.deals].filter((dd) => isNum(dd.closed_ms)).sort((a, b) => b.closed_ms - a.closed_ms)[0];
+  if (!nPos && !nOrd) {
+    return (
+      <section className={clsx(PANEL, "flex flex-wrap items-center justify-between gap-x-[16px] gap-y-[4px] px-[14px] py-[12px] lg:px-[16px]")} aria-label="Open and resting">
+        <span className="flex items-baseline gap-[12px]"><h2 className="m-0 text-[12px] font-semibold text-slate-300">Open &amp; resting</h2><span className="text-[12px] text-fg-2">Nothing open or resting.</span></span>
+        {lastDeal ? <span className="mono text-[11.5px] text-fg-2">last close {utcClockOf(lastDeal.closed_ms)} UTC, #{str(lastDeal.position_ticket) || str(lastDeal.deal_ticket)} {signedMoney((isNum(lastDeal.profit) ? lastDeal.profit : 0) + (isNum(lastDeal.commission) ? lastDeal.commission : 0) + (isNum(lastDeal.swap) ? lastDeal.swap : 0))}</span> : null}
+      </section>
+    );
+  }
+  const head = x.stops.noStop ? `${summary} · at stops ${x.stops.text}` : summary;
+  return (
+    <section className={PANEL} aria-label="Open and resting">
+      <div className="flex items-center justify-between gap-[12px] px-[14px] pb-[6px] pt-[10px] leading-[15px] lg:px-[16px] lg:pt-[12px]"><h2 className="m-0 text-[12px] font-semibold text-slate-300">Open &amp; resting</h2><span className="mono text-[11.5px] text-fg-2">{head}</span></div>
+      <div className={clsx("hidden min-h-[30px] px-[16px] text-[11px] text-muted", GRID)} aria-hidden="true">
+        <span>Ticket</span><span>Source</span><span>Side</span><span>Lot</span><span>Entry</span><span>Stop</span><span>Target</span><span>P/L</span><span>Risk at stop</span><span />
+      </div>
+      {positions.map((p, i) => {
+        const ticket = Number(p.ticket);
+        const src = sourceOf(p, tickets);
+        const isManual = src === "manual" || src === "delegated";
+        const isDelegated = src === "delegated";
+        const r = riskToSl(p, br);
+        const editing = edit?.target === "position" && edit.ticket === ticket;
+        const age = isNum(p.opened_ms) && p.opened_ms > 0 ? shortAge(now - p.opened_ms) : "";
+        const loose = loosened.includes(ticket) ? <span className="ml-[4px] rounded-sm border border-late-fill/40 px-[4px] text-[10px] font-semibold text-late" title="The Position Council loosened this position's stop once (ADR-0020 Amendment 8). It counts as unprotected again and is never loosened a second time.">loosened once</span> : null;
+        const buttons = (
+          <span className="flex justify-end gap-[6px] font-sans">
+            {isManual ? (
+              <button type="button" disabled={act.hitlBusy || (!isDelegated && !supported)} onClick={() => act.delegate(ticket, !isDelegated)} className={btnSm()}
+                title={!isDelegated && !supported ? `Needs OmegaExecutor ${str(delegation?.ea_min_version) || "1.18"}` : isDelegated ? "Take this position back: Omega stops managing it" : "Hand this manual position to Omega: it manages it like its own (never adds to it or reverses it)"}>
+                {isDelegated ? "Take back" : "Delegate"}
+              </button>
+            ) : null}
+            <button type="button" disabled={act.hitlBusy || !supported} onClick={() => setEdit(editing ? null : { target: "position", ticket, sl: p.sl ? String(p.sl) : "", tp: p.tp ? String(p.tp) : "", price: "" })} className={btnSm()}
+              title={supported ? "Change this position's stop and target" : `Needs OmegaExecutor ${str(delegation?.ea_min_version) || "1.18"}`}>{editing ? "Cancel" : "Modify"}</button>
+            <button type="button" disabled={act.closingTicket === ticket} className={btnSm("fault")} title="Close at market"
+              onClick={() => act.requestClose({ ticket: p.ticket, symbol: str(p.symbol) || str(br.symbol), side: p.side, volume: p.volume, open_price: p.entry ?? p.open_price, profit: p.profit, sl: p.sl, tp: p.tp, currency: x.cur })}>
+              {act.closingTicket === ticket ? "Closing…" : "Close"}
+            </button>
+          </span>
+        );
+        return (
+          <Fragment key={`p${str(p.ticket) || i}`}>
+            <div className={clsx("mono hidden min-h-[47px] border-t border-white/6 px-[16px] text-[12.5px]", GRID)} data-row="position">
+              <span>#{str(p.ticket)} <span className="text-[11px] text-fg-2">{age}</span></span>
+              <span className="font-sans text-fg-2">{src}{loose}</span>
+              <span><SideWord side={p.side} /></span>
+              <span>{num(p.volume, 2)}</span>
+              <span>{num(p.entry ?? p.open_price, digits)}</span>
+              <span className={p.sl ? "" : "text-muted"}>{p.sl ? num(p.sl, digits) : "—"}</span>
+              <span className={p.tp ? "" : "text-muted"}>{p.tp ? num(p.tp, digits) : "—"}</span>
+              <span>{signedMoney(p.profit)}</span>
+              <span>{riskCell(r, p.sl, killing)}</span>
+              {buttons}
+            </div>
+            <div className="mono flex flex-col gap-[4px] border-t border-white/6 px-[14px] py-[10px] text-[12.5px] leading-[17px] lg:hidden" data-card="position">
+              <div className="flex justify-between gap-[8px]"><span>#{str(p.ticket)} <SideWord side={p.side} /> {num(p.volume, 2)} <span className="font-sans text-fg-2">{src}</span> <span className="text-fg-2">{age}</span>{loose}</span><span>{signedMoney(p.profit)}</span></div>
+              <div>{num(p.entry ?? p.open_price, digits)} <span className="text-fg-2">SL</span> {p.sl ? num(p.sl, digits) : "—"} <span className="text-fg-2">TP</span> {p.tp ? num(p.tp, digits) : "—"}</div>
+              <div className="flex items-center justify-between gap-[8px]"><span><span className="text-fg-2">risk </span>{riskCell(r, p.sl, killing)}</span>{buttons}</div>
+            </div>
+            {editing && edit ? <ModifyForm row={edit} set={setEdit} act={act} note={`Empty removes a level.${src === "Omega" || isDelegated ? " Omega keeps managing it and may move the stop again." : ""}`} /> : null}
+          </Fragment>
+        );
+      })}
+      {orders.map((o, i) => {
+        const ticket = Number(o.ticket);
+        const k = orderKind(o.type);
+        const src = sourceOf(o, []);
+        const r = riskToSl(orderAsPosition(o), br);
+        const meta = limitByTicket[String(o.ticket)];
+        const exp = isNum(meta?.expiry_ms) && meta.expiry_ms > 0 ? `exp ${utcClockOf(meta.expiry_ms)}` : "";
+        const modifiable = ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"].includes(str(o.type));
+        const editing = edit?.target === "order" && edit.ticket === ticket;
+        const kindWord = k.kind.charAt(0).toUpperCase() + k.kind.slice(1);
+        const btn = (
+          <span className="flex justify-end font-sans">
+            <button type="button" disabled={act.hitlBusy || !modifiable || !supported} className={btnSm()}
+              onClick={() => setEdit(editing ? null : { target: "order", ticket, price: o.price_open ? String(o.price_open) : "", sl: o.sl ? String(o.sl) : "", tp: o.tp ? String(o.tp) : "" })}
+              title={!modifiable ? "Only limit and stop orders" : supported ? "Change this order's price, stop and target" : `Needs OmegaExecutor ${str(delegation?.ea_min_version) || "1.18"}`}>{editing ? "Cancel" : "Modify"}</button>
+          </span>
+        );
+        const vol = num(o.volume_current ?? o.volume_initial, 2);
+        return (
+          <Fragment key={`o${str(o.ticket) || i}`}>
+            <div className={clsx("mono hidden min-h-[47px] border-t border-white/6 px-[16px] text-[12.5px]", GRID)} data-row="order">
+              <span><span className="font-sans">{kindWord}</span> #{str(o.ticket)} <span className="text-[11px] text-fg-2">{exp}</span></span>
+              <span className="font-sans text-fg-2" title={str(meta?.reason) || undefined}>{src}</span>
+              <span className="font-sans"><SideWord side={k.side} /> {k.kind}</span>
+              <span>{vol}</span>
+              <span>{num(o.price_open, digits)}</span>
+              <span className={o.sl ? "" : "text-muted"}>{o.sl ? num(o.sl, digits) : "—"}</span>
+              <span className={o.tp ? "" : "text-muted"}>{o.tp ? num(o.tp, digits) : "—"}</span>
+              <span className="text-muted">—</span>
+              <span>{riskCell(r, o.sl, false)}</span>
+              {btn}
+            </div>
+            <div className="mono flex flex-col gap-[4px] border-t border-white/6 px-[14px] py-[10px] text-[12.5px] leading-[17px] lg:hidden" data-card="order">
+              <div className="flex justify-between gap-[8px]"><span><span className="font-sans">{kindWord}</span> #{str(o.ticket)} <SideWord side={k.side} /> {vol} <span className="font-sans text-fg-2">{src}</span></span><span className="text-fg-2">{exp}</span></div>
+              <div>{num(o.price_open, digits)} <span className="text-fg-2">SL</span> {o.sl ? num(o.sl, digits) : "—"} <span className="text-fg-2">TP</span> {o.tp ? num(o.tp, digits) : "—"}</div>
+              <div className="flex items-center justify-between gap-[8px]"><span><span className="text-fg-2">risk </span>{riskCell(r, o.sl, false)}</span>{btn}</div>
+            </div>
+            {editing && edit ? <ModifyForm row={edit} set={setEdit} act={act} note={`${src === "manual" ? "Your order." : "Omega's order."} Empty S/L or T/P removes it.`} /> : null}
+          </Fragment>
+        );
+      })}
+      {hitlMsg ? <p className={clsx("border-t border-white/6 px-[14px] py-[8px] text-[11.5px] lg:px-[16px]", hitlMsg.tone)}>{hitlMsg.text}</p> : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- 3. the signal and what Omega did
+
+function SignalLineView({ x, now }: { x: Derived; now: number }) {
+  const sl = signalLine(x.s, x.feedBasis, now);
+  const v = verdict({ codes: x.codes, envEnabled: x.e.env_enabled, resting: x.resting ? { ticket: x.resting.ticket, price: x.resting.price } : null, reason: (c) => omegaReason(c, x.e.env_enabled) });
+  const since = isNum(x.b.planner?.since_ms) && x.b.planner.since_ms > 0 ? `${utcClockOf(x.b.planner.since_ms)} UTC` : "";
+  const aside = v.kind === "block" ? v.code : since;
+  const feed = sl.scale === "feed" ? <span className="text-fg-2"> feed</span> : null;
+  return (
+    <section className={clsx(PANEL, "flex flex-col gap-[2px] px-[14px] py-[10px] text-[13px] leading-[20px] lg:min-h-[54px] lg:flex-row lg:items-center lg:gap-[14px] lg:px-[16px] lg:py-[8px] lg:text-[13.5px]")} aria-label="Signal">
+      <span className="flex flex-wrap items-baseline gap-x-[12px] gap-y-[2px] lg:shrink-0 lg:flex-nowrap lg:whitespace-nowrap">
+        <span className="text-[12px] text-fg-2">Signal</span>
+        {sl.side ? (
+          <>
+            <span><SideWord side={sl.side} /> {sl.kind} {sl.entry != null ? <span className="mono">{sl.entry.toFixed(2)}</span> : null}{sl.zone ? null : feed}</span>
+            {sl.zone ? <span><span className="text-fg-2">zone</span> <span className="mono">{zoneText(sl.zone)}</span>{feed}</span> : null}
+            {sl.expires ? <span className="text-fg-2">{sl.expires}</span> : null}
+          </>
+        ) : <b className="font-semibold text-late">WAIT</b>}
+      </span>
+      <span className="hidden w-px self-stretch bg-white/10 lg:my-1.5 lg:block" aria-hidden="true" />
+      <span className="flex min-w-0 flex-1 items-start gap-[8px] lg:items-center">
+        <span className="mt-[6px] lg:mt-0"><Dot tone={v.tone} /></span>
+        <span className="min-w-0 flex-1" title={v.code ?? undefined}>{v.text}{aside ? <span className="mono ml-[8px] text-[11px] text-fg-2 lg:hidden">{aside}</span> : null}</span>
+      </span>
+      {aside ? <span className="mono hidden shrink-0 text-[11.5px] text-fg-2 lg:inline">{aside}</span> : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- 4. the last actions
+
+function LastActions({ d }: { d: any }) {
+  const acts = lastActions(d, 5);
+  return (
+    <section className={clsx(PANEL, "pb-[2px] lg:pb-[6px]")} aria-label="Last actions">
+      <div className="flex items-center justify-between px-[14px] pb-[6px] pt-[10px] leading-[15px] lg:px-[16px] lg:pb-[8px] lg:pt-[12px]"><h2 className="m-0 text-[12px] font-semibold text-slate-300">Last actions</h2><span className="mono text-[11.5px] text-fg-2"><span>UTC</span><span className="hidden lg:inline"> · GMT+7</span></span></div>
+      {!acts.length ? <p className="border-t border-white/6 px-[14px] py-[8px] text-[12px] text-fg-2 lg:px-[16px]">No actions yet.</p> : null}
+      {acts.map((a, i) => (
+        <div key={`${a.ms}-${i}`} className="grid grid-cols-[42px_1fr] items-baseline gap-x-[10px] border-t border-white/6 px-[14px] py-[7px] text-[12px] leading-[17px] lg:leading-[16px] lg:grid-cols-[52px_52px_130px_1fr] lg:px-[16px]">
+          <span className="mono">{a.utc}</span>
+          <span className="mono hidden text-fg-2 lg:inline">{a.gmt7}</span>
+          <span className={clsx("hidden lg:inline", a.fault ? "text-fault" : "")}>{a.verb}</span>
+          <span className="mono">
+            <span className={clsx("font-sans lg:hidden", a.fault ? "text-fault" : "")}>{a.verb} </span>
+            {a.ticket != null ? `#${a.ticket} ` : ""}{a.side ? <><SideWord side={a.side} />{" "}</> : null}{a.lot != null ? `${a.lot.toFixed(2)} ` : ""}{a.price != null ? `at ${a.price.toFixed(2)} ` : ""}
+            {a.extra ? <span className={/^[+−]|^0\.00$/.test(a.extra) || /^(SL|TP) /.test(a.extra) ? "" : "text-fg-2"}>{a.extra}</span> : null}
+          </span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- Details
+
+const KV = "grid grid-cols-[118px_1fr] gap-x-[10px] gap-y-[5px] text-[12px] lg:grid-cols-[150px_1fr] lg:gap-x-[12px]";
+const DSEC = clsx(PANEL, "px-[14px] py-[12px] lg:px-[16px]");
+const DH = "mb-[10px] flex items-center justify-between gap-[8px]";
+const H2 = "m-0 text-[12px] font-semibold text-slate-300";
+
+function Details({ x, act, now, hitlMsg }: { x: Derived; act: OmegaActions; now: number; hitlMsg: { tone: string; text: string } | null }) {
+  const [tab, setTab] = useState<DetailsTab>("intents");
+  const [raw, setRaw] = useState(false);
+  const { data, s, c, b, br, st, account, positions, orders, intents, deals, digits, delegation, limitByTicket } = x;
+  const tickets = Array.isArray(delegation?.tickets) ? delegation.tickets : [];
+  const events = arr(b.events), ctlEvents = arr(data.control_events);
+  const watchdog = b.autonomous_watchdog != null && typeof b.autonomous_watchdog === "object" ? b.autonomous_watchdog : null;
+  const tm = obj(b.trading_mode);
+  const statsRow = (label: string, v: any) => {
+    const z = obj(v);
+    return <><dt className="text-fg-2">{label}</dt><dd className="mono">{signedMoney(z.net)} <span className="text-fg-2">{isNum(z.trades) ? z.trades : 0} trades · win {isNum(z.win_rate) ? `${Math.round(z.win_rate * 100)}%` : "—"} · PF {isNum(z.profit_factor) ? z.profit_factor : "—"} · DD {num(z.max_drawdown)}</span></dd></>;
+  };
+  const exec = obj(br.executor);
+  const nextEv = b.macro_risk?.next_event;
+  const nextMs = Date.parse(str(nextEv?.time));
+  return (
+    <div className="flex flex-col gap-[14px]" aria-label="Details content">
+      <OmegaChart digits={digits} bid={br.bid} positions={positions} feedBasis={x.feedBasis} limit={x.resting ? { price: x.resting.price, side: x.resting.side, zone: x.resting.zone, ticket: x.resting.ticket } : null} signal={s} />
+      <div className="grid gap-[14px] lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
+        <div className="flex min-w-0 flex-col gap-[14px]">
+          <section className={DSEC} aria-label="Positions and orders">
+            <div className={clsx(DH, "flex-wrap")}>
+              <h2 className={H2}>Positions and orders</h2>
+              {/* Delegate (owner 2026-11-19): every new manual position handed to Omega while this is on. */}
+              <label className="inline-flex items-center gap-[8px] text-[12px] text-slate-300" title="Every manual position opened while this is on is handed to Omega: a stop from the plan when it has none, break-even, the TP ladder, the Position Manager and the closes on an opposite signal. Omega never adds to it or reverses it.">
+                <input type="checkbox" className="h-[16px] w-[16px] accent-cyan-400" disabled={act.hitlBusy || delegation?.supported !== true} checked={delegation?.mode?.on === true} onChange={(ev) => act.delegateMode(ev.target.checked)} />
+                Delegate my next manual entries to Omega
+              </label>
+            </div>
+            {delegation?.mode?.on === true && isNum(delegation?.mode?.since_ms) ? <p className="mb-[8px] text-[11px] text-fg-2">On since {timeUtc(delegation.mode.since_ms)}.</p> : null}
+            {delegation && delegation.supported === false ? <p className="mb-[8px] text-[11px] text-late">Modify and Delegate need OmegaExecutor {str(delegation.ea_min_version) || "1.18"} on the terminal.</p> : null}
+            {!positions.length && !orders.length ? <p className="text-[12px] text-fg-2">No open positions or pending orders.</p> : (
+              <>
+              {/* On a phone one card each (the mockup's 390 Details); from lg the table. */}
+              <div className="flex flex-col lg:hidden">
+                {positions.map((p, i) => (
+                  <div key={`cp${i}`} className="mono border-t border-white/6 py-[10px] text-[12px] leading-[1.55]">
+                    <div className="flex justify-between gap-2"><span>#{str(p.ticket)} <SideWord side={p.side} /> {num(p.volume, 2)}</span><span className="font-sans text-fg-2">{sourceOf(p, tickets)}</span></div>
+                    <div className="text-fg-2">opened {dayClock(p.opened_ms)} UTC · intent {str(p.intent_id) || str(p.signal_id) || "—"}</div>
+                  </div>
+                ))}
+                {orders.map((o, i) => { const k = orderKind(o.type); const m = limitByTicket[String(o.ticket)]; return (
+                  <div key={`co${i}`} className="mono border-t border-white/6 py-[10px] text-[12px] leading-[1.55]">
+                    <div className="flex justify-between gap-2"><span><span className="font-sans">{k.kind.charAt(0).toUpperCase() + k.kind.slice(1)}</span> #{str(o.ticket)} <SideWord side={k.side} /> {num(o.volume_current ?? o.volume_initial, 2)}</span><span className="font-sans text-fg-2">{sourceOf(o, [])}</span></div>
+                    <div className="text-fg-2">placed {dayClock(o.placed_ms)} UTC{m ? ` · ${str(m.status) || "resting"}` : ""}{isNum(m?.expiry_ms) && m.expiry_ms > 0 ? ` · expires ${utcClockOf(m.expiry_ms)}` : ""} · intent {str(o.comment) || "—"}</div>
+                  </div>
+                ); })}
+              </div>
+              <div className="table-wrap hidden lg:block">
+                <table className="tbl mono [&_td]:px-[8px] [&_th]:px-[8px]">
+                  <thead><tr><th>Ticket</th><th>Source</th><th>Opened UTC</th><th>Side</th><th>Lot</th><th>Entry</th><th>Stop</th><th>Target</th><th>P/L</th><th>Risk at stop</th><th>Intent</th></tr></thead>
+                  <tbody>
+                    {positions.map((p, i) => (
+                      <tr key={`dp${i}`}>
+                        <td>#{str(p.ticket)}</td><td className="font-sans">{sourceOf(p, tickets)}</td><td>{dayClock(p.opened_ms)}</td><td><SideWord side={p.side} /></td><td>{num(p.volume, 2)}</td>
+                        <td>{num(p.entry ?? p.open_price, digits)}</td><td className={p.sl ? "" : "text-muted"}>{p.sl ? num(p.sl, digits) : "—"}</td><td className={p.tp ? "" : "text-muted"}>{p.tp ? num(p.tp, digits) : "—"}</td>
+                        <td>{signedMoney(p.profit)}</td><td>{riskCell(riskToSl(p, br), p.sl, false)}</td><td className="text-fg-2">{str(p.intent_id) || str(p.signal_id) || "—"}</td>
+                      </tr>
+                    ))}
+                    {orders.map((o, i) => { const k = orderKind(o.type); return (
+                      <tr key={`do${i}`}>
+                        <td>#{str(o.ticket)}</td><td className="font-sans">{sourceOf(o, [])}</td><td>{dayClock(o.placed_ms)}</td><td className="font-sans"><SideWord side={k.side} /> {k.kind}</td><td>{num(o.volume_current ?? o.volume_initial, 2)}</td>
+                        <td>{num(o.price_open, digits)}</td><td className={o.sl ? "" : "text-muted"}>{o.sl ? num(o.sl, digits) : "—"}</td><td className={o.tp ? "" : "text-muted"}>{o.tp ? num(o.tp, digits) : "—"}</td>
+                        <td className="text-muted">—</td><td>{riskCell(riskToSl(orderAsPosition(o), br), o.sl, false)}</td><td className="text-fg-2">{str(o.comment) || "—"}</td>
+                      </tr>
+                    ); })}
+                  </tbody>
+                </table>
+              </div>
+              </>
+            )}
+            {orders.filter((o) => limitByTicket[String(o.ticket)]).map((o, i) => { const m = limitByTicket[String(o.ticket)]; return (
+              <p key={`n${i}`} className="mono mt-[8px] text-[11px] text-fg-2">#{str(o.ticket)} {str(m.status) || "resting"}{isNum(m.expiry_ms) && m.expiry_ms > 0 ? ` · expires ${utcClockOf(m.expiry_ms)} UTC` : ""} · {str(m.reason) || "no council note"}.</p>
+            ); })}
+            {hitlMsg ? <p className={clsx("mt-[8px] text-[11.5px]", hitlMsg.tone)}>{hitlMsg.text}</p> : null}
+          </section>
+
+          <section className={DSEC} aria-label="History, intents and journal">
+            <div className="mb-[10px] flex overflow-hidden rounded-[7px] border border-white/12 lg:w-fit" role="tablist" aria-label="Details tables">
+              {([["history", `History ${deals.length}`], ["intents", `Intents ${intents.length}`], ["journal", `Journal ${events.length + ctlEvents.length}`]] as [DetailsTab, string][]).map(([k, label]) => (
+                <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={clsx("h-[40px] flex-1 px-[12px] text-[12px] font-medium lg:h-[30px] lg:flex-none", tab === k ? "bg-white/8 text-fg" : "text-fg-2 hover:text-fg")}>{label}</button>
+              ))}
+            </div>
+            {tab === "history" ? (!deals.length ? <Empty>No closed deals.</Empty> : (
+              <div className="table-wrap max-h-[440px] overflow-y-auto">
+                <table className="tbl mono [&_td]:px-[8px] [&_th]:px-[8px]">
+                  <thead><tr><th>Closed UTC</th><th>Deal</th><th>Source</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Net P/L</th><th>Reason</th><th>Mode</th><th>Signal</th></tr></thead>
+                  <tbody>
+                    {deals.map((dd, i) => {
+                      const net = (isNum(dd.profit) ? dd.profit : 0) + (isNum(dd.commission) ? dd.commission : 0) + (isNum(dd.swap) ? dd.swap : 0);
+                      return (
+                        <tr key={str(dd.deal_ticket) || i}>
+                          <td>{dayClock(dd.closed_ms)}</td><td>#{str(dd.deal_ticket) || "—"}</td><td className="font-sans">{sourceOf({ ...dd, intent_id: dd.signal_id }, [])}</td><td><SideWord side={dd.side} /></td><td>{num(dd.volume, 2)}</td>
+                          <td>{num(dd.entry_price, digits)}</td><td>{num(dd.exit_price, digits)}</td><td>{signedMoney(net)}</td><td>{str(dd.reason) || "closed"}</td><td className="text-fg-2">{str(dd.mode) || "live"}</td><td className="text-fg-2">{str(dd.signal_id) || "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )) : null}
+            {tab === "intents" ? (!intents.length ? <Empty>No intents yet.</Empty> : (
+              <>
+                {/* EZ1: on a phone one card per intent; from sm up the table. Every price is the broker's. */}
+                <IntentCards intents={intents} digits={digits} />
+                <div className="table-wrap hidden max-h-[440px] overflow-y-auto sm:block">
+                  <table className="tbl [&_td]:px-[8px] [&_th]:px-[8px]">
+                    <thead><tr><th>Created</th><th>Kind</th><th>Side</th><th>Lot</th><th>Entry · broker</th><th>SL · broker</th><th>TP · broker</th><th>Status</th><th>Result</th></tr></thead>
+                    <tbody>
+                      {intents.map((i, k) => (
+                        <tr key={str(i.id) || k} title={str(i.id) || undefined}>
+                          <td className="mono"><CreatedCell ms={i.created_ms} /></td>
+                          <td className="mono">{str(i.kind) || "—"}</td>
+                          <td className="mono"><SideWord side={i.side} />{i.side !== "BUY" && i.side !== "SELL" ? "—" : null}</td>
+                          <td className="mono">{isNum(i.lot) ? num(i.lot, 2) : isNum(i.volume) ? num(i.volume, 2) : "—"}</td>
+                          <td className="mono"><IntentEntry i={i} digits={digits} /></td>
+                          <td className="mono">{isNum(i.sl) ? num(i.sl, digits) : "—"}</td>
+                          <td className="mono">{isNum(i.tp) ? num(i.tp, digits) : "—"}</td>
+                          <td><Badge tone={INTENT_TONE[str(i.status)] || "slate"}>{str(i.status) || "—"}</Badge></td>
+                          <td className="mono text-[11px]">{i.result && typeof i.result === "object" ? (i.result.ok ? `ticket ${str(i.result.ticket) || "?"}` : str(i.result.error) || "failed") : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )) : null}
+            {tab === "journal" ? (!events.length && !ctlEvents.length ? <Empty>No events logged yet.</Empty> : (
+              <div className="table-wrap max-h-[440px] overflow-y-auto">
+                <table className="tbl">
+                  <thead><tr><th>Time UTC</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+                  <tbody>
+                    {events.map((ev, i) => (
+                      <tr key={`e${i}`}><td className="mono">{dayClock(ev.ms)}</td><td className="mono">{str(ev.actor) || "—"}</td><td className="mono">{str(ev.action) || "—"}</td><td className="mono text-[11px] text-fg-2">{ev.detail != null ? JSON.stringify(ev.detail).slice(0, 160) : "—"}</td></tr>
+                    ))}
+                    {ctlEvents.map((ev, i) => (
+                      <tr key={`c${i}`}><td className="mono">{dayClock(Date.parse(str(ev.at)))}</td><td className="mono">{str(ev.actor) || "—"}</td><td className="mono">{`${str(ev.previous_mode) || "—"} → ${str(ev.mode) || "—"}`}</td><td className="text-[11px] text-fg-2">{str(ev.reason) || "—"}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )) : null}
+          </section>
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-[14px]">
+          <section className={DSEC} aria-label="Signal fields">
+            <div className={DH}><h2 className={H2}>Signal</h2></div>
+            <SignalRows s={s} />
+            <div className="mt-[12px] border-t border-white/6 pt-[10px]">
+              <OmegaWhy codes={x.codes} sinceMs={isNum(b.planner?.since_ms) ? b.planner.since_ms : null} details={b.planner?.details && typeof b.planner.details === "object" ? b.planner.details : null} envEnabled={x.e.env_enabled} />
+            </div>
+          </section>
+
+          <section className={DSEC} aria-label="Account and stats">
+            <div className={DH}><h2 className={H2}>Account and stats</h2><span className="mono text-[11px] text-fg-2">{x.cur}</span></div>
+            <dl className={KV}>
+              <dt className="text-fg-2">Balance</dt><dd className="mono">{amount(br.balance)}</dd>
+              <dt className="text-fg-2">Day start</dt><dd className="mono">{amount(br.day_start_balance)}</dd>
+              <dt className="text-fg-2">Trading mode</dt><dd className="mono">{str(tm.mode) ? <>{str(tm.mode).charAt(0).toUpperCase() + str(tm.mode).slice(1)} <span className="text-fg-2">{tm.auto ? "auto" : "pinned"}</span></> : "—"}</dd>
+              <dt className="text-fg-2">Profile</dt><dd className="mono">{account ? <>{str(account.profile_label) || "—"} <span className="text-fg-2">risk {x.appliedRisk ?? "—"}% · {x.appliedPositions ?? "—"} positions · daily loss {x.appliedDaily ?? "—"}%</span></> : "—"}</dd>
+              {statsRow("Today", st.today)}
+              {statsRow("7 days", st.week)}
+              {statsRow("30 days", st.month)}
+              <dt className="text-fg-2">Control</dt><dd className="mono">{c.mode === "paused" ? "Paused" : c.mode === "killed" ? "Killed" : "Active"}{controlMeta(c) ? <span className="text-fg-2"> {Number.isFinite(Date.parse(str(c.at))) ? `since ${utcClockOf(Date.parse(str(c.at)))} UTC` : ""}{str(c.actor) ? `, ${str(c.actor)}` : ""}{str(c.reason) ? `: ${str(c.reason)}` : ""}</span> : null}</dd>
+            </dl>
+          </section>
+
+          <section className={DSEC} aria-label="Symbol and account">
+            <div className={DH}>
+              <h2 className={H2}>Symbol and account</h2>
+              <span className="mono text-[11px] text-fg-2">
+                {account ? <span aria-label="Broker spec check" title={str(account.spec_text) || undefined} className={account.spec_status === "validated" ? "" : "text-late"}>spec {str(account.spec_status) || "unknown"}</span> : null}
+                {br.ea_version_gate ? <span aria-label="EA version gate" title={`EA version gate ${br.ea_version_gate.on ? "on" : "off"}: new entries need OmegaExecutor ${str(br.ea_version_gate.min_version)} or later.`} className={br.ea_version_gate.met ? "" : "text-fault"}> · EA {str(exec.version) || "?"}{br.ea_version_gate.met ? "" : ` < ${str(br.ea_version_gate.min_version)}`}</span> : null}
+              </span>
+            </div>
+            <dl className={KV}>
+              <dt className="text-fg-2">Symbol</dt><dd className="mono">{str(br.symbol) || "—"}{br.symbol_check ? <span className={clsx("block font-sans text-[11px]", br.symbol_check.ok ? "text-fg-2" : "text-fault")} aria-label="Trade symbol check">{str(br.symbol_check.text) || (br.symbol_check.ok ? "verified" : "not verified")}{str(br.symbol_check.chart_symbol) ? ` · chart ${str(br.symbol_check.chart_symbol)}` : ""}</span> : null}</dd>
+              <dt className="text-fg-2">Digits / point</dt><dd className="mono">{str(br.digits) || "—"} / {str(br.point) || "—"}</dd>
+              <dt className="text-fg-2">Tick size / value</dt><dd className="mono">{str(br.tick_size) || "—"} / {isNum(br.tick_value) ? num(br.tick_value, 2) : "—"}</dd>
+              <dt className="text-fg-2">Volume min / max / step</dt><dd className="mono">{str(br.volume_min) || "—"} / {str(br.volume_max) || "—"} / {str(br.volume_step) || "—"}</dd>
+              <dt className="text-fg-2">Stops / freeze level</dt><dd className="mono">{str(br.stops_level_points) || "—"} / {str(br.freeze_level_points) || "—"} pts</dd>
+              <dt className="text-fg-2">Profit currency / contract</dt><dd className="mono">{str(br.symbol_check?.currency_profit) || "—"} / {isNum(br.symbol_check?.contract_size) ? `${br.symbol_check.contract_size} oz` : "—"}</dd>
+              <dt className="text-fg-2">Leverage / margin</dt>
+              <dd className="mono">{!isNum(Number(br.leverage)) || br.leverage == null ? "—" : Number(br.leverage) >= LEVERAGE_UNLIMITED_FROM
+                ? <span title={`The broker reports 1:${Number(br.leverage).toLocaleString("en-US")}: unlimited or unknown leverage. Sizing never uses leverage; the margin is the broker's OrderCheck answer.`}>unlimited</span>
+                : `1:${Number(br.leverage).toLocaleString("en-US")}`} / {str(br.margin_mode) || "—"}</dd>
+              <dt className="text-fg-2">Margin per lot</dt><dd className="mono">{isNum(br.margin_per_lot) ? num(br.margin_per_lot, 2) : "—"}</dd>
+              <dt className="text-fg-2">Trade mode</dt><dd className="mono">{str(br.symbol_trade_mode) || "—"}</dd>
+            </dl>
+          </section>
+
+          <section className={DSEC} aria-label="Diagnostics">
+            <div className={DH}><h2 className={H2}>Diagnostics</h2><button type="button" onClick={() => setRaw((v) => !v)} className={btnSm()} aria-expanded={raw}>{raw ? "Hide raw state" : "Show raw state"}</button></div>
+            <dl className={KV}>
+              <dt className="text-fg-2">Bridge</dt><dd className="mono">{br.seen === true ? `synced ${agoMs(br.synced_age_ms)}` : isNum(br.synced_age_ms) ? `last seen ${agoMs(br.synced_age_ms)}` : "never seen"}{str(br.bridge_version) ? ` · v${str(br.bridge_version)}` : ""}</dd>
+              <dt className="text-fg-2">Key id</dt><dd className="mono">{str(br.kid) || "—"}</dd>
+              <dt className="text-fg-2">Terminal state</dt><dd className="mono">{isNum(br.state_age_ms) ? `${shortAge(br.state_age_ms)} old` : "none"} · {br.trade_allowed === true ? "algo allowed" : "algo off"}</dd>
+              <dt className="text-fg-2">EA</dt><dd className="mono" title={str(exec.note) || undefined}>OmegaExecutor {str(exec.version) || "?"} · {exec.status === "ok" ? "stops by Omega" : exec.status === "local_management" ? "local trailing on" : exec.status === "outdated" ? "update the EA" : "not reported"}</dd>
+              <dt className="text-fg-2">Last recovery</dt><dd className="mono">{watchdog?.last_recovery && isNum(watchdog.last_recovery.ms) ? `${str(watchdog.last_recovery.directive) || "recovery"} · ${str(watchdog.last_recovery.reason)} · ${timeUtc(watchdog.last_recovery.ms)}` : "none"}</dd>
+              <dt className="text-fg-2">Next event</dt><dd className="mono">{nextEv && str(nextEv.title) ? `${str(nextEv.title)}${Number.isFinite(nextMs) ? ` ${utcClockOf(nextMs)} UTC` : ""}${str(nextEv.impact) ? `, ${str(nextEv.impact)}` : ""}` : "none in 24 h"}</dd>
+            </dl>
+            <div className="mt-[10px] border-t border-white/6 pt-[10px]">
+              <p className="mb-[6px] text-[11px] text-fg-2">Config <span className="ml-[4px] rounded-sm border border-off-fill/35 px-[4px] text-[10.5px] text-off">fixed values, not measured</span></p>
+              <dl className={KV}>
+                <dt className="text-fg-2">Watchdog policy</dt><dd className="mono">{str(watchdog?.policy) || "—"}</dd>
+                <dt className="text-fg-2">Watchdog agent</dt><dd className="mono">{str(watchdog?.agent) || "—"}</dd>
+                <dt className="text-fg-2">Cooldown</dt><dd className="mono">{isNum(watchdog?.anti_flapping_cooldown_sec) ? `${watchdog.anti_flapping_cooldown_sec} s` : "—"}</dd>
+                <dt className="text-fg-2">Route failover</dt><dd className="mono">{str(b.route?.failover) || "—"}</dd>
+              </dl>
+            </div>
+            {raw ? (
+              <pre className="mono mt-[10px] max-h-56 overflow-auto rounded-sm border border-white/10 bg-black/60 p-[12px] text-[11px] text-slate-300">
+                {JSON.stringify({
+                  terminal_connected: br.terminal_connected ?? null, trade_allowed: br.trade_allowed ?? null, terminal_error: br.terminal_error ?? null, server: br.server ?? null, trade_mode: br.trade_mode ?? null, currency: br.currency ?? null, cent: br.cent === true,
+                  balance: br.balance ?? null, equity: br.equity ?? null, day_start_balance: br.day_start_balance ?? null, day_realized_pl: br.day_realized_pl ?? null,
+                  symbol: { name: br.symbol ?? null, bid: br.bid ?? null, ask: br.ask ?? null, spread_points: br.spread_points ?? null, digits: br.digits ?? null, point: br.point ?? null, tick_size: br.tick_size ?? null, tick_value: br.tick_value ?? null, volume_min: br.volume_min ?? null, volume_max: br.volume_max ?? null, volume_step: br.volume_step ?? null, stops_level_points: br.stops_level_points ?? null },
+                  positions, orders, state_age_ms: br.state_age_ms ?? null, bridge_sync_age_ms: br.synced_age_ms ?? null, kid: br.kid ?? null, autonomous_watchdog: watchdog,
+                }, null, 2)}
+              </pre>
+            ) : null}
+          </section>
+        </div>
       </div>
     </div>
   );
 }
 
-// The profiles' caps (src/account-spec.mjs PROFILES): risk per trade (target), max positions, daily loss.
-const PROFILE_CAPS: Record<string, { risk: number; positions: number; daily: number }> = {
-  safe: { risk: 1, positions: 1, daily: 3 },
-  conservative: { risk: 2, positions: 2, daily: 6 },
-  aggressive: { risk: 5, positions: 3, daily: 10 },
-};
-const appliedLimit = (setting: unknown, cap: number | undefined) => {
-  const v = Number(setting);
-  if (!Number.isFinite(v)) return cap ?? "—";
-  return cap == null ? v : Math.min(v, cap);
-};
-
-// Total open risk per profile (src/account-spec.mjs PROFILES open_risk_pct), for the header's tooltip.
-const PROFILE_TOTAL_OPEN: Record<string, number> = { safe: 2, conservative: 5, aggressive: 10 };
-
 /**
- * Pure: a position's money at its stop (owner 2026-11-18). The loss to the SL in money and % of equity, or, once the
- * stop is at or beyond the entry (break-even or a lock), the profit it locks. Null without a stop or a tick value.
+ * The Terminal view (OM-LEAN), pure over one GET /omega/api/overview body: the four blocks and the Details disclosure.
+ * `now` is the clock its ages and expiries are read against; the render check passes a fixed one.
  */
-function riskToSl(p: any, br: any): { locked: boolean; amount: number; pct: number | null } | null {
-  const open = Number(p?.entry ?? p?.open_price), sl = Number(p?.sl), vol = Number(p?.volume);
-  const tick = Number(br?.tick_size), value = Number(br?.tick_value);
-  if (!(open > 0) || !(sl > 0) || !(vol > 0) || !(tick > 0) || !(value > 0)) return null;
-  const dist = p?.side === "BUY" ? open - sl : sl - open; // > 0: the stop loses; <= 0: the stop locks profit
-  const amount = Math.round((Math.abs(dist) / tick) * value * vol * 100) / 100;
-  const eq = Number(br?.equity);
-  return dist > 0 ? { locked: false, amount, pct: eq > 0 ? Math.round((amount / eq) * 1000) / 10 : null } : { locked: true, amount, pct: null };
+export function OmegaTerminal({ x, d, act, now, initialDetails = false, hitlMsg = null }: { x: Derived; d: any; act: OmegaActions; now: number; initialDetails?: boolean; hitlMsg?: { tone: string; text: string } | null }) {
+  const [open, setOpen] = useState(initialDetails);
+  const nDeals = x.deals.length, nIntents = x.intents.length, nJournal = arr(x.b.events).length + arr(x.data.control_events).length;
+  return (
+    <>
+      <OpenResting x={x} act={act} now={now} hitlMsg={hitlMsg} />
+      <SignalLineView x={x} now={now} />
+      <LastActions d={d} />
+      <button type="button" aria-expanded={open} aria-controls="omega-details" onClick={() => setOpen((v) => !v)} id="omega-details-toggle"
+        className={clsx(PANEL, "flex min-h-[48px] w-full items-center gap-[12px] px-[14px] text-left text-[12.5px] font-semibold text-fg lg:min-h-[46px] lg:px-[16px]")}>
+        <ChevronRight className={clsx("h-[12px] w-[12px] shrink-0 text-fg-2 transition", open ? "rotate-90" : "")} aria-hidden="true" />
+        Details
+        <span className="min-w-0 truncate font-normal text-fg-2">
+          {open ? "Hide" : <><span className="hidden lg:inline">chart, all positions and orders, history {nDeals}, intents {nIntents}, journal {nJournal}, signal fields, account, symbol, diagnostics</span><span className="lg:hidden">chart, tables, history, diagnostics</span></>}
+        </span>
+      </button>
+      {open ? <div id="omega-details"><Details x={x} act={act} now={now} hitlMsg={hitlMsg} /></div> : null}
+    </>
+  );
 }
 
-// A reported leverage this high is a broker's "unlimited" (FxPro demo: 1:2,000,000,000), not a real ratio.
-const LEVERAGE_UNLIMITED_FROM = 100_000;
+/** Derived values with the header's "At stops" text (positions only). */
+function deriveAll(d: any, now: number) {
+  const x = derive(d, now);
+  const stops = atStops(x.positions, x.br);
+  return { ...x, stops, atStopsText: stops.text };
+}
+
+/**
+ * The lean page over one overview body, for the render check (scripts/render-entry.tsx): the header, the alert lines,
+ * the four blocks and, with `details`, the Details content. No request, no-op actions, a fixed clock.
+ */
+export function OmegaLeanView({ d, now, details = false, act = NOOP_ACTIONS }: { d: any; now: number; details?: boolean; act?: OmegaActions }) {
+  const x = deriveAll(d, now);
+  return (
+    <div className="flex flex-col gap-[10px] lg:gap-[14px]">
+      <OmegaHeader x={x} view="terminal" act={act} now={now} error={null} attention="" />
+      <OmegaAlerts x={x} />
+      <OmegaTerminal x={x} d={d} act={act} now={now} initialDetails={details} />
+    </div>
+  );
+}
 
 export default function Omega() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<string>("—");
 
-  // MT5 Web Terminal & Separated Setup Mode UI state
   // A deep link (the profile agent's Telegram line): #setup/profile opens Setup → Risk profile.
   const hashTab = typeof window !== "undefined" ? (window.location.hash.match(/^#setup(?:\/(engine|profile|connection))?$/) ?? null) : null;
   const [viewMode, setViewMode] = useState<"terminal" | "setup">(hashTab ? "setup" : "terminal");
   const [setupTab, setSetupTab] = useState<"engine" | "profile" | "connection">((hashTab?.[1] as "engine" | "profile" | "connection" | undefined) ?? "engine");
-  // On a phone the Market Watch column folds above the chart (owner 2026-11-18: MT5 layout, no horizontal scroll).
-  const [dockOpen, setDockOpen] = useState(false);
-  const [mt5Tf, setMt5Tf] = useState<Mt5Tf>("M15");
-  const [toolboxTab, setToolboxTab] = useState<ToolboxTab>("trade");
-  const [showBidAsk, setShowBidAsk] = useState(true);
-  const [showPlan, setShowPlan] = useState(true);
-  const [showPositions, setShowPositions] = useState(true);
-  const [showKeyLevels, setShowKeyLevels] = useState(true);
-  const keyZones = useKeyZones();
-  const [streamLive, setStreamLive] = useState(false);
-  const [tickDir, setTickDir] = useState<"up" | "down" | null>(null);
-  const lastBidRef = useRef<number | null>(null);
   const engineDirtyRef = useRef(false);
   const serverInitRef = useRef(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 15_000); return () => window.clearInterval(t); }, []);
 
-  // Raw state inspector
-  const [showRawState, setShowRawState] = useState(false);
-
-  // Control state
-  const [controlReason, setControlReason] = useState("");
-  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
-  const [killConfirmText, setKillConfirmText] = useState("");
-  const [controlMsg, setControlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
   // Human-AI interaction (owner 2026-11-19): the owner's edit of a position or pending order, and delegation to Omega.
-  const [editRow, setEditRow] = useState<{ target: "position" | "order"; ticket: number; sl: string; tp: string; price: string } | null>(null);
   const [hitlBusy, setHitlBusy] = useState(false);
   const [hitlMsg, setHitlMsg] = useState<{ tone: string; text: string } | null>(null);
+  const [controlMsg, setControlMsg] = useState<{ tone: string; text: string } | null>(null);
   const [exitModalPosition, setExitModalPosition] = useState<ExitTargetPosition | null>(null);
 
   // Broker & Gold Pairing setup state
@@ -580,14 +1114,7 @@ export default function Omega() {
     setData((prev: any) => (ov?.viewer ? ov : { ...ov, viewer: prev?.viewer }));
     setError(null);
     setLoading(false);
-    setUpdatedAt(new Date().toISOString().slice(11, 19) + " UTC");
-    const newBid = ov?.broker?.bridge?.bid;
-    if (typeof newBid === "number" && Number.isFinite(newBid)) {
-      if (lastBidRef.current != null && newBid !== lastBidRef.current) {
-        setTickDir(newBid > lastBidRef.current ? "up" : "down");
-      }
-      lastBidRef.current = newBid;
-    }
+    setNow(Date.now());
     const activeSrv = ov?.broker?.connection?.server || ov?.broker?.bridge?.server;
     if (activeSrv && !serverInitRef.current) {
       serverInitRef.current = true;
@@ -621,31 +1148,33 @@ export default function Omega() {
   const push = usePushMany(["omega-overview"], "/omega/api/push");
   const pushed = push.snap["omega-overview"]?.data;
   useEffect(() => { if (pushed) applyOverview(pushed); }, [pushed]);
-  useEffect(() => { setStreamLive(push.live); }, [push.live]);
   useEffect(() => { load(); }, []);
   useEffect(() => {
     const t = window.setInterval(load, push.live ? 60_000 : 8_000);
     return () => window.clearInterval(t);
   }, [push.live]);
 
-  const sendControl = async (mode: string, confirm?: string) => {
-    const reason = controlReason.trim();
+  /** Pause, kill (typed KILL) or resume, with the reason the server requires to pause or kill. */
+  const sendControl = async (mode: "active" | "paused" | "killed", reasonText: string, confirm?: string): Promise<boolean> => {
+    const reason = reasonText.trim();
     if (mode !== "active" && !reason) {
-      setControlMsg({ tone: "text-amber-200", text: "Write a reason first." });
-      return;
+      setControlMsg({ tone: "text-late", text: "Write a reason first." });
+      return false;
     }
     setBusy(true);
     setControlMsg({ tone: "text-slate-300", text: "Sending…" });
+    let ok = false;
     try {
       await omegaJson("/omega/api/control", "POST", { mode, reason, confirm });
       setControlMsg({ tone: "text-ok", text: `Control set to ${mode}; applied at next EA poll.` });
-      setControlReason("");
+      ok = true;
     } catch (e: any) {
       setControlMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     } finally {
       setBusy(false);
       await load();
     }
+    return ok;
   };
 
   const connectBroker = async (ev: FormEvent) => {
@@ -710,7 +1239,7 @@ export default function Omega() {
     await load();
   };
 
-  const saveEngine = async (extra: Record<string, unknown> = {}) => {
+  const saveEngine = async (extra: Record<string, unknown> = {}): Promise<boolean> => {
     const toNum = (v: string) => (v.trim() === "" ? undefined : Number(v));
     const body = {
       enabled: eEnabled,
@@ -721,6 +1250,7 @@ export default function Omega() {
       max_signal_age_min: toNum(eAge),
       ...extra,
     };
+    let ok = false;
     try {
       await omegaJson("/omega/api/settings", "POST", body);
       setEngineDirty(false);
@@ -728,29 +1258,27 @@ export default function Omega() {
         tone: "text-ok",
         text: extra.live_armed === true ? "Live armed." : extra.live_armed === false ? "Live disarmed." : "Saved.",
       });
+      ok = true;
     } catch (e: any) {
       setEngineMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     }
     await load();
-  };
-
-  const requestExitPosition = (pos: ExitTargetPosition) => {
-    setExitModalPosition(pos);
+    return ok;
   };
 
   const lvl = (v: string) => (v.trim() === "" ? null : Number(v));
-  const saveModify = async () => {
-    if (!editRow) return;
+  const saveModify = async (editRow: EditRow): Promise<boolean> => {
     const body = { target: editRow.target, ticket: editRow.ticket, sl: lvl(editRow.sl), tp: lvl(editRow.tp), ...(editRow.target === "order" ? { price: lvl(editRow.price) } : {}) };
-    if ([body.sl, body.tp, (body as any).price].some((v) => v != null && !(Number.isFinite(v) && v >= 0))) { setHitlMsg({ tone: "text-fault", text: "Prices only (empty removes a level)." }); return; }
+    if ([body.sl, body.tp, (body as any).price].some((v) => v != null && !(Number.isFinite(v) && v >= 0))) { setHitlMsg({ tone: "text-fault", text: "Prices only (empty removes a level)." }); return false; }
     setHitlBusy(true);
     try {
       await omegaJson("/omega/api/position/modify", "POST", body);
       setHitlMsg({ tone: "text-ok", text: `Modify sent for #${editRow.ticket}; the EA applies it at the next sync.` });
-      setEditRow(null);
       await load();
+      return true;
     } catch (err: any) {
       setHitlMsg({ tone: "text-fault", text: `Modify refused for #${editRow.ticket}: ${err?.message || "error"}` });
+      return false;
     } finally { setHitlBusy(false); }
   };
   const delegate = async (ticket: number, on: boolean) => {
@@ -778,17 +1306,11 @@ export default function Omega() {
     setClosingTicket(ticket);
     try {
       await omegaJson("/omega/api/position/close", "POST", { ticket, reason: "manual_user_exit" });
-      setControlMsg({
-        tone: "text-ok",
-        text: `Close sent for #${ticket}.`,
-      });
+      setControlMsg({ tone: "text-ok", text: `Close sent for #${ticket}.` });
       setExitModalPosition(null);
       await load();
     } catch (err: any) {
-      setControlMsg({
-        tone: "text-fault",
-        text: `Close failed for #${ticket}: ${err?.message || "error"}`,
-      });
+      setControlMsg({ tone: "text-fault", text: `Close failed for #${ticket}: ${err?.message || "error"}` });
     } finally {
       setClosingTicket(null);
     }
@@ -796,70 +1318,27 @@ export default function Omega() {
 
   if (loading && !data) {
     return (
-      <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-        <Panel title="Omega" icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}>
+      <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-2.5 py-2.5 sm:px-6 sm:py-5">
+        <Panel title="Omega">
           <Skeleton rows={5} />
         </Panel>
       </div>
     );
   }
 
-  const s = data?.signal || {};
-  const c = data?.control || {};
-  const hb = data?.heartbeat || null;
-  const ea = data?.ea || {};
-  const st = data?.stats || {};
+  const x = deriveAll(data, now);
+  const { e, br, account, entryOrder } = x;
   const b = data?.broker || null;
-  // Delegation and the owner's edits (owner 2026-11-19, src/omega-hitl.mjs).
-  const delegation: any = b?.delegation ?? null;
-  // ADR-0020 Amendment 8: the owner's switch and the positions whose stop the council loosened (once each).
-  const pmLoosen: any = b?.pm_loosen ?? null;
-  const viewer = data?.viewer || { can_control: false };
-  const canControl = Boolean(viewer.can_control);
-
-  const e = b?.engine || {};
   const conn = b?.connection || {};
-  const br = b?.bridge || {};
-  // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md): the switch, and Omega's resting limit by order ticket.
-  const entryOrder: any = b?.entry_order || {};
-  const limitByTicket: Record<string, any> = Object.fromEntries((entryOrder.pending || []).map((x: any) => [String(x.ticket), x]));
-  // The connected account's row, as the server marks it (the live login's own reference, never the first account on
-  // the same server: owner 2026-11-19, "harus bisa membedakan mana akun sen dan usd"). No connected account: none.
-  const accounts: any[] = Array.isArray(b?.accounts) ? b.accounts : [];
-  const account = accounts.find((a) => a?.connected === true) ?? null;
-  // Phase 4: the trading mode for new orders, Auto (council) or pinned by the owner.
-  const tm = b?.trading_mode ?? null;
-  const tradingModeLabel = tm?.mode ? `${String(tm.mode).charAt(0).toUpperCase()}${String(tm.mode).slice(1)} (${tm.auto ? "auto" : "pinned"})` : "";
+  const canControl = Boolean(data?.viewer?.can_control);
+  const digits = x.digits;
+  // Every amount is in US dollars once the account's units per dollar are known; otherwise the account's own currency.
+  const acctCur = Number(account?.money?.units_per_usd) > 0 ? "USD" : (br.currency || "");
+  const symbolName = br.symbol || "symbol not reported";
+  const serverName = br.server || conn.server || "no server";
   // A proposal waiting for the owner, or a downgrade waiting for the council: a badge on Setup and on its Risk profile tab.
   const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
     ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
-  const watchdog = b?.autonomous_watchdog || null;
-  // Every amount is in US dollars once the account's units per dollar are known (USD, measured or the owner's value:
-  // the backend converted them once); otherwise the amounts are the account's own and carry its currency (owner
-  // 2026-11-19: no currency code decides).
-  const inUsd = Number(account?.money?.units_per_usd) > 0;
-  const cur = inUsd ? "USD" : (br.currency || hb?.currency || "USD");
-  const acctCur = inUsd ? "USD" : (br.currency || "");
-  const digits = typeof br.digits === "number" && br.digits >= 0 ? br.digits : 2;
-  const symbolName = br.symbol || "symbol not reported";
-  const serverName = br.server || conn.server || "no server";
-  const positionsList: any[] = hb?.positions_detail?.length ? hb.positions_detail : br?.positions || [];
-  const ordersList: any[] = br?.orders || [];
-  // EZ1 (owner-approved mockup, 2026-11-23): the signal's broker − feed basis (signal.feed_basis, when the server knows
-  // it) converts the broker's prices to the feed chart; Omega's resting limit and the entry zone its intent carries.
-  const feedBasis = knownFeedBasis(s);
-  const signalZone = signalZoneOf(s);
-  const resting = restingLimit(ordersList, b?.intents || []);
-  const dealsList: any[] = (Array.isArray(data?.deals) && data.deals.length > 0)
-    ? data.deals
-    : (Array.isArray(br?.deals) ? br.deals : []);
-  const floatingPnl =
-    typeof hb?.floating_pnl === "number"
-      ? hb.floating_pnl
-      : (typeof br?.equity === "number" && typeof br?.balance === "number")
-        ? br.equity - br.balance
-        : positionsList.reduce((acc, p) => acc + (typeof p.profit === "number" ? p.profit : 0), 0);
-  const algoActive = Boolean(e.env_enabled && e.enabled && c.mode !== "paused" && c.mode !== "killed");
 
   const effectiveLabel = !e.env_enabled
     ? "off (server switch)"
@@ -872,18 +1351,10 @@ export default function Omega() {
     conn.status === "stored" && conn.server && br.terminal_connected
   );
   const configLocked = accountActive;
-  // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY), once the account's spec is validated
-  // (owner 2026-11-19: nothing named after a server; "broker unknown" otherwise), the account mode, and the risk that
-  // applies under the profile.
+  // The broker as the terminal names itself (OmegaExecutor 1.19 ACCOUNT_COMPANY): never a server's name.
   const brokerName: string = br.broker || "MT5 broker";
-  const brokerLabel = account?.spec_status === "validated" ? brokerName : "broker unknown";
   // The connected account as the terminal describes it (currency, cent or not, gold symbol): never a server or an id.
   const accountLabel: string = account?.identity?.label || (br.terminal_connected ? "MT5 account" : "no account");
-  const tradeTag = br.trade_mode === "real" ? "LIVE" : br.trade_mode === "demo" ? "DEMO" : br.trade_mode === "contest" ? "CONTEST" : "—";
-  const capOf = (k: "risk" | "positions" | "daily") => (account && account.profile !== "custom" ? PROFILE_CAPS[account.profile]?.[k] : undefined);
-  const appliedRisk = e.risk_pct != null ? appliedLimit(e.risk_pct, capOf("risk")) : null;
-  const appliedPositions = e.max_positions != null ? appliedLimit(e.max_positions, capOf("positions")) : null;
-  const appliedDaily = e.max_daily_loss_pct != null ? appliedLimit(e.max_daily_loss_pct, capOf("daily")) : null;
   // The Engine form (owner 2026-11-20, "Follow the active profile"): a field above what the profile applies says so, and
   // Default fills the profile's values (OMEGA_DEFAULTS without an active profile); Save still writes them.
   const formNotes = appliedNotes({ risk_pct: eRisk, max_positions: eMaxPos, max_daily_loss_pct: eLoss }, account?.profile_limits ?? null, account?.profile_label ?? null);
@@ -902,1627 +1373,26 @@ export default function Omega() {
     setEngineMsg({ tone: "text-cyan-200", text: `${account?.profile_label ? `${account.profile_label} defaults` : "Omega defaults"} filled; press Save to apply.` });
   };
 
+  const act: OmegaActions = {
+    canControl, busy, hitlBusy, closingTicket,
+    sendControl,
+    // The header's Engine switch saves at once, as the old toolbar's Algo Trading button did.
+    setEngine: (on) => { setEEnabled(on); saveEngine({ enabled: on }); },
+    armLive: () => saveEngine({ live_armed: true, confirm: "LIVE" }),
+    disarmLive: () => { saveEngine({ live_armed: false }); },
+    saveModify, delegate, delegateMode,
+    requestClose: (pos) => setExitModalPosition(pos),
+    setView: setViewMode,
+  };
+  const notice = controlMsg ?? (engineMsg && viewMode === "terminal" ? engineMsg : null);
+
   return (
-    <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
-      {/* Top Status Banner */}
-      <Panel
-        title="Omega"
-        icon={<Zap className="h-3.5 w-3.5 text-cyan-300" />}
-        right={
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge tone={br.terminal_connected ? "ok" : "fault"}>
-              <Dot tone={br.terminal_connected ? "ok" : "fault"} pulse={br.terminal_connected} />
-              {br.terminal_connected ? "MT5 connected" : "MT5 disconnected"}
-            </Badge>
-            <Badge tone={br.seen ? "ok" : "fault"}>
-              <Dot tone={br.seen ? "ok" : "fault"} pulse={br.seen} />
-              {br.seen ? "Bridge online" : "Bridge offline"}
-            </Badge>
-            <Badge tone={streamLive ? "ok" : "plain"}>
-              <Dot tone={streamLive ? "ok" : "off"} pulse={streamLive} />
-              {streamLive ? "Streaming" : "Polling"}
-            </Badge>
-            <Badge tone={tradeTag === "LIVE" ? "late" : "cyan"}>
-              <span>{brokerLabel} · {tradeTag} · {br.symbol || "—"}</span>
-            </Badge>
-            {account ? (
-              <Badge tone="cyan">
-                <span title={`Applied now: risk ${appliedRisk ?? "—"}% per trade, ${appliedPositions ?? "—"} positions, daily loss ${appliedDaily ?? "—"}%${account.profile !== "custom" && PROFILE_CAPS[account.profile] ? `, total open risk ${PROFILE_TOTAL_OPEN[account.profile]}%` : ""}. Each is the smaller of the setting and the profile's cap.`}>
-                  {account.profile_label} · {appliedRisk ?? "—"}%{tradingModeLabel ? ` · ${tradingModeLabel}` : ""}
-                </span>
-              </Badge>
-            ) : null}
-            <Badge tone={c.mode === "killed" ? "fault" : c.mode === "paused" ? "late" : "ok"}>
-              control: {c.mode || "active"}
-            </Badge>
-            {s.kill ? <Badge tone="fault">kill ({s.kill_source || "server"})</Badge> : null}
-            {s.blackout ? <Badge tone="late">event blackout</Badge> : null}
-            {viewer.subject ? (
-              <Badge tone="slate">
-                {viewer.subject}
-                {canControl ? "" : " · read only"}
-              </Badge>
-            ) : null}
-          </div>
-        }
-      >
-        {error ? (
-          <p className="text-[12px] text-fault">Error: {error}</p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
-            <span className="mono">Updated {updatedAt}</span>
-          </div>
-        )}
-      </Panel>
-
-      {/* Separated Workspace Mode Bar: MT5 Terminal vs Setup & Configuration Center */}
-      <div
-        id="omega-mode-bar"
-        className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-cyan-500/25 bg-panel px-3.5 py-2.5 shadow-lg"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id="tab-terminal-mode"
-            onClick={() => setViewMode("terminal")}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
-              viewMode === "terminal"
-                ? "border-white/30 bg-white/8 text-fg"
-                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
-            }`}
-          >
-            <Terminal className="h-3.5 w-3.5 text-fg-2" />
-            Terminal
-          </button>
-          <button
-            type="button"
-            id="tab-setup-mode"
-            onClick={() => setViewMode("setup")}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
-              viewMode === "setup"
-                ? "border-white/30 bg-white/8 text-fg"
-                : "border-white/10 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200"
-            }`}
-          >
-            <Sliders className="h-3.5 w-3.5 text-fg-2" />
-            Setup
-            {profileAttention ? <span id="setup-attention" className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-black" title={profileAttention}>1</span> : null}
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          {configLocked ? (
-            <span className="mono flex items-center gap-1.5 rounded-md border border-ok-fill/40 bg-ok-fill/15 px-2.5 py-1 text-ok">
-              <span className="h-1.5 w-1.5 rounded-full bg-ok-fill animate-pulse" />
-              <span>Session: <strong className="text-ok">{brokerName}</strong> · locked</span>
-            </span>
-          ) : (
-            <span className="mono rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-slate-300">
-              Server: <strong className="text-cyan-300">{bServer || serverName || "—"}</strong>
-            </span>
-          )}
-        </div>
-      </div>
-
+    <div className="mx-auto flex max-w-[1680px] flex-col gap-[10px] px-[10px] pb-[10px] pt-[7px] sm:px-6 sm:py-5 lg:gap-[14px] lg:px-[24px] lg:pb-[22px] lg:pt-[21px]">
+      <OmegaHeader x={x} view={viewMode} act={act} now={now} error={error} attention={profileAttention} />
+      {notice ? <p role="status" className={clsx("px-1 text-[11.5px]", notice.tone)}>{notice.text}</p> : null}
+      <OmegaAlerts x={x} />
       {viewMode === "terminal" ? (
-        <div className="flex flex-col gap-4">
-        {/* =====================================================================
-            WINDOWS METATRADER 5 TERMINAL — WEB EDITION WORKSTATION
-           ===================================================================== */}
-        <div className="overflow-hidden rounded-xl border border-cyan-500/25 bg-panel shadow-[0_20px_60px_rgba(0,0,0,0.65)]">
-        {/* Windows MT5 Application Title Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3.5 py-2">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-6 w-6 items-center justify-center rounded-sm bg-cyan-500/15 border border-cyan-400/30 text-cyan-300">
-              <Terminal className="h-3.5 w-3.5" />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[12.5px] font-bold text-slate-100">
-                MT5 Terminal
-              </span>
-              <span className="mono rounded-sm bg-white/5 px-2 py-0.5 text-[11px] text-cyan-300 border border-white/10">
-                {symbolName},{mt5Tf}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 text-[11px]">
-            <div className="flex items-center gap-1.5 text-slate-300">
-              <Dot tone={br.terminal_connected ? "ok" : "fault"} pulse={br.terminal_connected} />
-              <span className="mono">
-                {br.terminal_connected ? "Connected" : "Offline"} · Sync {agoMs(br.synced_age_ms)}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* MT5 Standard Top Toolbar (Algo Trading, Timeframes, Overlay Toggles, Live Account Strip) */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Algo Trading Master Direct Toggle Button */}
-            <button
-              type="button"
-              disabled={!canControl}
-              onClick={() => {
-                const next = !eEnabled;
-                setEEnabled(next);
-                saveEngine({ enabled: next });
-              }}
-              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition disabled:opacity-40 ${
-                eEnabled
-                  ? "border-ok-fill/40 bg-ok-fill/15 text-ok hover:bg-ok-fill/25"
-                  : "border-off-fill/35 bg-off-fill/8 text-off hover:bg-off-fill/15"
-              }`}
-              title="Toggle algo trading"
-            >
-              <span className={`h-2 w-2 rounded-full ${eEnabled ? "bg-ok-fill animate-pulse" : "bg-off-fill"}`} />
-              Algo Trading: {eEnabled ? "ON" : "OFF"}
-            </button>
-
-            {/* MT5 Terminal VPS Execution Health Pill */}
-            <button
-              type="button"
-              onClick={() => setToolboxTab("state_machine")}
-              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11.5px] font-semibold transition ${
-                !br.terminal_connected
-                  ? "border-fault-fill/40 bg-fault-fill/15 text-fault hover:bg-fault-fill/25"
-                  : !br.trade_allowed
-                  ? "border-amber-500/50 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 animate-pulse"
-                  : "border-ok-fill/40 bg-ok-fill/15 text-ok hover:bg-ok-fill/25"
-              }`}
-              title={
-                !br.terminal_connected
-                  ? "Terminal disconnected; watchdog is recovering"
-                  : !br.trade_allowed
-                  ? "Algo trading disabled on the terminal; watchdog is correcting"
-                  : "Terminal live; algo trading allowed"
-              }
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  !br.terminal_connected
-                    ? "bg-fault-fill"
-                    : !br.trade_allowed
-                    ? "bg-amber-400 animate-pulse"
-                    : "bg-ok-fill animate-pulse"
-                }`}
-              />
-              {!br.terminal_connected
-                ? "Terminal: Offline"
-                : !br.trade_allowed
-                ? "Terminal: Algo blocked"
-                : "Terminal: Live"}
-            </button>
-
-            <div className="h-4 w-px bg-white/10" />
-
-            {/* Timeframe Selector */}
-            <div className="flex items-center gap-1 rounded-md border border-white/10 bg-black/40 p-0.5">
-              {MT5_TFS.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setMt5Tf(t.key)}
-                  className={`mono rounded px-2 py-0.5 text-[11px] font-semibold transition ${
-                    mt5Tf === t.key
-                      ? "bg-cyan-500/25 text-cyan-200 border border-cyan-400/40"
-                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="h-4 w-px bg-white/10" />
-
-            {/* Chart Layer Toggles */}
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setShowBidAsk((v) => !v)}
-                className={`rounded border px-2 py-0.5 text-[11px] transition ${
-                  showBidAsk
-                    ? "border-ok-fill/35 bg-ok-fill/10 text-ok"
-                    : "border-white/10 bg-black/30 text-slate-400"
-                }`}
-              >
-                Bid/Ask
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowPlan((v) => !v)}
-                className={`rounded border px-2 py-0.5 text-[11px] transition ${
-                  showPlan
-                    ? "border-cyan-400/35 bg-cyan-500/10 text-cyan-200"
-                    : "border-white/10 bg-black/30 text-slate-400"
-                }`}
-              >
-                Plan
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowPositions((v) => !v)}
-                className={`rounded border px-2 py-0.5 text-[11px] transition ${
-                  showPositions
-                    ? "border-amber-400/35 bg-amber-500/10 text-amber-200"
-                    : "border-white/10 bg-black/30 text-slate-400"
-                }`}
-              >
-                Positions ({positionsList.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowKeyLevels((v) => !v)}
-                // The legend lives here, not over the chart's volume (owner 2026-11-12: "hilangkan label yang menutupi volume").
-                title="Six nearest key-level zones: green support, red resistance, cyan at price; on feed prices (OANDA); broker prices may differ"
-                className={`rounded border px-2 py-0.5 text-[11px] transition ${
-                  showKeyLevels
-                    ? "border-violet-400/35 bg-violet-500/10 text-violet-200"
-                    : "border-white/10 bg-black/30 text-slate-400"
-                }`}
-              >
-                Key Levels ({keyZones.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setToolboxTab("state_machine")}
-                className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
-                  toolboxTab === "state_machine"
-                    ? "border-cyan-400/50 bg-cyan-500/20 text-cyan-200"
-                    : "border-white/10 bg-black/30 text-slate-300 hover:border-cyan-400/30 hover:text-cyan-200"
-                }`}
-                title="Watchdog"
-              >
-                <Cpu className="h-3 w-3 text-cyan-400" />
-                Watchdog
-              </button>
-              <button
-                type="button"
-                onClick={() => setToolboxTab("tca_sor")}
-                className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-semibold transition ${
-                  toolboxTab === "tca_sor"
-                    ? "border-ok-fill/50 bg-ok-fill/20 text-ok"
-                    : "border-white/10 bg-black/30 text-slate-300 hover:border-ok-fill/30 hover:text-ok"
-                }`}
-                title="Execution quality"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-ok-fill" />
-                Execution: {b?.tca?.quality || "—"}
-              </button>
-            </div>
-          </div>
-
-          {/* Right Quick Account Readout */}
-          <div className="mono flex flex-wrap items-center gap-3 text-[11.5px]">
-            <div>
-              <span className="text-slate-500">Balance: </span>
-              <span className="font-bold text-slate-100">{balFmt(br.balance, cur)}</span>
-            </div>
-            <div>
-              <span className="text-slate-500">Equity: </span>
-              <span className="font-bold text-cyan-300">{balFmt(br.equity, cur)}</span>
-            </div>
-            <div>
-              <span className="text-slate-500">Floating: </span>
-              <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Autonomous Cerebrum Watchdog Self-Healing Banner */}
-        {conn.status === "stored" && (!br.terminal_connected || !br.trade_allowed) ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] text-amber-200">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-              <span>
-                {!br.terminal_connected
-                  ? "Terminal disconnected. Watchdog is reconnecting."
-                  : "Algo trading disabled on the terminal. Watchdog is correcting it."}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setToolboxTab("state_machine")}
-              className="flex items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-500/20 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/30 transition"
-            >
-              <Activity className="h-3 w-3" />
-              Details
-            </button>
-          </div>
-        ) : null}
-
-        {/* MT5 Main Split Workspace: Left Dock (Market Watch + Navigator) & Center Chart */}
-        <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr]">
-          {/* Left Dock: Market Watch + Contract Spec + Navigator */}
-          <button type="button" onClick={() => setDockOpen((v) => !v)} aria-expanded={dockOpen} id="omega-dock-toggle"
-            className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 lg:hidden text-[11px] font-semibold text-fg-2">
-            <span>Market Watch · {symbolName}</span><span>{dockOpen ? "▴" : "▾"}</span>
-          </button>
-          <div className={`${dockOpen ? "flex" : "hidden"} flex-col border-b border-white/10 bg-panel lg:flex lg:border-b-0 lg:border-r`}>
-            {/* Market Watch Header */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold text-fg-2">
-              <span className="flex items-center gap-1.5">
-                <CandlestickChart className="h-3.5 w-3.5 text-cyan-300" />
-                Market Watch · {symbolName}
-              </span>
-              <span className="mono flex items-center gap-1 text-[10px] text-slate-400">
-                {tickDir === "up" ? <span className="text-bull">▲</span> : tickDir === "down" ? <span className="text-bear">▼</span> : null}
-                {br.spread_points != null ? `${br.spread_points} pts` : "—"}
-              </span>
-            </div>
-
-            {/* MT5 One-Click Trading Style Dual Bid / Ask Box */}
-            <div className="grid grid-cols-2 gap-2 p-2.5 border-b border-white/10 bg-black/25">
-              <div className="rounded-lg border border-bear-fill/30 bg-linear-to-b from-bear-fill/15 to-bear-fill/5 px-2.5 py-2 text-center">
-                <div className="text-[11px] font-medium text-bear">BID (SELL)</div>
-                <div className="mono mt-0.5 text-lg font-extrabold text-bear">{num(br.bid, digits)}</div>
-              </div>
-              <div className="rounded-lg border border-bull-fill/30 bg-linear-to-b from-bull-fill/15 to-bull-fill/5 px-2.5 py-2 text-center">
-                <div className="text-[11px] font-medium text-bull">ASK (BUY)</div>
-                <div className="mono mt-0.5 text-lg font-extrabold text-bull">{num(br.ask, digits)}</div>
-              </div>
-            </div>
-
-            {/* Market Watch Symbol Table */}
-            <div className="border-b border-white/10 px-2.5 py-2">
-              <table className="w-full text-left text-[11px]">
-                <thead>
-                  <tr className="border-b border-white/10 text-[11px] font-medium text-muted">
-                    <th className="pb-1">Symbol</th>
-                    <th className="pb-1 text-right">Bid</th>
-                    <th className="pb-1 text-right">Ask</th>
-                    <th className="pb-1 text-right"> {!s.market_price ? "Pts" : "Spread"}</th>
-                  </tr>
-                </thead>
-                <tbody className="mono divide-y divide-white/5">
-                  <tr className="bg-cyan-500/5">
-                    <td className="py-1.5 font-bold text-cyan-300">{symbolName}</td>
-                    <td className="py-1.5 text-right text-bull">{num(br.bid, digits)}</td>
-                    <td className="py-1.5 text-right text-bear">{num(br.ask, digits)}</td>
-                    <td className="py-1.5 text-right text-amber-200">{br.spread_points ?? "—"}</td>
-                  </tr>
-                  {s.market_price ? (
-                    <tr>
-                      <td className="py-1 text-slate-400">XAUUSD feed</td>
-                      <td className="py-1 text-right text-slate-300" colSpan={2}>
-                        {num(s.market_price, 2)}
-                      </td>
-                      <td className="py-1 text-right text-slate-500">—</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Symbol Contract Specification */}
-            <div className="border-b border-white/10 px-3 py-2">
-              <div className="mb-1.5 text-[11px] font-medium text-muted">
-                Specification
-              </div>
-              <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
-                <dt className="text-slate-500">Digits / point</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.digits ?? "—"} / {br.point ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Tick size / val</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.tick_size ?? "—"} / {br.tick_value != null ? num(br.tick_value, 2) : "—"}
-                </dd>
-                <dt className="text-slate-500">Volume min / max</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.volume_min ?? "—"} / {br.volume_max ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Volume step</dt>
-                <dd className="mono text-right text-slate-300">{br.volume_step ?? "—"}</dd>
-                <dt className="text-slate-500">Stops level</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.stops_level_points != null ? `${br.stops_level_points} pts` : "—"}
-                </dd>
-                <dt className="text-slate-500">Profit ccy / contract</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.symbol_check?.currency_profit ?? "—"} / {br.symbol_check?.contract_size != null ? `${br.symbol_check.contract_size} oz` : "—"}
-                </dd>
-                <dt className="text-slate-500">Chart symbol</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.symbol_check?.chart_symbol ?? "—"}
-                  {br.symbol_check?.resolution?.status ? ` (${br.symbol_check.resolution.status})` : ""}
-                </dd>
-              </dl>
-              {/* USD gold only (PR #405): a refused symbol opens nothing and is never silent. */}
-              {br.symbol_check ? (
-                <p
-                  className={`mt-1.5 text-[11px] ${br.symbol_check.ok ? "text-ok" : "text-fault"}`}
-                  aria-label="Trade symbol check"
-                >
-                  {br.symbol_check.ok ? `Symbol verified: ${br.symbol_check.text}` : br.symbol_check.text}
-                </p>
-              ) : null}
-              {/* Account Profiles phase 1 (docs/RFC_ACCOUNT_PROFILES.md): the broker spec gate and the stored profile. */}
-              <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]" aria-label="Account spec">
-                <dt className="text-slate-500">Leverage / margin</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.leverage == null
-                    ? "—"
-                    : Number(br.leverage) >= LEVERAGE_UNLIMITED_FROM
-                      ? <span title={`The broker reports 1:${Number(br.leverage).toLocaleString("en-US")}: unlimited or unknown leverage. Sizing never uses leverage; the margin is the broker's OrderCheck answer.`}>unlimited</span>
-                      : `1:${Number(br.leverage).toLocaleString("en-US")}`} / {br.margin_mode ?? "—"}
-                </dd>
-                <dt className="text-slate-500">Margin / lot</dt>
-                <dd className="mono text-right text-slate-300">{br.margin_per_lot != null ? num(br.margin_per_lot, 2) : "—"}</dd>
-                <dt className="text-slate-500">Freeze / trade mode</dt>
-                <dd className="mono text-right text-slate-300">
-                  {br.freeze_level_points != null ? `${br.freeze_level_points} pts` : "—"} / {br.symbol_trade_mode ?? "—"}
-                </dd>
-              </dl>
-              {/* Spec and EA gate as two badges; the detail is in the tooltip (owner 2026-11-18: no prose here). */}
-              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
-                {account ? (
-                  <span aria-label="Broker spec check" title={account.spec_text}
-                    className={`rounded-sm border px-1.5 py-0.5 ${account.spec_status === "validated" ? "border-ok-fill/30 text-ok" : "border-amber-400/30 text-amber-300"}`}>
-                    spec {account.spec_status === "validated" ? "✓" : account.spec_status}
-                  </span>
-                ) : null}
-                {br.ea_version_gate ? (
-                  <span aria-label="EA version gate" title={`EA version gate ${br.ea_version_gate.on ? "on" : "off"}: new entries need OmegaExecutor ${br.ea_version_gate.min_version} or later.`}
-                    className={`rounded-sm border px-1.5 py-0.5 ${br.ea_version_gate.met ? "border-ok-fill/30 text-ok" : "border-fault-fill/30 text-fault"}`}>
-                    EA {br.executor?.version ?? "?"} {br.ea_version_gate.met ? "✓" : `< ${br.ea_version_gate.min_version}`}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            {/* MT5 Navigator Tree (Ctrl+N) */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-bar px-3 py-1.5 text-[11px] font-semibold text-fg-2">
-              <span className="flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5 text-cyan-300" />
-                Navigator
-              </span>
-            </div>
-            <div className="flex-1 space-y-2 px-3 py-2.5 text-[11.5px]">
-              <div>
-                <div className="text-[11px] font-medium text-muted">Accounts</div>
-                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
-                  <span className="mono text-slate-200 truncate">{accountLabel}</span>
-                  <Badge tone={br.terminal_connected ? "ok" : "fault"}>
-                    {br.trade_mode || "unknown"}
-                  </Badge>
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] font-medium text-muted">Expert Advisors</div>
-                <div className="mt-1 space-y-1">
-                  <div className="flex items-center justify-between rounded-sm bg-cyan-500/[0.07] px-2 py-1 border border-cyan-400/20">
-                    <span className="mono flex items-center gap-1.5 text-cyan-200">
-                      <Bot className="h-3 w-3 text-cyan-300" />
-                      OmegaExecutor
-                    </span>
-                    <span className="mono text-[10px] text-ok">
-                      {br.terminal_connected ? `${symbolName}, M1` : "standby"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-sm bg-white/2 px-2 py-1 border border-white/5">
-                    <span className="mono text-slate-300">CryptophysXAUUSD</span>
-                    <span className="mono text-[10px] text-slate-400">
-                      {ea.connected ? (hb?.version ? `v${hb.version}` : "—") : "direct EA"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] font-medium text-muted">Decision Engine</div>
-                <div className="mt-1 flex items-center justify-between rounded-sm bg-white/3 px-2 py-1 border border-white/5">
-                  <span className="text-slate-300">Signal</span>
-                  <span
-                    className={`mono font-bold ${
-                      s.side === "BUY" ? "text-bull" : s.side === "SELL" ? "text-bear" : "text-slate-400"
-                    }`}
-                  >
-                    {!s.side || s.side === "NONE" ? "WAIT" : `${s.side} (${num(s.entry, 2)} feed)`}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Center / Right MT5 Interactive Candlestick Chart: stretches to the row's height (the sidebar's) */}
-          <div className="flex min-h-[430px] flex-col">
-            <Mt5ChartCanvas
-              tf={mt5Tf}
-              symbol={symbolName}
-              server={serverName}
-              digits={digits}
-              bid={br.bid}
-              ask={br.ask}
-              spreadPoints={br.spread_points}
-              signal={s}
-              positions={positionsList}
-              showBidAsk={showBidAsk}
-              showPlan={showPlan}
-              showPositions={showPositions}
-              keyZones={keyZones}
-              showKeyLevels={showKeyLevels}
-              feedBasis={feedBasis}
-              limit={resting}
-            />
-          </div>
-        </div>
-
-        {/* =================================================================
-            MT5 BOTTOM DOCK — TOOLBOX (Ctrl+T): Trade | History | Intents | Experts | Journal
-           ================================================================= */}
-        <div className="border-t border-white/10 bg-panel">
-          {/* Toolbox Tab Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-bar px-3 py-1.5">
-            <div className="flex flex-wrap items-center gap-1">
-              {(
-                [
-                  ["trade", `Trade (${positionsList.length}${ordersList.length ? ` + ${ordersList.length} ord` : ""})`],
-                  ["history", `History (${dealsList.length})`],
-                  ["intents", `Intents (${(b?.intents || []).length})`],
-                  ["state_machine", "Watchdog"],
-                  ["tca_sor", "Execution"],
-                  ["events", `Journal (${(b?.events || []).length + (data?.control_events || []).length})`],
-                ] as [ToolboxTab, string][]
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setToolboxTab(key)}
-                  className={`rounded px-2.5 py-1 text-[11.5px] font-semibold transition ${
-                    toolboxTab === key
-                      ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/35"
-                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Tab 1: TRADE (Open Positions + Classic MT5 Account Summary Row) */}
-          {toolboxTab === "trade" ? (
-            <div>
-              {/* Delegate (owner 2026-11-19): manual positions handed to Omega, one by one or every new one. */}
-              <div className="flex flex-wrap items-center gap-3 border-b border-white/10 bg-bar px-3.5 py-1.5 text-[11px]">
-                <label className="inline-flex items-center gap-2 text-slate-300" title="Every manual position opened while this is on is handed to Omega: a stop from the plan when it has none, break-even, the TP ladder, the Position Manager and the closes on an opposite signal. Omega never adds to it or reverses it.">
-                  <input type="checkbox" className="accent-cyan-400" disabled={hitlBusy || !delegation?.supported} checked={delegation?.mode?.on === true} onChange={(e) => delegateMode(e.target.checked)} />
-                  Delegate my next manual entries to Omega
-                </label>
-                {delegation?.mode?.on && delegation?.mode?.since_ms ? <span className="text-slate-500">on since {timeUtc(delegation.mode.since_ms)}</span> : null}
-                {delegation && delegation.supported === false ? <span className="text-amber-300">Modify and Delegate need OmegaExecutor {delegation.ea_min_version ?? "1.18"} on the terminal.</span> : null}
-                {hitlMsg ? <span className={hitlMsg.tone}>{hitlMsg.text}</span> : null}
-              </div>
-              <div className="table-wrap max-h-[240px] overflow-y-auto">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Ticket</th>
-                      <th>Source</th>
-                      <th>Time (UTC)</th>
-                      <th>Type</th>
-                      <th>Volume</th>
-                      <th>Price</th>
-                      <th>S/L</th>
-                      <th>T/P</th>
-                      <th>Current</th>
-                      <th>Profit ({cur})</th>
-                      <th title="Loss at the stop in money and % of equity; once the stop is at or beyond the entry, the profit it locks">Risk @ SL</th>
-                      <th>Intent</th>
-                      <th className="text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {positionsList.length === 0 ? (
-                      <tr>
-                        <td colSpan={14} className="py-4 text-center text-[12px] text-slate-500">
-                          No open positions.
-                        </td>
-                      </tr>
-                    ) : (
-                      positionsList.map((p: any) => {
-                        const isBuy = p.side === "BUY";
-                        const curPrice = isBuy ? br.bid : br.ask;
-                        const isManual = p.source === "manual" || p.magic === 0;
-                        const isOmega = p.source === "omega" || p.magic === 920200 || String(p.intent_id || "").startsWith("open:");
-                        const isDelegated = isManual && (delegation?.tickets ?? []).map(Number).includes(Number(p.ticket));
-                        const loosenedOnce = (pmLoosen?.loosened ?? []).map(Number).includes(Number(p.ticket));
-                        const editing = editRow?.target === "position" && editRow.ticket === Number(p.ticket);
-                        return (
-                          <Fragment key={p.ticket}>
-                          <tr>
-                            <td className="mono font-bold text-cyan-300">{p.symbol || symbolName}</td>
-                            <td className="mono">#{String(p.ticket)}</td>
-                            <td>
-                              {isDelegated ? (
-                                <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-200 border border-cyan-400/40" title="A manual position you delegated: Omega manages it like its own.">
-                                  MANUAL → OMEGA
-                                </span>
-                              ) : isManual ? (
-                                <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                  MANUAL
-                                </span>
-                              ) : isOmega ? (
-                                <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                  OMEGA
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 rounded-sm bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
-                                  EXTERNAL
-                                </span>
-                              )}
-                              {loosenedOnce ? (
-                                <span className="ml-1 inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 border border-amber-400/40" title="The Position Council loosened this position's stop once (ADR-0020 Amendment 8). It counts as unprotected again and is never loosened a second time.">
-                                  LOOSENED ONCE
-                                </span>
-                              ) : null}
-                            </td>
-                            <td className="mono">{timeUtc(p.opened_ms)}</td>
-                            <td className={`mono font-bold ${isBuy ? "text-bull" : "text-bear"}`}>{p.side}</td>
-                            <td className="mono">
-                              {num(p.volume, 2)}
-                              {/* The exposure in USD (owner 2026-11-18): a lot alone is ambiguous across brokers and cent accounts. */}
-                              {p.exposure?.usd_per_dollar != null ? (
-                                <div className="text-[10px] font-normal text-slate-400" title="What a $1 move in gold does to this position, and its loss at the stop">
-                                  ≈ ${num(p.exposure.usd_per_dollar, 2)}/$1
-                                  {p.exposure.risk_at_sl_usd != null ? ` · SL −$${num(p.exposure.risk_at_sl_usd, 2)}${p.exposure.risk_at_sl_pct != null ? ` (${p.exposure.risk_at_sl_pct}%)` : ""}` : ""}
-                                </div>
-                              ) : null}
-                            </td>
-                            <td className="mono">{num(p.entry ?? p.open_price, digits)}</td>
-                            <td className={`mono ${p.sl ? "text-bear" : "text-muted"}`}>{p.sl ? num(p.sl, digits) : "—"}</td>
-                            <td className={`mono ${p.tp ? "text-bull" : "text-muted"}`}>{p.tp ? num(p.tp, digits) : "—"}</td>
-                            <td className="mono text-slate-200">{num(curPrice, digits)}</td>
-                            <td className={`mono font-bold ${toneCls(p.profit)}`}>{money(p.profit, cur)}</td>
-                            {(() => {
-                              const r = riskToSl(p, br);
-                              if (!r) return <td className="mono text-slate-500">—</td>;
-                              return r.locked
-                                ? <td className="mono text-bull">locked +{money(r.amount, cur).replace(/^\+/, "")}</td>
-                                : <td className="mono text-bear">SL −{money(r.amount, cur).replace(/^[-+]/, "")} · {r.pct}%</td>;
-                            })()}
-                            <td className="mono text-[11px] text-slate-400">{p.signal_id || p.intent_id || (isManual ? "Manual" : "—")}</td>
-                            <td className="text-right whitespace-nowrap">
-                              <button
-                                type="button"
-                                disabled={hitlBusy || !delegation?.supported}
-                                onClick={() => setEditRow(editing ? null : { target: "position", ticket: Number(p.ticket), sl: p.sl ? String(p.sl) : "", tp: p.tp ? String(p.tp) : "", price: "" })}
-                                className="mr-1 inline-flex items-center rounded-sm bg-cyan-500/15 px-2 py-1 text-[11px] font-bold text-cyan-200 border border-cyan-400/40 hover:bg-cyan-500/25 disabled:opacity-40"
-                                title={delegation?.supported ? "Change this position's stop and target" : "Needs OmegaExecutor 1.18"}
-                              >
-                                {editing ? "CANCEL" : "MODIFY"}
-                              </button>
-                              {isManual ? (
-                                <button
-                                  type="button"
-                                  disabled={hitlBusy || (!isDelegated && !delegation?.supported)}
-                                  onClick={() => delegate(Number(p.ticket), !isDelegated)}
-                                  className="mr-1 inline-flex items-center rounded-sm bg-violet-500/15 px-2 py-1 text-[11px] font-bold text-violet-200 border border-violet-400/40 hover:bg-violet-500/25 disabled:opacity-40"
-                                  title={isDelegated ? "Take this position back: Omega stops managing it" : "Hand this manual position to Omega: it manages it like its own (never adds to it or reverses it)"}
-                                >
-                                  {isDelegated ? "TAKE BACK" : "DELEGATE"}
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                disabled={closingTicket === p.ticket}
-                                onClick={() =>
-                                  requestExitPosition({
-                                    ticket: p.ticket,
-                                    symbol: p.symbol || symbolName,
-                                    side: p.side,
-                                    volume: p.volume,
-                                    open_price: p.entry ?? p.open_price,
-                                    profit: p.profit,
-                                    sl: p.sl,
-                                    tp: p.tp,
-                                    currency: cur,
-                                  })
-                                }
-                                className="inline-flex items-center gap-1 rounded-sm bg-fault-fill/20 px-2.5 py-1 text-[11px] font-bold text-fault border border-fault-fill/40 hover:bg-fault-fill/30 hover:border-fault-fill active:scale-95 transition disabled:opacity-50"
-                                title="Close at market"
-                              >
-                                {closingTicket === p.ticket ? (
-                                  <span className="inline-flex items-center gap-1">
-                                    <span className="inline-block h-2 w-2 rounded-full bg-fault-fill animate-ping" />
-                                    CLOSING…
-                                  </span>
-                                ) : (
-                                  "CLOSE"
-                                )}
-                              </button>
-                            </td>
-                          </tr>
-                          {editing ? (
-                            <tr>
-                              <td colSpan={14} className="bg-cyan-500/5">
-                                <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11px]">
-                                  <span className="text-slate-400">Modify #{String(p.ticket)} {p.side}:</span>
-                                  <label className="text-bear">S/L <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.sl} onChange={(e) => setEditRow({ ...editRow!, sl: e.target.value })} placeholder="none" /></label>
-                                  <label className="text-bull">T/P <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.tp} onChange={(e) => setEditRow({ ...editRow!, tp: e.target.value })} placeholder="none" /></label>
-                                  <button type="button" disabled={hitlBusy} onClick={saveModify} className="rounded-sm bg-cyan-500/25 px-2.5 py-1 font-bold text-cyan-100 border border-cyan-400/50 hover:bg-cyan-500/35 disabled:opacity-40">SEND</button>
-                                  <span className="text-slate-500">Empty removes a level. {isOmega || isDelegated ? "Omega keeps managing it and may move the stop again." : ""}</span>
-                                </div>
-                              </td>
-                            </tr>
-                          ) : null}
-                          </Fragment>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {ordersList.length > 0 && (
-                <div className="border-t border-white/10 bg-ground">
-                  <div className="border-b border-white/5 bg-bar px-3.5 py-1 text-[11px] font-semibold text-slate-400">
-                    Pending Orders ({ordersList.length})
-                  </div>
-                  <div className="table-wrap max-h-[160px] overflow-y-auto">
-                    <table className="tbl">
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Ticket</th>
-                          <th>Source</th>
-                          <th>Placed (UTC)</th>
-                          <th>Type</th>
-                          <th>Volume</th>
-                          <th>Price</th>
-                          <th>S/L</th>
-                          <th>T/P</th>
-                          <th>Comment</th>
-                          <th>Status</th>
-                          <th>Expires (UTC)</th>
-                          <th className="text-right">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ordersList.map((o: any) => {
-                          const isManualOrd = o.source === "manual" || o.magic === 0;
-                          const editingOrd = editRow?.target === "order" && editRow.ticket === Number(o.ticket);
-                          const modifiable = ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"].includes(o.type);
-                          return (
-                            <Fragment key={o.ticket}>
-                            <tr>
-                              <td className="mono font-bold text-cyan-300">{o.symbol || symbolName}</td>
-                              <td className="mono">#{String(o.ticket)}</td>
-                              <td>
-                                {isManualOrd ? (
-                                  <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                    MANUAL
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                    OMEGA
-                                  </span>
-                                )}
-                              </td>
-                              <td className="mono">{timeUtc(o.placed_ms)}</td>
-                              <td className="mono font-semibold text-amber-200">{o.type}</td>
-                              <td className="mono">{num(o.volume_current ?? o.volume_initial, 2)}</td>
-                              <td className="mono text-slate-200">{num(o.price_open, digits)}</td>
-                              <td className={`mono ${o.sl ? "text-bear" : "text-muted"}`}>{o.sl ? num(o.sl, digits) : "—"}</td>
-                              <td className={`mono ${o.tp ? "text-bull" : "text-muted"}`}>{o.tp ? num(o.tp, digits) : "—"}</td>
-                              <td className="mono text-[11px] text-slate-400">{o.comment || "—"}</td>
-                              <td className="mono text-[11px] text-slate-300" title={limitByTicket[String(o.ticket)]?.reason || undefined}>
-                                {limitByTicket[String(o.ticket)]?.status || (isManualOrd ? "—" : "resting")}
-                                {limitByTicket[String(o.ticket)]?.reason ? <span className="block max-w-[220px] truncate text-slate-500">{limitByTicket[String(o.ticket)].reason}</span> : null}
-                              </td>
-                              <td className="mono text-[11px]">{limitByTicket[String(o.ticket)]?.expiry_ms ? timeUtc(limitByTicket[String(o.ticket)].expiry_ms) : "—"}</td>
-                              <td className="text-right">
-                                <button
-                                  type="button"
-                                  disabled={hitlBusy || !modifiable || !delegation?.supported}
-                                  onClick={() => setEditRow(editingOrd ? null : { target: "order", ticket: Number(o.ticket), price: o.price_open ? String(o.price_open) : "", sl: o.sl ? String(o.sl) : "", tp: o.tp ? String(o.tp) : "" })}
-                                  className="inline-flex items-center rounded-sm bg-cyan-500/15 px-2 py-1 text-[11px] font-bold text-cyan-200 border border-cyan-400/40 hover:bg-cyan-500/25 disabled:opacity-40"
-                                  title={!modifiable ? "Only limit and stop orders" : delegation?.supported ? "Change this order's price, stop and target" : "Needs OmegaExecutor 1.18"}
-                                >
-                                  {editingOrd ? "CANCEL" : "MODIFY"}
-                                </button>
-                              </td>
-                            </tr>
-                            {editingOrd ? (
-                              <tr>
-                                <td colSpan={13} className="bg-cyan-500/5">
-                                  <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11px]">
-                                    <span className="text-slate-400">Modify order #{String(o.ticket)} {o.type}:</span>
-                                    <label className="text-slate-200">Price <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.price} onChange={(e) => setEditRow({ ...editRow!, price: e.target.value })} /></label>
-                                    <label className="text-bear">S/L <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.sl} onChange={(e) => setEditRow({ ...editRow!, sl: e.target.value })} placeholder="none" /></label>
-                                    <label className="text-bull">T/P <input inputMode="decimal" className="mono ml-1 w-24 rounded-sm border border-white/15 bg-black/40 px-1.5 py-0.5 text-slate-100" value={editRow!.tp} onChange={(e) => setEditRow({ ...editRow!, tp: e.target.value })} placeholder="none" /></label>
-                                    <button type="button" disabled={hitlBusy} onClick={saveModify} className="rounded-sm bg-cyan-500/25 px-2.5 py-1 font-bold text-cyan-100 border border-cyan-400/50 hover:bg-cyan-500/35 disabled:opacity-40">SEND</button>
-                                    <span className="text-slate-500">{isManualOrd ? "Your order." : "Omega's order."} Empty S/L or T/P removes it.</span>
-                                  </div>
-                                </td>
-                              </tr>
-                            ) : null}
-                            </Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {entryOrder.mode && entryOrder.mode !== "market" && entryOrder.recent?.length ? (
-                <div className="border-t border-white/10 bg-ground px-3.5 py-1.5 text-[11px] text-slate-400" aria-label="Omega limit events">
-                  <span className="font-semibold text-slate-300">Limit ({entryOrder.mode}):</span>{" "}
-                  {entryOrder.recent.slice(0, 4).map((x: any, i: number) => (
-                    <span key={`${x.ms}-${i}`} className="mono mr-3">{timeUtc(x.ms).slice(11)} {x.action}{x.ticket ? ` #${x.ticket}` : ""}{x.reason ? ` · ${x.reason}` : ""}{x.gap_r != null ? ` · gap ${x.gap_r}R` : ""}</span>
-                  ))}
-                </div>
-              ) : null}
-
-              {/* Classic Windows MT5 Gray/Obsidian Account Summary Footer Row */}
-              <div className="mono flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-bar px-3.5 py-2 text-[11.5px]">
-                <div className="flex flex-wrap items-center gap-4">
-                  <span>
-                    <strong className="text-slate-400">Balance:</strong>{" "}
-                    <span className="font-bold text-slate-100">{balFmt(br.balance, cur)}</span>
-                  </span>
-                  <span>
-                    <strong className="text-slate-400">Equity:</strong>{" "}
-                    <span className="font-bold text-cyan-300">{balFmt(br.equity, cur)}</span>
-                  </span>
-                  <span>
-                    <strong className="text-slate-400">Floating P/L:</strong>{" "}
-                    <span className={`font-bold ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</span>
-                  </span>
-                  <span>
-                    <strong className="text-slate-400">Day P/L:</strong>{" "}
-                    <span className={`font-bold ${toneCls(br.day_realized_pl)}`}>{money(br.day_realized_pl, cur)}</span>
-                  </span>
-                  <span>
-                    <strong className="text-slate-400">Day start:</strong>{" "}
-                    <span className="text-slate-300">{balFmt(br.day_start_balance, cur)}</span>
-                  </span>
-                </div>
-                <div className="text-slate-400">
-                  {/* What applies, not the raw setting: the smaller of the setting and the profile's cap. */}
-                  Risk/Trade: <span className="text-slate-200" title="Applied: the smaller of the setting and the profile's cap">{appliedRisk != null ? `${appliedRisk}%` : "—"}</span> · Max Pos:{" "}
-                  <span className="text-slate-200">{appliedPositions ?? "—"}</span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Tab 2: HISTORY (Closed Deals) */}
-          {toolboxTab === "history" ? (
-            <div className="table-wrap max-h-[260px] overflow-y-auto">
-              {!dealsList.length ? (
-                <div className="p-4">
-                  <Empty>No closed deals.</Empty>
-                </div>
-              ) : (
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Closed (UTC)</th>
-                      <th>Deal</th>
-                      <th>Source</th>
-                      <th>Side</th>
-                      <th>Volume</th>
-                      <th>Entry</th>
-                      <th>Exit</th>
-                      <th>Net P/L</th>
-                      <th>Reason</th>
-                      <th>Mode</th>
-                      <th>Signal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dealsList.map((d: any, idx: number) => {
-                      const net = (d.profit ?? 0) + (d.commission ?? 0) + (d.swap ?? 0);
-                      const isManual = d.source === "manual" || d.magic === 0;
-                      const isOmega = d.source === "omega" || d.magic === 920200 || String(d.signal_id || "").startsWith("open:");
-                      return (
-                        <tr key={d.deal_ticket ?? idx}>
-                          <td className="mono">{timeUtc(d.closed_ms)}</td>
-                          <td className="mono font-semibold">#{d.deal_ticket ?? "—"}</td>
-                          <td>
-                            {isManual ? (
-                              <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
-                                MANUAL
-                              </span>
-                            ) : isOmega ? (
-                              <span className="inline-flex items-center gap-1 rounded-sm bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 border border-cyan-400/30">
-                                OMEGA
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 rounded-sm bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-400/30">
-                                EXTERNAL
-                              </span>
-                            )}
-                          </td>
-                          <td className={`mono font-bold ${d.side === "BUY" ? "text-bull" : "text-bear"}`}>{d.side}</td>
-                          <td className="mono">{num(d.volume, 2)}</td>
-                          <td className="mono">{num(d.entry_price, digits)}</td>
-                          <td className="mono">{num(d.exit_price, digits)}</td>
-                          <td className={`mono font-bold ${toneCls(net)}`}>{money(net, d.currency || cur)}</td>
-                          <td className="mono">
-                            <span className="rounded-sm bg-white/5 px-1.5 py-0.5 text-[10.5px]">
-                              {d.reason || "closed"}
-                            </span>
-                          </td>
-                          <td className="mono text-slate-400">{d.mode || "live"}</td>
-                          <td className="mono text-[11px] text-slate-400">{d.signal_id || (isManual ? "Manual" : "—")}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          ) : null}
-
-          {/* Tab 3: ORDER INTENTS (Engine -> Bridge Queue) */}
-          {toolboxTab === "intents" ? (
-            <div className="table-wrap max-h-[260px] overflow-y-auto">
-              {!(b?.intents || []).length ? (
-                <div className="p-4">
-                  <Empty>No intents yet.</Empty>
-                </div>
-              ) : (
-                <>
-                {/* EZ1 (the approved mockup): on a phone one card per intent; from sm up the table. Every price is the broker's. */}
-                <IntentCards intents={b.intents || []} digits={digits} />
-                <table className="tbl hidden sm:table">
-                  <thead>
-                    <tr>
-                      <th>Created</th>
-                      <th>Intent</th>
-                      <th>Kind</th>
-                      <th>Side</th>
-                      <th>Volume</th>
-                      <th>Entry · broker</th>
-                      <th>SL · broker</th>
-                      <th>TP · broker</th>
-                      <th>Status</th>
-                      <th>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(b.intents || []).map((i: any) => (
-                      <tr key={i.id}>
-                        <td className="mono"><CreatedCell ms={i.created_ms} /></td>
-                        <td className="mono">{i.id}</td>
-                        <td className="mono">{i.kind}</td>
-                        <td className={`mono font-bold ${i.side === "BUY" ? "text-bull" : i.side === "SELL" ? "text-bear" : ""}`}>
-                          {i.side || "—"}
-                        </td>
-                        <td className="mono">{typeof i.lot === "number" ? num(i.lot, 2) : i.volume != null ? num(i.volume, 2) : "—"}</td>
-                        <td className="mono"><IntentEntry i={i} digits={digits} /></td>
-                        <td className="mono">{i.sl != null ? num(i.sl, digits) : "—"}</td>
-                        <td className="mono">{i.tp != null ? num(i.tp, digits) : "—"}</td>
-                        <td>
-                          <Badge tone={INTENT_TONE[i.status] || "slate"}>{i.status}</Badge>
-                        </td>
-                        <td className="mono text-[11px]">
-                          {i.result ? (i.result.ok ? `ticket ${i.result.ticket ?? "?"}` : i.result.error || "failed") : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </>
-              )}
-            </div>
-          ) : null}
-
-          {/* Tab 4: AUTONOMOUS STATE MACHINE & SELF-HEALING WATCHDOG */}
-          {toolboxTab === "state_machine" ? (
-            <div className="space-y-4 p-4 text-[12px]">
-              {/* Header Banner: Autonomous System Architecture */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] font-semibold text-fg">Terminal watchdog</span>
-                  <Hint text="On each bridge sync the watchdog checks the terminal and sends a recovery directive when it is stuck, then waits the cooldown." />
-                  <Badge tone={watchdog?.active ? "ok" : "slate"}>{watchdog?.active ? "ACTIVE" : "IDLE"}</Badge>
-                </div>
-
-                <div className="flex items-center gap-2 text-[11px]">
-                  <span className="text-slate-400">Policy:</span>
-                  <span className="mono font-semibold text-cyan-200">{watchdog?.policy || "self_healing_v1"}</span>
-                  <span className="text-slate-600">|</span>
-                  <span className="text-slate-400">Cooldown:</span>
-                  <span className="mono font-semibold text-slate-200">{watchdog?.anti_flapping_cooldown_sec || 180}s</span>
-                </div>
-              </div>
-
-              {/* 5-Stage Interactive State Machine Pipeline */}
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {/* Node 1: Cerebrum Cloud Supervisor */}
-                <div className="flex flex-col justify-between rounded-lg border border-cyan-500/30 bg-black/40 p-3">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-muted">
-                        Watchdog
-                      </span>
-                    </div>
-                    <div className="mt-2 text-[13px] font-extrabold text-white">
-                      Cerebrum
-                    </div>
-                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Agent</span>
-                        <span className="mono font-semibold text-cyan-200">{watchdog?.agent || "agent:cerebrum"}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Node 2: Host Bridge Daemon */}
-                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-muted">
-                        Bridge
-                      </span>
-                      <Badge tone={br.seen ? "ok" : "fault"}>
-                        {br.seen ? "SYNCED" : "OFFLINE"}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      Omega bridge
-                    </div>
-                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Last sync</span>
-                        <span className="mono text-ok">{br.seen ? agoMs(br.synced_age_ms) : "—"}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Key ID</span>
-                        <span className="mono text-slate-300 truncate max-w-[90px]">{br.kid || "—"}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Node 3: MT5 Terminal Service */}
-                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-muted">
-                        Terminal
-                      </span>
-                      <Badge tone={br.state_age_ms != null && br.state_age_ms < 60000 ? "ok" : "fault"}>
-                        {br.state_age_ms != null && br.state_age_ms < 60000 ? "STREAMING" : "STALE"}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      MT5
-                    </div>
-                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Heartbeat</span>
-                        <span className="mono text-ok">{agoMs(br.state_age_ms)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Terminal</span>
-                        <span className={`mono ${br.terminal_connected ? "text-ok" : "text-fault"}`}>{br.terminal_connected ? "connected" : "not connected"}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Node 4: Broker Gateway & Market */}
-                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-muted">
-                        Broker
-                      </span>
-                      <Badge tone={br.terminal_connected && br.trade_allowed ? "ok" : "fault"}>
-                        {br.terminal_connected ? (br.trade_allowed ? "READY" : "ALGO BLOCKED") : "DISCONNECTED"}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-[13px] font-extrabold text-cyan-200 truncate">
-                      {brokerName} · {accountLabel}
-                    </div>
-                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Mode</span>
-                        <span className="mono uppercase text-slate-200">{br.trade_mode || "unknown"}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Permission</span>
-                        <span className={`font-semibold ${br.trade_allowed ? "text-ok" : "text-fault"}`}>
-                          {br.trade_allowed ? "Allowed" : "Disabled"}
-                        </span>
-                      </div>
-                      {/* OmegaExecutor 1.12+ reports its version and whether it still moves stops beside Omega. */}
-                      <div className="flex justify-between" title={br.executor?.note ?? ""}>
-                        <span className="text-slate-500">EA</span>
-                        <span className={`font-semibold ${br.executor?.status === "ok" ? "text-ok" : br.executor?.status === "local_management" ? "text-fault" : "text-amber-300"}`}>
-                          {br.executor?.version ? `v${br.executor.version}` : "v?"} · {br.executor?.status === "ok" ? "stops by Omega" : br.executor?.status === "local_management" ? "local trailing ON" : br.executor?.status === "outdated" ? "update EA" : "not reported"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
-                    {symbolName} · Spread {br.spread_points ?? 0} pts
-                  </div>
-                </div>
-
-                {/* Node 5: Cloud Decision Engine */}
-                <div className="flex flex-col justify-between rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-medium text-muted">
-                        Engine
-                      </span>
-                      <Badge tone={c.mode === "killed" ? "fault" : eEnabled ? "ok" : "off"}>
-                        {c.mode === "killed" ? "KILLED" : eEnabled ? "ARMED" : "IDLE"}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-[13px] font-extrabold text-slate-100">
-                      Decision Engine
-                    </div>
-                    <div className="mt-1.5 space-y-1 text-[11px] text-slate-300">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Mode</span>
-                        <span className="mono uppercase text-slate-200">{c.mode || "active"}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Live</span>
-                        <span className="mono text-slate-300">{e.live_armed ? "Armed" : "Not armed"}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-2.5 border-t border-white/5 pt-2 text-[10px] text-slate-400">
-                    Signal: {s.side || "NONE"}
-                  </div>
-                </div>
-              </div>
-
-              {/* Autonomous Self-Healing Audit Trail Card */}
-              <div className="rounded-lg border border-white/10 bg-bar p-3.5">
-                <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                  <h4 className="flex items-center gap-1.5 text-[12px] font-semibold text-fg">
-                    <ShieldCheck className="h-4 w-4 text-ok" />
-                    Last recovery
-                  </h4>
-                </div>
-
-                {watchdog?.last_recovery ? (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[11px] font-medium text-muted">Directive</div>
-                      <div className="mono mt-1 text-[12px] font-bold text-amber-300">
-                        {watchdog.last_recovery.directive}
-                      </div>
-                    </div>
-                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[11px] font-medium text-muted">Reason</div>
-                      <div className="mono mt-1 text-[12px] font-bold text-slate-200">
-                        {watchdog.last_recovery.reason}
-                      </div>
-                    </div>
-                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[11px] font-medium text-muted">Time</div>
-                      <div className="mono mt-1 text-[12px] text-cyan-200">
-                        {timeUtc(watchdog.last_recovery.ms)} ({agoMs(Date.now() - watchdog.last_recovery.ms)})
-                      </div>
-                    </div>
-                    <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
-                      <div className="text-[11px] font-medium text-muted">Status</div>
-                      <div className="mono mt-1 text-[12px] font-semibold text-ok">
-                        {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-3 flex items-center gap-2 rounded-sm border border-ok-fill/20 bg-ok-fill/5 p-3 text-[11.5px] text-ok">
-                    <ShieldCheck className="h-4 w-4 shrink-0 text-ok" />
-                    <span>
-                      No recoveries.{br.state_age_ms != null && br.state_age_ms < 60000 ? " Terminal streaming." : " Terminal not streaming."}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Collapsible Raw State JSON Inspector */}
-              <div className="rounded-lg border border-white/10 bg-bar p-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-[12px] font-semibold text-fg">
-                      Raw state
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowRawState((v) => !v)}
-                    className="rounded-sm border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-white/10 transition"
-                  >
-                    {showRawState ? "Hide" : "Show"}
-                  </button>
-                </div>
-                {showRawState ? (
-                  <pre className="mt-2.5 max-h-56 overflow-y-auto rounded-sm bg-black/60 p-3 mono text-[11px] text-ok/90 border border-white/10">
-                    {JSON.stringify(
-                      {
-                        terminal_connected: br.terminal_connected,
-                        trade_allowed: br.trade_allowed,
-                        server: serverName,
-                        trade_mode: br.trade_mode,
-                        currency: br.currency,
-                        cent: br.cent === true,
-                        balance: br.balance,
-                        equity: br.equity,
-                        day_start_balance: br.day_start_balance,
-                        day_realized_pl: br.day_realized_pl,
-                        symbol: {
-                          name: symbolName,
-                          bid: br.bid,
-                          ask: br.ask,
-                          spread_points: br.spread_points,
-                          digits: br.digits,
-                          point: br.point,
-                          tick_size: br.tick_size,
-                          tick_value: br.tick_value,
-                          volume_min: br.volume_min,
-                          volume_max: br.volume_max,
-                          volume_step: br.volume_step,
-                          stops_level_points: br.stops_level_points,
-                        },
-                        positions: positionsList,
-                        state_age_ms: br.state_age_ms,
-                        bridge_sync_age_ms: br.synced_age_ms,
-                        kid: br.kid,
-                        autonomous_watchdog: watchdog,
-                      },
-                      null,
-                      2
-                    )}
-                  </pre>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          {/* Tab: EXECUTION QUALITY, TCA & SMART ORDER ROUTER (SOR) */}
-          {toolboxTab === "tca_sor" ? (
-            <div className="space-y-4 p-4 text-[12px]">
-              {/* Header Banner: Institutional Execution & TCA Quality */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] font-semibold text-fg">Execution quality</span>
-                  <Hint text="Measured on Omega's fills: intent-to-fill latency and slippage against the requested price." />
-                  <Badge tone={b?.tca?.samples_count ? "ok" : "slate"}>{b?.tca?.samples_count ? b.tca.quality : "NO FILLS"}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="mono rounded-sm border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] text-slate-300">
-                    Route: <span className="text-cyan-300 font-semibold">{b?.route?.active_route ?? "no connection"}</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* 4 Cards Grid: TCA, SOR Redundancy, Dynamic ATR, Macro Gate */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                {/* 1. Transaction Cost Analysis (TCA) */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-medium text-muted">Slippage</span>
-                    <span className="rounded-sm bg-ok-fill/20 px-1.5 py-0.5 text-[9.5px] font-bold text-ok">
-                      {b?.tca?.samples_count ? b.tca.quality : "—"}
-                    </span>
-                  </div>
-                  <div className="space-y-1.5 text-[11.5px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Latency</span>
-                      <span className="mono font-semibold text-slate-200">{b?.tca?.avg_latency_ms != null ? `${b.tca.avg_latency_ms} ms` : "—"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Avg slippage</span>
-                      <span className="mono font-semibold text-ok">{b?.tca?.avg_slippage_points != null ? `${b.tca.avg_slippage_points} pts` : "—"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Max slippage</span>
-                      <span className="mono text-slate-300">{b?.tca?.max_slippage_points != null ? `${b.tca.max_slippage_points} pts` : "—"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Samples</span>
-                      <span className="mono text-slate-400">{b?.tca?.samples_count || 0} fills</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. Smart Order Router (SOR) & Failover */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-medium text-muted">Order route</span>
-                    <span className={`rounded-sm px-1.5 py-0.5 text-[9.5px] font-bold ${b?.route?.status === "trading" ? "bg-ok-fill/20 text-ok" : "bg-amber-500/20 text-amber-300"}`}>
-                      {String(b?.route?.status ?? "unknown").replace(/_/g, " ").toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="space-y-1.5 text-[11.5px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Active route</span>
-                      <span className="mono font-semibold text-slate-200">{b?.route?.active_route ?? "none"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Failover</span>
-                      <span className="mono text-slate-300">{b?.route?.failover ?? "—"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Last sync</span>
-                      <span className="mono text-slate-400">{b?.route?.bridge_sync_age_ms != null ? `${Math.round(b.route.bridge_sync_age_ms / 1000)} s ago` : "never"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Adaptive Volatility & Dynamic ATR */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
-                      Volatility &amp; stops
-                      {b?.management ? <Hint text={`${b.management.key_levels}. ${b.management.fallback}; ${b.management.scale_out}.`} /> : null}
-                    </span>
-                    <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
-                      b?.volatility?.regime === "HIGH" ? "bg-amber-500/20 text-amber-300" : "bg-ok-fill/20 text-ok"
-                    }`}>
-                      {b?.volatility?.regime || "NORMAL"} REGIME
-                    </span>
-                  </div>
-                  <div className="space-y-1.5 text-[11.5px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">ATR (broker)</span>
-                      <span className="mono font-semibold text-slate-200">
-                        {b?.volatility?.atr_points != null ? `${b.volatility.atr_points} pts${b.volatility.atr_value != null ? ` (${b.volatility.atr_value})` : ""}` : "not reported"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Break-even</span>
-                      <span className="mono text-slate-300">{b?.management?.break_even_r != null ? `at ${b.management.break_even_r}R` : "off (key-level SL+)"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Noise filter</span>
-                      <span className={`mono ${b?.management?.adaptive_stop ? "text-ok" : "text-slate-500"}`}>{b?.management?.adaptive_stop ? "on (0.75 ATR)" : "off"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 4. Live Macro Risk & Economic Calendar Webhook */}
-                <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-medium text-muted">Event risk</span>
-                    <span className={`rounded px-1.5 py-0.5 text-[9.5px] font-bold ${
-                      b?.macro_risk?.blackout ? "bg-fault-fill/20 text-fault animate-pulse" : "bg-ok-fill/20 text-ok"
-                    }`}>
-                      {b?.macro_risk?.blackout ? "BLACKOUT" : "CLEAR"}
-                    </span>
-                  </div>
-                  <div className="space-y-1.5 text-[11.5px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Window</span>
-                      <span className="mono text-slate-300">{b?.macro_risk?.window_minutes ? `−${b.macro_risk.window_minutes.before}m / +${b.macro_risk.window_minutes.after}m (USD high)` : "—"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Upcoming (24h)</span>
-                      <span className="mono font-semibold text-cyan-300">{b?.macro_risk?.upcoming_24h ?? "—"} events</span>
-                    </div>
-                    <div className="truncate text-slate-400 text-[10.5px] pt-1">
-                      {b?.macro_risk?.next_event ? (
-                        <span>Next: <strong className="text-slate-200">{b.macro_risk.next_event.title}</strong> ({b.macro_risk.next_event.impact})</span>
-                      ) : (
-                        <span>No high-impact USD event.</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Tab 5: EVENTS & AUDIT JOURNAL */}
-          {toolboxTab === "events" ? (
-            <div className="table-wrap max-h-[260px] overflow-y-auto">
-              {!(b?.events || []).length && !(data?.control_events || []).length ? (
-                <div className="p-4">
-                  <Empty>No events logged yet.</Empty>
-                </div>
-              ) : (
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Time (UTC)</th>
-                      <th>Actor</th>
-                      <th>Action</th>
-                      <th>Detail</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(b?.events || []).map((x: any, idx: number) => (
-                      <tr key={`m-e-${idx}`}>
-                        <td className="mono">{timeUtc(x.ms)}</td>
-                        <td className="mono font-semibold text-slate-300">{x.actor}</td>
-                        <td className="mono text-cyan-300">{x.action}</td>
-                        <td className="mono text-[11px] text-slate-300">
-                          {x.detail ? JSON.stringify(x.detail).slice(0, 160) : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                    {(data?.control_events || []).map((ev: any, idx: number) => (
-                      <tr key={`m-c-${idx}`}>
-                        <td className="mono">{timeUtc(Date.parse(ev.at))}</td>
-                        <td className="mono font-semibold text-slate-300">{ev.actor}</td>
-                        <td className="mono text-amber-200">{`${ev.previous_mode} → ${ev.mode}`}</td>
-                        <td className="text-[11px] text-slate-300">{ev.reason || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      {/* =====================================================================
-          SIGNAL, CONTROL & EXPERT ADVISOR DECK
-         ===================================================================== */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Signal" icon={<Radio className="h-3.5 w-3.5 text-cyan-300" />}>
-          <div
-            className={`mono mb-2 text-2xl font-extrabold ${
-              s.side === "BUY" ? "text-bull" : s.side === "SELL" ? "text-bear" : "text-slate-500"
-            }`}
-          >
-            {!s.side || s.side === "NONE" ? "NO TRADE" : `${s.side} · ${String(s.action || "").replace("ENTER_", "")}`}
-          </div>
-          <SignalRows s={s} />
-          {/* Why Omega is or is not entering now (owner 2026-11-13: "pastikan semua ada visualisasi") */}
-          <div className="mt-3 border-t border-white/5 pt-3">
-            <div className="mb-1.5 text-[11px] font-medium text-muted">Entry status</div>
-            <OmegaWhy codes={b?.planner?.codes} sinceMs={b?.planner?.since_ms} details={b?.planner?.details} />
-          </div>
-        </Panel>
-
-        <Panel title="Control" icon={<Power className="h-3.5 w-3.5 text-cyan-300" />}>
-          <div
-            className={`mono mb-2 text-xl font-extrabold uppercase ${
-              c.mode === "killed" ? "text-fault" : c.mode === "paused" ? "text-amber-200" : "text-ok"
-            }`}
-          >
-            {c.mode || "active"}
-          </div>
-          <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Since</dt><dd className="mono text-slate-300">{c.at ? timeUtc(Date.parse(c.at)) : "—"}</dd>
-            <dt className="text-slate-500">By</dt><dd className="mono text-slate-300">{c.actor || "—"}</dd>
-            <dt className="text-slate-500">Reason</dt><dd className="text-slate-300">{c.reason || "—"}</dd>
-          </dl>
-          {s.kill_source === "env" ? (
-            <p className="mb-2 text-[11px] text-amber-200">Server kill switch is on; it overrides this control.</p>
-          ) : null}
-          <div className="space-y-2 border-t border-white/10 pt-3">
-            <label className="block text-[11px] font-medium text-muted" htmlFor="reason">
-              Reason
-            </label>
-            <input
-              id="reason"
-              className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-[12px] text-slate-100 focus:border-cyan-400/50 focus:outline-hidden"
-              maxLength={200}
-              placeholder="Required to pause or kill"
-              value={controlReason}
-              onChange={(ev) => setControlReason(ev.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={busy || !canControl || (c.mode || "active") === "active"}
-                onClick={() => sendControl("active")}
-                className="btn border-ok-fill/30 bg-ok-fill/10 text-ok disabled:opacity-40"
-              >
-                Resume
-              </button>
-              <button
-                type="button"
-                disabled={busy || !canControl || c.mode === "paused"}
-                onClick={() => sendControl("paused")}
-                className="btn disabled:opacity-40"
-              >
-                Pause entries
-              </button>
-              <button
-                type="button"
-                disabled={busy || !canControl || c.mode === "killed"}
-                onClick={() => setKillConfirmOpen(true)}
-                className="btn border-fault-fill/30 bg-fault-fill/10 text-fault disabled:opacity-40"
-              >
-                Kill (close all)
-              </button>
-            </div>
-            {killConfirmOpen ? (
-              <div className="glass-inner space-y-2 p-2.5">
-                <label className="block text-[11px] font-medium text-fault" htmlFor="confirm">
-                  Type KILL to close every EA position and stop the EA
-                </label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    id="confirm"
-                    maxLength={8}
-                    value={killConfirmText}
-                    onChange={(ev) => setKillConfirmText(ev.target.value)}
-                    className="w-28 rounded-md border border-white/10 bg-black/40 px-2.5 py-1 text-[12px] text-slate-100"
-                  />
-                  <button
-                    type="button"
-                    id="kill-go"
-                    onClick={() => {
-                      if (killConfirmText.trim() !== "KILL") {
-                        setControlMsg({ tone: "text-amber-200", text: "Type KILL exactly." });
-                        return;
-                      }
-                      setKillConfirmOpen(false);
-                      setKillConfirmText("");
-                      sendControl("killed", "KILL");
-                    }}
-                    className="btn border-fault-fill/40 bg-fault-fill/20 text-fault"
-                  >
-                    Confirm kill
-                  </button>
-                  <button
-                    type="button"
-                    id="kill-cancel"
-                    onClick={() => {
-                      setKillConfirmOpen(false);
-                      setKillConfirmText("");
-                    }}
-                    className="btn"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {controlMsg ? <p className={`text-[11.5px] ${controlMsg.tone}`}>{controlMsg.text}</p> : null}
-          </div>
-        </Panel>
-
-        <Panel title="Expert Advisor" icon={<Activity className="h-3.5 w-3.5 text-cyan-300" />}>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
-            <dt className="text-slate-500">Heartbeat</dt><dd className={`mono ${ea.connected ? "text-ok" : "text-slate-400"}`}>{agoMs(ea.heartbeat_age_ms)}</dd>
-            <dt className="text-slate-500">Executor</dt><dd className={`mono ${br.terminal_connected ? "text-ok" : "text-fault"}`}>{br.terminal_connected ? `OmegaExecutor (${symbolName})` : "disconnected"}</dd>
-            <dt className="text-slate-500">Trading allowed</dt>
-            <dd className={`mono font-bold ${br.trade_allowed ? "text-ok" : "text-fault"}`}>
-              {br.trade_allowed ? "yes" : "NO"}
-            </dd>
-            <dt className="text-slate-500">EA control</dt><dd className="mono text-slate-300">{hb?.control || c.mode || "active"}</dd>
-            <dt className="text-slate-500">Positions</dt><dd className="mono text-slate-200">{hb?.positions ?? positionsList.length}</dd>
-            <dt className="text-slate-500">Floating P&amp;L</dt><dd className={`mono ${toneCls(floatingPnl)}`}>{money(floatingPnl, cur)}</dd>
-            <dt className="text-slate-500">Today P&amp;L</dt><dd className={`mono ${toneCls(hb?.today_pnl ?? br.day_realized_pl)}`}>{money(hb?.today_pnl ?? br.day_realized_pl, cur)}</dd>
-            <dt className="text-slate-500">Daily loss</dt><dd className="mono text-slate-300">{hb?.daily_loss_pct != null ? `${num(hb.daily_loss_pct)}%` : "—"}</dd>
-            <dt className="text-slate-500">Spread</dt><dd className="mono text-slate-300">{(br.spread_points ?? hb?.spread_points) != null ? `${br.spread_points ?? hb?.spread_points} pts` : "—"}</dd>
-            <dt className="text-slate-500">Last signal</dt><dd className="mono truncate text-slate-400">{hb?.last_signal_id || s.signal_id || "—"}</dd>
-            <dt className="text-slate-500">Note</dt><dd className="text-slate-400">{hb?.note || (br.terminal_connected ? "via bridge" : "—")}</dd>
-          </dl>
-        </Panel>
-      </div>
-
-      {/* Statistics KPIs */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        {([
-          ["Today (UTC)", st.today],
-          ["7 days", st.week],
-          ["30 days", st.month],
-        ] as [string, any][]).map(([label, x]) => (
-          <Kpi
-            key={label}
-            label={label}
-            value={money(x?.net, cur)}
-            sub={`${x?.trades ?? 0} trade${x?.trades === 1 ? "" : "s"} · win rate ${
-              x?.win_rate != null ? Math.round(x.win_rate * 100) + "%" : "—"
-            } · PF ${x?.profit_factor ?? "—"} · max DD ${num(x?.max_drawdown)}`}
-            color={pnlColor(x?.net)}
-            icon={<Activity className="h-3 w-3" />}
-          />
-        ))}
-      </div>
-      </div>
+        <OmegaTerminal x={x} d={data} act={act} now={now} hitlMsg={hitlMsg} />
       ) : (
       <div className="flex flex-col gap-4">
       {/* =====================================================================
