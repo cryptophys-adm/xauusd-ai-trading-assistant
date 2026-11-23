@@ -6,24 +6,24 @@ import { usePoll } from "../lib/usePoll";
 
 const p = (x?: number | null) => (x == null ? "n/a" : `${Math.round(x * 1000) / 10}%`);
 const stuck = (s: any) => ["d_enc", "b_enc", "subtype"].map((f) => `${f} ${s?.[f]?.episodes ?? "?"}`).join(", ");
-const yes = (b: unknown) => (b === true ? <span className="font-semibold text-emerald-300">PASS</span> : b === false ? <span className="font-semibold text-rose-300">FAIL</span> : <span className="text-slate-500">{String(b)}</span>);
+const yes = (b: unknown) => (b === true ? <span className="font-semibold text-ok">PASS</span> : b === false ? <span className="font-semibold text-fault">FAIL</span> : <span className="text-slate-500">{String(b)}</span>);
 
 const pointTone = (pt: any) => (
   pt.status === "stopped" ? "text-slate-500" :
   pt.status === "untested" ? "text-slate-400" :
-  pt.verdict?.startsWith("better_than_active") ? "text-emerald-300 font-bold" :
-  pt.verdict === "collecting" ? "text-amber-200" :
-  "text-rose-300"
+  pt.verdict?.startsWith("better_than_active") ? "text-ok font-bold" :
+  pt.verdict === "collecting" ? "text-late" :
+  "text-fault"
 );
 
 function verdictBadge(verdict: string) {
-  if (verdict?.startsWith("better_than_active")) return <Badge tone="green">BETTER</Badge>;
-  if (verdict === "collecting") return <Badge tone="amber">COLLECTING</Badge>;
-  if (verdict === "control") return <Badge tone="slate">CONTROL</Badge>;
-  return <Badge tone="red">{verdict || "NOT BETTER"}</Badge>;
+  if (verdict?.startsWith("better_than_active")) return <Badge tone="ok">BETTER</Badge>;
+  if (verdict === "collecting") return <Badge tone="late">COLLECTING</Badge>;
+  if (verdict === "control") return <Badge tone="plain">CONTROL</Badge>;
+  return <Badge tone="fault">{verdict || "NOT BETTER"}</Badge>;
 }
 
-/** Visual SVG Comparative Delta Bar: Candidate vs Control Head-to-Head */
+/** Head-to-head: the candidate's wins in ok cyan against the control's (the active version) in grey; no direction. */
 function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, controlName }: { candidateBetter: number; controlBetter: number; candidateName: string; controlName: string }) {
   const total = (candidateBetter || 0) + (controlBetter || 0);
   if (total === 0) return <div className="text-[11px] text-slate-500 italic">No paired bars yet.</div>;
@@ -33,12 +33,12 @@ function HeadToHeadGraph({ candidateBetter, controlBetter, candidateName, contro
   return (
     <div className="space-y-1.5 py-1">
       <div className="flex items-center justify-between text-[11px] mono">
-        <span className="text-emerald-300 font-semibold">{candidateName}: {candidateBetter} wins ({candPct}%)</span>
-        <span className="text-rose-300 font-semibold">{controlName}: {controlBetter} wins ({ctrlPct}%)</span>
+        <span className="text-ok font-semibold">{candidateName}: {candidateBetter} wins ({candPct}%)</span>
+        <span className="text-off font-semibold">{controlName}: {controlBetter} wins ({ctrlPct}%)</span>
       </div>
       <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-white/6">
-        <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${candPct}%` }} title={`${candidateName}: ${candPct}%`} />
-        <div className="h-full bg-rose-400 transition-all duration-500" style={{ width: `${ctrlPct}%` }} title={`${controlName}: ${ctrlPct}%`} />
+        <div className="h-full bg-ok-fill transition-all duration-500" style={{ width: `${candPct}%` }} title={`${candidateName}: ${candPct}%`} />
+        <div className="h-full bg-off-fill transition-all duration-500" style={{ width: `${ctrlPct}%` }} title={`${controlName}: ${ctrlPct}%`} />
         {/* 50% Marker */}
         <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/40 z-10" />
       </div>
@@ -112,7 +112,7 @@ function TuningGrid() {
                 <ShieldCheck className="h-3.5 w-3.5 text-violet-400" />
                 Knowledge notes <span className="mono font-normal text-slate-500">{c.name}</span>
               </span>
-              <Badge tone={c.enabled ? "green" : "slate"}>{c.enabled ? `enabled · ${c.max_calls_per_hour}/h` : "disabled"}</Badge>
+              <Badge tone={c.enabled ? "ok" : "off"}>{c.enabled ? `enabled · ${c.max_calls_per_hour}/h` : "disabled"}</Badge>
             </div>
             <p className="mb-3 flex items-center gap-1.5 text-[11px] text-slate-400">
               A/A noise: {c.aa_noise.changed} of {c.aa_noise.bars} bars ({c.aa_noise.rate != null ? `${Math.round(c.aa_noise.rate * 100)}%` : "0%"})
@@ -143,7 +143,7 @@ function TuningGrid() {
                         <td className="mono">{k.answered}/{k.calls}</td>
                         <td className="mono text-amber-200">{k.changed_stance} of {k.same_bars} bars</td>
                         <td className="mono text-[11px]">
-                          <span className="text-emerald-300">Note: {k.discovery.candidate_better}</span> vs <span className="text-rose-300">Base: {k.discovery.control_better}</span>
+                          <span className="text-ok">Note: {k.discovery.candidate_better}</span> vs <span className="text-off">Base: {k.discovery.control_better}</span>
                         </td>
                         <td className="mono text-slate-300">{k.discovery.p_holm ?? "n/a"}</td>
                         <td className="mono">{k.holdout.bars}/{k.holdout.required_bars}</td>
@@ -190,7 +190,7 @@ function TuningGrid() {
                       <td className="text-slate-300 text-[11px]">{k.change}</td>
                       <td className="mono text-amber-200">{k.differing_decisions} hrs</td>
                       <td className="mono text-[11px]">
-                        <span className="text-emerald-300">Cand: {k.discovery.candidate_better}</span> vs <span className="text-rose-300">Ctrl: {k.discovery.control_better}</span>
+                        <span className="text-ok">Cand: {k.discovery.candidate_better}</span> vs <span className="text-off">Ctrl: {k.discovery.control_better}</span>
                       </td>
                       <td className="mono text-slate-300">{k.discovery.p_holm ?? "n/a"}</td>
                       <td className="mono">{k.holdout.bars}/{k.holdout.required_bars}</td>
@@ -246,44 +246,44 @@ export default function Shadow() {
       {/* KPI Overview Cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <FlaskConical className="h-3.5 w-3.5 text-violet-400" />
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+            <FlaskConical className="h-3.5 w-3.5 text-ghost" />
             <span>Candidates</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {kpi(totalCandidates)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{known ? `${families.length} families` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <GitPullRequest className="h-3.5 w-3.5 text-emerald-400" />
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+            <GitPullRequest className="h-3.5 w-3.5 text-ok" />
             <span>Ready</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {kpi(promotionReadyCount)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{!known ? "—" : promotionReadyCount ? "p < 0.05 + holdout" : "None yet"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <Activity className="h-3.5 w-3.5 text-amber-400" />
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+            <Activity className="h-3.5 w-3.5 text-late" />
             <span>Collecting</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {kpi(collectingCount)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">&ge; 50 pairs</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
             <BarChart2 className="h-3.5 w-3.5 text-cyan-400" />
             <span>Bars evaluated</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {kpi(totalBarsEvaluated)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">H1 closed bars</div>
@@ -311,7 +311,7 @@ export default function Shadow() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-slate-400">
                 <span>
                   Control <strong className="text-slate-200">{c.id}</strong>: {c.outputs} outputs · local match{" "}
-                  <strong className="text-emerald-300">{c.matches_approved_local_records.agree}</strong>/{c.matches_approved_local_records.compared}
+                  <strong className="text-ok">{c.matches_approved_local_records.agree}</strong>/{c.matches_approved_local_records.compared}
                 </span>
                 <span className="mono text-[11px]">Accuracy: {p(c.scored?.accuracy)} · Directional: {p(c.scored?.directional?.hit_rate)}</span>
               </div>
@@ -382,7 +382,7 @@ export default function Shadow() {
                             />
                           </td>
                           <td className="mono">
-                            <div className={k.paired?.p_value != null && k.paired.p_value < 0.05 ? "text-emerald-300 font-bold" : "text-slate-400"}>
+                            <div className={k.paired?.p_value != null && k.paired.p_value < 0.05 ? "text-ok font-bold" : "text-slate-400"}>
                               p = {k.discovery?.p_holm ?? k.paired?.p_value ?? "n/a"}
                             </div>
                             <div className="text-[10px] text-slate-500">Sign test {yes(k.criteria?.higher_outcome_score)}</div>

@@ -61,12 +61,12 @@ export default function OrganismCard() {
             <div className="flex items-center gap-2">
               <Dot tone={market === "open" ? "ok" : "off"} pulse={market === "open"} />
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-400">Market</div>
+                <div className="text-[11px] font-medium text-muted">Market</div>
                 <div className={`mono text-xs font-semibold uppercase ${market === "open" ? "text-ok" : "text-off"}`}>{market}</div>
               </div>
             </div>
             <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wider text-slate-400">Omega control</div>
+              <div className="text-[11px] font-medium text-muted">Omega control</div>
               <div className="mono text-xs font-bold uppercase text-white">{om?.control_mode ?? "—"}</div>
             </div>
           </div>

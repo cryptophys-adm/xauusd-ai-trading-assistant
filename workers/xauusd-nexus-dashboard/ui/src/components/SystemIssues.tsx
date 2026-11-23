@@ -4,7 +4,7 @@ import { useSystemHealth } from "../lib/health";
 
 /**
  * War Room: only what needs attention (owner request 2026-11-08). The full Worker status and parity
- * live on the System status page; this panel appears only when a lane is amber or red.
+ * live on the System status page; this panel appears only when a lane is late (amber) or a fault (red).
  */
 export default function SystemIssues() {
   const { items, poll, lanePoll } = useSystemHealth();
@@ -13,14 +13,14 @@ export default function SystemIssues() {
   const readIssue = ([["status-read", "System status", poll], ["lane-read", "Pull adapter", lanePoll]] as const).flatMap(([key, label, p]) => {
     const phase = phaseOf(p);
     return phase === "error" || phase === "stale"
-      ? [{ key, label, tone: "amber" as const, detail: p.error ?? "no good read for 2 × the interval", worker: undefined as string | undefined }]
+      ? [{ key, label, tone: "late" as const, detail: p.error ?? "no good read for 2 × the interval", worker: undefined as string | undefined }]
       : [];
   });
-  const issues = [...readIssue, ...items.filter((i) => i.tone === "red" || i.tone === "amber")];
+  const issues = [...readIssue, ...items.filter((i) => i.tone === "fault" || i.tone === "late")];
   if (!issues.length) return null;
   return (
-    <a href="/#/status" className="glass block border-rose-400/20 p-4 transition hover:border-rose-300/40">
-      <div className="panel-title mb-2 flex items-center gap-2"><AlertTriangle className="h-3 w-3 text-rose-300" />System issues</div>
+    <a href="/#/status" className="glass block border-fault-fill/20 p-4 transition hover:border-fault-fill/40">
+      <div className="panel-title mb-2 flex items-center gap-2"><AlertTriangle className="h-3 w-3 text-fault" />System issues</div>
       <div className="space-y-1.5">
         {issues.map((i) => (
           <div key={i.key} className="flex items-start gap-2 text-[11.5px]">

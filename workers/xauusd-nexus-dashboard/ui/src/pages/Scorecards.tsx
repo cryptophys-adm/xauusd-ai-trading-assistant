@@ -15,7 +15,7 @@ function Compliance() {
   if (!c) return null;
   const rows = (c.agents as any[]).filter((a) => a.violations > 0).slice(0, 20);
   return (
-    <Panel title="Rule compliance, 7d" icon={<ShieldAlert className="h-3.5 w-3.5 text-amber-300" />} right={<Badge tone={c.total.violations ? "amber" : "green"}>{c.total.rate_per_100 ?? 0} per 100 msgs</Badge>}>
+    <Panel title="Rule compliance, 7d" icon={<ShieldAlert className="h-3.5 w-3.5 text-amber-300" />} right={<Badge tone={c.total.violations ? "late" : "ok"}>{c.total.rate_per_100 ?? 0} per 100 msgs</Badge>}>
       {!rows.length ? <Empty>No rule breaks in {c.total.messages} messages.</Empty> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -37,13 +37,13 @@ function Compliance() {
                   <td className="font-semibold text-slate-200">{a.agent}</td>
                   <td className="mono"><Badge tone="slate">{CHART[a.chart] ?? a.chart}</Badge></td>
                   <td className="mono">{a.messages}</td>
-                  <td className="mono text-rose-300">{a.violations}</td>
+                  <td className="mono text-fault">{a.violations}</td>
                   <td className="mono">
                     <div className="flex items-center gap-2">
                       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/5">
-                        <div className={`h-full ${rate >= 20 ? "bg-rose-400" : "bg-amber-400"}`} style={{ width: `${Math.min(100, rate * 3)}%` }} />
+                        <div className={`h-full ${rate >= 20 ? "bg-fault-fill" : "bg-late-fill"}`} style={{ width: `${Math.min(100, rate * 3)}%` }} />
                       </div>
-                      <span className={rate >= 20 ? "text-rose-300" : "text-amber-200"}>{rate} / 100</span>
+                      <span className={rate >= 20 ? "text-fault" : "text-late"}>{rate} / 100</span>
                     </div>
                   </td>
                   <td className="text-slate-400">{top ? `${CHECK[top[0]] ?? top[0]} (${top[1].count}${top[1].example ? `, e.g. "${top[1].example}"` : ""})` : "—"}</td>
@@ -64,11 +64,11 @@ const SUBJECT: Record<string, string> = {
   "indicator:gmi_v12_70": "GMI v12.70 verdict"
 };
 
-/** Inline horizontal progress bar for rates */
+/** A rate as a bar. Accuracy is a score, not a direction: 55% or more ok cyan, under 45% fault red, between grey. */
 function RateBar({ value, toneClass }: { value?: number | null; toneClass?: string }) {
   if (value == null) return <span className="mono text-slate-500">n/a</span>;
   const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
-  const color = toneClass || (pct >= 55 ? "bg-emerald-400" : pct < 45 ? "bg-rose-400" : "bg-slate-400");
+  const color = toneClass || accuracyFill(value);
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-14 overflow-hidden rounded-full bg-white/10">
@@ -78,6 +78,10 @@ function RateBar({ value, toneClass }: { value?: number | null; toneClass?: stri
     </div>
   );
 }
+
+const accuracyFill = (v: number) => (v >= 0.55 ? "bg-ok-fill" : v < 0.45 ? "bg-fault-fill" : "bg-off-fill");
+/** An agent's crowd weight: raised (over x1.1) ok, cut (under x0.9) fault, about x1 plain. */
+const weightToneOf = (w: number | null) => (w == null ? "plain" : w > 1.1 ? "ok" : w < 0.9 ? "fault" : "plain") as "plain" | "ok" | "fault";
 
 /** Visual SVG Leaderboard Bar Chart comparing agents' accuracy and crowd weights */
 function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
@@ -91,9 +95,9 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
           <span>{title}</span>
         </div>
         <div className="flex items-center gap-4 text-[11px] text-slate-400">
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" /> &ge; 55%</span>
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-400" /> 45–55%</span>
-          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> &lt; 45%</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-ok-fill" /> &ge; 55%</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-off-fill" /> 45–55%</span>
+          <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-fault-fill" /> &lt; 45%</span>
           <span className="flex items-center gap-1.5 text-cyan-300 font-mono">| 50%</span>
         </div>
       </div>
@@ -103,8 +107,8 @@ function LeaderboardGraph({ rows, title }: { rows: any[]; title: string }) {
           const acc: number | null = typeof r.accuracy === "number" ? r.accuracy : null;
           const pct = acc == null ? 0 : Math.max(0, Math.min(100, Math.round(acc * 100)));
           const weight: number | null = typeof r.weight === "number" ? r.weight : null;
-          const barColor = acc == null ? "bg-slate-600" : acc >= 0.55 ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.3)]" : acc < 0.45 ? "bg-rose-400" : "bg-slate-400";
-          const weightTone = weight == null ? "slate" : weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
+          const barColor = acc == null ? "bg-slate-600" : accuracyFill(acc);
+          const weightTone = weightToneOf(weight);
           return (
             <div key={r.id} className="grid grid-cols-[130px_1fr_70px_70px] items-center gap-3 text-[11px]">
               <div className="truncate font-mono font-medium text-slate-300" title={r.name}>{r.name}</div>
@@ -145,15 +149,15 @@ function AgentTable({ rows }: { rows: any[] }) {
         <tbody>
           {rows.map((r) => {
             const weight: number | null = typeof r.weight === "number" ? r.weight : null;
-            const weightTone = weight == null ? "slate" : weight > 1.1 ? "green" : weight < 0.9 ? "red" : "slate";
+            const weightTone = weightToneOf(weight);
             const brier = r.brier != null ? Number(r.brier) : null;
-            const brierTone = brier == null ? "text-slate-500" : brier < 0.2 ? "text-emerald-300" : brier > 0.28 ? "text-rose-300" : "text-amber-200";
+            const brierTone = brier == null ? "text-slate-500" : brier < 0.2 ? "text-ok" : brier > 0.28 ? "text-fault" : "text-late";
             return (
               <tr key={r.id}>
                 <td className="font-semibold text-slate-200">{r.name}</td>
                 <td className="text-slate-400"><Badge tone="slate">{r.family}</Badge></td>
                 <td className="mono text-slate-300">{r.decisive} <span className="text-[10px] text-slate-500">/ {r.n ?? 0}</span></td>
-                <td><RateBar value={r.accuracy} toneClass={r.accuracy >= 0.55 ? "bg-emerald-400" : r.accuracy < 0.45 ? "bg-rose-400" : "bg-slate-400"} /></td>
+                <td><RateBar value={r.accuracy} /></td>
                 <td><RateBar value={r.hit_rate} toneClass="bg-cyan-400" /></td>
                 <td><RateBar value={r.wait_accuracy} toneClass="bg-violet-400" /></td>
                 <td className={`mono font-bold ${brierTone}`}>{r.brier ?? "n/a"}</td>
@@ -209,44 +213,44 @@ export default function Scorecards() {
       {/* KPI Overview Cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
             <TrendingUp className="h-3.5 w-3.5 text-cyan-400" />
             <span>Avg accuracy</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-cyan-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {avgAccuracy != null ? `${avgAccuracy}%` : "n/a"}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{scoredAgents.length} agents scored</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <Award className="h-3.5 w-3.5 text-emerald-400" />
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+            <Award className="h-3.5 w-3.5 text-ok" />
             <span>Top weight</span>
           </div>
-          <div className="mono mt-2 truncate text-[22px] font-extrabold text-emerald-300 sm:text-[26px]">
+          <div className="mono mt-2 truncate text-[22px] font-extrabold text-fg sm:text-[26px]">
             {topAgent ? topAgent.name : "n/a"}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{topAgent ? `x${topAgent.weight} · ${p(topAgent.accuracy)}` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
             <CheckCircle2 className="h-3.5 w-3.5 text-violet-400" />
             <span>Best calibration</span>
           </div>
-          <div className="mono mt-2 truncate text-[22px] font-extrabold text-violet-300 sm:text-[26px]">
+          <div className="mono mt-2 truncate text-[22px] font-extrabold text-fg sm:text-[26px]">
             {bestBrier ? bestBrier.name : "n/a"}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">{bestBrier ? `Brier ${bestBrier.brier}` : "—"}</div>
         </div>
 
         <div className="glass p-3 sm:p-4">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
             <Activity className="h-3.5 w-3.5 text-amber-400" />
             <span>Scored calls</span>
           </div>
-          <div className="mono mt-2 text-[22px] font-extrabold text-amber-300 sm:text-[26px]">
+          <div className="mono mt-2 text-[22px] font-extrabold text-fg sm:text-[26px]">
             {totalCalls}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">Last 30 days</div>
@@ -342,7 +346,7 @@ export default function Scorecards() {
 
           {/* Stuck States Alert */}
           {!!d?.stuck_states?.length && (
-            <Panel title="Stuck indicator states" icon={<ShieldAlert className="h-4 w-4 text-amber-400" />} hint="A stuck field disables the affected agent's vote." right={<Badge tone="amber">{d.stuck_states.length} open</Badge>}>
+            <Panel title="Stuck indicator states" icon={<ShieldAlert className="h-4 w-4 text-amber-400" />} hint="A stuck field disables the affected agent's vote." right={<Badge tone="late">{d.stuck_states.length} open</Badge>}>
               <div className="table-wrap">
                 <table className="tbl">
                   <thead>
@@ -359,7 +363,7 @@ export default function Scorecards() {
                         <td className="mono text-amber-200">{s.field}</td>
                         <td className="mono">{s.candles} candles</td>
                         <td className="mono">{s.atr ? Math.round((s.price_range / s.atr) * 10) / 10 : "?"} x ATR</td>
-                        <td><Badge tone="red">Vote disabled</Badge></td>
+                        <td><Badge tone="fault">Vote disabled</Badge></td>
                       </tr>
                     ))}
                   </tbody>

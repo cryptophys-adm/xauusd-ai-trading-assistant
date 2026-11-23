@@ -113,10 +113,13 @@ export function directionGlyph(v?: string | null): string {
 /**
  * The tone of a model's edge over its base rate on one side. On the Long row a positive edge is bullish (green); on
  * the Short row a positive edge favours the short, so it is bearish (red), and a negative edge there is green. No
- * edge (null or 0) is the text colour.
+ * edge is the text colour: null, or an edge that rounds to 0 whole points (the label shows whole points, so +0.3 pts
+ * reads "0 pts" and is not coloured).
  */
 export function edgeTone(side: "long" | "short", d: number | null | undefined): Tone {
-  if (d == null || !Number.isFinite(d) || d === 0) return "plain";
-  const favoured = d > 0;
+  if (d == null || !Number.isFinite(d)) return "plain";
+  const pts = Math.round(d * 100);
+  if (pts === 0) return "plain";
+  const favoured = pts > 0;
   return side === "long" ? (favoured ? "bull" : "bear") : (favoured ? "bear" : "bull");
 }

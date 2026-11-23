@@ -12,16 +12,16 @@ export default function Alerts() {
   const { data } = poll;
   const phase = phaseOf(poll);
   const v = (data as any)?.alerts;
-  const state = !v ? null : v.enabled ? { tone: "green" as const, text: "active" }
-    : !v.switch_on ? { tone: "slate" as const, text: "off" } : { tone: "amber" as const, text: "bot not configured" };
+  const state = !v ? null : v.enabled ? { tone: "ok" as const, text: "active" }
+    : !v.switch_on ? { tone: "off" as const, text: "off" } : { tone: "late" as const, text: "bot not configured" };
   return (
     <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-6 sm:py-5">
       <Panel title="Alerts" icon={<BellRing className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint="Each Signal Ledger event is sent to Telegram once, at most 5 messages per run. No orders are placed." right={state ? <Badge tone={state.tone}>{state.text}</Badge> : null}>
-        {v && !v.bot_configured ? <p className="text-[12px] text-amber-200">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to start sending.</p> : null}
+        {v && !v.bot_configured ? <p className="text-[12px] text-late">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to start sending.</p> : null}
       </Panel>
       {phase === "error" ? <Panel><PollError poll={poll} /></Panel> : phase === "loading" ? <Panel><Skeleton rows={4} /></Panel> : !v ? <Panel><Empty>No data yet.</Empty></Panel> : (
         <>
-          <Panel title="Pending" hint="Sent on the next sweep, every 15 minutes." right={<Badge tone="cyan">{v.pending.length}</Badge>}>
+          <Panel title="Pending" hint="Sent on the next sweep, every 15 minutes." right={<Badge tone="plain">{v.pending.length}</Badge>}>
             {!v.started ? <Empty>Not started yet.</Empty>
               : !v.pending.length ? <Empty>Nothing pending.</Empty> : (
               <ul className="flex flex-col gap-2">
@@ -43,7 +43,7 @@ export default function Alerts() {
                     {v.recorded.map((r: any) => (
                       <tr key={r.signal_id + r.event}>
                         <td className="mono">{when(r.at)}</td><td>{EVENT_WORD[r.event] ?? r.event}</td><td>{r.source ?? ""}</td><td className="mono">{r.side ?? ""}</td>
-                        <td>{r.status === "sent" ? <span className="text-emerald-300">sent</span> : <span className="text-slate-500">baseline</span>}</td>
+                        <td>{r.status === "sent" ? <span className="text-ok">sent</span> : <span className="text-slate-500">baseline</span>}</td>
                         <td className="max-w-[520px] whitespace-pre-wrap text-[11px] text-slate-400">{r.text ?? "—"}</td>
                       </tr>
                     ))}

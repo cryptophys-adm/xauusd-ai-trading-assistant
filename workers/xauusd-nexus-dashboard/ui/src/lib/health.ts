@@ -2,7 +2,8 @@ import { get } from "./api";
 import { usePoll } from "./usePoll";
 import { WORKERS, engineTitle } from "./names";
 
-export type Tone = "green" | "amber" | "red" | "slate";
+/** A lane's state in the status tones (as the header): ok cyan, late amber, fault red, off grey (idle, market closed). */
+export type Tone = "ok" | "late" | "fault" | "off";
 export type HealthItem = { key: string; label: string; tone: Tone; detail: string; worker?: string };
 
 /** Gold, the dollar and yields do not trade from Friday 17:30 to Sunday 18:00 New York (as the pull adapter). */
@@ -25,45 +26,45 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
   const closed = marketClosed(now);
   const items: HealthItem[] = [];
   if (status) {
-    items.push({ key: "ai", label: "AI Worker", worker: WORKERS.ai.name, tone: ai.status === "ok" ? "green" : "red", detail: ai.status === "ok" ? "answering" : "not answering" });
+    items.push({ key: "ai", label: "AI Worker", worker: WORKERS.ai.name, tone: ai.status === "ok" ? "ok" : "fault", detail: ai.status === "ok" ? "answering" : "not answering" });
     const pull = ing.last_scheduled_ingest ?? null;
     const pullBad = pull && !["ok", "empty"].includes(pull.status);
-    items.push({ key: "news", label: "News Worker", worker: WORKERS.news.name, tone: ing.status !== "ok" ? "red" : pullBad ? "amber" : "green", detail: ing.status !== "ok" ? "not answering" : `last hourly pull ${pull?.status ?? "none"} ${mins(age(pull?.checked_at ?? null))}` });
-    items.push({ key: "oauth", label: "TradingView MCP OAuth", worker: WORKERS.news.name, tone: ing.oauth_authorized ? "green" : "red", detail: ing.oauth_authorized ? "authorized" : "not authorized: the news and the bars stop" });
+    items.push({ key: "news", label: "News Worker", worker: WORKERS.news.name, tone: ing.status !== "ok" ? "fault" : pullBad ? "late" : "ok", detail: ing.status !== "ok" ? "not answering" : `last hourly pull ${pull?.status ?? "none"} ${mins(age(pull?.checked_at ?? null))}` });
+    items.push({ key: "oauth", label: "TradingView MCP OAuth", worker: WORKERS.news.name, tone: ing.oauth_authorized ? "ok" : "fault", detail: ing.oauth_authorized ? "authorized" : "not authorized: the news and the bars stop" });
     items.push({
       key: "lane", label: "Local lane", worker: WORKERS.pull.name,
-      tone: ai.local_lane?.fresh ? "green" : reEarning ? "amber" : closed ? "slate" : "red",
+      tone: ai.local_lane?.fresh ? "ok" : reEarning ? "late" : closed ? "off" : "fault",
       detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}${h1[0]?.promote_after ? `/${h1[0].promote_after}` : " matches"}` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
     });
     // TradingView alerts (owner report 2026-11-09): every alert since the week open answered 401 and
-    // nothing here said so. Red while alerts are rejected; the reason, never the secret.
+    // nothing here said so. Fault (red) while alerts are rejected; the reason, never the secret.
     const wh = ai.webhook;
     if (wh) {
       const lastOk = age(wh.last_accepted_at);
       const rejecting = Number(wh.rejected_last_hour) > 0 && (lastOk == null || (age(wh.last_rejected_at) ?? Infinity) < lastOk);
       items.push({
         key: "webhook", label: "TradingView alerts", worker: WORKERS.ai.name,
-        tone: rejecting ? "red" : lastOk != null && lastOk <= 2 * 3_600_000 ? "green" : closed ? "slate" : "amber",
+        tone: rejecting ? "fault" : lastOk != null && lastOk <= 2 * 3_600_000 ? "ok" : closed ? "off" : "late",
         detail: rejecting
           ? `${wh.rejected_last_hour} rejected (401) in the last hour: ${wh.top_reason_text ?? wh.top_reason}; last accepted ${mins(lastOk)}`
           : lastOk != null && lastOk <= 2 * 3_600_000 ? `last alert accepted ${mins(lastOk)} (${wh.last_accepted_source})` : closed ? "market closed" : lastOk == null ? "no alert accepted yet" : `no alert accepted for ${mins(lastOk).replace(" ago", "")}`
       });
     }
-    if (ai.local_lane?.calibration?.due) items.push({ key: "calibration", label: "Calibration", tone: "amber", detail: "an approved engine has not been compared for its interval" });
+    if (ai.local_lane?.calibration?.due) items.push({ key: "calibration", label: "Calibration", tone: "late", detail: "an approved engine has not been compared for its interval" });
   }
   if (lane) {
     const r = lane.last_refresh ?? {};
     const okStatus = ["ok", "up_to_date"].includes(r.status);
     items.push({
-      key: "pull", label: "Pull adapter", worker: WORKERS.pull.name, tone: okStatus ? "green" : r.status === "partial" ? "amber" : closed && r.status === "daily_budget_exhausted" ? "slate" : r.status ? "red" : "amber",
+      key: "pull", label: "Pull adapter", worker: WORKERS.pull.name, tone: okStatus ? "ok" : r.status === "partial" ? "late" : closed && r.status === "daily_budget_exhausted" ? "off" : r.status ? "fault" : "late",
       detail: `${r.status ?? "no refresh yet"} · ${mins(age(r.checked_at))}`
     });
     const used = Number(lane.budget?.used) || 0, daily = Number(lane.budget?.daily);
     const known = Number.isFinite(daily) && daily > 0;
-    items.push({ key: "budget", label: "TradingView MCP budget", worker: WORKERS.news.name, tone: !known ? "slate" : used >= daily ? "red" : used >= 0.9 * daily ? "amber" : "green", detail: known ? `${used} of ${daily} calls today (UTC)` : `${used} calls today (UTC), limit not reported` });
+    items.push({ key: "budget", label: "TradingView MCP budget", worker: WORKERS.news.name, tone: !known ? "off" : used >= daily ? "fault" : used >= 0.9 * daily ? "late" : "ok", detail: known ? `${used} of ${daily} calls today (UTC)` : `${used} calls today (UTC), limit not reported` });
     const m1 = (lane.series ?? []).find((s: any) => s.series === "OANDA:XAUUSD|1m");
     const a = age(m1?.latest_close_time);
-    items.push({ key: "bars", label: "OANDA:XAUUSD bars", worker: WORKERS.pull.name, tone: closed ? "slate" : a != null && a <= 15 * 60_000 ? "green" : a != null && a <= 60 * 60_000 ? "amber" : "red", detail: closed ? "market closed" : `last 1m close ${mins(a)}` });
+    items.push({ key: "bars", label: "OANDA:XAUUSD bars", worker: WORKERS.pull.name, tone: closed ? "off" : a != null && a <= 15 * 60_000 ? "ok" : a != null && a <= 60 * 60_000 ? "late" : "fault", detail: closed ? "market closed" : `last 1m close ${mins(a)}` });
   }
   return items;
 }
