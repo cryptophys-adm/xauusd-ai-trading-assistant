@@ -1,6 +1,7 @@
-// The Nexus Intelligence views (Track B: B8 GET /api/liquidity; B9 and B14 later): their switch and the strategy memo
-// they share. The memo is readStrategy (src/strategy-engine.mjs), as GET /api/strategy reads it, with its existing
-// idempotent ensure*Schema calls; the views' own reads are SELECT and KV reads only. Read-only: nothing here writes.
+// The Nexus Intelligence views (Track B: B8 GET /api/liquidity, B9 GET /api/chart-patterns; B14 later): their switch
+// and the strategy memo they share. The memo is readStrategy (src/strategy-engine.mjs), as GET /api/strategy reads it,
+// with its existing idempotent ensure*Schema calls; the views' own reads are SELECT and KV reads only. Read-only:
+// nothing here writes.
 import { readStrategy } from "./strategy-engine.mjs";
 
 /** The strategy memo's life per isolate. */

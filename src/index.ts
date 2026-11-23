@@ -227,6 +227,7 @@ import { pullOmegaPolicy } from "./omega-policy.mjs";
 import { runLensStep, lensStatus, pushLensReport } from "./lens-steps.mjs";
 import { intelViewsOn, readStrategyMemo } from "./intel-memo.mjs";
 import { readLiquidityView } from "./liquidity-view.mjs";
+import { readChartPatternsView } from "./chart-patterns-view.mjs";
 import { runCotStep } from "./positioning-lens.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
@@ -2020,8 +2021,8 @@ function parseJsonText(value: unknown, fallback: unknown): unknown {
 
 const LOCAL_LANE_FRESH_MS = 2 * 60 * 60 * 1000;
 
-/** The Nexus Intelligence views (Track B) behind INTEL_VIEWS: B8 GET /api/liquidity. */
-const INTEL_VIEW_PATHS: readonly string[] = ["/api/liquidity"];
+/** The Nexus Intelligence views (Track B) behind INTEL_VIEWS: B8 GET /api/liquidity, B9 GET /api/chart-patterns. */
+const INTEL_VIEW_PATHS: readonly string[] = ["/api/liquidity", "/api/chart-patterns"];
 
 /**
  * Read-only API for the Nexus dashboard (nexus.cryptophys.work proxies /api/*).
@@ -2391,6 +2392,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/patterns/calibration") {
     // The chart patterns' measured record on gold and the weight factors in force (src/pattern-calibration.mjs).
+    // The Nexus page's view of the patterns themselves is GET /api/chart-patterns (B9, INTEL_VIEW_PATHS below).
     return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
   }
   if (url.pathname === "/api/strategy-agents") {
@@ -2664,14 +2666,19 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     catch (error) { console.error("lens_status_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (INTEL_VIEW_PATHS.includes(url.pathname)) {
-    // The Nexus Intelligence views (Track B): B8 the liquidity view (src/liquidity-view.mjs). Nexus only (behind
-    // Cloudflare Access), with prices labelled by scale; read-only. The strategy memo is read once for the views
+    // The Nexus Intelligence views (Track B): B8 the liquidity view (src/liquidity-view.mjs), B9 the chart patterns
+    // view (src/chart-patterns-view.mjs, ?history=0..24; the feed's prices only). Nexus only (behind Cloudflare
+    // Access), with prices labelled by scale; read-only. The strategy memo is read once for the views
     // (readStrategy, 60 s per isolate); INTEL_VIEWS = "off" answers 404.
     if (!intelViewsOn(env)) return dashboardJson({ status: "not_found", reason: "intel_views_off" }, 404);
     const strategy = await readStrategyMemo(env);
     if (url.pathname === "/api/liquidity") {
       try { return dashboardJson({ status: "ok", ...(await readLiquidityView(env, { strategy })) }); }
       catch (error) { console.error("liquidity_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "liquidity_unavailable" }, 500); }
+    }
+    if (url.pathname === "/api/chart-patterns") {
+      try { return dashboardJson({ status: "ok", ...(await readChartPatternsView(env, { strategy, history: url.searchParams.get("history") })) }); }
+      catch (error) { console.error("chart_patterns_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "chart_patterns_unavailable" }, 500); }
     }
   }
   if (url.pathname === "/api/corpus/status") {
