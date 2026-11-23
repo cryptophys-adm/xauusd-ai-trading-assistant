@@ -2,6 +2,9 @@
 // mengubah layout sebelumnya", less cosmetic text on the chart, not a new layout). pages/Omega.tsx Mt5ChartCanvas: one
 // short label per line (lib/entryZone.ts CHART_LABEL, positionLines), its price only on the axis tag, the scale said once
 // in the caption (chartScaleCaption), the credit kept, every line still drawn in its colour and style. Display only.
+// The owner's review of the before/after (2026-11-23): "Bid ask sudah ada di side panel, tidak perlu lagi text di chart.
+// Tidak usah juga pakai kata kata broker karena sumber data omega memang dari broker": no bid or ask text on the chart
+// (the lines stay), and no "broker" in its text.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -18,14 +21,14 @@ const OVERVIEW = JSON.parse(read("test/fixtures/nexus-ez1/omega-overview.json"))
 const NO_UI_DEPS = ["esbuild", "react", "react-dom"].some((p) => !existsSync(`${UI}node_modules/${p}/package.json`))
   && "the Nexus UI packages are not installed (npm ci in workers/xauusd-nexus-dashboard/ui)";
 let bundled = null;
-/** The render check's registry and the labels' placement, bundled as the render check bundles them (CommonJS, lightweight-charts on its stub). */
+/** The render check's registry, bundled as the render check bundles them (CommonJS, lightweight-charts on its stub). */
 async function ui() {
   if (bundled) return bundled;
   const req = createRequire(`${UI}package.json`);
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export { VIEWS, render, OmegaChartView, OMEGA_NO_BASIS } from "./scripts/render-entry"; export { placeLabel } from "./src/lib/zones-primitive";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export { VIEWS, render, OmegaChartView, OMEGA_NO_BASIS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -34,15 +37,16 @@ async function ui() {
 }
 
 test("OT1 the short labels and the one scale caption", () => {
-  assert.deepEqual({ ...ez.CHART_LABEL }, { bid: "Bid", ask: "Ask", limit: "Limit", zone: "Zone", plan: "Plan", planSl: "Plan SL", planTp: "Plan TP", sl: "SL", tp: "TP" });
-  for (const l of Object.values(ez.CHART_LABEL)) assert.doesNotMatch(l, /\d|broker|feed|·/, l);
-  assert.equal(ez.chartScaleCaption(0.42), "prices: feed · broker = feed + 0.42");
-  assert.equal(ez.chartScaleCaption(-0.35), "prices: feed · broker = feed − 0.35");
-  assert.equal(ez.chartScaleCaption(0), "prices: feed · broker = feed + 0.00", "a known basis of zero is still a basis");
-  for (const b of [null, undefined, Number.NaN]) assert.equal(ez.chartScaleCaption(b), "prices: feed · bid, ask, positions: broker (basis unknown)");
+  assert.deepEqual({ ...ez.CHART_LABEL }, { limit: "Limit", zone: "Zone", plan: "Plan", planSl: "Plan SL", planTp: "Plan TP", sl: "SL", tp: "TP" }, "no bid or ask label");
+  for (const l of Object.values(ez.CHART_LABEL)) assert.doesNotMatch(l, /\d|broker|feed|·/i, l);
+  assert.equal(ez.chartScaleCaption(0.42), "prices: feed · MT5 +0.42");
+  assert.equal(ez.chartScaleCaption(-0.35), "prices: feed · MT5 −0.35");
+  assert.equal(ez.chartScaleCaption(0), "prices: feed · MT5 +0.00", "a known basis of zero is still a basis");
+  for (const b of [null, undefined, Number.NaN]) assert.equal(ez.chartScaleCaption(b), "prices: feed · MT5 lines not converted");
+  for (const b of [0.42, null]) assert.doesNotMatch(ez.chartScaleCaption(b), /broker/i);
   // The caption follows the signal's own fields (feed_basis when feed_basis_known), as the conversion does.
-  assert.equal(ez.chartScaleCaption(ez.knownFeedBasis(OVERVIEW.signal)), "prices: feed · broker = feed + 0.42");
-  assert.equal(ez.chartScaleCaption(ez.knownFeedBasis({ ...OVERVIEW.signal, feed_basis_known: false })), "prices: feed · bid, ask, positions: broker (basis unknown)");
+  assert.equal(ez.chartScaleCaption(ez.knownFeedBasis(OVERVIEW.signal)), "prices: feed · MT5 +0.42");
+  assert.equal(ez.chartScaleCaption(ez.knownFeedBasis({ ...OVERVIEW.signal, feed_basis_known: false })), "prices: feed · MT5 lines not converted");
   // The old titles' helpers are gone (no other page used them).
   for (const f of ["quoteTitle", "limitTitle", "chartZoneLabel"]) assert.equal(ez[f], undefined, f);
   // A position: side and lot, then SL and TP; no ticket, no price, no scale.
@@ -51,13 +55,13 @@ test("OT1 the short labels and the one scale caption", () => {
   assert.deepEqual(ez.positionLines({ open_price: 2686.02 }, 0.42).map((l) => l.title), ["Position"], "no side and no lot");
 });
 
-test("OT2 every line is drawn as before, in its colour and style, with a short label and no price in it", () => {
+test("OT2 every line is drawn as before, in its colour and style; a short label and no price in it, none on the bid and ask", () => {
   // The calls, their colours and styles (the labels are the only change).
   for (const re of [
     /addLine\(feedBid, "", T\.bullFill, LineStyle\.Solid, 1, false\);/,
     /addLine\(feedAsk, "", T\.bearFill, LineStyle\.Solid, 1, false\);/,
-    /addLine\(bid, CHART_LABEL\.bid, T\.bullFill, LineStyle\.Solid, 1\);/,
-    /addLine\(ask, CHART_LABEL\.ask, T\.bearFill, LineStyle\.Solid, 1\);/,
+    /addLine\(bid, "", T\.bullFill, LineStyle\.Solid, 1\);/,
+    /addLine\(ask, "", T\.bearFill, LineStyle\.Solid, 1\);/,
     /addLine\(signal\.entry, CHART_LABEL\.plan, T\.okFill, LineStyle\.Dashed, 1\);/,
     /addLine\(signal\.stop, CHART_LABEL\.planSl, T\.bearFill, LineStyle\.Dashed, 1\);/,
     /addLine\(signal\.tp1, CHART_LABEL\.planTp, T\.bullFill, LineStyle\.Dashed, 1\);/,
@@ -66,53 +70,40 @@ test("OT2 every line is drawn as before, in its colour and style, with a short l
     /else addLine\(l\.price, l\.title, l\.kind === "sl" \? T\.bearFill : T\.bullFill, LineStyle\.Dotted, 1\);/
   ]) assert.match(canvas, re);
   assert.equal((canvas.match(/\baddLine\(/g) ?? []).length, 10, "ten calls, as before");
-  // The bid's, the ask's and the zone's labels: short, the ask's above its line, the bid's below.
-  assert.match(canvas, /labels\.push\(\{ low: feedBid, high: feedBid, color: T\.bullFill, alpha: 0, text: T\.bull, label: CHART_LABEL\.bid, below: true \}\)/);
-  assert.match(canvas, /labels\.push\(\{ low: feedAsk, high: feedAsk, color: T\.bearFill, alpha: 0, text: T\.bear, label: CHART_LABEL\.ask \}\)/);
+  // The bid and ask: lines only, no label (the side panel shows them); the zone's label short.
+  assert.doesNotMatch(canvas, /labels\.push|CHART_LABEL\.(bid|ask)/);
   assert.match(canvas, /labels\.unshift\(\{ low: zoneFeed\.low, high: zoneFeed\.high, color: T\.okFill, alpha: 0\.16, text: T\.ok, label: CHART_LABEL\.zone \}\)/);
   // No title or label is a template with a price or a scale any more.
-  for (const old of ["BID broker", "ASK broker", "PLAN ${", "PLAN SL", "PLAN TP1", "quoteTitle", "limitTitle", "chartZoneLabel", "Entry zone · feed", "const narrow"]) assert.ok(!canvas.includes(old), old);
+  for (const old of ["BID broker", "ASK broker", ">Bid<", ">Ask<", "spreadPoints", "· broker", "PLAN ${", "PLAN SL", "PLAN TP1", "quoteTitle", "limitTitle", "chartZoneLabel", "Entry zone · feed", "const narrow"]) assert.ok(!canvas.includes(old), old);
   // The key levels keep their label (role, strength and the price range: owner 2026-11-12; a band has no axis tag).
   assert.match(canvas, /label: `KL \$\{KEY_ROLE_SHORT\[z\.role \?\? ""\] \?\? "zone"\} · \$\{z\.strength \?\? "—"\} · /);
 });
 
-test("OT3 around the chart: the scale once in the caption, no footer prose, no duplicate prices; the credit kept", () => {
+test("OT3 around the chart: the scale once in the caption, no footer prose, no quote, no \"broker\"; the credit kept", () => {
   assert.match(canvas, /<span>\{chartScaleCaption\(feedBasis\)\}<\/span>\n\s+<span><ChartCredit \/><\/span>/, "one caption line, then the credit");
   for (const old of ["candles, PLAN lines", "(intents[].entry_zone", "not converted (the basis is unknown)", ">feed<", "(feed {", "V {Math.round"]) assert.ok(!canvas.includes(old), old);
-  // The overlay keeps the symbol, the bars' OHLC and the live broker quote (labelled broker once), the time axis its GMT+7.
-  assert.match(canvas, /<span className="text-fg-2">· broker<\/span>/);
+  // The overlay keeps the symbol and the bars' OHLC (no quote: the side panel's), the time axis its GMT+7.
+  assert.match(canvas, /<span className=\{last\.close >= last\.open \? "text-bull" : "text-bear"\}>C \{num\(last\.close, digits\)\}<\/span>\n\s+<\/div>/);
+  // No "broker" in any text the chart shows (JSX text and string literals; identifiers and comments may keep it).
+  const shown = canvas.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  for (const m of shown.matchAll(/"([^"\n]*)"|`([^`\n]*)`|>([^<>{}\n]+)</g)) assert.doesNotMatch(m[1] ?? m[2] ?? m[3], /\bbroker\b/i, m[0]);
   assert.equal((canvas.match(/>GMT\+7<\/span>/g) ?? []).length, 1);
   // The layout: the same boxes as before.
   for (const c of ["relative flex h-full min-h-[430px] w-full flex-1 flex-col bg-ground", "relative min-h-[380px] flex-1", "pointer-events-none absolute left-2.5 top-2 z-10 flex max-w-[calc(100%-5.5rem)]"]) assert.ok(canvas.includes(c), c);
 });
 
-test("OT4 the anchored labels: `below` tries under the line first, so the bid's sits under the ask's at the left", { skip: NO_UI_DEPS }, async () => {
-  const { placeLabel } = await ui();
-  const fs = 10, W = 800, H = 400;
-  // Default (unchanged): above the band first.
-  assert.equal(placeLabel({ top: 200, bottom: 200 }, 20, fs, W, H, []).y, 197);
-  // below: under it first.
-  assert.equal(placeLabel({ top: 200, bottom: 200, below: true }, 20, fs, W, H, []).y, 211);
-  // The Omega order: the zone, the bid (below), then the ask (above), 8 px apart: both at the left, clear of each other.
-  const placed = [];
-  const bid = placeLabel({ top: 208, bottom: 208, below: true }, 18, fs, W, H, placed); placed.push(bid.box);
-  const ask = placeLabel({ top: 200, bottom: 200 }, 18, fs, W, H, placed); placed.push(ask.box);
-  assert.equal(bid.x, 6); assert.equal(ask.x, 6);
-  assert.ok(ask.box.y1 <= bid.box.y0, "no overlap");
-});
-
-test("OT5 the rendered chart: the caption for a known and an unknown basis, once; the render check's views", { skip: NO_UI_DEPS }, async () => {
+test("OT4 the rendered chart: the caption for a known and an unknown basis, once; the render check's views", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
   const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
   const known = u.render(u.OmegaChartView, OVERVIEW);
   const unknown = u.render(u.OmegaChartView, u.OMEGA_NO_BASIS);
-  for (const [html, caption] of [[known, "prices: feed · broker = feed + 0.42"], [unknown, "prices: feed · bid, ask, positions: broker (basis unknown)"]]) {
+  for (const [html, caption] of [[known, "prices: feed · MT5 +0.42"], [unknown, "prices: feed · MT5 lines not converted"]]) {
     const t = text(html);
     assert.equal(t.split(caption).length - 1, 1, `${caption} once in ${t}`);
     assert.equal((html.match(/Charts by TradingView/g) ?? []).length, 1);
     assert.equal(t.split("prices:").length - 1, 1, "the scale said once");
     assert.ok(!/\(feed|candles, PLAN|basis \(intents/.test(t), t);
-    assert.match(t, /Bid 2684\.64 \/ Ask 2684\.86 · broker 22 pts/, "the live broker quote, without feed duplicates");
+    assert.ok(!/\bbroker\b|Bid|Ask|22 pts|2684\.64|2684\.86/.test(t), `no quote and no "broker": ${t}`);
   }
   const names = u.VIEWS.map((v) => v.name);
   for (const n of ["OmegaChartCaption", "OmegaChartCaptionNoBasis"]) assert.ok(names.includes(n), n);

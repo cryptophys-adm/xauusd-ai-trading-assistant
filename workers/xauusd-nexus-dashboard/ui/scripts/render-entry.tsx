@@ -179,11 +179,11 @@ export const OMEGA_NO_BASIS = merged(clone(ez1Overview), { signal: { feed_basis:
 export function OmegaChartView({ d }: { d: any }) {
   const br = d?.broker?.bridge ?? {};
   return (
-    <Mt5ChartCanvas tf="M15" symbol={br.symbol ?? "XAUUSD"} server={br.server ?? ""} digits={typeof br.digits === "number" ? br.digits : 2} bid={br.bid} ask={br.ask} spreadPoints={br.spread_points}
+    <Mt5ChartCanvas tf="M15" symbol={br.symbol ?? "XAUUSD"} server={br.server ?? ""} digits={typeof br.digits === "number" ? br.digits : 2} bid={br.bid} ask={br.ask}
       signal={d?.signal ?? null} positions={Array.isArray(br.positions) ? br.positions : []} showBidAsk showPlan showPositions keyZones={[]} showKeyLevels feedBasis={knownFeedBasis(d?.signal)} limit={null} />
   );
 }
-const OMEGA_CHART_OLD = ["candles, PLAN lines", "(feed ", "basis (intents", "not converted (the basis is unknown)", ">feed<"];
+const OMEGA_CHART_OLD = ["candles, PLAN lines", "(feed ", "basis (intents", "not converted (the basis is unknown)", ">feed<", "broker", "Bid", "Ask", "22 pts", "2684.64"];
 const EZ1_ZONE_SHOWS = ["Entry zone", "2684.20–2685.60", "· feed scale", "zone · feed scale", "plan 2684.90", "key zone 2683.60–2686.60", "Omega limit", "not available on this page", "near edge", "2685.60", "feed · allowed", "min 1R · feed scale"];
 const EZ1_NEW = ["Entry zone", "zone · feed scale", "Omega limit", "EZ1"];
 
@@ -197,8 +197,8 @@ export const VIEWS: Entry[] = [
   ...Object.keys(EZ1_DETAILS).map((code) => ({ name: `EZ1OmegaWhy_${code}`, View: OmegaSignalView, fixture: ez1Code(code), shows: EZ1_CODE_SHOWS[code] })),
   { name: "OmegaWhyEngineOffServer", View: OmegaSignalView, fixture: OMEGA_ENGINE_OFF_SERVER, shows: ["NOT ENTERING", "The server switch is off (OMEGA_ENGINE_ENABLED). Only the Worker setting turns it on.", "engine_off"], hides: ["Turn it on with Algo Trading"] },
   { name: "OmegaWhyEngineOffLocal", View: OmegaSignalView, fixture: OMEGA_ENGINE_OFF_LOCAL, shows: ["NOT ENTERING", "The engine is switched off. Turn it on with Algo Trading, or in Setup (Engine enabled).", "engine_off"], hides: ["OMEGA_ENGINE_ENABLED"] },
-  { name: "OmegaChartCaption", View: OmegaChartView, fixture: ez1Overview, shows: ["prices: feed · broker = feed + 0.42", "Charts by TradingView", "2684.64", "· broker", "22 pts"], hides: [...OMEGA_CHART_OLD, "basis unknown"] },
-  { name: "OmegaChartCaptionNoBasis", View: OmegaChartView, fixture: OMEGA_NO_BASIS, shows: ["prices: feed · bid, ask, positions: broker (basis unknown)", "Charts by TradingView"], hides: [...OMEGA_CHART_OLD, "broker = feed"] },
+  { name: "OmegaChartCaption", View: OmegaChartView, fixture: ez1Overview, shows: ["prices: feed · MT5 +0.42", "Charts by TradingView", "XAUUSD, M15"], hides: [...OMEGA_CHART_OLD, "not converted"] },
+  { name: "OmegaChartCaptionNoBasis", View: OmegaChartView, fixture: OMEGA_NO_BASIS, shows: ["prices: feed · MT5 lines not converted", "Charts by TradingView"], hides: [...OMEGA_CHART_OLD, "MT5 +"] },
   { name: "OmegaModifyIntent", View: OmegaSignalView, fixture: OMEGA_MODIFY_INTENT, shows: ["modify_sl", "SL 2681.20 · broker"], hides: ["Market (Ask)", "market"] },
   { name: "LensView", View: LensView, fixture: lens, shows: ["Lens A · Positioning (CFTC)", "Lens B · Liquidity (broker M1)", "at floor", "fresh", "insufficient"] },
   { name: "LensHeader", View: LensHeader, fixture: lens, shows: ["Intraday mode"] },

@@ -6,10 +6,9 @@ import type { CanvasRenderingTarget2D } from "fancy-canvas";
  * components/IntelChart.tsx); a zone without them draws as before.
  * - `outline`: the edges only, no fill (a key zone); `dash`: dashed edges (a management candidate, a whale zone);
  * - `from`: the band starts at this bar's time instead of the left edge (a whale zone since it formed);
- * - `text`: the label's colour (a text token; default the zone's colour), drawn with a dark halo above the candles;
- * - `below`: the label tries below the band first ("anchored" mode; the Omega chart's bid label, under the ask's).
+ * - `text`: the label's colour (a text token; default the zone's colour), drawn with a dark halo above the candles.
  */
-export type ChartZone = { low: number; high: number; color: string; alpha: number; label: string; outline?: boolean; dash?: number[]; from?: Time; text?: string; below?: boolean };
+export type ChartZone = { low: number; high: number; color: string; alpha: number; label: string; outline?: boolean; dash?: number[]; from?: Time; text?: string };
 
 /** How a primitive places its labels: "first" (as before: top left, zones close together share one) or "anchored". */
 export type LabelMode = "first" | "anchored";
@@ -27,12 +26,12 @@ const hit = (a: Box, b: Box) => !(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 |
 /**
  * Pure: where a band's label goes ("anchored" mode, mockup review round 2): next to its own band, above its top edge
  * or below its bottom edge, at the left, the right or a third of the way in, the first spot clear of the labels
- * already placed; each spot clamped inside the plot (`below`: the spots below the band first). With no clear spot,
- * the first spot that fits. Returns the baseline-left point, or null when the band is out of view.
+ * already placed; each spot clamped inside the plot. With no clear spot, the first spot that fits. Returns the
+ * baseline-left point, or null when the band is out of view.
  */
-export function placeLabel(band: { top: number; bottom: number; left?: number; below?: boolean }, w: number, fs: number, width: number, height: number, placed: Box[]): { x: number; y: number; box: Box } | null {
+export function placeLabel(band: { top: number; bottom: number; left?: number }, w: number, fs: number, width: number, height: number, placed: Box[]): { x: number; y: number; box: Box } | null {
   const xs = [Math.max(6, (band.left ?? 0) + 4), width - 6 - w, Math.max(width * 0.35, (band.left ?? 0) + 4)];
-  const ys = band.below ? [band.bottom + fs + 1, band.top - 3] : [band.top - 3, band.bottom + fs + 1];
+  const ys = [band.top - 3, band.bottom + fs + 1];
   let first: { x: number; y: number; box: Box } | null = null;
   for (const y of ys) {
     for (const x0 of xs) {
@@ -66,7 +65,7 @@ class ZonesRenderer implements ISeriesPrimitivePaneRenderer {
         const top = Math.min(yHigh, yLow), bottom = Math.max(yHigh, yLow);
         if (bottom < 0 || top > mediaSize.height) continue;
         const left = z.from != null ? this.owner.chart?.timeScale().timeToCoordinate(z.from) ?? 0 : 0;
-        const spot = placeLabel({ top, bottom, left, below: z.below }, ctx.measureText(z.label).width, fs, mediaSize.width, mediaSize.height, placed);
+        const spot = placeLabel({ top, bottom, left }, ctx.measureText(z.label).width, fs, mediaSize.width, mediaSize.height, placed);
         if (!spot) continue;
         placed.push(spot.box);
         ctx.lineWidth = 3;

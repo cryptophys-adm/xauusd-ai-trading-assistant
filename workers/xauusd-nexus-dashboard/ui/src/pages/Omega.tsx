@@ -171,7 +171,6 @@ export function Mt5ChartCanvas({
   digits,
   bid,
   ask,
-  spreadPoints,
   signal,
   positions,
   showBidAsk,
@@ -188,7 +187,6 @@ export function Mt5ChartCanvas({
   digits: number;
   bid?: number | null;
   ask?: number | null;
-  spreadPoints?: number | null;
   signal: any;
   positions: any[];
   showBidAsk: boolean;
@@ -376,23 +374,21 @@ export function Mt5ChartCanvas({
       const base = KEY_ROLE_COLOR[z.role ?? ""] ?? C.muted;
       return { low: z.low, high: z.high, fill: withAlpha(base, KEY_STRENGTH_FILL[z.strength ?? ""] ?? 0.1), text: KEY_ROLE_TEXT[z.role ?? ""] ?? T.fg2, label: `KL ${KEY_ROLE_SHORT[z.role ?? ""] ?? "zone"} · ${z.strength ?? "—"} · ${z.low === z.high ? num(z.low, digits) : `${num(z.low, digits)}–${num(z.high, digits)}`}` };
     }) : []);
-    // EZ1 (the reviewer's ruling 4): the broker's bid, ask, resting limit and entry zone on the feed chart, converted
-    // (broker − feed_basis). Each line carries one short label (CHART_LABEL) and its price only on the axis tag; the
-    // caption says the scale once (owner 2026-11-23: less cosmetic text on the chart). The bid and ask labels sit at the
-    // left next to their lines, the ask's above its line and the bid's below (the axis keeps the limit's tag; the bid's
-    // feed price is the last price's tag); while the basis is unknown the bid and ask stay at the broker's prices with
-    // their own axis tags.
+    // EZ1 (the reviewer's ruling 4): the terminal's bid, ask, resting limit and entry zone on the feed chart, converted
+    // (MT5 − feed_basis). Each line carries one short label (CHART_LABEL) and its price only on the axis tag; the
+    // caption says the scale once (owner 2026-11-23: less cosmetic text on the chart). The bid and ask lines carry no
+    // text (owner 2026-11-23: "Bid ask sudah ada di side panel, tidak perlu lagi text di chart"): converted, without an
+    // axis tag (the bid's feed price is the last price's tag, the axis keeps the limit's); while the basis is unknown at
+    // the terminal's prices with their own axis tags.
     const labels: ChartZone[] = [];
     const feedBid = brokerToFeed(bid, feedBasis, digits), feedAsk = brokerToFeed(ask, feedBasis, digits);
     if (showBidAsk) {
       if (feedBasis != null) {
         addLine(feedBid, "", T.bullFill, LineStyle.Solid, 1, false);
         addLine(feedAsk, "", T.bearFill, LineStyle.Solid, 1, false);
-        if (feedBid != null) labels.push({ low: feedBid, high: feedBid, color: T.bullFill, alpha: 0, text: T.bull, label: CHART_LABEL.bid, below: true });
-        if (feedAsk != null) labels.push({ low: feedAsk, high: feedAsk, color: T.bearFill, alpha: 0, text: T.bear, label: CHART_LABEL.ask });
       } else {
-        addLine(bid, CHART_LABEL.bid, T.bullFill, LineStyle.Solid, 1);
-        addLine(ask, CHART_LABEL.ask, T.bearFill, LineStyle.Solid, 1);
+        addLine(bid, "", T.bullFill, LineStyle.Solid, 1);
+        addLine(ask, "", T.bearFill, LineStyle.Solid, 1);
       }
     }
     // No setup on chart unless decision is explicitly clear (Owner directive 2026-11-11)
@@ -445,16 +441,6 @@ export function Mt5ChartCanvas({
         ) : (
           <div className="mono text-[10.5px] text-slate-500">Loading…</div>
         )}
-        {/* The live broker bid and ask, a line of this box so it never covers it on a narrow chart; their feed prices are the chart's lines. */}
-        <div className="flex flex-wrap items-center gap-x-1.5 text-[11px]">
-          <span className="text-slate-400">Bid</span>
-          <span className="mono font-bold text-bull">{num(bid, digits)}</span>
-          <span className="text-slate-600">/</span>
-          <span className="text-slate-400">Ask</span>
-          <span className="mono font-bold text-bear">{num(ask, digits)}</span>
-          <span className="text-fg-2">· broker</span>
-          {spreadPoints != null ? <span className="mono ml-1 rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] text-amber-200">{spreadPoints} pts</span> : null}
-        </div>
       </div>
 
       {/* EZ1: every price on the chart's axis is the feed's (the caption says so, once), its times GMT+7. */}
@@ -462,7 +448,8 @@ export function Mt5ChartCanvas({
         <div ref={hostRef} className="absolute inset-0" />
         <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9.5px] text-fg-2">GMT+7</span>
       </div>
-      {/* The scale, said once (owner 2026-11-23: less cosmetic text on the chart), and the library's credit. */}
+      {/* The scale, said once (owner 2026-11-23: less cosmetic text on the chart; no "broker": Omega's data is the
+          terminal's), and the library's credit. The bid and ask are the side panel's (Market Watch). */}
       <div className="mono flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-t border-white/5 px-2.5 py-1.5 text-[10.5px] text-muted">
         <span>{chartScaleCaption(feedBasis)}</span>
         <span><ChartCredit /></span>
@@ -1432,7 +1419,6 @@ export default function Omega() {
               digits={digits}
               bid={br.bid}
               ask={br.ask}
-              spreadPoints={br.spread_points}
               signal={s}
               positions={positionsList}
               showBidAsk={showBidAsk}

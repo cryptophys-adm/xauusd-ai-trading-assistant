@@ -82,8 +82,8 @@ test("EZ1-2 broker to feed: broker − feed_basis, only with a known basis; the 
   assert.deepEqual(ez.zoneToBroker({ low: 2684.2, high: 2685.6 }, 0.42), { low: 2684.62, high: 2686.02 });
   assert.equal(ez.zoneToFeed({ low: 1, high: 2 }, null), null);
   // The Omega chart's labels carry no price and no scale (OM-TEXT, test/nexus-omega-chart-text.test.mjs): the caption does.
-  assert.equal(ez.chartScaleCaption(0.42), "prices: feed · broker = feed + 0.42");
-  assert.equal(ez.chartScaleCaption(null), "prices: feed · bid, ask, positions: broker (basis unknown)");
+  assert.equal(ez.chartScaleCaption(0.42), "prices: feed · MT5 +0.42");
+  assert.equal(ez.chartScaleCaption(null), "prices: feed · MT5 lines not converted");
   assert.equal(ez.basisText(0.42), "+0.420");
   assert.equal(ez.basisText(-0.35, 2), "−0.35");
   // Omega's resting limit: its own broker order first (a manual one never), else the newest pending place_limit intent.
@@ -223,7 +223,7 @@ test("EZ1-7 the Omega Signal card and intents: every price with its scale, entry
   assert.ok(cards.includes("place_limit BUY 0.10") && cards.includes("2684.64 broker · in zone · from 2685.32") && cards.includes("zone 2684.62–2686.02 · SL 2680.82 · TP 2692.02 · broker"), cards);
   // The chart: the zone, the limit and the bid and ask converted, each with its short label (OM-TEXT).
   assert.match(omega, /addLine\(feedBid, "", T\.bullFill, LineStyle\.Solid, 1, false\);/);
-  assert.match(omega, /label: CHART_LABEL\.bid, below: true \}/);
+  assert.doesNotMatch(omega, /CHART_LABEL\.(bid|ask)/, "the bid and ask lines carry no text (the side panel shows them)");
   assert.match(omega, /addLine\(limitFeed, CHART_LABEL\.limit,/);
   assert.match(omega, /label: CHART_LABEL\.zone \}/);
   assert.match(omega, /<span>\{chartScaleCaption\(feedBasis\)\}<\/span>/);
@@ -280,6 +280,6 @@ test("EZ1-9 the open positions on the Omega chart: entry, SL and TP converted as
   // Every other line on that chart is the feed's (candles, PLAN lines, key zones, the last price) or converted and labelled.
   const lines = [...omega.matchAll(/addLine\(([^,]+),/g)].map((m) => m[1].trim());
   assert.deepEqual(lines.sort(), ["bid", "ask", "feedBid", "feedAsk", "l.price", "l.price", "limitFeed", "signal.entry", "signal.stop", "signal.tp1"].sort());
-  assert.match(omega, /addLine\(bid, CHART_LABEL\.bid,/);
-  assert.match(omega, /addLine\(ask, CHART_LABEL\.ask,/);
+  assert.match(omega, /addLine\(bid, "", T\.bullFill, LineStyle\.Solid, 1\);/);
+  assert.match(omega, /addLine\(ask, "", T\.bearFill, LineStyle\.Solid, 1\);/);
 });

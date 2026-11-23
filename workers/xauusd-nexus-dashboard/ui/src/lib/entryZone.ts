@@ -106,16 +106,18 @@ export const basisText = (b: number, digits = 3): string => `${b >= 0 ? "+" : "�
 // scale said once, in the caption under the chart (chartScaleCaption). The lines, their colours and their conversion
 // (broker − basis while the basis is known) are as before.
 
-/** The Omega chart's line labels: no price and no scale in a label. */
-export const CHART_LABEL = { bid: "Bid", ask: "Ask", limit: "Limit", zone: "Zone", plan: "Plan", planSl: "Plan SL", planTp: "Plan TP", sl: "SL", tp: "TP" } as const;
+/** The Omega chart's line labels: no price and no scale in a label. The bid and ask lines have none (the side panel shows them). */
+export const CHART_LABEL = { limit: "Limit", zone: "Zone", plan: "Plan", planSl: "Plan SL", planTp: "Plan TP", sl: "SL", tp: "TP" } as const;
 
 /**
- * The Omega chart's one scale caption: the axis is the feed's, and with a known basis the broker's lines are converted
- * ("prices: feed · broker = feed + 0.42"); without one the bid, ask and positions stay at the broker's prices, unconverted.
+ * The Omega chart's one scale note: the axis is the feed's (TradingView), and with a known basis the terminal's lines
+ * are converted and MT5's prices are the axis plus the basis ("prices: feed · MT5 +0.42"); without one the bid, ask and
+ * positions stay at MT5's prices, unconverted ("prices: feed · MT5 lines not converted"). No "broker" (owner 2026-11-23:
+ * Omega's data is the broker's anyway).
  */
 export function chartScaleCaption(basis: number | null): string {
-  if (!isNum(basis)) return "prices: feed · bid, ask, positions: broker (basis unknown)";
-  return `prices: feed · broker = feed ${basis < 0 ? "−" : "+"} ${Math.abs(basis).toFixed(2)}`;
+  if (!isNum(basis)) return "prices: feed · MT5 lines not converted";
+  return `prices: feed · MT5 ${basis < 0 ? "−" : "+"}${Math.abs(basis).toFixed(2)}`;
 }
 
 /** One open position's line on the feed chart: its price on the chart's scale and its label. */
