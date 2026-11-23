@@ -823,14 +823,14 @@ export async function runSignalLedger(env, { now = Date.now(), readStrategy = nu
 }
 
 /**
- * LH1's one-shot re-ingest (owner 2026-11-23, relayed by the orchestrator: "Ya, masukkan 6"): the decisions the old
- * hold-back held from 06:00 to 12:10 UTC that day, oldest first, each through ingestDecision from its own stored record
+ * LH1's one-shot re-ingest (owner 2026-11-23, relayed by the orchestrator: "Ya, masukkan 6"; the orchestrator widened it to
+ * the whole day, since the old rule kept holding until this deploy): every decision the old hold-back held that UTC day, oldest first, each through ingestDecision from its own stored record
  * (decided_at kept, so the hold-back reads the ledger as it stood then), INSERT OR IGNORE by decision id. After each
  * insert the open rows are simulated (`evaluate`) so the next decision sees the fills and exits as live would have. A
  * decision re-ingested leaves signal_ledger_held; one the new rule still holds stays there. Runs once: the KV marker
  * keeps the report (decision, side, re-ingested or why not).
  */
-export const LH1_REINGEST = Object.freeze({ key: "ledger:lh1:reingest:2026-11-23:v1", from: "2026-11-23T06:00:00.000Z", to: "2026-11-23T12:10:00.000Z" });
+export const LH1_REINGEST = Object.freeze({ key: "ledger:lh1:reingest:2026-11-23:v1", from: "2026-11-23T00:00:00.000Z", to: "2026-11-23T23:59:59.000Z" });
 export async function reingestHeldOnce(env, { now = Date.now(), evaluate = null, window = LH1_REINGEST } = {}) {
   const kv = env?.SIGNAL_CACHE, db = env?.DB;
   if (!db || !kv?.get || !kv?.put) return { status: "unavailable" };

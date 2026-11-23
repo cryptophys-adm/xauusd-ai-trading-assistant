@@ -119,7 +119,10 @@ test("LH1-6 the one-shot re-ingest: the held decisions in the window, each from 
     calls++;
     env.DB.raw.prepare("UPDATE signal_ledger SET status = 'open', filled_at = ?, omega_status = 'closed', omega_filled_at = ?, omega_closed_at = ? WHERE id = ? AND omega_status = 'pending'").run("2026-11-23T06:33:00.000Z", "2026-11-23T06:33:00.000Z", "2026-11-23T08:00:00.000Z", `decision:${key(at("06:15:00.000"))}`);
   };
-  const r = await reingestHeldOnce(env, { now: at("14:30:00.000"), evaluate });
+  // The deployed window is the whole UTC day; this test narrows it to show a decision outside is left alone.
+  assert.deepEqual([LH1_REINGEST.from, LH1_REINGEST.to], ["2026-11-23T00:00:00.000Z", "2026-11-23T23:59:59.000Z"]);
+  const window = { key: LH1_REINGEST.key, from: "2026-11-23T06:00:00.000Z", to: "2026-11-23T12:10:00.000Z" };
+  const r = await reingestHeldOnce(env, { now: at("14:30:00.000"), evaluate, window });
   assert.equal(r.status, "ran");
   assert.deepEqual(r.items.map((x) => [x.decision_key, x.reingested]), [[key(at("06:15:00.000")), true], [key(at("07:00:00.000")), false], [key(at("08:45:00.000")), true]], "12:45 is outside the window");
   assert.match(r.items[1].reason, /still held by decision:.*1795414500000/);
@@ -133,5 +136,5 @@ test("LH1-6 the one-shot re-ingest: the held decisions in the window, each from 
   // Once: the marker keeps the report; a second run does nothing.
   assert.ok(env.SIGNAL_CACHE.m.has(LH1_REINGEST.key));
   assert.equal(JSON.parse(env.SIGNAL_CACHE.m.get(LH1_REINGEST.key)).items.length, 3);
-  assert.deepEqual(await reingestHeldOnce(env, { now: at("14:35:00.000"), evaluate }), { status: "done" });
+  assert.deepEqual(await reingestHeldOnce(env, { now: at("14:35:00.000"), evaluate, window }), { status: "done" });
 });
