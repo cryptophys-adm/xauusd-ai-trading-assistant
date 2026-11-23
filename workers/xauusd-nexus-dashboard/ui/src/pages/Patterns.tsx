@@ -201,8 +201,6 @@ function Heading({ chips }: { chips?: ReactNode }) {
   );
 }
 
-/** Whether any of the later backend PR's horizon fields is filled. */
-const horizonOn = (d: any) => num(d?.seat?.horizon_bars) || arr(d?.patterns).some((p) => num(p?.horizon_bars));
 
 function headingChips(d: any, now: number) {
   const computed = Date.parse(String(d?.calibration?.computed_at ?? ""));
@@ -212,8 +210,6 @@ function headingChips(d: any, now: number) {
       <Badge tone={d?.mode === "off" ? "off" : "ok"}>{d?.mode === "off" ? "patterns off" : "patterns on"}</Badge>
       <Badge tone={d?.calibration_mode === "off" ? "off" : "ok"}>{d?.calibration_mode === "off" ? "calibration off" : `calibration ${str(d?.calibration_mode) ?? "auto"}`}</Badge>
       {Number.isFinite(computed) ? <Badge tone="plain">{now >= computed ? `calibrated ${ageText(now - computed)} ago` : `calibrated ${clockPair(computed)}`}</Badge> : null}
-      {/* While the horizon is not filled, its Empties say so (OM-LEAN: no chip repeating them). */}
-      {horizonOn(d) ? <Badge tone="ok">horizon on</Badge> : null}
       {num(d?.price) ? <Badge tone="plain">price {price(d.price)} · feed scale</Badge> : null}
       {num(d?.atr_h1) ? <Badge tone="plain">ATR (1H) {d.atr_h1.toFixed(2)}</Badge> : null}
       {Number.isFinite(close) ? <Badge tone="plain">decision {clockPair(close)}</Badge> : null}

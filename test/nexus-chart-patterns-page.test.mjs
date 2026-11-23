@@ -128,7 +128,8 @@ test("CP4 the later backend PR's fields null: the not-yet Empties; filled: the r
   const later = await page(u.PATTERNS_FULL);
   clean(later);
   for (const t of ["No held breakouts yet", "No horizon yet", "No plan reach yet", "No horizon for the seat yet"]) assert.ok(!later.includes(t), `filled: no "${t}"`);
-  for (const t of ["horizon on", "Since breakout", "held", "at price (continuation)", "judged on its horizon (19 bars)"]) assert.ok(later.includes(t), t);
+  for (const t of ["Since breakout", "held", "at price (continuation)", "judged on its horizon (19 bars)"]) assert.ok(later.includes(t), t);
+  assert.ok(!later.includes("horizon on") && !later.includes("no horizon yet"), "no horizon chip: the filled values show it (OM-LEAN)");
   // Filled mean R has no field in /api/strategy-agents: the Empty, whatever the record carries, and no column.
   const extra = await page(CP, { agents: { ...AGENTS, agents: AGENTS.agents.map((a) => (a.record ? { ...a, record: { ...a.record, filled_mean_r: 0.5 } } : a)) } });
   assert.ok(extra.includes("No filled mean R yet") && !extra.includes("Filled mean R<") && !extra.includes("+0.50R"));
