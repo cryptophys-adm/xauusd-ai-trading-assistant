@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
+import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type TickMarkType, type Time, type UTCTimestamp } from "lightweight-charts";
 import { CandlestickChart, Link2, Unlink2 } from "lucide-react";
 import clsx from "clsx";
 import { Panel } from "./ui";
@@ -10,6 +10,7 @@ import { useTab } from "../lib/tab";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { bandSeries, type Bar } from "../lib/indicators";
 import { CANDLE, KWW, T, rgba, tagText, volumeColor } from "../lib/tokens";
+import { bandSource, gmt7ClockOf, gmt7Crosshair, gmt7Tick, zoneText } from "../lib/entryZone";
 
 const ZONE_COLOR: Record<string, string> = { support: T.bullFill, resistance: T.bearFill, "at price": T.okFill };
 const ZONE_ALPHA: Record<string, number> = { strong: 0.16, medium: 0.1, weak: 0.06 };
@@ -62,6 +63,8 @@ export default function PriceChart() {
   const [syncWithRoom, setSyncWithRoom] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartSync") !== "off"; } catch { return true; } });
   const [tf, setTf] = useState<string>(() => { try { return localStorage.getItem("nexus.chartTf") || "H1"; } catch { return "H1"; } });
   const zonesRef = useRef<ZonesPrimitive | null>(null);
+  // EZ1: the decision's entry zone (feed scale) as its own band, its label next to it above the candles.
+  const entryRef = useRef<ZonesPrimitive | null>(null);
   const layerZonesRef = useRef<ZonesPrimitive | null>(null);
   const planLines = useRef<IPriceLine[]>([]);
   const layerLines = useRef<IPriceLine[]>([]);
@@ -71,7 +74,7 @@ export default function PriceChart() {
   const [showZones, setShowZones] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartZones") !== "off"; } catch { return true; } });
   const [showPlan, setShowPlan] = useState<boolean>(() => { try { return localStorage.getItem("nexus.chartPlan") !== "off"; } catch { return true; } });
   const [layers, setLayers] = useState<Layers>(readLayers);
-  const { global: g, pollOf } = useMarket();
+  const { global: g, engine, pollOf } = useMarket();
   // Re-review of #520: the plan lines and zones come from the kept decision, which can be old. While its read is stale
   // they are dimmed and each title says so ("Entry · stale 1h"); past PLAN_HIDE_MS they are dropped, with a note, so
   // the chart never shows an old plan at full strength when the decision card is collapsed or below it.
@@ -175,8 +178,11 @@ export default function PriceChart() {
         barSpacing: 8,
         minBarSpacing: 3,
         rightOffset: 5,
+        tickMarkFormatter: (t: Time, type: TickMarkType) => gmt7Tick(t, type),
       },
       crosshair: { mode: 0 },
+      // The time axis in the owner's GMT+7 (the EZ1 mockup): "Thu 19" at midnight, else "08:00"; the crosshair too.
+      localization: { timeFormatter: (t: Time) => gmt7Crosshair(t) },
     });
     // The last price is our own price line (in the load below), so its axis tag carries dark text on the green and red
     // fills: the library's own tag is white there (2.3 to 1 on the bull fill).
@@ -187,6 +193,8 @@ export default function PriceChart() {
     });
     zonesRef.current = new ZonesPrimitive();
     candles.current.attachPrimitive(zonesRef.current);
+    entryRef.current = new ZonesPrimitive("anchored");
+    candles.current.attachPrimitive(entryRef.current);
     layerZonesRef.current = new ZonesPrimitive();
     candles.current.attachPrimitive(layerZonesRef.current);
     for (const [key, s] of Object.entries(LINE_STYLE) as [LineKey, (typeof LINE_STYLE)[LineKey]][]) {
@@ -195,7 +203,7 @@ export default function PriceChart() {
     volume.current = c.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
     c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chart.current = c;
-    return () => { c.remove(); chart.current = null; zonesRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lastLine.current = null; lines.current = {}; };
+    return () => { c.remove(); chart.current = null; zonesRef.current = null; entryRef.current = null; layerZonesRef.current = null; planLines.current = []; layerLines.current = []; lastLine.current = null; lines.current = {}; };
   }, []);
 
   // The zones and the plan follow the Global Conclusion (refreshed every 60 s).
@@ -228,6 +236,16 @@ export default function PriceChart() {
       line(p.tp2, `TP2 ${p.rrr?.tp2 ?? ""}R`, T.bullFill, LineStyle.Dotted);
     }
   }, [strategy, showZones, showPlan, mark.show, mark.dim, mark.suffix]);
+
+  // EZ1 (the reviewer's ruling 1): the Entry band from the engine's trade when the engine is on, else the strategy plan,
+  // so the chart and the Decision card show the same zone (feed scale); shown with the plan lines, dimmed with them while
+  // the decision is stale, dropped with them past the threshold.
+  useEffect(() => {
+    const clear = strategy?.decision === "BUY" || strategy?.decision === "SELL" || g?.engine?.stance === "BUY" || g?.engine?.stance === "SELL" || engine?.stance === "BUY" || engine?.stance === "SELL";
+    const ez = showPlan && clear && mark.show ? bandSource({ engine, strategy }).zone : null;
+    const narrow = (el.current?.clientWidth ?? 1000) < 480;
+    entryRef.current?.setZones(ez ? [{ low: ez.low, high: ez.high, color: T.okFill, alpha: mark.dim ? 0.08 : 0.16, text: mark.dim ? rgba(T.ok, 0.6) : T.ok, label: narrow ? "Entry zone · feed" : `Entry zone ${zoneText(ez)} · feed scale` }] : []);
+  }, [strategy, engine, g?.engine?.stance, showPlan, mark.show, mark.dim]);
 
   useEffect(() => {
     let fit = true;
@@ -394,14 +412,17 @@ export default function PriceChart() {
         <button type="button" aria-pressed={layers.liquidity} title="Whale zones, FVG targets, QM and RBS/SBR" className={chip(layers.liquidity)} onClick={() => setLayer("liquidity", !layers.liquidity)}>Liquidity</button>
         <button type="button" aria-pressed={layers.session} title="True day, week and month opens" className={chip(layers.session)} onClick={() => setLayer("session", !layers.session)}>Session</button>
       </div>
-      <div className="relative">
+      <div className="relative pt-4">
+        {/* Every price on this chart is the feed's (TradingView OANDA:XAUUSD), its times GMT+7 (the EZ1 mockup). */}
+        <span className="mono pointer-events-none absolute right-1 top-0 z-10 text-[9.5px] text-fg-2">feed</span>
         <div ref={el} className="h-[300px] w-full sm:h-[400px]" />
+        <span className="mono pointer-events-none absolute bottom-1 right-1 z-10 text-[9.5px] text-fg-2">GMT+7</span>
         {planHidden ? <div className="mono pointer-events-none absolute left-2 top-2 z-10 rounded-md border border-late-fill/35 bg-late-fill/10 px-2 py-0.5 text-[11px] text-late" title={staleTitle}>{mark.note}</div> : null}
       </div>
       <div className="mt-2 flex flex-wrap justify-between gap-2 text-[11px] text-muted">
-        <span>{head.error ? <span className="text-fault">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"}`}</span>
+        <span>{head.error ? <span className="text-fault">Chart data unavailable: {head.error}</span> : `TradingView closed bars · ${head.basis ?? "…"} · feed scale`}</span>
         <span className="normal-case tracking-normal">{plane ? `GMI levels from the ${PLANE_LABEL[planeTf]} snapshot` : "GMI levels: waiting for the chart plane"}</span>
-        {head.closed && <span className="mono normal-case tracking-normal">last closed bar {new Date(head.closed).toISOString().replace("T", " ").slice(0, 16)} UTC</span>}
+        {head.closed && <span className="mono normal-case tracking-normal">last closed bar {new Date(head.closed).toISOString().replace("T", " ").slice(0, 16)} UTC · {gmt7ClockOf(Date.parse(head.closed))} GMT+7</span>}
       </div>
     </Panel>
   );

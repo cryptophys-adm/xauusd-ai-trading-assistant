@@ -3,7 +3,8 @@
 // esbuild bundles scripts/render-entry.tsx as CommonJS for Node (an ESM bundle breaks on react-dom/server's dynamic
 // require), with lightweight-charts aliased to scripts/lw-stub.mjs. For each view of the registry it renders the
 // static markup (react-dom/server renderToStaticMarkup) over:
-//   - the fixture (test/fixtures/nexus-intel/*.json), which must also show the entry's `shows` texts;
+//   - the fixture (test/fixtures/nexus-intel/*.json, nexus-ez1/*.json), which must also show the entry's `shows` texts
+//     and none of its `hides` texts;
 //   - the not_found bodies: the AI Worker's unrouted /api/* answer { error: "Not found" }, the { status: "not_found" }
 //     of its per-key reads, a route's { status: "error" }, an empty object and null, plus the entry's own `missing`;
 //   - the fixture with each path nulled in turn;
@@ -115,6 +116,7 @@ function check(entries, render) {
       if (v.name === "fixture" && html != null) {
         if (!html.trim()) failures.push({ view: entry.name, variant: v.name, finding: "renders nothing" });
         for (const t of entry.shows ?? []) if (!html.includes(t)) failures.push({ view: entry.name, variant: v.name, finding: `does not show "${t}"` });
+        for (const t of entry.hides ?? []) if (html.includes(t)) failures.push({ view: entry.name, variant: v.name, finding: `shows "${t}"` });
       }
     }
     counts.push({ view: entry.name, variants: variants.length, capped });

@@ -1,0 +1,126 @@
+{
+  "status": "ok",
+  "global": {
+    "action": "BUY",
+    "bias": "BULLISH",
+    "score": 0.4,
+    "summary": "Buy the pullback into 1H demand.",
+    "strategy": {
+      "decision": "BUY",
+      "state": "SETUP_READY",
+      "direction": "LONG",
+      "confidence": 0.68,
+      "price": 2688.4,
+      "atr_h1": 2.8,
+      "min_rrr": 1,
+      "headline": "Pullback buy into 1H demand.",
+      "plan": {
+        "entry": 2684.9,
+        "entry_low": 2684.2,
+        "entry_high": 2685.6,
+        "stop": 2680.4,
+        "tp1": 2691.6,
+        "tp2": 2697.3,
+        "risk": 4.5,
+        "rrr": {
+          "tp1": 1.49,
+          "tp2": 2.76
+        },
+        "at_level": false,
+        "entry_note": "zone 2683.60\u20132686.60 \u00b7 pullback",
+        "stop_note": "below 1H demand",
+        "progressive_stop": 2684.9,
+        "tp1_note": "target \u00b7 1H supply",
+        "tp2_note": ""
+      },
+      "key_levels": {
+        "price": 2688.4,
+        "candidates": [
+          {
+            "low": 2683.6,
+            "high": 2686.6,
+            "role": "support",
+            "strength": "medium",
+            "sources": 3,
+            "label": "1H demand",
+            "key": true
+          },
+          {
+            "low": 2690.9,
+            "high": 2692.3,
+            "role": "resistance",
+            "strength": "medium",
+            "sources": 3,
+            "label": "1H supply"
+          }
+        ]
+      },
+      "layers": [],
+      "vetoes": [],
+      "cautions": []
+    },
+    "timeframes": []
+  },
+  "engine": {
+    "decision_key": "OANDA:XAUUSD:15:1795096800000",
+    "stance": "BUY",
+    "bias": "BULLISH",
+    "source": "council",
+    "trading_mode": "intraday",
+    "confidence": 0.68,
+    "bar_close": "2026-11-19T14:00:00.000Z",
+    "latency_seconds": 42,
+    "entry_zone_mode": "edge",
+    "quorum": {
+      "score": 0.4,
+      "long_share": 0.7,
+      "short_share": 0.3,
+      "neutral_share": 0.16
+    },
+    "witnesses": [],
+    "reasons": [],
+    "risks": [],
+    "cautions": [],
+    "rules": {
+      "min_rrr": 1
+    },
+    "summary": "BUY: the council follows the pullback into 1H demand.",
+    "strategy": {
+      "price": 2688.4
+    },
+    "key_levels": [
+      {
+        "low": 2683.6,
+        "high": 2686.6,
+        "role": "support",
+        "strength": "medium",
+        "sources": 3,
+        "label": "1H demand",
+        "key": true
+      }
+    ],
+    "trade": {
+      "side": "BUY",
+      "entry": 2684.9,
+      "entry_low": 2684.2,
+      "entry_high": 2685.6,
+      "stop": 2680.4,
+      "tp1": 2691.6,
+      "tp2": 2697.3,
+      "risk": 4.5,
+      "rrr": 1.49,
+      "rrr_all": {
+        "tp1": 1.49,
+        "tp2": 2.76
+      },
+      "target": "tp1",
+      "tp_note": "1H supply",
+      "at_level": false,
+      "entry_note": "pullback",
+      "stop_note": "below 1H demand",
+      "progressive_stop": 2684.9,
+      "agent": "default"
+    }
+  },
+  "setups": []
+}
