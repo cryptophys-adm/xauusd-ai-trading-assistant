@@ -24,6 +24,11 @@
 //            actions, and v4's replay of a position the layer protects. Written with the layer on only.
 // `pmFast` (PM-1M, 2026-11-23) sets pm_fast_1m on every input the same way: "off" gives the text of the engine before
 // PM-1M byte for byte (CH1's 169243f2…; test/pm-fast.test.mjs).
+//   re       RE1's cases (test/fixtures/reentry-1m.mjs): the eligibility of exits, the re-entry's check over its
+//            guards, its triggers through planIntents' opening checks, and v4's replay of a break-even stop re-entered.
+//            Written with the re-entry on only.
+// `reentry` (RE1, 2026-11-23) sets reentry_1m on every input the same way: "off" gives the text of the engine before
+// RE1 byte for byte (PM-1M's d0def5bb…; test/reentry-1m.test.mjs).
 import { planIntents } from "../../src/omega-engine.mjs";
 import { replayOmega4, eraSwitches } from "../../src/ledger-omega4.mjs";
 import { handInputs, replayScenarios } from "./omega-market-path.mjs";
@@ -31,16 +36,18 @@ import { pmOffOutputs } from "./pm-a8-off.mjs";
 import { v4ReplayScenarios, base, retraceCase } from "./omega-v4-replay.mjs";
 import { changeLines } from "./change-thresholds.mjs";
 import { fastLines } from "./pm-fast.mjs";
+import { reentryLines } from "./reentry-1m.mjs";
 
 const atDefaults = (name, settings) => {
   const on = eraSwitches(settings);
   if (on.length) throw new Error(`${name}: a behaviour switch is on (${on.join(", ")}); the fingerprint is taken with every switch at its default`);
 };
-let changeOverride = null, fastOverride = null;
+let changeOverride = null, fastOverride = null, reOverride = null;
 const withGate = (settings, gate) => {
   const s = gate ? { ...settings, profit_lock_gate: gate } : settings;
   const c = changeOverride != null ? { ...s, change_thresholds: changeOverride } : s;
-  return fastOverride != null ? { ...c, pm_fast_1m: fastOverride } : c;
+  const f = fastOverride != null ? { ...c, pm_fast_1m: fastOverride } : c;
+  return reOverride != null ? { ...f, reentry_1m: reOverride } : f;
 };
 const replayLines = (group, scenarios, gate = null) => {
   const lines = [];
@@ -56,10 +63,11 @@ const replayLines = (group, scenarios, gate = null) => {
 };
 
 /** The text ENGINE_BEHAVIOUR_HASH is taken of (sha256Hex of it). */
-export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null, pmFast = null } = {}) {
+export function engineBehaviourSource({ profitLockGate = null, changeThresholds = null, pmFast = null, reentry = null } = {}) {
   changeOverride = changeThresholds == null ? null : changeThresholds === "" ? "off" : changeThresholds;
   fastOverride = pmFast == null ? null : pmFast;
-  try { return behaviourText(profitLockGate); } finally { changeOverride = null; fastOverride = null; }
+  reOverride = reentry == null ? null : reentry;
+  try { return behaviourText(profitLockGate); } finally { changeOverride = null; fastOverride = null; reOverride = null; }
 }
 function behaviourText(profitLockGate) {
   const lines = [];
@@ -96,5 +104,7 @@ function behaviourText(profitLockGate) {
   if (changeOverride !== "off") lines.push(...changeLines(changeOverride ?? undefined));
   // PM-1M (2026-11-23): the 1m layer's own cases, only with it on (they are absent from the text before PM-1M).
   if (fastOverride !== "off") lines.push(...fastLines());
+  // RE1 (2026-11-23): the re-entry's own cases, only with it on (they are absent from the text before RE1).
+  if (reOverride !== "off") lines.push(...reentryLines());
   return lines.join("\n");
 }

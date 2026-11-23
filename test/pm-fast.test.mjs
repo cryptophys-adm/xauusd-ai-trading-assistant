@@ -395,8 +395,9 @@ test("F10. off is byte for byte today: the sync reads no stream and writes no fa
   await writeSettings(k, { body: { enabled: false }, actor: "owner" }, { now: NOW - 10_000 });
   await sync(k);
   assert.equal(k.DB.raw.prepare("SELECT COUNT(*) AS n FROM position_actions").get().n, 0);
-  // Every fixture with pm_fast_1m "off" gives the behaviour text before PM-1M: CH1's hash, byte for byte.
-  assert.equal(await sha256Hex(engineBehaviourSource({ pmFast: "off" })), BEFORE_PM1M_HASH);
+  // Every fixture with pm_fast_1m "off" gives the behaviour text before PM-1M: CH1's hash, byte for byte (RE1, 2026-11-23:
+  // with the 1m re-entry off too, the engine before it).
+  assert.equal(await sha256Hex(engineBehaviourSource({ pmFast: "off", reentry: "off" })), BEFORE_PM1M_HASH);
   assert.notEqual(ENGINE_BEHAVIOUR_HASH, BEFORE_PM1M_HASH, "the layer on is a new era (a recorded exception)");
   const text = engineBehaviourSource();
   assert.equal(await sha256Hex(text), ENGINE_BEHAVIOUR_HASH);

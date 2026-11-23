@@ -18,6 +18,9 @@
 //               the live account had one (D1 position_actions.council), else none: the mechanical fallback;
 //   PM-1M       fastProtect (src/pm-fast.mjs) at every minute with a position, after the Position Manager, on these 1m
 //               bars (the live sync evaluates each closed broker minute), while pm_fast_1m is "on";
+//   RE1         reentryCheck (src/reentry-1m.mjs) at every minute after a profit-lock stop's exit, on these 1m bars (the
+//               live sync evaluates each closed broker minute), while reentry_1m is "on": a trigger is planIntents'
+//               reentry1m, its open a trade of its own (key "re:<the setup's decision key>");
 //   broker      the stop and the target at the broker, inside each minute (a gap at the open exits at the open; within
 //               the minute the stop first), a SELL closing at the ask (the bid plus the fixed spread).
 // It never feeds a room, a prompt or a decision, and nothing here is sent to Aether or the platform. R is the unit:
@@ -55,6 +58,8 @@ import * as changeThresholds from "./change-thresholds.mjs";
 import { decisionHistory, changeTokens, CHANGE_TOKENS, heldTag } from "./change-thresholds.mjs";
 import { fastProtect, fastMeta, fastId, pmFastOn, PM_FAST_1M } from "./pm-fast.mjs";
 import * as pmFast from "./pm-fast.mjs";
+import { reentryOn, reentrySetup, reentryCheck, isReentryId, REENTRY_1M } from "./reentry-1m.mjs";
+import * as reentry1m from "./reentry-1m.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -235,6 +240,8 @@ export function replayOmega4({
   const changes = changeTokens(S);
   // PM-1M (2026-11-23, src/pm-fast.mjs): the 1m fast layer, at every minute with a position, on these 1m bars.
   const fastOn = pmFastOn(S);
+  // RE1 (2026-11-23, src/reentry-1m.mjs): the latest exit's re-entry setup, checked at every minute on these 1m bars.
+  const reOn = reentryOn(S);
   const start = finite(from) ? from : (m1.length ? m1[0].t + OMEGA4_SIM.warmup_ms : Infinity);
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
@@ -247,6 +254,7 @@ export function replayOmega4({
   let reentry = carried.reentry && finite(carried.reentry.exit_ms) ? { ...carried.reentry } : null;
   let ownBalance = finite(carried.balance) ? carried.balance : OMEGA4_SIM.start_balance;
   let ownDayMs = finite(carried.day_ms) ? carried.day_ms : null, ownDayStart = finite(carried.day_start) ? carried.day_start : ownBalance;
+  let reSetup = reOn && carried.re_setup && typeof carried.re_setup === "object" && finite(carried.re_setup.exit_ms) ? { ...carried.re_setup } : null;
 
   const positions = Array.isArray(carried.positions) ? clone(carried.positions) : [];
   const trades = new Map((Array.isArray(carried.trades) ? clone(carried.trades) : []).map((t) => [t.key, t])); // decision key -> trade
@@ -292,6 +300,12 @@ export function replayOmega4({
     positions.splice(positions.indexOf(p), 1);
     t.status = "closed"; t.closed_ms = now; t.exit = code; t.r = rOf(t, t.realized);
     if (REENTRY_EXIT_REASONS.includes(code)) reentry = { side: p.side, ticket: p.ticket, exit_price: price, exit_ms: now, entry_conf: finite(p.open_intent?.agent_conf) ? p.open_intent.agent_conf : null };
+    // RE1: the latest exit is the setup when a profit-lock stop closed an original entry (as live reads its last deal).
+    if (reOn) {
+      const rs = reentrySetup({ ticket: p.ticket, side: p.side, intentId: p.intent_id, entry: p.open_price, stopHit: code === "sl_plus" || code === "stop", stop: p.sl, stopRule: p.sl_rule ?? null, exitMs: now, exitPrice: price,
+        open: p.open_intent, realized: t.realized * MONEY_PER_PRICE_LOT, moneyPerPriceLot: MONEY_PER_PRICE_LOT });
+      reSetup = rs.eligible ? { ...rs.setup, key: p.key, used: false } : null;
+    }
   };
   const brokerExit = (p, kind) => {
     if (kind === "stop") return isProtected(p) ? "sl_plus" : "stop";
@@ -299,8 +313,8 @@ export function replayOmega4({
   };
   const execPos = (p) => ({ ticket: p.ticket, side: p.side, volume: p.volume, open_price: p.open_price, sl: p.sl, tp: p.tp, source: "omega", magic: 920200, intent_id: p.intent_id, opened_ms: p.opened_ms, symbol: "XAUUSD" });
   // An open intent becomes a simulated position and its trade (v4's market fill, or another entry policy's fill).
-  const openTrade = ({ key, it, now, issuedMs, mode, agent, equity, profile, noteCodes = [], extra = null }) => {
-    const pos = { key, ticket: Math.floor(issuedMs / M1) * 10 + (it.side === "BUY" ? 1 : 2), side: it.side, volume: it.volume, open_price: it.entry, sl: it.sl, tp: it.tp, tp0: it.tp, intent_id: it.id, opened_ms: now, open_intent: { ...it } };
+  const openTrade = ({ key, it, now, issuedMs, mode, agent, equity, profile, noteCodes = [], extra = null, ticket = null }) => {
+    const pos = { key, ticket: finite(ticket) ? ticket : Math.floor(issuedMs / M1) * 10 + (it.side === "BUY" ? 1 : 2), side: it.side, volume: it.volume, open_price: it.entry, sl: it.sl, tp: it.tp, tp0: it.tp, intent_id: it.id, opened_ms: now, open_intent: { ...it } };
     positions.push(pos);
     if (entry) emitted.push({ id: it.id, ms: now, it });
     const stopDist = Math.abs(it.entry - it.sl);
@@ -352,7 +366,18 @@ export function replayOmega4({
     if (entryKey && signal?.side === "NONE" && d && now < d.close_ms + M15 && !trades.has(entryKey)) notes.set(entryKey, { gate: awaitingGate(signal.awaiting_reason), last_ms: now });
     // Flat and no entry window open: nothing in planIntents can act (it would only open), so the minute is skipped,
     // unless another entry policy still has an order resting (its cancels and its fill are checked; nothing to plan).
-    const restingOnly = !positions.length && !entryLive;
+    // RE1: the setup's check on the closed 1m bars before this minute (live: each newly closed broker minute); a trigger
+    // is planned even while flat. The bars carry v4's fixed spread and no receipt time.
+    let reCand = null;
+    if (reSetup && !reSetup.used) {
+      const fromT = Math.min(Math.floor(reSetup.exit_ms / M1) * M1, now - REENTRY_1M.median_min * M1) - 25 * M1;
+      let lo = 0, hi = k;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (m1[mid].t < fromT) lo = mid + 1; else hi = mid; }
+      const c = reentryCheck({ setup: reSetup, signal, bars: m1.slice(lo, k).map((b) => ({ ...b, s: spreadPts })), now, sym: { point: OMEGA4_SIM.point, digits: 2, spread_points: spreadPts } });
+      if (c.status === "trigger") reCand = c;
+      else if (c.status === "invalid" && c.code === "window") reSetup = null;
+    }
+    const restingOnly = !positions.length && !entryLive && !reCand;
     if (restingOnly && !entry?.busy()) continue;
 
     // The M15 ATR(14) the terminal reports (its forming bar included), from the 1m bars.
@@ -459,7 +484,7 @@ export function replayOmega4({
       // The ladder's closed candles as ladderCandles builds them (lastClosedCandle over the last 125 1m bars); {} when flat, as live.
       const candles = recentBars ? { M5: lastClosedCandle(recentBars, 5, now), M15: lastClosedCandle(recentBars, 15, now), H1: lastClosedCandle(recentBars, 60, now) } : {};
       const re = reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null;
-      const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops, ...(gates ? { gates } : {}) };
+      const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops, ...(gates ? { gates } : {}), ...(reCand ? { reentry1m: reCand } : {}) };
       const out = plan(input);
       plans += 1;
       if (trace) trace.push({ now, input, output: out });
@@ -484,11 +509,21 @@ export function replayOmega4({
         if (entry && it.kind === "open") continue;
         emitted.push({ id: it.id, ms: now, it });
         const p = it.ticket != null ? positions.find((x) => x.ticket === it.ticket) : null;
-        if (it.kind === "open") {
+        if (it.kind === "open" && isReentryId(it.id)) {
+          // RE1: the re-entry, a trade of its own under the setup's key (its own ticket), once per setup.
+          if (!reSetup || reSetup.used) continue;
+          const key = `re:${reSetup.key}`;
+          if (trades.has(key)) continue;
+          const q = openTrade({ key, it, now, issuedMs: finite(reSetup.issued_ms) ? reSetup.issued_ms : signal.issued_ms, mode: it.mode ?? reSetup.mode ?? null, agent: it.strategy ?? null, equity: executor.account.equity, profile, noteCodes: out.notes.map((n) => n.code), ticket: reSetup.ticket * 10 + 9 });
+          tradeOf(q).reentry = { of: reSetup.key, lock: reSetup.lock, lock_rule: reSetup.lock_rule, exit_at: iso(reSetup.exit_ms) };
+          reSetup.used = true;
+        } else if (it.kind === "open") {
           const key = signal.signal_id;
           if (!key || trades.has(key)) continue;
           openTrade({ key, it, now, issuedMs: signal.issued_ms, mode: it.mode ?? signal.trading_mode ?? null, agent: it.strategy ?? (signal.trade_agent || null), equity: executor.account.equity, profile, noteCodes: out.notes.map((n) => n.code) });
           opened = true;
+          // RE1: another entry since the exit ends the setup (live: an open intent after the exit).
+          if (reOn) reSetup = null;
         } else if (it.kind === "close_all") {
           for (const q of positions.slice()) closePos(q, priceOut(q, bid0, ask0), it.reason ?? "kill", now);
         } else if (!p) {
@@ -499,7 +534,7 @@ export function replayOmega4({
           closePos(p, priceOut(p, bid0, ask0), it.reason ?? "partial", now, it.volume);
         } else if (it.kind === "modify_sl" || it.kind === "modify_tp" || it.kind === "modify_sltp") {
           const t = tradeOf(p);
-          if ((it.kind === "modify_sl" || it.kind === "modify_sltp") && finite(it.sl) && it.sl > 0 && it.sl !== p.sl) { p.sl = it.sl; t.sl_moves += 1; if (t.protected_ms == null && isProtected(p)) t.protected_ms = now; }
+          if ((it.kind === "modify_sl" || it.kind === "modify_sltp") && finite(it.sl) && it.sl > 0 && it.sl !== p.sl) { p.sl = it.sl; t.sl_moves += 1; if (t.protected_ms == null && isProtected(p)) t.protected_ms = now; if (reOn) p.sl_rule = typeof it.reason === "string" ? it.reason : null; }
           if ((it.kind === "modify_tp" || it.kind === "modify_sltp") && finite(it.tp) && it.tp > 0 && it.tp !== p.tp) { p.tp = it.tp; t.tp_moves += 1; }
         }
       }
@@ -559,7 +594,8 @@ export function replayOmega4({
     version, at_ms: nextMs, recent, reentry: reentry && nextMs - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null,
     balance: r2(ownBalance), day_ms: ownDayMs, day_start: r2(ownDayStart),
     positions: clone(positions), trades: clone([...trades.values()].filter((t) => t.status === "open")), notes: [...notes].filter(([, n]) => n.last_ms > nextMs - 3600_000),
-    ...(entry ? { entry: entry.state() } : {})
+    ...(entry ? { entry: entry.state() } : {}),
+    ...(reSetup ? { re_setup: reSetup } : {})
   };
   return { records, checkpoint, steps, plans, pm_calls: pmCalls, decisions: decs.length, last_ms: lastMs, more, open_positions: positions.length };
 }
@@ -569,7 +605,8 @@ function toRecord(t, { openR = null, version = OMEGA4_VERSION } = {}) {
     version, entry_ms: t.filled_ms, profile: t.profile, risk_pct: t.risk_pct, stop_source: t.stop_source, entry_notes: t.entry_notes,
     protected_at: t.protected_ms != null ? iso(t.protected_ms) : null, sl_moves: t.sl_moves, tp_moves: t.tp_moves, partials: t.partials,
     exits: t.exits, pm: t.pm.slice(-20), pm_council: t.pm_council, mfe_r: r3(t.mfe), mae_r: r3(t.mae), open_r: openR,
-    ...(t.extra ? { entry_policy: t.extra } : {})
+    ...(t.extra ? { entry_policy: t.extra } : {}),
+    ...(t.reentry ? { reentry: t.reentry } : {})
   };
   return {
     decision_key: t.key, side: t.side, issued_ms: t.issued_ms, trading_mode: TRADING_MODES.includes(t.mode) ? t.mode : null, agent: t.agent,
@@ -601,6 +638,8 @@ export const ENGINE_CODE = Object.freeze({
     "stampGate",
     // PM-1M (2026-11-23): Omega's check of the 1m layer's actions.
     "fastIntent"]],
+  // RE1 (2026-11-23): the 1m re-entry after a profit-lock stop (its table, the setup, the check, the live step).
+  "reentry-1m": [reentry1m, ["reentryOn", "reentryId", "isReentryId", "isEntryIntentId", "reentrySetup", "reentryCheck", "liveSetup", "runReentry", "recordReentry", "isLockRule", "REENTRY_1M", "REENTRY_LOCK_PATTERN", "REENTRY_RULE", "REENTRY_MODES", "REENTRY_READ_MIN", "REENTRY_RETRY_MS"]],
   // CH1 (2026-11-23): the change thresholds (their tokens, per-mode thresholds, the decision history, the measured falls).
   "change-thresholds": [changeThresholds, ["normalizeChangeThresholds", "changeTokens", "changeOn", "changeRule", "trendFor", "decisionHistory", "sideReadings", "measuredFall", "stanceAgainstConfirmed", "pendingShareFall", "heldText", "heldTag", "CHANGE_TOKENS", "CHANGE_THRESHOLDS_ALL", "CHANGE_THRESHOLDS_OFF", "SHARE_FALL_MIN", "CONFIRM_DECISIONS", "CONFIDENCE_CHANGE_MIN"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
@@ -659,7 +698,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "5b9db4dcfbded3a9a55686dbed866e7980569837f19ee3217ed91a5c5af3b3ae";
+export const ENGINE_CODE_HASH = "6a91298d6d5323d9bef4fcf5744e768aee26a0508ea455db1efd0610ac5af6e9";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -685,10 +724,15 @@ export const ENGINE_CODE_HASH = "5b9db4dcfbded3a9a55686dbed866e7980569837f19ee32
  * "off" on every input the fixtures still give that hash byte for byte (test/pm-fast.test.mjs F10). The fingerprint
  * also covers the layer's own cases (test/fixtures/pm-fast.mjs: its triggers, noise rules, Omega's check and two v4
  * replays), written with it on only.
+ * RE1 (owner 2026-11-23, "Live: gerbang + re-entry (Rekomendasi)", a recorded exception): the 1m re-entry after a
+ * profit-lock stop on by default moved it from d0def5bb1a982e391d9491ff1e7a8e13289f700db5e8a0490c2f8ffccff55120, a new
+ * era at its deploy; with reentry_1m "off" on every input the fixtures still give that hash byte for byte
+ * (test/reentry-1m.test.mjs R13). The fingerprint also covers the re-entry's own cases (test/fixtures/reentry-1m.mjs: the
+ * eligibility of exits, its guards, its triggers through planIntents and a v4 replay), written with it on only.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "d0def5bb1a982e391d9491ff1e7a8e13289f700db5e8a0490c2f8ffccff55120";
+export const ENGINE_BEHAVIOUR_HASH = "39c10287e884bba0469ee4557bada444601c5a7d6a209e3231471336a841c4f1";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns
@@ -705,7 +749,9 @@ export const ENGINE_BEHAVIOUR_HASH = "d0def5bb1a982e391d9491ff1e7a8e13289f700db5
 // starts a new era at that time.
 // pm_fast_1m (PM-1M, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
 // owner setting it to "off" writes "pm_fast_1m=off" and starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m"]);
+// reentry_1m (RE1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
+// owner setting it to "off" writes "reentry_1m=off" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
@@ -900,7 +946,8 @@ export function liveTradesFrom({ deals = [], opens = {}, closes = {} } = {}) {
     out.push({
       signal_issued_ms: Number(open.signal_issued_ms), side: open.side ?? last.side, mode: open.mode ?? null,
       opened_ms: Number(list[0].opened_ms) || null, closed_ms: Number(last.closed_ms) || null,
-      r: risk > 0 ? r3(profit / risk) : null, exit: liveExitCode(last, closes[g.ticket] ?? null), partial_exits: list.length - 1
+      r: risk > 0 ? r3(profit / risk) : null, exit: liveExitCode(last, closes[g.ticket] ?? null), partial_exits: list.length - 1,
+      ...(open.reentry === true ? { reentry: true } : {})
     });
   }
   return out.sort((a, b) => a.signal_issued_ms - b.signal_issued_ms);
@@ -918,14 +965,17 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
   const expectedSet = new Set(Array.isArray(expected) ? expected : []);
   const eraSince = finite(era?.since_ms) ? era.since_ms : PARITY_CURRENT_CODE_MS;
   const rowOf = new Map();
-  for (const r of ledgerRows) { const c = decisionCloseMs(r?.decision_key); if (finite(c)) rowOf.set(`${c}|${r.side}`, r); }
+  // RE1: a re-entry is a trade of its own: v4's "re:" row against the live trade whose open intent re-entered (`reentry`).
+  const reTag = (x) => (x ? "|re" : "");
+  const isRe = (r) => String(r?.decision_key ?? "").startsWith("re:");
+  for (const r of ledgerRows) { const c = decisionCloseMs(r?.decision_key); if (finite(c)) rowOf.set(`${c}|${r.side}${reTag(isRe(r))}`, r); }
   // Decisions live still holds open: not compared yet (neither side has a final result).
-  const used = new Set((Array.isArray(liveOpen) ? liveOpen : []).map((o) => `${o.signal_issued_ms}|${o.side}`)), trades = [];
+  const used = new Set((Array.isArray(liveOpen) ? liveOpen : []).map((o) => `${o.signal_issued_ms}|${o.side}${reTag(o.reentry === true)}`)), trades = [];
   for (const l of liveTrades) {
     if (!(l.signal_issued_ms >= sinceMs) || !(l.signal_issued_ms <= untilMs)) continue;
-    const key = `${l.signal_issued_ms}|${l.side}`;
+    const key = `${l.signal_issued_ms}|${l.side}${reTag(l.reentry === true)}`;
     const v = rowOf.get(key);
-    const row = { issued_at: iso(l.signal_issued_ms), side: l.side, mode: l.mode ?? v?.trading_mode ?? null, live_code: (l.opened_ms ?? l.signal_issued_ms) >= eraSince ? "current" : "earlier", matched: Boolean(v), live_exit: l.exit, v4_exit: null, live_r: l.r, v4_r: null, dr: null, entry_diff_s: null, same_exit: false, cause: null };
+    const row = { issued_at: iso(l.signal_issued_ms), side: l.side, mode: l.mode ?? v?.trading_mode ?? null, live_code: (l.opened_ms ?? l.signal_issued_ms) >= eraSince ? "current" : "earlier", matched: Boolean(v), live_exit: l.exit, v4_exit: null, live_r: l.r, v4_r: null, dr: null, entry_diff_s: null, same_exit: false, cause: null, ...(l.reentry === true ? { reentry: true } : {}) };
     if (!v) { row.cause = "no v4 row for this decision (outside the replay's span)"; trades.push(row); continue; }
     used.add(key);
     row.v4_status = v.omega4_status;
@@ -951,10 +1001,10 @@ export function omegaParity({ ledgerRows = [], liveTrades = [], liveOpen = [], s
   }
   for (const r of ledgerRows) {
     const c = decisionCloseMs(r?.decision_key);
-    if (!finite(c) || used.has(`${c}|${r.side}`) || !(c >= sinceMs) || !(c <= untilMs)) continue;
+    if (!finite(c) || used.has(`${c}|${r.side}${reTag(isRe(r))}`) || !(c >= sinceMs) || !(c <= untilMs)) continue;
     if (r.omega4_status !== "closed") continue;
     if (expectedSet.has(`${c}|${r.side}`)) continue;
-    trades.push({ issued_at: iso(c), side: r.side, mode: r.trading_mode ?? null, live_code: c >= eraSince ? "current" : "earlier", matched: false, v4_only: true, live_exit: null, v4_exit: r.omega4_exit ?? null, live_r: null, v4_r: r.r_omega4 ?? null, dr: null, entry_diff_s: null, same_exit: false, v4_status: r.omega4_status, cause: "v4 traded it, live did not" });
+    trades.push({ issued_at: iso(c), side: r.side, mode: r.trading_mode ?? null, live_code: c >= eraSince ? "current" : "earlier", matched: false, v4_only: true, live_exit: null, v4_exit: r.omega4_exit ?? null, live_r: null, v4_r: r.r_omega4 ?? null, dr: null, entry_diff_s: null, same_exit: false, v4_status: r.omega4_status, cause: "v4 traded it, live did not", ...(isRe(r) ? { reentry: true } : {}) });
   }
   trades.sort((a, b) => a.issued_at.localeCompare(b.issued_at));
   // Only the trades of the current era count; the earlier ones are shown apart.
@@ -1171,7 +1221,7 @@ export async function loadLiveTrades(env, { sinceMs = PARITY_SINCE_MS } = {}) {
     const part = tickets.slice(i, i + 50), marks = part.map(() => "?").join(", ");
     for (const r of (await db.prepare(`SELECT payload, json_extract(result, '$.ticket') AS ticket FROM omega_intents WHERE kind = 'open' AND json_extract(result, '$.ticket') IN (${marks})`).bind(...part).all()).results ?? []) {
       const p = parse(r.payload, {});
-      opens[Number(r.ticket)] = { entry: p.entry, sl: p.sl, volume: p.volume, r_dist: p.r_dist, signal_issued_ms: p.signal_issued_ms, side: p.side, mode: p.mode ?? null };
+      opens[Number(r.ticket)] = { entry: p.entry, sl: p.sl, volume: p.volume, r_dist: p.r_dist, signal_issued_ms: p.signal_issued_ms, side: p.side, mode: p.mode ?? null, ...(p.reentry_of != null ? { reentry: true } : {}) };
     }
     for (const r of (await db.prepare(`SELECT payload, created_ms FROM omega_intents WHERE kind IN ('close', 'close_all') AND json_extract(payload, '$.ticket') IN (${marks}) ORDER BY created_ms`).bind(...part).all()).results ?? []) {
       const p = parse(r.payload, {});
@@ -1184,7 +1234,7 @@ export async function loadLiveTrades(env, { sinceMs = PARITY_SINCE_MS } = {}) {
   try {
     const rows = (await db.prepare("SELECT payload, json_extract(result, '$.ticket') AS ticket FROM omega_intents WHERE kind = 'open' AND status = 'done' AND created_ms >= ?").bind(sinceMs).all()).results ?? [];
     const closed = new Set(deals.map((d) => Number(d.position_ticket)));
-    open = rows.filter((r) => Number(r.ticket) > 0 && !closed.has(Number(r.ticket))).map((r) => { const p = parse(r.payload, {}); return { signal_issued_ms: Number(p.signal_issued_ms), side: p.side }; }).filter((o) => finite(o.signal_issued_ms));
+    open = rows.filter((r) => Number(r.ticket) > 0 && !closed.has(Number(r.ticket))).map((r) => { const p = parse(r.payload, {}); return { signal_issued_ms: Number(p.signal_issued_ms), side: p.side, ...(p.reentry_of != null ? { reentry: true } : {}) }; }).filter((o) => finite(o.signal_issued_ms));
   } catch { open = []; }
   return { trades, open };
 }

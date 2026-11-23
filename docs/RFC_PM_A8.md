@@ -80,3 +80,15 @@ Provenance: owner 2026-11-23, relayed by the orchestrator: "deploy semuanya live
 - **Records.** `position_actions` rows `pm1:<ticket>:<bar minute>` (rule `pm_fast_tp` or `pm_fast_cut`, `council` null), Omega's intent under the same id (`fastIntent`), the Position Manager's Telegram line.
 
 Tests: test/pm-fast.test.mjs F1 to F12; the fixture test/fixtures/pm-fast.mjs.
+
+## 9. RE1: the 1m re-entry after a profit-lock stop (2026-11-23)
+
+Provenance: owner 2026-11-23, relayed by the orchestrator, verbatim: "Live: gerbang + re-entry (Rekomendasi)". SLG1 (the gate) went first; this is the re-entry. Live on merge, behind the Omega setting `reentry_1m` ("on" by default, "off" is the engine before it byte for byte). The canonical description is docs/SSOT.md ("The 1m re-entry after a profit-lock stop"); this section records how it sits beside the council, the gate and PM-1M.
+
+- **An entry, not a management step.** The re-entry opens a new position through `planIntents` and every opening check (the profile's caps, `tick_value_mismatch`, `volume_below_min`, `PLATFORM_MAX_OPEN`, the daily loss limit and budget, kill, pause, the engine switch); it never touches an open position and the council never decides it. Its money at risk is at most the original trade's, and the setup's total loss at most 1.0R of the original.
+- **Only after a profit-lock stop.** The setup is an original entry stopped out at a stop Omega had moved to or beyond the entry by a profit-lock rule (break-even, the ladder's lock, the key-level SL+, the Position Manager's break-even, TP2 break-even or TP1 lock, PM-1M's lock), so after SLG1 every such stop sat past the gate. The council's own exits (`cut_loss`, `take_profit_weakening`) are never a setup: they keep `reentryGate` (its cooldown also binds a re-entry). A stop the council loosened (Amendment 8) or a stop tightened in loss is not a lock either.
+- **PM-1M's stream and noise rules.** The trigger reads the closed broker M1 bars PM-1M reads, with its identity, freshness, warm-up, ATR1m and quarantines; the reopen window is RE1's own (23:00-23:15 UTC and 15 minutes after any reopen, against PM-1M's 5).
+- **Managed as Omega's own.** The re-entry's intent id `re:<ticket>:<minute>` is an entry id (`isEntryIntentId`): the Position Manager, its council, PM-1M, the ladder, SLG1 and Amendment 8 manage the new position exactly as an `open:` one, with its own stop distance and the original's mode.
+- **Deviations from the brief.** The switch is the Omega setting `reentry_1m` in `ERA_SWITCHES` (the brief said an ERA_SWITCH `REENTRY_1M`; SLG1, CH1 and PM-1M set the precedent, and there is no environment variable). The plan's validity is 240 minutes from the plan's issue (the decisions carry no `valid_until`). "0.1 × ATR" in the stop's buffer is ATR1m(14), PM-1M's. A trigger is the latest closed bar beyond the lock (no fresh cross is required). The latest decision on the same side means the signal's own side (a decision still waiting for its entry trigger has none, so the re-entry waits).
+
+Tests: test/reentry-1m.test.mjs R1 to R13; the fixture test/fixtures/reentry-1m.mjs.
