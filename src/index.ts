@@ -296,6 +296,7 @@ import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
 import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge, runShadowClosures } from "./shadow-knowledge.mjs";
 import { runLearnedPromotion, readLearnedLive } from "./learned-live.mjs";
+import { postKnowledgeVerdicts } from "./knowledge-verdicts.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
@@ -3307,11 +3308,20 @@ export default {
           // KA1 (owner 2026-11-24: "buka arm, biarkan system menilai dirinya sendiri"): after the promotion, an item whose
           // final shadow verdict is not better, failed its holdout or is worse closes by itself (learned_live 'retired');
           // the first run settles the items tested until #492 once (KV shadow-knowledge:settle:v1). Only with the arm on.
+          let closurePlan: unknown = null;
           try {
             const closures = await runShadowClosures(env);
+            if (closures.status === "ok") closurePlan = closures.plan ?? null;
             if (closures.status !== "disabled" && (closures.status !== "ok" || closures.closed?.length || closures.settle)) console.log("shadow_knowledge_closures", JSON.stringify({ ...closures, message: undefined }));
             if (closures.message) await sendTelegram(env, String(closures.message)).catch((e) => console.error("shadow_knowledge_closures_telegram_failed", e instanceof Error ? e.message : String(e)));
           } catch (e) { console.error("shadow_knowledge_closures_failed", e instanceof Error ? e.message : String(e)); }
+          // KA2 (platform PF3, knowledge.verdict): the arm's verdicts posted to the platform as the shadow-knowledge agent,
+          // for Aether's curator: one call per item on each verdict change, collecting at most once a UTC day. Off unless
+          // SHADOW_KNOWLEDGE_ENABLED and KNOWLEDGE_VERDICT_POSTS "on" (src/knowledge-verdicts.mjs). One log line, no Telegram.
+          try {
+            const verdicts = await postKnowledgeVerdicts(env, { plan: closurePlan });
+            if (!["disabled", "unavailable", "no_plan"].includes(verdicts.status) && (verdicts.status !== "ok" || verdicts.posted?.length || verdicts.not_found?.length || verdicts.invalid?.length || verdicts.stopped)) console.log("knowledge_verdicts", JSON.stringify(verdicts));
+          } catch (e) { console.error("knowledge_verdicts_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
           // Neuron allocation by reputation (owner 2026-11-14, src/agent-allocation.mjs): a room agent below 45% over

@@ -197,6 +197,15 @@
           ],
           "tier_max": 1,
           "voter": false
+        },
+        {
+          "id": "shadow-knowledge",
+          "display_name": "Shadow Knowledge",
+          "capabilities": [
+            "knowledge.verdict"
+          ],
+          "tier_max": 1,
+          "voter": false
         }
       ],
       "engines": [
