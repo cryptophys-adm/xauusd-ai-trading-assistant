@@ -16,6 +16,7 @@ import { knobById, KNOBS_KEY, resetKnobCache } from "./council-knobs.mjs";
 import { bootstrapLow } from "./grid-adapt.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
 import { proposalReport, ensureSessionSchema } from "./cfc-session.mjs";
+import { ensurePlanLearningSchema } from "./plan-learning.mjs";
 
 export const KNOB_GATE = Object.freeze({ min_changed: 30, min_gain_r: 0.05, recent_share: 0.25, recent_min: 10, learn_days: 60, wait_days: 30, live_window: 20 });
 /** The knobs the replay can test; the others are code for the platform. */
@@ -115,7 +116,9 @@ async function readDoc(env) { try { return parse(await env.SIGNAL_CACHE.get(KNOB
 
 async function loadRows(db, sinceIso) {
   const decisions = (await db.prepare("SELECT decision_key, decided_at, decision_json FROM engine_decisions WHERE decided_at >= ? ORDER BY decided_at").bind(sinceIso).all()).results ?? [];
-  const setups = (await db.prepare("SELECT decision_key, side, results_json FROM plan_setups WHERE agent = 'zone_pullback' AND status = 'resolved' AND decided_at >= ?").bind(sinceIso).all()).results ?? [];
+  // MS2: the live setups only (the knob's own decisions; never a shadow mode's).
+  await ensurePlanLearningSchema(db);
+  const setups = (await db.prepare("SELECT decision_key, side, results_json FROM plan_setups WHERE agent = 'zone_pullback' AND status = 'resolved' AND source = 'live' AND decided_at >= ?").bind(sinceIso).all()).results ?? [];
   const by = new Map();
   for (const s of setups) { if (!by.has(s.decision_key)) by.set(s.decision_key, {}); by.get(s.decision_key)[s.side] = s.results_json; }
   return decisions.map((d) => decisionRow(d, by.get(d.decision_key) ?? {}));

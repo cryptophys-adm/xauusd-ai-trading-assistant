@@ -240,6 +240,7 @@ import { archiveBusMessages } from "./bus-archive.mjs";
 import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
+import { pruneModeShadowPlans } from "./mode-shadow.mjs";
 import { readPublicProjection } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
 import { readPublicWarRoom, readPublicWarRoomScene } from "./public-warroom.mjs";
@@ -285,7 +286,7 @@ import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { sendOmegaTelegram, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
-import { ownerModeAction, relayModeChanges, modeStatus } from "./mode-selector.mjs";
+import { ownerModeAction, relayModeChanges, modeStatus, modeEvidenceStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
@@ -2368,7 +2369,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       const sel = await modeStatus(env) as Record<string, unknown>;
       return dashboardJson({ status: "ok", mode: await tradingMode(env), pinned: ["scalp", "intraday", "swing", "range"].includes(String(env.TRADING_MODE ?? "").trim().toLowerCase()),
         // Phase 4: Auto (selector + council) or pinned by the owner; the last switch (an automatic one can be vetoed).
-        auto: sel.auto === true, owner_pinned: sel.pinned === true, baseline: sel.baseline ?? null, last_switch: sel.last_switch ?? null });
+        auto: sel.auto === true, owner_pinned: sel.pinned === true, baseline: sel.baseline ?? null, last_switch: sel.last_switch ?? null,
+        // MS2 (additive): each mode's evidence per 1H regime, live against shadow, and the probation (src/mode-selector.mjs).
+        selector: await modeEvidenceStatus(env).catch(() => null) });
     }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
@@ -3391,7 +3394,8 @@ export default {
           // AI Neuron B: the model arena's pairs, scored on the same 15m outcome; rows older than 90 days dropped.
           const arenaScored = await scoreModelArena(env);
           if (Number(arenaScored.scored)) console.log("model_arena_scored", JSON.stringify(arenaScored));
-          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) { await pruneShadowKnowledge(env); await pruneModelArena(env); }
+          // MS2: the shadow modes' plans (mode_shadow_plans) older than 90 days dropped, bounded (src/mode-shadow.mjs).
+          if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() < 25) { await pruneShadowKnowledge(env); await pruneModelArena(env); await pruneModeShadowPlans(env); }
           if (captured.status === "captured" || Number(scoredInputs.scored) || Number(replayed.hours) || Number(replayed.failed)) console.log("strategy_inputs", JSON.stringify({ captured, scored: scoredInputs, replayed }));
         } catch (e) { console.error("strategy_inputs_failed", e instanceof Error ? e.message : String(e)); }
         // Agent compliance (RFC_AETHER_KNOWLEDGE_GUARDIAN A1): deterministic rule checks of the room

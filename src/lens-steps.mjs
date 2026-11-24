@@ -22,7 +22,8 @@ export const LIQUIDITY_REPLAY_KEY = "liquidity:replay:v1";
 /** B2: the sweep replay of the minutes a backfill added, once per backfill identity. */
 export const liquidityReplayKey = (identity) => `liquidity:replay:v2:${identity}`;
 
-async function modeNow(env) {
+/** The trading mode in force for the lenses' knobs: the configured TRADING_MODE, else KV trading:mode, else intraday. */
+export async function modeNow(env) {
   const pinned = String(env?.TRADING_MODE ?? "").trim().toLowerCase();
   if (MODES.has(pinned)) return pinned;
   try { const v = String((await env?.SIGNAL_CACHE?.get?.("trading:mode")) ?? "").trim().toLowerCase(); if (MODES.has(v)) return v; } catch { /* default */ }
