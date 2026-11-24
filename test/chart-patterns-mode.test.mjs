@@ -53,9 +53,9 @@ test("PM2 buildStrategy: modes.chartPatterns \"off\" leaves no pattern, no patte
 });
 
 test("PM3 the inputs carry the switch: loadStrategyInputs, the capture's slim inputs, and the replay builds what was live", async () => {
-  // TP1-KZ (2026-11-23) travels in the same modes.
-  assert.deepEqual((await loadStrategyInputs({ CHART_PATTERNS_MODE: "off" }, { now: NOW })).modes, { chartPatterns: "off", tp1KeyZone: "on", entryZone: "edge" });
-  assert.deepEqual((await loadStrategyInputs({}, { now: NOW })).modes, { chartPatterns: "on", tp1KeyZone: "on", entryZone: "edge" });
+  // TP1-KZ (2026-11-23) travels in the same modes, and Z0's KEY_LEVEL_ZONE_TYPES (2026-11-24).
+  assert.deepEqual((await loadStrategyInputs({ CHART_PATTERNS_MODE: "off" }, { now: NOW })).modes, { chartPatterns: "off", tp1KeyZone: "on", entryZone: "edge", zoneTypes: "on" });
+  assert.deepEqual((await loadStrategyInputs({}, { now: NOW })).modes, { chartPatterns: "on", tp1KeyZone: "on", entryZone: "edge", zoneTypes: "on" });
   // The capture keeps "off" (so its replay builds what the live strategy built) and adds nothing when on.
   assert.deepEqual(slimInputs({ ...input(), modes: { chartPatterns: "off" } }).modes, { chartPatterns: "off" });
   assert.equal("modes" in slimInputs({ ...input(), modes: { chartPatterns: "on" } }), false, "stored inputs are unchanged while on");
@@ -90,8 +90,9 @@ test("PM5 every reader of the strategy builds from loadStrategyInputs, so each h
 });
 
 test("PM6 the H1 chain's own-timeframe plan honours the switch: no projection-reader zone member while off", async () => {
-  assert.deepEqual((await loadOwnTimeframePlanInputs({ CHART_PATTERNS_MODE: "off" })).modes, { chartPatterns: "off" });
-  assert.deepEqual((await loadOwnTimeframePlanInputs({})).modes, { chartPatterns: "on" });
+  // Z0's KEY_LEVEL_ZONE_TYPES (2026-11-24) travels in the same modes.
+  assert.deepEqual((await loadOwnTimeframePlanInputs({ CHART_PATTERNS_MODE: "off" })).modes, { chartPatterns: "off", zoneTypes: "on" });
+  assert.deepEqual((await loadOwnTimeframePlanInputs({})).modes, { chartPatterns: "on", zoneTypes: "on" });
   // The zones ownTimeframePlan builds from (the 1H snapshot and bars only), with and without the switch.
   const zonesOf = (patterns) => buildKeyLevels({ snapshots: { "60": null }, bars: { H1: h1Bars }, price: h1Bars.at(-1).close, atrH1: 2.46, patterns }).zones;
   const projection = (zones) => zones.flatMap((z) => z.members).filter((m) => m.reader === "projection");

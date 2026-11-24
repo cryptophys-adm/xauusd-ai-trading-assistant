@@ -29,6 +29,7 @@ import { recentReleases } from "./econ-releases.mjs";
 import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
 import { orderImbalance } from "./producer/m5-orderbook.mjs";
+import { keyLevelZoneTypesMode, zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -103,6 +104,9 @@ function roomLayer(key, room, now) {
  *   the entry, padded by 0.2 ATR; without one, or beyond 2.5 ATR, it is 1.5 ATR.
  * - The targets are the near edges of the next two MAJOR zones (Key Level Agent candidates), each
  *   at least 0.5 ATR beyond the previous one, or 2R and 3R projections.
+ * Z0 (recorded only): with typed zones (z.ds, KEY_LEVEL_ZONE_TYPES on) the plan also carries zone_types { entry, stop,
+ * tp1, tp2 }: the words { type, strength, freshness } of the zone each came from, or null (a projection, the 1.5 ATR
+ * stop, an entry at price with no key zone behind it). Its prices never change.
  */
 export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNote = null, nearAtr = STRATEGY_PARAMS.near_atr, targetGapAtr = 0.5, keyZone = false, entryZone = false }) {
   if (!dir || !isNum(price) || !isNum(atrH1) || atrH1 <= 0) return null;
@@ -122,7 +126,8 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   let stop = stopZone ? farEdge(stopZone) - dir * pad : null;
   let stopNote = stopZone ? `beyond ${stopZone.label}` : null;
   const risk0 = isNum(stop) ? Math.abs(entry - stop) : null;
-  if (!isNum(risk0) || risk0 > 2.5 * atrH1) { stop = entry - dir * 1.5 * atrH1; stopNote = "1.5 times the 1H average range"; }
+  let stopFrom = stopZone;
+  if (!isNum(risk0) || risk0 > 2.5 * atrH1) { stop = entry - dir * 1.5 * atrH1; stopNote = "1.5 times the 1H average range"; stopFrom = null; }
   const risk = Math.abs(entry - stop);
   const targetEdge = (z) => (dir > 0 ? lo(z) : hi(z));
   const ahead = levels.filter((z) => z.major !== false && dir * (targetEdge(z) - entry) >= tgap).sort((a, b) => dir * (targetEdge(a) - targetEdge(b)));
@@ -138,6 +143,8 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
   // EZ1 (entryZone): the band of the key zone the entry came from (at it, or a pullback to it), clipped around the entry;
   // an entry at price with no key zone behind it (a demand or supply zone of the chart plane only) has none.
   const zone = entryZone && nearest && (atZone || !atLevel) ? entryZoneOf({ dir, entry, stop, atrH1, band: [lo(nearest), hi(nearest)] }) : null;
+  // Z0: the type words of the zones the entry, stop and targets came from (only with typed zones).
+  const types = typedZones(levels) ? { zone_types: { entry: nearest && (atZone || !atLevel) ? zoneWords(nearest) : null, stop: zoneWords(stopFrom), tp1: zoneWords(t1), tp2: zoneWords(t2) } } : {};
   return {
     at_level: atLevel, entry: r2(entry), entry_note: entryNote,
     ...(zone ?? {}),
@@ -145,7 +152,8 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
     tp1: r2(tp1), tp1_note: t1 ? t1.label : "a 2R projection",
     tp2: r2(tp2), tp2_note: t2 ? t2.label : "a projection beyond the first target",
     progressive_stop: r2(entry),
-    rrr: { tp1: rr(tp1), tp2: rr(tp2) }
+    rrr: { tp1: rr(tp1), tp2: rr(tp2) },
+    ...types
   };
 }
 
@@ -204,10 +212,11 @@ export function tp1KeyZoneOf(ahead, levels, { dir, entry, tgap, edge }) {
 const zoneText = (z) => `${z.candidate ? "the" : "a"} ${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} ${z.candidate ? "key zone" : "level"} (${z.label})`;
 /**
  * The Key Level Agent's zones as tradeLevels input: candidates are the major zones; with `qualified`,
- * also the zones that qualified as candidates but were left out by the cap of two per side.
+ * also the zones that qualified as candidates but were left out by the cap of two per side. A typed zone
+ * passes its demand/supply type (ds, Z0) along.
  */
 export function zoneLevels(zones, { qualified = false } = {}) {
-  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), key: z.candidate === true, label: zoneText(z) }));
+  return (zones || []).filter((z) => isNum(z.low) && isNum(z.high)).map((z) => ({ low: z.low, high: z.high, price: z.price, major: z.candidate === true || (qualified && z.qualified === true), key: z.candidate === true, label: zoneText(z), ...(z.ds ? { ds: z.ds } : {}) }));
 }
 
 /**
@@ -261,7 +270,9 @@ export function planForDirection(strategy, dir, { scalp = false, keyZone = false
   if (!strategy || !(dir === 1 || dir === -1)) return null;
   const sameWay = (strategy.direction === "LONG" && dir > 0) || (strategy.direction === "SHORT" && dir < 0);
   const setupNote = sameWay && strategy.setup?.type && strategy.setup.type !== "none" ? `${strategy.setup.type === "continuation_pullback" ? "a pullback with the trend" : "a stretched sweep into liquidity"}: ${(strategy.setup.evidence || []).join(", ")}` : null;
-  return tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}), ...(keyZone ? { keyZone: true } : {}), ...(entryZone ? { entryZone: true } : {}) });
+  const plan = tradeLevels({ dir, price: strategy.price, levels: zoneLevels(strategy.key_levels?.zones, { qualified: scalp && SCALP_TARGET.qualified }), atrH1: strategy.atr_h1, inZone: Boolean(sameWay && strategy.plan?.at_level), zoneNote: setupNote, ...(scalp ? { targetGapAtr: SCALP_TARGET.targetGapAtr } : {}), ...(keyZone ? { keyZone: true } : {}), ...(entryZone ? { entryZone: true } : {}) });
+  // Z0 (recorded only): the nearest decisive opposing zone ahead, last, on the final entry and stop (src/zone-types.mjs).
+  return withZoneAhead(plan, strategy, dir);
 }
 
 /**
@@ -276,7 +287,8 @@ export function ownTimeframePlan({ snapshot = null, bars = [], modes = null } = 
   const atrH1 = atr(closed);
   if (!isNum(price) || !isNum(atrH1)) return null;
   // CHART_PATTERNS_MODE "off" leaves the 1H chart patterns out of this plan's zones too (Track A PR 1 review).
-  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1, patterns: modes?.chartPatterns === "off" ? "off" : "on" });
+  // KEY_LEVEL_ZONE_TYPES "off" leaves this plan's zones untyped too (Z0; the plan then carries no zone_types).
+  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1, patterns: modes?.chartPatterns === "off" ? "off" : "on", zoneTypes: modes?.zoneTypes === "off" ? "off" : "on" });
   const plan = tradeLevels({ dir, price, levels: zoneLevels(reading.zones), atrH1 });
   return plan ? { ...plan, source: "1H chart only", reference_price: r2(price), atr_h1: r2(atrH1) } : null;
 }
@@ -286,7 +298,7 @@ export async function loadOwnTimeframePlanInputs(env) {
   let snapshot = null;
   try { snapshot = await loadHudSnapshot(env, { timeframe: "60" }); } catch { snapshot = null; }
   const bars = await seriesCandles(env, "1h");
-  return { snapshot, bars: bars.slice(-60), modes: { chartPatterns: chartPatternsMode(env) } };
+  return { snapshot, bars: bars.slice(-60), modes: { chartPatterns: chartPatternsMode(env), zoneTypes: keyLevelZoneTypesMode(env) } };
 }
 
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
@@ -410,7 +422,9 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
     // without env by the decision engine, the Global Conclusion and the capture, so "off" never reached it.
     patterns: modes?.chartPatterns === "off" ? "off" : chartPatternsMode(env), events: releases,
     // Their measured record on gold scales their weights (src/pattern-calibration.mjs, hourly).
-    calibration: patternCalibration
+    calibration: patternCalibration,
+    // Z0: demand/supply types on the zones (recorded only); KEY_LEVEL_ZONE_TYPES travels in the inputs as modes.zoneTypes.
+    zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env)
   });
   const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
@@ -430,7 +444,8 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   // at_level), and the decision waits (state LOW_REWARD): no trade comes from a first target under 1R.
   const keyZone = modes?.tp1KeyZone !== "off" && tp1KeyZoneMode(env) === "on";
   const kz = keyZone && base ? tradeLevels({ dir, price, levels, atrH1, inZone: inZone || setup.type !== "none", zoneNote: setupNote, nearAtr: P.near_atr, keyZone: true, ...ez }) : null;
-  const plan = keyZone && kz ? kz : base;
+  // Z0 (recorded only): the plan's nearest decisive opposing zone ahead, from the recorded set, on its final entry and stop.
+  const plan = withZoneAhead(keyZone && kz ? kz : base, { key_levels: keyLevelReading, price: r2(price), atr_h1: r2(atrH1), trend: r2(trend) }, dir);
   const tp1Short = keyZone && base && !kz;
   const { vetoes, cautions, supports } = riskChecks(dir, { h1Snapshot, m15Snapshot, news, macro, macroScore, mode: mode ?? tradingMode ?? env?.TRADING_MODE, env, calendar, now });
   const trigger = triggerOf(dir, { confirmations, m15Snapshot });
@@ -537,7 +552,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env) },
     now
   };
 }

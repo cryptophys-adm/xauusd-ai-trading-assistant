@@ -58,6 +58,7 @@ import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
+import { aroundSet } from "./zone-types.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
@@ -667,7 +668,9 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     // A market entry waits for the confirmation candle at execution; a limit at the key level waits for price.
     trigger_required: market,
     // The strategy agent whose plan this is, when it is not the default agent's.
-    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {})
+    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {}),
+    // Z0 (recorded only): the plan's zone type words and its nearest decisive opposing zone ahead, when it has them.
+    ...(plan.zone_types ? { zone_types: plan.zone_types } : {}), ...(plan.opposing_ahead ? { opposing_ahead: plan.opposing_ahead } : {})
   };
 }
 
@@ -1313,7 +1316,8 @@ export function shadowModeDecisions({ loaded, assessment, council = null, env = 
     out.push({
       mode: m, stance, agent: trading ? agent : null,
       plans: trading ? (strategyPlansOf(a.guards)?.[side] ?? {}) : null,
-      trade: trading ? { entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, action: d.trade.action, at_level: d.trade.at_level === true } : null,
+      // Z0: the trade's zone words and opposing zone ahead ride along when the zones are typed, as on the live record.
+      trade: trading ? { entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, action: d.trade.action, at_level: d.trade.at_level === true, ...(d.trade.zone_types ? { zone_types: d.trade.zone_types } : {}), ...(d.trade.opposing_ahead ? { opposing_ahead: d.trade.opposing_ahead } : {}) } : null,
       reason
     });
   }
@@ -1350,13 +1354,13 @@ export function strategyPlansOf(guards) {
 /** The first target's note when no key level lies ahead (src/strategy-engine.mjs tradeLevels). */
 export const TP1_PROJECTION = "a 2R projection";
 export const KEY_LEVELS_KEPT = 12;
-/** Pure: the Key Level Agent's candidate (and qualified) zones nearest to price ({ low, high }, lowest first), or []. */
+/**
+ * Pure: the Key Level Agent's candidate (and qualified) zones nearest to price ({ low, high }, lowest first), or []. Z0:
+ * the recorded set of src/zone-types.mjs aroundSet (the same rule), which adds zone_type, zone_strength, zone_freshness
+ * and zone_rank beside low and high when the zones are typed (KEY_LEVEL_ZONE_TYPES on); zoneAhead reads only this set.
+ */
 export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
-  const price = strategy?.price;
-  const zones = (strategy?.key_levels?.zones || []).filter((z) => (z?.candidate || z?.qualified) && isNum(z.low) && isNum(z.high) && z.low <= z.high);
-  if (!isNum(price) || !zones.length) return [];
-  const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
-  return zones.sort((a, b) => dist(a) - dist(b)).slice(0, n).map((z) => ({ low: r2(z.low), high: r2(z.high) })).sort((a, b) => a.low - b.low);
+  return aroundSet(strategy?.key_levels?.zones, strategy?.price, n);
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */

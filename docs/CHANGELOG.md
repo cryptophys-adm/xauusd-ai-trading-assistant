@@ -5,6 +5,27 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-24
+- feat(key-levels): demand/supply zone types, strength and freshness, recorded only, with no behaviour change (Z0; owner 2026-11-23, "Langsung prioritaskan"; orchestrator brief, after MS2). `src/zone-types.mjs` (new, pure, with `.d.mts`); docs/RFC_DEMAND_SUPPLY_ZONES.md (new).
+  - **Typing.**
+    - `buildKeyLevels` overlays `z.ds = { type, strength, score, freshness, touches, sources }` on each zone near price, after `limitCandidates`.
+    - **Sources:** whale zones (0.9 active, 0.7 mitigation), the best Prophet order blocks (0.7), the GABFX RBS/SBR (1.0) and QM (0.9) points, and the 15m GMI flags (0.7, only at price), each times `TF_WEIGHT`.
+    - **Rule:** strict overlap, the heaviest box per (source, timeframe), 2x dominance; strong >= 2.0, medium >= 1.0.
+    - **Freshness:** touches on the 40 closed 15m bars before the decision bar (10 hours for every zone timeframe), within 0.15 ATR(1H), at least 3 bars apart: fresh, tested, worn.
+    - Zones, candidates, scores, labels, members and roles are unchanged.
+  - **Recorded.**
+    - `decision.key_levels` (`keyLevelsAround`, now `aroundSet`, the same rule) adds `zone_type`, `zone_strength`, `zone_freshness` and `zone_rank` beside low and high.
+    - Plans add `zone_types { entry, stop, tp1, tp2 }` (`tradeLevels`, `targetsAhead`, `finishPlan`; `zoneLevels` passes `ds`).
+    - Plans also add `opposing_ahead { o_type, o_strength, o_freshness, o_rank, room_atr, room_r, need_r, trend_lean, with_trend, would_block }`, from `zoneAhead`, last, on the final entry and stop. It reads the recorded set only, with `ZONE_NEED` = max(1R, 0.75 ATR) and the trend exemption at 0.15.
+    - `slimPlan`, `tradeFor` and MS2's shadow trade copy both fields when present.
+    - `plan_setups` adds `entry_zone_type`, `stop_zone_type`, `tp1_zone_type` and `opposing_room_atr` (ALTERs in `ensurePlanLearningSchema`). `decisionPlans` and `setupsFrom` carry them for live and shadow setups.
+  - **Switch.** `KEY_LEVEL_ZONE_TYPES` "on" (wrangler.jsonc) | "off", through the strategy modes (`loadStrategyInputs`, the capture's slim inputs, `loadOwnTimeframePlanInputs`). Off is main 74be83c byte for byte: test/zone-types.test.mjs Z0-9 pins the strategy, guardrails, decision record, council, EA signal, public output and plan_setups rows.
+  - **Untouched.** `managementFields`, the council's evidence and messages, the guardrails' checks, `pickStrategy`, Omega, the Position Manager, `publicAnalysis` and `publicRecap` are byte-identical with it on.
+  - **Hashes.** `ENGINE_CODE_HASH` (c4aa5772…) and `ENGINE_BEHAVIOUR_HASH` (ecfe3f90…) unchanged, as is ERA_SWITCHES; no era moves. MS2's MSH-15 holds unedited (its fixture's zones are untyped).
+  - **Replay** (production D1, SELECT only; 245 hourly captures; the final rule without the pattern levels):
+    - 34% of the recorded zones are decisive;
+    - decisive zones held 63% fresh, 51% tested and 39% worn (supply 53%, demand 28% in a SELL-heavy fortnight);
+    - `would_block` fired on 27% of both-side plans (0 with the trend) and on 14 of 421 live BUY/SELL decisions' sides (3.3%).
+  - **Tests.** test/zone-types.test.mjs Z0-1 to Z0-17; test/chart-patterns-mode.test.mjs PM3 and PM6 add `zoneTypes` to the modes.
 - feat(mode): shadow per-mode evidence and a probation switch (MS2; orchestrator brief 2026-11-23, after MS1). The daily mode selector only had evidence for the mode that traded; now every mode collects it at every 15m decision.
   - **Shadow pass.** After the live record is stored, `runDecisionEngine` runs `shadowModeDecisions` (`src/decision-engine.mjs`) for each mode not in force: the deterministic part only, with the live witnesses, quorum and market (`assess`'s new `witnesses` option) and the live council's answer; the mode's geometry (scalp, `SCALP_TARGET`, TP1-KZ), `modeThresholds(m, knobs)`, room (`activeRoom(env, m)`), vetoes and agent selection, through `decide()`. The side is the council's BUY or SELL; on its WAIT a side the mode opens that the live gates had closed (a side the live gates had open and the council declined stays WAIT; both open: the quorum's lean); no answer: the live fallback. Range only while the 1H regime ranges and only from `RANGE_GATED_AGENTS`. A mode that would trade writes D1 `mode_shadow_plans` (`src/mode-shadow.mjs`; `migrations/0026_mode_shadow_plans.sql` records it). No model call, no room, no price in a room; the decision record is byte-identical.
   - **Setups.** `plan_setups.source` ('live' | 'shadow') and `plan_setups.rule_version` ("tp1_kz:on" | "tp1_kz:off") by the run-time ALTER pattern (MS2 prepares rule_version: TP1-KZ did not write it). Live rows take the rule in force at the plan learner's run; rows of before MS2 stay NULL (not counted). `runPlanLearning` derives shadow setups per mode with the live rules (`shadowSetupsFrom`, key `shadow:<mode>:…`), replayed in their own queue on the control arm only. `ensurePlanLearningSchema` caches per database.

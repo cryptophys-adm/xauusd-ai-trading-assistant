@@ -425,6 +425,38 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - Strength: strong (score ≥ 6), medium (≥ 3) or weak.
       - **Candidate key level:** a zone with three or more families and at least medium strength, at most two per side (the strongest, then the nearest; a zone at price always stays; the others read `qualified`). `cryptophys.key-level-agent.v2`. The owner tightened this on 2026-11-06: at two sources, production marked 14 of 18 zones; at three sources and medium, it marked 9 of 18.
       - Role: support, resistance, or "at price".
+      - **Demand and supply type, strength and freshness (Z0, owner 2026-11-23: "Langsung prioritaskan"; `src/zone-types.mjs`, docs/RFC_DEMAND_SUPPLY_ZONES.md). Recorded only: no zone, candidate, price, guardrail, council, EA signal, Omega or public output changes.**
+        - **Sources.** After `limitCandidates`, each zone near price is typed from the charts' boxes (15m, 1H, 4H, D1). Each box is its base weight times `TF_WEIGHT`:
+          - whale zones: support = demand, resistance = supply (a mitigated block already flipped); 0.9 active, 0.7 mitigation;
+          - the best Prophet order blocks (`prophet_best`): 0.7;
+          - the GABFX points: RBS 1.0 and QM buy 0.9 for demand; SBR 1.0 and QM sell 0.9 for supply;
+          - the 15m GMI order-block and mitigation flags (`gmi_flag`): 0.7, on the zone at price only.
+        - **Typing.**
+          - A box counts on a strict overlap; a point must lie inside the zone.
+          - Per side, each (source, timeframe) adds its heaviest box.
+          - Type: demand when demand_w > 0 and at least 2 x supply_w; supply in the mirror case; mixed when both are > 0; else none.
+          - Strength on the type's score: strong >= 2.0, medium >= 1.0, else weak.
+          - A lone 1H-or-higher box, or a lone 15m RBS/SBR point, is medium. A lone 15m whale is weak.
+          - Decisive: demand or supply, and medium or strong.
+        - **Freshness.**
+          - Prophet's touch rule: touches on the 40 closed 15m bars before the decision bar, within 0.15 x ATR(1H), at least 3 bars apart, counted up to 3.
+          - 0 touches = fresh, 1-2 = tested, 3 = worn.
+          - The window is 10 hours for every zone timeframe, so a 4H zone touched two days ago reads fresh.
+        - **Output.** `z.ds = { type, strength, score, freshness, touches, sources }`. Source labels use timeframe words (`whale@4H`), never period numbers.
+        - **Recorded.**
+          - `decision.key_levels` (`aroundSet`, `keyLevelsAround`'s exact rule) adds `zone_type`, `zone_strength`, `zone_freshness` and `zone_rank` beside low and high.
+          - Each plan carries `zone_types { entry, stop, tp1, tp2 }`. Producers: tradeLevels, targetsAhead and finishPlan; the trade, `strategy_plans` and MS2's shadow rows copy it.
+          - Each plan also carries `opposing_ahead`, from `zoneAhead`, which runs last on the final entry and stop and reads only the recorded set:
+            - the nearest decisive opposing zone ahead (supply for a long, demand for a short);
+            - `room_atr`, `room_r` and `need_r`, where need is `ZONE_NEED` = max(1R, 0.75 ATR(1H));
+            - `trend_lean`, `with_trend` (dir x trend >= 0.15) and `would_block`;
+            - a stored decision replays it from its key_levels and trade.
+          - `plan_setups` adds `entry_zone_type`, `stop_zone_type`, `tp1_zone_type` and `opposing_room_atr` (run-time ALTERs).
+        - **Switch.** `KEY_LEVEL_ZONE_TYPES` = "on" (default) | "off". It travels through the strategy modes (`modes.zoneTypes`, as CHART_PATTERNS_MODE), and "off" removes every typed field: main's output byte for byte.
+        - **Replay.** 245 hourly captures, 2026-11-09 to 2026-11-23, without the pattern levels:
+          - 34% of recorded zones are decisive;
+          - decisive zones held 63% fresh, 51% tested and 39% worn;
+          - `would_block` fired on 3.3% of the live BUY/SELL decisions' sides and never with the trend.
     - **The strategy plans on the zones:**
       - entry: at a zone with the trade (inside it, or within 0.35 ATR of it), or a pullback to its near edge;
       - stop: beyond the far edge of the first zone against the trade at least 0.5 ATR from the entry;

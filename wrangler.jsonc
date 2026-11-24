@@ -149,6 +149,10 @@
     // "on" | "off". "on": Omega rests a limit inside it where the plan's level is through price; "edge" (EZ1b, owner
     // "setuju") also at its near edge where the plan's level is out of the placement band; "off" sends no zone.
     "ENTRY_ZONE_MODE": "edge",
+    // Z0 (2026-11-24, src/zone-types.mjs): demand/supply type, strength and freshness of the Key Level Agent's zones and
+    // each plan's nearest decisive opposing zone ahead, recorded only (no behaviour change): "on" | "off". "off" removes
+    // every typed field (decision key_levels words, plan zone_types and opposing_ahead, the plan_setups zone columns).
+    "KEY_LEVEL_ZONE_TYPES": "on",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.
