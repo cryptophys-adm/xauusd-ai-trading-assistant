@@ -13,7 +13,7 @@
 // learner keeps learning on it): the signal moves its entry and stop, Omega's sizing (risk_pct), its stop floors,
 // max_positions and the Position Manager apply as to any entry, and the open intent records stop_source
 // "grid:<cell>". GRID_ADAPT_MODE "off" (code default) leaves the plan; "live" acts. Never throws.
-import { CONTROL_ARM, ENTRY_SHIFTS, STOP_SCALES, armId, DEFAULT_PLAN_AGENT } from "./plan-learning.mjs";
+import { CONTROL_ARM, ENTRY_SHIFTS, STOP_SCALES, armId, DEFAULT_PLAN_AGENT, ensurePlanLearningSchema } from "./plan-learning.mjs";
 
 export const GRID_ADAPT_KEY = "grid-adapt:v1";
 export const GATE = Object.freeze({
@@ -133,7 +133,9 @@ export async function runGridAdapt(env, { now = Date.now(), send = null, force =
     const prev = (await readGridChoices(env)) ?? { slices: {}, held: {} };
     const day = new Date(now).toISOString().slice(0, 10);
     if (!force && prev.day === day) return { status: "fresh" };
-    const rows = (await db.prepare("SELECT agent, regime, side, entry, stop, atr_h1, results_json, opened_at FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at")
+    // MS2: the live setups only (a shadow mode's setups are the mode selector's evidence, never a grid's).
+    await ensurePlanLearningSchema(db);
+    const rows = (await db.prepare("SELECT agent, regime, side, entry, stop, atr_h1, results_json, opened_at FROM plan_setups WHERE status = 'resolved' AND source = 'live' AND opened_at >= ? ORDER BY opened_at")
       .bind(new Date(now - GATE.learn_days * DAY).toISOString()).all()).results ?? [];
     const bySlice = {};
     for (const r of rows) {

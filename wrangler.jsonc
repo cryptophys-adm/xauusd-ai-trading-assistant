@@ -149,6 +149,13 @@
     // "on" | "off". "on": Omega rests a limit inside it where the plan's level is through price; "edge" (EZ1b, owner
     // "setuju") also at its near edge where the plan's level is out of the placement band; "off" sends no zone.
     "ENTRY_ZONE_MODE": "edge",
+    // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
+    // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
+    // selector reads live setups only, as before.
+    "MODE_SHADOW_EVIDENCE": "on",
+    // MS2: the mode probation (a selector switch to a mode with fewer than 31 live setups: half the risk on Omega's new
+    // orders of that mode until it passes or fails back to the baseline): "on" | "off". "off": no probation, no scale.
+    "MODE_PROBATION": "on",
     // The pattern calibration v2 fields (src/pattern-calibration.mjs, Track A PR 4): "on" | "off"; "off" strips
     // by_tf and open from the stored calibration on read (the pooled block and the factors are unchanged).
     "PATTERN_HORIZON_MODE": "on",

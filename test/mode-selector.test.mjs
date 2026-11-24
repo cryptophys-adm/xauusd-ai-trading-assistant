@@ -32,10 +32,11 @@ const setups = (mode, n, r, stop = 10, regime = "trend") => Array.from({ length:
 function env() {
   resetModeSchemaForTests(); resetAiUsageSchemaCacheForTests();
   const db = d1();
-  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT, agent TEXT)");
+  // MS2: the columns the plan learner adds (source, rule_version); the seeded setups are live ones of the rule in force.
+  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT, agent TEXT, decision_key TEXT, side TEXT, source TEXT NOT NULL DEFAULT 'live', rule_version TEXT)");
   return { DB: db, SIGNAL_CACHE: kv() };
 }
-const seed = (e, rows) => { let i = 0; for (const s of rows) e.DB.raw.prepare("INSERT INTO plan_setups (setup_key, mode, regime, entry, stop, status, opened_at, results_json) VALUES (?, ?, ?, ?, ?, 'resolved', ?, ?)").run(`k${i++}`, s.mode, s.regime, s.entry, s.stop, new Date(NOW - 10 * DAY + i * 60_000).toISOString(), JSON.stringify({ "e0@s1": { r: s.r } })); };
+const seed = (e, rows) => { let i = 0; for (const s of rows) e.DB.raw.prepare("INSERT INTO plan_setups (setup_key, mode, regime, entry, stop, status, opened_at, results_json, rule_version) VALUES (?, ?, ?, ?, ?, 'resolved', ?, ?, 'tp1_kz:on')").run(`k${i++}`, s.mode, s.regime, s.entry, s.stop, new Date(NOW - 10 * DAY + i * 60_000).toISOString(), JSON.stringify({ "e0@s1": { r: s.r } })); };
 const call = (bySeat) => async (_e, req) => {
   const seat = ["strategy", "technical", "risk", "trade_management"].find((s) => req.messages[0].content.includes(`as the ${s.replace("_", " ")} seat`));
   return bySeat[seat] ? { status: "answered", obj: { verdict: bySeat[seat], reason: `${seat} ${bySeat[seat]}` } } : { status: "failed" };
@@ -140,7 +141,9 @@ test("MS6 range, the 4th mode: proposed only while ranging with a passing cell; 
 });
 
 test("MS7 the council approves range from the cells; the owner's pin of range; the 5-minute breakout exit records and tells", async () => {
-  const e = env();
+  // The plan learner's cells in KV: the selector's range evidence with shadow evidence off (MS2: on, it builds the cells
+  // from the live and shadow setups; test/mode-shadow.test.mjs).
+  const e = { ...env(), MODE_SHADOW_EVIDENCE: "off" };
   await e.SIGNAL_CACHE.put(TRADING_MODE_KEY, "intraday");
   seed(e, setups("intraday", 40, 0.05, 8));
   await e.SIGNAL_CACHE.put(PLAN_LEARNING_KEY, JSON.stringify({ cells: [{ agent: "range_fade", side: "SELL", context: "with", setups: 35, mean_r: 0.3, status: "pass" }] }));

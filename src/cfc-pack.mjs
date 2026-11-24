@@ -372,7 +372,7 @@ export function entryActionsSection(topicTrades, allTrades) {
 
 // ---------------------------------------------------------------------------------------------- strategy readers
 
-const SETUPS_SQL = "SELECT setup_key, agent, pattern, opened_at, side, entry, stop, atr_h1, mode, regime, context, at_level, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? AND agent = ? ORDER BY opened_at DESC LIMIT ?";
+const SETUPS_SQL = "SELECT setup_key, agent, pattern, opened_at, side, entry, stop, atr_h1, mode, regime, context, at_level, results_json FROM plan_setups WHERE status = 'resolved' AND source = 'live' AND opened_at >= ? AND agent = ? ORDER BY opened_at DESC LIMIT ?";
 
 /** Pure: the plan learner's setups of an agent: the contexts, every grid arm against the plan, and the stop distance in ATR per exit. */
 export function setupSections(rows, t) {

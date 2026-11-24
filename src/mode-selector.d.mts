@@ -16,3 +16,9 @@ export function relayModeChanges(env: unknown, options?: { now?: number; publish
 export function capOf(profile: string, settings: Record<string, any> | null): number | null;
 export const MODE_RUN_EVENT: string;
 export function outcomeEvidence(evidence: Record<string, any> | null): Record<string, { n: number | null; mean_r: number | null; status: string | null; scope: string | null } | null> | null;
+export function unionSetups(setups: Record<string, any>[], options: { ruleVersion: string }): Record<string, any>[];
+export function rangeShadowEvidence(setups: Record<string, any>[], options: { ruleVersion: string }): Record<string, any>;
+export function liveRecordOf(setups: Record<string, any>[], mode: string, options?: { sinceMs?: number | null }): { n: number; since_n: number; since_mean_r: number | null };
+export function probationStep(input: Record<string, any>): Record<string, any>;
+export function modeEvidenceStatus(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function modeProbationRisk(env: unknown, signal: Record<string, any> | null): Promise<{ mode: string; scale: number } | null>;

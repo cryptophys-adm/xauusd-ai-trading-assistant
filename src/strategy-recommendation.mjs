@@ -7,7 +7,7 @@
 // strategy-recommendations:v1 and read by GET /api/strategy-agents (no D1 query on the page's poll). Advice only: no
 // decision, no gate and no order reads it.
 import { AGENT_IDS, DEFAULT_AGENT, AGENT_BREAKER, CONSENSUS_RULES, suspendedAgents, suspendedPatterns } from "./strategy-agents.mjs";
-import { readPlanLearning, CONTROL_ARM } from "./plan-learning.mjs";
+import { readPlanLearning, CONTROL_ARM, ensurePlanLearningSchema } from "./plan-learning.mjs";
 import { readArmsFromDb } from "./strategy-arm.mjs";
 
 export const RECO_KEY = "strategy-recommendations:v1";
@@ -121,9 +121,11 @@ export async function computeRecommendations(env, { now = Date.now(), force = fa
     const safe = async (fn, fb) => { try { return await fn(); } catch { return fb; } };
     const state = await safe(() => readPlanLearning(env), null);
     const records = Array.isArray(state?.agents) ? state.agents : [];
-    const context = await safe(async () => (await db.prepare("SELECT context FROM plan_setups ORDER BY opened_at DESC LIMIT 1").first())?.context ?? null, null);
+    // MS2: the live setups only (a shadow mode's setups are the mode selector's evidence).
+    await safe(() => ensurePlanLearningSchema(db), null);
+    const context = await safe(async () => (await db.prepare("SELECT context FROM plan_setups WHERE source = 'live' ORDER BY opened_at DESC LIMIT 1").first())?.context ?? null, null);
     const rDist = await safe(async () => {
-      const rows = (await db.prepare("SELECT agent, results_json FROM plan_setups WHERE status = 'resolved' ORDER BY opened_at DESC LIMIT 2000").all()).results ?? [];
+      const rows = (await db.prepare("SELECT agent, results_json FROM plan_setups WHERE status = 'resolved' AND source = 'live' ORDER BY opened_at DESC LIMIT 2000").all()).results ?? [];
       const out = {};
       for (const r of rows) {
         const b = rBucket(parse(r.results_json)?.[CONTROL_ARM]?.r);

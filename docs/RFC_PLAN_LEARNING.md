@@ -40,6 +40,12 @@ free model: every arm is a plan a person can read, and the sample is small.
 - **Context**: the trading mode and the 1H regime of the decision (volatility and character, for
   example `scalp|low-ranging`).
 
+- **Source and rule version** (MS2, 2026-11-23): `plan_setups.source` is `live` (the engine's own decisions) or
+  `shadow` (a trading mode not in force, run deterministically at the same decision, D1 `mode_shadow_plans`; replayed on
+  the control arm only); `plan_setups.rule_version` is the target rule the setup was planned under (`tp1_kz:on` or
+  `tp1_kz:off`; NULL for the setups of before MS2). The learner, the referee, the agents' records and the range cells
+  read live setups only; the trading-mode selector alone reads shadow ones (docs/RFC_ACCOUNT_PROFILES.md §7).
+
 ## 3. How it learns
 
 Per arm, the mean difference against the plan on the same setups. A context's estimate is shrunk

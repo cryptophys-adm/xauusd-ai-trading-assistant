@@ -29,7 +29,7 @@ import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
-import { runModeSelector, modeStatus, capOf, rangeExitTick } from "./mode-selector.mjs";
+import { runModeSelector, modeStatus, capOf, rangeExitTick, modeProbationRisk } from "./mode-selector.mjs";
 import { readCorpusBars, CORPUS_READ_MAX } from "./corpus-oracle.mjs";
 import { gatesFor, gateReadSince, gateMode, profitLockGateOn, PROFIT_LOCK_GATE, GATE_LOOKBACK_MIN } from "./profit-lock-gate.mjs";
 import { readLatestDecision } from "./decision-engine.mjs";
@@ -1129,7 +1129,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           // The exposure in USD (owner 2026-11-18): the lot alone is ambiguous across brokers and cent accounts.
           const xp = positionExposure({ side: p.side, volume: p.volume, open_price: result.fill_price || p.entry, sl: p.sl }, executor?.symbol, executor?.account?.equity);
           const xpText = xp ? `\nExposure: <code>${exposureText(xp)}</code>` : "";
-          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>${p.probation === true ? " · <b>PROBATION ½ risk</b> (counter-trend reversal)" : ""}\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
+          await sendOmegaTelegram(env, `🟢 <b>Omega Order Executed · ${label}</b>${p.probation === true ? " · <b>PROBATION ½ risk</b> (counter-trend reversal)" : ""}${Number(p.mode_probation) > 0 && Number(p.mode_probation) < 1 ? ` · <b>MODE PROBATION ×${Number(p.mode_probation)} risk</b>` : ""}\nTicket: <code>#${result.ticket || "—"}</code>\nSide: <b>${p.side}</b> | Volume: <code>${p.volume}</code> lot ${executor?.symbol?.name ?? ""}\nEntry: <code>${p.entry || "—"}</code> | Fill: <code>${result.fill_price || p.entry || "—"}</code>\nSL: <code>${p.sl}</code> | TP: <code>${p.tp}</code>${xpText}${tcaText}`);
         } else if (p?.kind === "partial_close") {
           // A full close is said from its exit deal (announceExits above, at this or the next sync): entry, exit, result.
           await sendOmegaTelegram(env, `💰 <b>Omega Position Scaled Out (${p.volume ?? "part"} lot) · ${label}</b>\nTicket: <code>#${result.ticket || p.ticket || "—"}</code>\nReason: <code>${p.reason || "executed"}</code>`);
@@ -1300,7 +1300,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // other. Off (reentry_1m "off"): nothing is read or written, today's sync.
   const re1 = executor?.connected === true && engineEnvEnabled(env) && settings?.enabled === true && control?.mode !== "killed" && signal?.kill !== true && reentryOn(settings)
     ? await runReentry(env, { executor, signal, now }) : null;
-  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}), ...(re1 ? { reentry1m: re1 } : {}) });
+  // MS2: the mode probation's risk scale for new entries (null: full risk; MODE_PROBATION "off": always null).
+  const modeRisk = await modeProbationRisk(env, signal);
+  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}), ...(re1 ? { reentry1m: re1 } : {}), ...(modeRisk ? { modeRisk } : {}) });
   // RE1: the trigger's record, applied when the plan made its open intent, else skipped with the plan's reason.
   if (re1) {
     const made = plan.intents.some((it) => it.id === re1.id);

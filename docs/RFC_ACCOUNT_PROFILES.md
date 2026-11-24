@@ -86,6 +86,28 @@ Each account chooses a mode:
 - **Stability.** Hysteresis stops it flipping back and forth. It reverts automatically on live underperformance.
 - **No shortcut for small accounts.** Grid data showed tight stops underperform (s0.5 −0.17R, n 240), so "small account → tight scalp" is not assumed. When nothing is proven, the account skips.
 - **Today the mode is global:** env `TRADING_MODE`, KV `trading:mode`, default intraday. The selector chooses per regime and per account, and a manual pin stays possible.
+- **Shadow per-mode evidence (MS2, 2026-11-23).** Each mode not in force runs the deterministic part of every 15m
+  decision with the live witnesses and the live council's answer (`shadowModeDecisions`, `src/mode-shadow.mjs`):
+  - its own geometry (scalp and `SCALP_TARGET` under TP1-KZ), thresholds (quorum_min, min_rrr, lean), room, vetoes
+    and agent selection; range only while the 1H regime ranges and only from the range strategies;
+  - the side: the council's BUY or SELL; on its WAIT a side the mode opens that the live gates had closed; without an
+    answer the live fallback. The council's confidence applies.
+  - A mode that would trade writes `mode_shadow_plans`; the plan learner derives shadow setups (`plan_setups.source =
+    'shadow'`, control arm only). No model call, no room, no price in a room; the decision record is unchanged.
+    `mode_shadow_plans` keeps 90 days (the cron's retention line, `pruneModeShadowPlans`).
+  - The selector's evidence per mode is its live and shadow setups of the target rule in force (`rule_version`), one per
+    bar and agent, the live one first. The gate, the margin, the streak and the council are unchanged. Every other
+    reader of `plan_setups` reads live setups only.
+- **Probation (MS2).** A selector switch to a mode (not the baseline) with fewer than 31 live resolved setups is a
+  probation (ADR-0020 Amendment 3: new orders only, sizing within the profile cap):
+  - Omega's new entries of that mode at 0.5 of the risk per trade; the profile's hard cap is not scaled and an open
+    position is never touched; the EA is unchanged.
+  - The baseline stays the owner's.
+  - Its live setups since it started reach 15 with a mean under 0R, or its walk-forward fails: back to the baseline,
+    reason `probation_failed` (a change row, an Omega event, one Telegram line, a `mode.v1` item).
+  - It passes at 31 live setups and a walk-forward pass (cleared, full risk, one line).
+  - The owner's pin, Auto and veto are unchanged and owner only; a pin or a veto clears it.
+- **Switches.** `MODE_SHADOW_EVIDENCE` and `MODE_PROBATION` ("on" by default); both "off" is the behaviour before MS2.
 
 ## 8. Position manager in R
 
@@ -341,6 +363,9 @@ selector. That holds as long as:
 - **The server pin.** Only the configured `TRADING_MODE` pins the mode. The Decision Engine reads the mode in force
   on a copy of env for its decision and never writes env (MS1), so the mode the selector wrote to KV never reads as the
   server's pin to the selector's next run in the same isolate.
+- **Shadow evidence and probation** (MS2, 2026-11-23): see §7. The daily outcome's evidence adds `n_live` and
+  `n_shadow` per mode; `GET /api/trading-mode` adds `selector` (per mode and 1H regime, live against shadow, and the
+  probation).
 - **Not yet.** The ladder's lock distance in R per mode (it is 30 pips for every mode) is the next step. It needs the
   initial stop from the open intent.
 

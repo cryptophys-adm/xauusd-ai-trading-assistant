@@ -42,6 +42,8 @@ export function planIntents(input?: {
   conversion?: Record<string, any> | null;
   gates?: Record<string, Record<string, any>>;
   supersede?: { ticket: number; deleted: boolean | null }[];
+  /** MS2: the mode probation's risk scale (src/mode-selector.mjs modeProbationRisk). */
+  modeRisk?: { mode: string; scale: number } | null;
 }): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[]; entry_request?: Record<string, any> | null; limit_used?: string[]; limit_dropped?: { id: string; reason: string }[]; fill_checks?: { ticket: number; guard: string | null }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
 export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]>; gates?: Record<string, Record<string, any>> }): Array<Record<string, any>>;
