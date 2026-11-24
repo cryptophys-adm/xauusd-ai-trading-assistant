@@ -154,6 +154,28 @@ async function agentStatus(env, agentId) {
     return typeof w?.status === "string" ? w.status : null;
   } catch { return null; } finally { clearTimeout(timer); }
 }
+// The same backoff, for the other kernel senders (KA2, src/knowledge-verdicts.mjs): one table, one status read.
+export { readBackoff as readAgentBackoff, writeBackoff as writeAgentBackoff, clearBackoff as clearAgentBackoff, agentStatus as kernelAgentStatus };
+
+/**
+ * One kernel capability call as `agentId` over the AGENTS binding (the caller identity is pinned in its props; no
+ * secret), with a timeout. Never throws: the kernel's own answer ({ outcome: "succeeded" | "denied" | "failed",
+ * reason?, result? }), or { outcome: "transport", reason: "timeout" | "rpc_failed" | "unavailable" }.
+ */
+export async function kernelSyscall(env, agentId, capability, payload, { timeoutMs = PLATFORM_CALL_TIMEOUT_MS } = {}) {
+  if (typeof env?.AGENTS?.syscall !== "function") return { outcome: "transport", reason: "unavailable" };
+  let timer;
+  try {
+    const r = await Promise.race([
+      env.AGENTS.syscall(agentId, capability, payload),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); })
+    ]);
+    return r && typeof r === "object" ? r : { outcome: "failed", reason: "empty_answer" };
+  } catch (error) {
+    return { outcome: "transport", reason: error instanceof Error && error.message === "timeout" ? "timeout" : "rpc_failed" };
+  } finally { clearTimeout(timer); }
+}
+
 /** The agents waiting out a suspension (for the status page): [{ agent_id, until, reason, since }]. */
 export async function platformBackoffs(env) {
   try {

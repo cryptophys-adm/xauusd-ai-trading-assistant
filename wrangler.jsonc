@@ -234,6 +234,10 @@
     // Same cap (32 calls an hour, 6 items), kill switch and neuron breaker; its A/A arm runs with the first item, as
     // before. The metric rebuttals and the model arena stay off.
     "SHADOW_KNOWLEDGE_ENABLED": "true",
+    // KA2 (platform PF3, capability knowledge.verdict): the arm's verdicts posted to the platform as the kernel agent
+    // shadow-knowledge, for Aether's curator (src/knowledge-verdicts.mjs). Code default "off"; it also needs
+    // SHADOW_KNOWLEDGE_ENABLED. Until the platform registers the agent, each hourly run stops at the first refusal.
+    "KNOWLEDGE_VERDICT_POSTS": "on",
     "METRIC_REBUTTAL": "off",
     "MODEL_ARENA": "off",
     "LEARNED_KNOWLEDGE_ENABLED": "true"

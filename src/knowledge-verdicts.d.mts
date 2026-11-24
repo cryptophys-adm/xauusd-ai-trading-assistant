@@ -1,0 +1,14 @@
+export const KNOWLEDGE_VERDICT_AGENT_ID: string;
+export const KNOWLEDGE_VERDICT_CAPABILITY: string;
+export const KNOWLEDGE_VERDICTS: readonly string[];
+export const KNOWLEDGE_VERDICT_EVIDENCE_KEYS: readonly string[];
+export const KNOWLEDGE_VERDICT_RULES: { readonly per_run: number; readonly max_attempts: number; readonly strikes_per_hour: number; readonly backoff_ms: number };
+export const KNOWLEDGE_VERDICT_SCHEMA_SQL: readonly string[];
+export function knowledgeVerdictPostsEnabled(env: unknown): boolean;
+export function verdictPayloadProblems(payload: unknown): string[];
+export function subjectEvidence(subject: unknown, verdict: string, windows?: Record<string, { start: string; end: string }>): Record<string, unknown>;
+export function untestableReason(item: unknown): string | null;
+export function verdictEntries(input?: { plan?: unknown; live?: unknown[]; packItems?: unknown[]; firstSeen?: Record<string, string> }): Array<{ key: string; item_id: string; version: number; verdict: string; window_end: string; payload: Record<string, any> }>;
+export function planVerdictPosts(input?: { entries?: unknown[]; markers?: unknown[]; now?: number }): Array<{ key: string; item_id: string; version: number; verdict: string; window_end: string; payload: Record<string, any> }>;
+export function resetKnowledgeVerdictsForTests(): void;
+export function postKnowledgeVerdicts(env: unknown, options?: { plan?: unknown; now?: number; limit?: number; timeoutMs?: number }): Promise<Record<string, any> & { status: string }>;

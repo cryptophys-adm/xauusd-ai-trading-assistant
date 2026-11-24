@@ -322,7 +322,18 @@ export function planShadowClosures(outputs = [], { now = Date.now(), done = new 
       evidence: { schema: CLOSURE_VERSION, item_id, version, outcome, reason, judged_at: new Date(now).toISOString(), subjects }
     };
   });
-  return { version: CLOSURE_VERSION, items };
+  // KA2 (src/knowledge-verdicts.mjs): each subject's first and last bar, kept apart from the closure evidence so the
+  // learned_live rows stay as KA1 writes them.
+  const windows = {};
+  for (const o of outputs) {
+    const t = Date.parse(o?.statement_close);
+    if (!o?.subject || !Number.isFinite(t)) continue;
+    const w = windows[o.subject] ??= { start: t, end: t };
+    if (t < w.start) w.start = t;
+    if (t > w.end) w.end = t;
+  }
+  for (const w of Object.values(windows)) { w.start = new Date(w.start).toISOString(); w.end = new Date(w.end).toISOString(); }
+  return { version: CLOSURE_VERSION, items, windows };
 }
 
 /** Pure: the owner's Telegram line for the items closed in one run (null when none). Counts and p only. */
@@ -373,6 +384,9 @@ export async function runShadowClosures(env, { now = Date.now(), days = 60, sett
     const { plan, closed } = await judge(null);
     out.closed.push(...closed);
     out.collecting = plan.items.filter((i) => i.outcome === "collecting").length;
-    return { ...out, closed: out.closed.map((c) => c.key), message: closureMessage(out.closed) };
+    const result = { ...out, closed: out.closed.map((c) => c.key), message: closureMessage(out.closed) };
+    // The whole-row plan, for the verdict posts (KA2, src/knowledge-verdicts.mjs). Not enumerable: logs never show it.
+    Object.defineProperty(result, "plan", { enumerable: false, value: plan });
+    return result;
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
