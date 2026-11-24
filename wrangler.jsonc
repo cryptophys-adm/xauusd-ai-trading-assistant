@@ -159,6 +159,16 @@
     // each plan's nearest decisive opposing zone ahead, recorded only (no behaviour change): "on" | "off". "off" removes
     // every typed field (decision key_levels words, plan zone_types and opposing_ahead, the plan_setups zone columns).
     "KEY_LEVEL_ZONE_TYPES": "on",
+    // Z2 (2026-11-24, src/zone-types.mjs zoneAheadCheck; owner 2026-11-23, "Langsung prioritaskan"): the guardrails'
+    // zone_ahead check, no trade into a decisive opposing demand or supply zone inside max(1R, 0.75 ATR(1H)) against
+    // the trend, and the same rule on the strategy agents' plans (outside the consensus and the quorum).
+    // ZONE_PRIORITY "on" | "off" (unset reads "off": everything as before). ZONE_AHEAD_MODE "trend" (a with-trend plan
+    // is exempt) | "all" (owner-set only: no exemption, one warning line per decision) | "record" (no check; the plan
+    // keeps would_block) | "off".
+    // Shipped "off" (orchestrator ruling, 2026-11-24): the gate goes on in a follow-up PR only after the typing
+    // replay and the ZONE_NEED re-check run on live captures that carry 1H/4H Prophet boxes (Z1a).
+    "ZONE_PRIORITY": "off",
+    "ZONE_AHEAD_MODE": "trend",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.

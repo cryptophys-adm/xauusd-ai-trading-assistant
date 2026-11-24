@@ -22,7 +22,7 @@ export function decisionKeyFor(closeIso: string | null | undefined): string | nu
 export function keyCloseMs(key: string | null | undefined): number;
 export function witnessCards(input: { global?: any; strategy?: any }): Record<string, any>[];
 export function quorumOf(cards: Record<string, any>[]): Record<string, any>;
-export function guardrailsFor(dir: number, input: { cards: any[]; quorum: any; strategy: any; inputs?: any; now?: number }): Record<string, any>;
+export function guardrailsFor(dir: number, input: { cards: any[]; quorum: any; strategy: any; inputs?: any; macro?: any; now?: number; env?: any }): Record<string, any>;
 export function liveAgentPlans(g: any): Array<[string, { status: string; plan: Record<string, any> }]>;
 export function agentPlanPasses(plan: any, g: any): boolean;
 export function strategyPlansOf(guards: any): { long: Record<string, any>; short: Record<string, any> } | null;
@@ -31,6 +31,9 @@ export const MODE_THRESHOLDS: Readonly<Record<string, { quorum_min: number; min_
 export function modeThresholds(mode: unknown): { mode: string; quorum_min: number; min_rrr: number; lean: number };
 export function councilEvidence(input: { barClose: string; cards: any[]; quorum: any; guards: any; context?: any }): Record<string, any>;
 export function councilMessages(evidence: unknown): { role: string; content: string }[];
+// Z2: the council's sentence on the owner's demand and supply priority, and the record's zone_blocked.
+export const ZONE_PRIORITY_PROMPT: string;
+export function zoneBlockedOf(guards: any, decision?: any): { side: "long" | "short"; agent: string; plan: Record<string, any>; opposing_ahead: Record<string, any> | null } | null;
 export function validateCouncil(o: any): { valid: boolean; errors: string[] };
 export function decide(input: { answer?: any; guards: any; strategy?: any; quorum: any }): Record<string, any>;
 export function loadDecisionInputs(env: any, options?: { now?: number }): Promise<Record<string, any>>;

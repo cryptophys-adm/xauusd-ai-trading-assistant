@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) follows it; Z2, Z2b, Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side; Z2b, Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -172,7 +172,56 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 
 **The typing replay and ZONE_NEED.** Not re-run in this PR: the stored captures predate the export (no `zones.prophet`), and D1 holds only about four days of 1m bars, short of the 1000 bars per chart (with the feed's volume) the core needs to rebuild the blocks. The captures keep the chart plane, so from Z1a's deploy on they carry the boxes; the replay with the new source and the ZONE_NEED re-check run on them before Z2 turns the gate on.
 
-## 5. Risks
+## 5. Z2: the zone_ahead check (decision side only)
+**Why.** Until Z2 nothing kept a long out of supply: the only zone gates were scalp's 'reward' (a real level as the target) and `zone_pullback`'s own location rule. The design replay (426 at-level plans): an opposing typed zone under 0.5 ATR ahead -0.268R against +0.512R with none ahead; the counter-trend plans it would block -0.379R (n 121), the with-trend plans +0.135R (n 54), hence the trend exemption. A contrary-entry veto would have removed +0.055R with-trend plans, so a contrary entry zone stays a record.
+
+### 5.1 The check (`guardrailsFor`)
+`zone_ahead` follows `reward` while ZONE_PRIORITY is on and ZONE_AHEAD_MODE is 'trend' or 'all'. It reads the side's plan's `opposing_ahead` (§2.4), so it acts on the source set Z1a typed and a stored decision replays it.
+
+| plan | 'trend' | 'all' |
+|---|---|---|
+| no plan | pass, "no plan to check" | pass |
+| no decisive opposing zone ahead | pass, "no demand or supply zone against the trade within reach" | pass |
+| room >= need | pass | pass |
+| room < need, dir x trend < 0.15 (`would_block`) | **fail** | **fail** |
+| room < need, with the trend | pass, noted in the detail only | **fail** |
+
+- **need** = `ZONE_NEED` = max(1.0 x risk, 0.75 x ATR(1H)), shared with Z2b's typed-TP floor. **Opposing** = decisive supply for a long, demand for a short, from the recorded set only (`aroundSet`: a zone outside the 12 nearest never blocks; a weak, mixed or untyped zone never blocks).
+- **The trend** is `opposing_ahead.trend_lean`, the strategy's D1/4H trend; the exemption is `STRATEGY_PARAMS.lean` (0.15).
+- **Nothing goes to `g.cautions`.** Cautions enter the council's evidence and lower its confidence; the replay says a with-trend plan into a zone is not a caution.
+- **Details** are words, ATR and R ("the nearest medium fresh supply zone lies 0.35 ATR ahead of the long entry (0.5R), short of the 1.07R it needs, and the trend (lean 0) is not with the trade"), never a price.
+- In 'all' a with-trend plan is judged on the recorded `room_r` against `need_r` (2 dp).
+
+### 5.2 The filter, outside the quorum
+`zonePlanPasses(plan, g)` (`src/zone-types.mjs`) applies the side's rule (`g.zone_ahead`, the mode `guardrailsFor` records) to the strategy agents' plans:
+- `liveAgentPlans` leaves a failing plan out (the council's strategy list, the council's choice);
+- the execution non-arm path skips a failing speaker; with none left the decision waits, `overruled` naming `zone_ahead`;
+- `pickStrategy` marks a failing candidate ineligible with `zone_ahead: false`.
+
+`agentSpeaks`, `agentsConsensus` and the consensus passes in `assess` are unchanged, so the STRATEGY_AGENTS witness, the agents' confidence and the quorum deep-equal the run without Z2.
+
+### 5.3 The record, the council and the rest
+- **`decision.zone_blocked`** = `{ side, agent, plan (slim), opposing_ahead }` when `zone_ahead` is a side's only failing check (the guardrails' plan, the default agent's; the side the decision wanted first).
+- **`rule_version`** gains `+zone_ahead@1` (`+zone_ahead@1:all`) while the check is in the guardrails (`ruleVersionOf`: `plan_setups`, `mode_shadow_plans`). The check changes which decisions trade in every mode, so the mode selector's evidence restarts at Z2's deploy, as at TP1-KZ's.
+- **MS2.** The shadow modes run the same guardrails and filter; a mode the check holds back records the reason `zone_ahead`; each shadow trade keeps `opposing_ahead`, so a replay reproduces the check from the record. `withRoom` (room tuning) recomputes only the room check.
+- **The council** (only while ZONE_PRIORITY is on): each plan adds `zone_types`, `opposing_zone_ahead_atr` and `with_trend`; the system prompt adds one sentence (`ZONE_PRIORITY_PROMPT`) on the owner's priority since 2026-11-23. Nothing goes to the cautions.
+- **Doctrine facts.** `guardrailIds` lists `zone_ahead` after `reward`, only while the check is on.
+- **Public.** `publicRecap`'s `held_back` leaves `zone_ahead` out: the recap is unchanged.
+- **Untouched.** The EA signal, `managementFields`, Omega, the Position Manager, `publicAnalysis`, the hashed local engines; ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…) and ERA_SWITCHES; no era moves. v4 replays the stored decisions.
+
+### 5.4 The switches
+- `ZONE_PRIORITY` = "on" | "off". wrangler.jsonc ships "off": the gate goes on in a follow-up PR once the typing replay and the `ZONE_NEED` re-check have run on live captures carrying 1H/4H Prophet boxes. Unset reads "off", so a config without it (and every test that does not set it) is byte-identical to before Z2.
+- `ZONE_AHEAD_MODE` = "trend" (default) | "all" (owner-set only, read from the Worker's env; one `zone_ahead_mode_all` warning line per decision; Z5 alarms on its block share) | "record" (no check; the plan keeps `would_block`; the council's words stay) | "off". An unknown value reads "trend".
+- `KEY_LEVEL_ZONE_TYPES` "off" (env or the strategy's modes) leaves the zones untyped, so the check is out too.
+- Z5's breaker can drop the check to "record".
+
+### 5.5 Evidence and expected impact
+- **Live impact, spec measure** (production D1, SELECT only, the 14 days to 2026-11-23, D1/H4 leans as the trend proxy): 419 directional decisions, 402 of them SELLs; 379 with the trend, 40 neutral or counter. 'trend' would have blocked at most 1 of 419 (0.24%); 'all' up to 278 (66%): 277 of the 379 with-trend plans had a recorded zone within need.
+- **Expected:** at most about 0.3% blocked in 'trend' in the current regime; up to about 66% in 'all'.
+- **The frozen 2026-11-20 22:00 capture** (test Z2-16): in a SELL-trend hour (lean -0.78) the counter-trend long meets a strong worn supply zone 0.33 ATR (0.4R) ahead and fails; the with-trend short has no decisive demand zone within reach and passes.
+- **Risk.** Nearly inert in 'trend' in a SELL-heavy regime: the priority shows mainly in the record and in the council's words until the regime turns. It is regime-sensitive (one bearish fortnight of evidence); Z5's cohort and breaker watch it. The council sentence may tilt the stance toward WAIT; Z5 compares the stance shares before and after.
+
+## 6. Risks
 - **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
 - **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.
