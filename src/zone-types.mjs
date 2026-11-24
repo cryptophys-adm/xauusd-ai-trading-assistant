@@ -1,5 +1,7 @@
 // Demand and supply zone types (Z0, owner 2026-11-23: "Langsung prioritaskan"; docs/RFC_DEMAND_SUPPLY_ZONES.md).
 // Recorded only: nothing here changes a zone, a candidate, a plan's prices, a guardrail, the council or the EA signal.
+// Z2 (the end of this file) reads the record: the zone_ahead check of the Decision Engine's guardrails and its plan
+// filter (zonePlanPasses), switched by ZONE_PRIORITY and ZONE_AHEAD_MODE.
 //
 // The Key Level Agent (src/key-level-agent.mjs) groups every chart's levels into zones; a zone's `role` is only its
 // position against price. This pure module types each zone from the demand and supply boxes the charts already carry:
@@ -249,4 +251,79 @@ export function withZoneAhead(plan, strategy, dir) {
   if (!plan || !typedZones(zones)) return plan;
   const oa = zoneAhead(plan, aroundSet(zones, strategy.price), { dir, atrH1: strategy.atr_h1, trend: strategy.trend });
   return oa ? { ...plan, opposing_ahead: oa } : plan;
+}
+
+// ---------------------------------------------------------------- Z2: the zone_ahead check (decision side only)
+// Owner 2026-11-23, "Langsung prioritaskan": no trade into a decisive opposing demand or supply zone against the trend.
+// The check reads plan.opposing_ahead (zoneAhead above, recorded since Z0), so a stored decision replays it.
+
+/** ZONE_AHEAD_MODE values: the check in the guardrails ('trend', 'all'), recorded only ('record'), none ('off'). */
+export const ZONE_AHEAD_MODES = Object.freeze(["trend", "all", "record", "off"]);
+/** The rule's version in rule_version (src/mode-shadow.mjs ruleVersionOf) while the check is in the guardrails. */
+export const ZONE_AHEAD_RULE = "zone_ahead@1";
+
+/**
+ * ZONE_PRIORITY: "on" | "off". Unset reads "off" (a config without the variable behaves as before Z2); wrangler.jsonc
+ * sets "on", the live default.
+ */
+export function zonePriorityMode(env) {
+  return String(env?.ZONE_PRIORITY ?? "off").trim().toLowerCase() === "on" ? "on" : "off";
+}
+
+/**
+ * The zone_ahead mode in force: ZONE_AHEAD_MODE ("trend" default, "all" owner-set only, "record", "off") while
+ * ZONE_PRIORITY is on; "off" while it is off, and while the zones are untyped (KEY_LEVEL_ZONE_TYPES "off" in env or in
+ * the strategy's modes: every Z rule then behaves as before). An unknown value reads "trend".
+ */
+export function zoneAheadMode(env, modes = null) {
+  if (zonePriorityMode(env) !== "on" || keyLevelZoneTypesMode(env) === "off" || modes?.zoneTypes === "off") return "off";
+  const v = String(env?.ZONE_AHEAD_MODE ?? "trend").trim().toLowerCase();
+  return ZONE_AHEAD_MODES.includes(v) ? v : "trend";
+}
+/** Pure: is the check in the guardrails in this mode ('trend' or 'all')? */
+export const zoneAheadChecks = (mode) => mode === "trend" || mode === "all";
+
+/**
+ * Pure: does a recorded opposing_ahead fail in `mode`? 'trend': would_block (room < need and dir x trend < 0.15, Z0's
+ * exact rule); 'all': also a with-trend plan whose room is short of need (the recorded room_r against need_r, 2 dp).
+ * No opposing zone, no record, or any other mode: false.
+ */
+export function zoneAheadFails(oa, mode) {
+  if (!zoneAheadChecks(mode) || !oa || !oa.o_type) return false;
+  if (oa.would_block === true) return true;
+  return mode === "all" && isNum(oa.room_r) && isNum(oa.need_r) && oa.room_r < oa.need_r;
+}
+
+/**
+ * Pure (Z2): an agent's plan passes the zone_ahead rule of its side's guardrails (`g.zone_ahead`, the mode guardrailsFor
+ * recorded). True while the check is not in the guardrails, and for a plan without a recorded opposing zone.
+ */
+export function zonePlanPasses(plan, g) {
+  return !zoneAheadFails(plan?.opposing_ahead ?? null, g?.zone_ahead ?? null);
+}
+
+/** Pure: the zone_ahead check of a side's plan in `mode`: { pass, detail }, the detail in words, ATR and R only. */
+export function zoneAheadCheck(plan, mode, dir) {
+  if (!plan) return { pass: true, detail: "no plan to check" };
+  const oa = plan.opposing_ahead ?? null;
+  if (!oa) return { pass: true, detail: "no recorded demand or supply zone to measure the room ahead against" };
+  if (!oa.o_type) return { pass: true, detail: "no demand or supply zone against the trade within reach" };
+  const zone = [oa.o_strength, oa.o_freshness, oa.o_type].filter(Boolean).join(" ");
+  const side = dir > 0 ? "long" : "short";
+  const where = oa.room_r === 0 ? `the ${side} entry sits inside a ${zone} zone (no room)` : `the nearest ${zone} zone lies ${oa.room_atr} ATR ahead of the ${side} entry (${oa.room_r}R)`;
+  const lean = isNum(oa.trend_lean) ? `${oa.trend_lean > 0 ? "+" : ""}${oa.trend_lean}` : "unknown";
+  const short = isNum(oa.room_r) && isNum(oa.need_r) && oa.room_r < oa.need_r;
+  if (!short && oa.would_block !== true) return { pass: true, detail: `${where}, at least the ${oa.need_r}R it needs` };
+  if (zoneAheadFails(oa, mode)) {
+    return { pass: false, detail: mode === "all" && oa.would_block !== true
+      ? `${where}, short of the ${oa.need_r}R it needs; the owner's 'all' mode exempts no trend (lean ${lean})`
+      : `${where}, short of the ${oa.need_r}R it needs, and the trend (lean ${lean}) is not with the trade` };
+  }
+  return { pass: true, detail: `${where}, short of the ${oa.need_r}R it needs, but the trend (lean ${lean}) is with the trade: noted only` };
+}
+
+/** The rule_version token of the check in force (`ZONE_AHEAD_RULE`, `:all` in 'all'), or null when it is not in the guardrails. */
+export function zoneRuleToken(env) {
+  const mode = zoneAheadMode(env);
+  return mode === "trend" ? ZONE_AHEAD_RULE : mode === "all" ? `${ZONE_AHEAD_RULE}:all` : null;
 }

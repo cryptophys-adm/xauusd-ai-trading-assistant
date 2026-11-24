@@ -22,7 +22,11 @@ import { activeRoom, roomTuningFrozen, ROOM_MIN, ROOM_MAX, ROOM_MODES } from "./
 
 export const DOCTRINE_FACTS_SCHEMA = "cryptophys.doctrine-facts.v1";
 
-/** Pure: the guardrail ids the Decision Engine checks for a side, plus the council's confidence check. */
+/**
+ * Pure: the guardrail ids the Decision Engine checks for a side, plus the council's confidence check. Z2: "zone_ahead"
+ * (after "reward") is listed deliberately, only while the check is in the guardrails (ZONE_PRIORITY on, ZONE_AHEAD_MODE
+ * 'trend' or 'all'): guardrailsFor reads the same env. Off, the list is today's, byte for byte.
+ */
 export function guardrailIds(env = {}) {
   let ids = [];
   try {

@@ -37,3 +37,14 @@ export function typedZones(zones: unknown): boolean;
 export function aroundSet(zones: unknown[] | null | undefined, price: number | null | undefined, n?: number): AroundZone[];
 export function zoneAhead(plan: { entry?: number; stop?: number } | null | undefined, around: AroundZone[] | null | undefined, options?: { dir?: number; atrH1?: number | null; trend?: number | null }): OpposingAhead | null;
 export function withZoneAhead<T extends Record<string, any> | null>(plan: T, strategy: any, dir: number): T;
+// Z2: the zone_ahead check.
+export type ZoneAheadMode = "trend" | "all" | "record" | "off";
+export const ZONE_AHEAD_MODES: readonly ZoneAheadMode[];
+export const ZONE_AHEAD_RULE: string;
+export function zonePriorityMode(env: unknown): "on" | "off";
+export function zoneAheadMode(env: unknown, modes?: { zoneTypes?: string } | null): ZoneAheadMode;
+export function zoneAheadChecks(mode: unknown): boolean;
+export function zoneAheadFails(oa: OpposingAhead | null | undefined, mode: unknown): boolean;
+export function zonePlanPasses(plan: { opposing_ahead?: OpposingAhead | null } | null | undefined, g: { zone_ahead?: ZoneAheadMode } | null | undefined): boolean;
+export function zoneAheadCheck(plan: { opposing_ahead?: OpposingAhead | null } | null | undefined, mode: ZoneAheadMode, dir: number): { pass: boolean; detail: string };
+export function zoneRuleToken(env: unknown): string | null;

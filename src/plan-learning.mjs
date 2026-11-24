@@ -292,7 +292,8 @@ export async function ensurePlanLearningSchema(db) {
   // MS2 (2026-11-23, src/mode-shadow.mjs): 'live' (the engine's own decisions) or 'shadow' (another mode's deterministic
   // pass, mode_shadow_plans). Only the mode selector reads shadow rows; every other reader filters source = 'live'.
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN source TEXT NOT NULL DEFAULT 'live'").run(); } catch { /* exists */ }
-  // The target rule the setup was planned under ("tp1_kz:on" | "tp1_kz:off", ruleVersionOf). Rows of before MS2: NULL.
+  // The target rule the setup was planned under ("tp1_kz:on" | "tp1_kz:off", plus "+zone_ahead@1" while Z2's check is in
+  // the guardrails; ruleVersionOf). Rows of before MS2: NULL.
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN rule_version TEXT").run(); } catch { /* exists */ }
   // Z0 (2026-11-24, src/zone-types.mjs): the demand/supply type of the setup's entry, stop and first-target zones and the
   // room to the nearest decisive opposing zone ahead (in 1H ATR). Recorded only; NULL with KEY_LEVEL_ZONE_TYPES off.
