@@ -354,6 +354,21 @@ test("the council toggle and unpin are owner only (owner 2026-11-17); refused wi
   assert.deepEqual(calls.map(([k, i]) => [k, i.on ?? i.strategy_id, i.actor_sub]), [["auto", true, "owner-sub-0001"], ["unpin", "range_fade", "owner-sub-0001"]]);
 });
 
+test("SV1b the owner's force of the strategy agents' veto rule rides the same owner-only council route (veto_rule)", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { ...omega(), setAgentVetoRule: async (i) => { calls.push(i); return { ok: true }; }, setCouncilAuto: async () => assert.fail("not the toggle") };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" }), other = await jwt({ email: "g@example.com", sub: "guest-sub-0002" });
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  const post = (token, body, e = env) => handle(req("/api/strategy-council", { token, method: "POST", body }), e, opts);
+  assert.equal((await post(other, { veto_rule: "classic" })).status, 403);
+  assert.equal((await post(owner, { veto_rule: "classic" }, { ...ENV_BASE, OMEGA: O })).status, 403, "no owner configured: nobody");
+  assert.equal((await post(owner, { veto_rule: "off" })).status, 400);
+  for (const rule of ["classic", "two_sided", "auto"]) assert.equal((await post(owner, { veto_rule: rule })).status, 200);
+  assert.deepEqual(calls.map((i) => [i.rule, i.actor_sub]), [["classic", "owner-sub-0001"], ["two_sided", "owner-sub-0001"], ["auto", "owner-sub-0001"]]);
+});
+
 test("POST /api/council (Call for Councils P2) is owner only; actions start, message, switch", async () => {
   resetKeyCacheForTests();
   const calls = [];

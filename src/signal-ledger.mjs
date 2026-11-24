@@ -557,12 +557,14 @@ export const LIMIT_COLUMNS = Object.freeze(["regime TEXT", "limit_status TEXT", 
 const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT",
   // v4 (src/ledger-omega4.mjs), on the ledger's own rows beside v3, so the two are paired on the same signals.
   "omega4_status TEXT", "omega4_exit TEXT", "r_omega4 REAL", "omega4_size REAL", "omega4_filled_at TEXT", "omega4_closed_at TEXT", "omega4_json TEXT"];
+/** SV1b (src/agent-veto.mjs): a decision that traded only because A6 or A7 lifted a veto keeps its tag ({ rule, old_detail }, JSON). */
+export const VETO_SOFTENED_COLUMN = "veto_softened TEXT";
 let schemaReady = false;
 export function resetLedgerSchemaCacheForTests() { schemaReady = false; }
 export async function ensureLedgerSchema(db) {
   if (schemaReady) return;
   for (const sql of LEDGER_SCHEMA_SQL) await db.prepare(sql).run();
-  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS]) {
+  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS, VETO_SOFTENED_COLUMN]) {
     try { await db.prepare(`ALTER TABLE signal_ledger ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   for (const col of LIMIT_COLUMNS) {
@@ -724,6 +726,10 @@ export async function ingestDecision(env, d, { now = Date.now(), maxAgeMs = OMEG
   const added = Number(res?.meta?.changes) || 0;
   // The Omega policy follows the decision's trading mode and entry type.
   if (added) await env.DB.prepare("UPDATE signal_ledger SET trading_mode = ?, entry_action = ?, omega_status = 'pending' WHERE id = ?").bind(TRADING_MODES.includes(d.trading_mode) ? d.trading_mode : null, t.action === "ENTER_LIMIT" ? "ENTER_LIMIT" : "ENTER_MARKET", `decision:${d.decision_key}`).run();
+  // SV1b: the decision's veto_softened (only a decision that has one; every other row as before).
+  if (added && (d.veto_softened?.rule === "A6" || d.veto_softened?.rule === "A7")) {
+    try { await env.DB.prepare("UPDATE signal_ledger SET veto_softened = ? WHERE id = ?").bind(JSON.stringify({ rule: d.veto_softened.rule, old_detail: String(d.veto_softened.old_detail ?? "").slice(0, 200) }), `decision:${d.decision_key}`).run(); } catch { /* the row stands */ }
+  }
   return added;
 }
 

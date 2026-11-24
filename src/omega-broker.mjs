@@ -26,6 +26,7 @@ import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strate
 import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
 import { fallbackSinceMs } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
+import { vetoSoftenedTag } from "./agent-veto.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
@@ -1340,8 +1341,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     plan.intents = markDelegatedIntents(plan.intents, delegated);
   }
   for (const planned of plan.intents) {
-    const it = await withAttempt(db, planned);
-    if (!it) continue;
+    const attempt = await withAttempt(db, planned);
+    if (!attempt) continue;
+    // SV1b (src/agent-veto.mjs): an entry of a decision that traded only because A6 or A7 lifted a veto carries the
+    // decision's veto_softened, so its Omega R is tracked per trade (the automatic revert's evidence). Others unchanged.
+    const softened = await vetoSoftenedTag(db, attempt);
+    const it = softened ? { ...attempt, veto_softened: softened } : attempt;
     await db.prepare("INSERT OR IGNORE INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, ?, ?, 'pending', ?, ?)").bind(it.id, it.kind, JSON.stringify(it), now, now).run();
   }
   const notesKey = plan.notes.map((x) => x.code).join(",");

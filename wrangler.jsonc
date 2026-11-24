@@ -66,6 +66,12 @@
     // the one best strategy by confidence x confluence). "off" restores today's choice; "shadow" records only.
     "STRATEGY_ARM_MODE": "live",
     "GRID_ADAPT_MODE": "live",
+    // The strategy agents' veto rule (SV1b, src/agent-veto.mjs; owner 2026-11-24, relayed: "Build A6+A7, switch on,
+    // auto-revert"): "two_sided" lets an agent that speaks on both sides no longer count against the side it also speaks
+    // for (A6: the lean veto; A7: the arm veto). Back to "classic" by itself for 7 days once its latest 15 closed softened
+    // trades average below 0R (KV agent-veto:auto:v1); the owner's force wins (KV agent-veto:owner:v1). Unset or any
+    // other value: "classic", the vetoes as before.
+    "AGENT_VETO_RULE": "two_sided",
     // The council auto-arm ceiling (platform ADR-0020 Amendment 2, merged 2026-11-17, platform main 6df9a34): "allowed"
     // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
     // council to proposals.

@@ -400,6 +400,14 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
       if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
       if (route === "POST /api/strategy-council") {
+        // SV1b (owner 2026-11-24): the owner's force of the strategy agents' veto rule on the same owner-only route
+        // ("two_sided" or "classic" pins it, "auto" hands it back to AGENT_VETO_RULE and the automatic revert).
+        if (typeof r.body.veto_rule === "string") {
+          const rule = r.body.veto_rule.trim().toLowerCase();
+          if (!["two_sided", "classic", "auto"].includes(rule)) return json({ error: "veto_rule must be two_sided, classic or auto" }, 400);
+          if (typeof env.OMEGA.setAgentVetoRule !== "function") return json({ error: "strategy_council_unavailable" }, 503);
+          return rpc(() => env.OMEGA.setAgentVetoRule({ rule, actor: identity.subject, actor_sub: identity.sub ?? null }), "agent_veto_failed");
+        }
         if (typeof r.body.auto !== "boolean") return json({ error: "auto (true or false) is required" }, 400);
         if (typeof env.OMEGA.setCouncilAuto !== "function") return json({ error: "strategy_council_unavailable" }, 503);
         return rpc(() => env.OMEGA.setCouncilAuto({ on: r.body.auto, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_council_failed");
