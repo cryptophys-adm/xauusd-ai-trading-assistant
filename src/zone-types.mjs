@@ -10,6 +10,11 @@
 //   gabfx         chart_plane.liquidity.gabfx points: RBS 1.0 and QM buy 0.9 demand, SBR 1.0 and QM sell 0.9 supply
 //   gmi_flag      the 15m aegis_footprint flags (in a bullish order block or mitigation: demand; bearish: supply), 0.7,
 //                 only on the zone holding price (role "at price")
+//   prophet_zone  (Z1a) every active Prophet order block the producer adds to the chart plane (chart_plane.zones.prophet,
+//                 the 4 nearest per side; local-engines/producer/src/adopt/prophet-ob.mjs): bull demand, bear supply,
+//                 0.7, 0.9 when high_volume. On a chart that has them, prophet_best (one of them) is dropped. A zone's
+//                 freshness reads the most touches of its own count and of the prophet_zone boxes typing it (worn
+//                 dominates).
 // each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5). A box types a zone on a strict overlap; a
 // point must lie inside the zone. Per side, a (source, timeframe) adds only its heaviest box, so two overlapping 15m
 // whales count once. Type: demand when demand_w > 0 and demand_w >= 2 x supply_w, supply in the mirror case, mixed when
@@ -20,7 +25,10 @@
 // counted up to 3: 0 fresh, 1-2 tested, 3 worn.
 // zoneAhead reads only the recorded set (aroundSet, the decision's key_levels with their zone words), so a replay of a
 // stored decision reproduces it. Switch: KEY_LEVEL_ZONE_TYPES = "on" (default) | "off" (no typed field anywhere),
-// through the strategy modes.
+// through the strategy modes. ZONE_SOURCES_OFF (Z1a): a list of ZONE_SOURCES tokens left out of the typing, through the
+// strategy modes too; "prophet_zone" restores Z0's typing.
+
+import { prophetZoneBoxes } from "./level-readers.mjs";
 
 export const ZONE_TYPES_VERSION = "cryptophys.zone-types.v1";
 /** The Key Level Agent's timeframe weights (src/key-level-agent.mjs TF_WEIGHT; a test holds them equal). */
@@ -29,6 +37,10 @@ export const ZONE_TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2
 export const ZONE_TF_NAME = Object.freeze({ "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly" });
 /** The readers' own base weights (src/level-readers.mjs, src/key-level-agent.mjs), and the 15m GMI flag. */
 export const ZONE_SOURCE_WEIGHT = Object.freeze({ whale_active: 0.9, whale_mitigation: 0.7, prophet_best: 0.7, rbs: 1, sbr: 1, qm_buy: 0.9, qm_sell: 0.9, gmi_flag: 0.7 });
+/** Z1a: an active Prophet order block's base weight, and its weight when the core flags its source bar high_volume. */
+export const ZONE_PROPHET_WEIGHT = Object.freeze({ active: 0.7, high_volume: 0.9 });
+/** The evidence sources, the tokens of ZONE_SOURCES_OFF. */
+export const ZONE_SOURCES = Object.freeze(["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag"]);
 export const ZONE_RULES = Object.freeze({
   dominance: 2, medium: 1, strong: 2,
   touch_band_atr: 0.15, touch_bars: 40, touch_gap: 3, touch_cap: 3,
@@ -48,16 +60,36 @@ export function keyLevelZoneTypesMode(env) {
   return String(env?.KEY_LEVEL_ZONE_TYPES ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
 }
 
+/**
+ * ZONE_SOURCES_OFF (Z1a): the ZONE_SOURCES tokens to leave out of the typing, comma- or space-separated, in
+ * ZONE_SOURCES order; unknown tokens are ignored. [] (default) leaves every source in.
+ */
+export function zoneSourcesOffMode(env) {
+  return zoneSourcesList(String(env?.ZONE_SOURCES_OFF ?? "").split(/[\s,]+/));
+}
+/** The strategy modes' entry for ZONE_SOURCES_OFF: { zoneSourcesOff: [...] } when a source is off, else {} (modes unchanged). */
+export function zoneSourcesModes(env) {
+  const off = zoneSourcesOffMode(env);
+  return off.length ? { zoneSourcesOff: off } : {};
+}
+/** Pure: the known tokens of a list (an array or a separated string), in ZONE_SOURCES order, each once. */
+export function zoneSourcesList(list) {
+  const given = new Set((Array.isArray(list) ? list : typeof list === "string" ? list.split(/[\s,]+/) : []).map((t) => String(t).trim().toLowerCase()));
+  return ZONE_SOURCES.filter((t) => given.has(t));
+}
+
 /** Pure: need = ZONE_NEED.risk x risk, at least ZONE_NEED.atr x ATR(1H). */
 export const zoneNeed = (risk, atrH1) => Math.max(ZONE_NEED.risk * risk, ZONE_NEED.atr * atrH1);
 
 /**
  * Pure: the demand and supply evidence of the charts ({ "15", "60", "240", "1D" } HUD snapshots), with the closed 15m
- * bars and the 1H ATR for freshness: { boxes: [{ source, tf, side, bottom, top, weight, point?, at_price? }], bars, atr_h1 }.
- * `weight` is the base weight times the chart's timeframe weight. A missing field gives no box, never a default.
+ * bars and the 1H ATR for freshness: { boxes: [{ source, tf, side, bottom, top, weight, point?, at_price?, touches? }],
+ * bars, atr_h1 }. `weight` is the base weight times the chart's timeframe weight. A missing field gives no box, never a
+ * default. `sourcesOff` (ZONE_SOURCES_OFF) leaves those sources out.
  */
-export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null } = {}) {
+export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null, sourcesOff = [] } = {}) {
   const boxes = [];
+  const off = new Set(zoneSourcesList(sourcesOff));
   const box = (source, tf, side, bottom, top, base, extra = {}) => {
     if (!isNum(bottom) || !isNum(top) || top < bottom) return;
     boxes.push({ source, tf, side, bottom, top, weight: r2(base * ZONE_TF_WEIGHT[tf]), ...extra });
@@ -68,23 +100,27 @@ export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null } = {}) {
     const tf = String(snap.timeframe ?? chart);
     if (!ZONE_TF_NAME[tf]) continue;
     const liq = snap.chart_plane?.liquidity;
-    for (const z of Array.isArray(liq?.whale_zones) ? liq.whale_zones : []) {
+    // Z1a: every active Prophet order block of the chart (the producer's chart_plane.zones.prophet).
+    const prophet = off.has("prophet_zone") ? [] : prophetZoneBoxes(snap.chart_plane);
+    for (const z of prophet) box("prophet_zone", tf, z.side, z.bottom, z.top, z.high_volume ? ZONE_PROPHET_WEIGHT.high_volume : ZONE_PROPHET_WEIGHT.active, { touches: z.touches });
+    for (const z of off.has("whale") || !Array.isArray(liq?.whale_zones) ? [] : liq.whale_zones) {
       const side = z?.role === "support" ? "demand" : z?.role === "resistance" ? "supply" : null;
       if (side) box("whale", tf, side, z.bottom, z.top, z.state === "active" ? ZONE_SOURCE_WEIGHT.whale_active : ZONE_SOURCE_WEIGHT.whale_mitigation);
     }
-    const g = liq?.gabfx;
+    const g = off.has("gabfx") ? null : liq?.gabfx;
     if (g && typeof g === "object") {
       for (const [k, side] of [["rbs", "demand"], ["qm_buy", "demand"], ["sbr", "supply"], ["qm_sell", "supply"]]) {
         if (isNum(g[k]) && g[k] > 0) box("gabfx", tf, side, g[k], g[k], ZONE_SOURCE_WEIGHT[k], { point: true });
       }
     }
-    const ob = snap.huds?.order_blocks?.fields;
+    // The best blocks are among the active ones: dropped on a chart that has prophet_zone boxes.
+    const ob = off.has("prophet_best") || prophet.length ? null : snap.huds?.order_blocks?.fields;
     if (ob) {
       box("prophet_best", tf, "demand", ob.bull_bottom, ob.bull_top, ZONE_SOURCE_WEIGHT.prophet_best);
       box("prophet_best", tf, "supply", ob.bear_bottom, ob.bear_top, ZONE_SOURCE_WEIGHT.prophet_best);
     }
     // The 15m GMI flags say price is inside a block: they type the zone holding price only.
-    const ae = tf === "15" ? snap.huds?.aegis_footprint?.fields : null;
+    const ae = tf === "15" && !off.has("gmi_flag") ? snap.huds?.aegis_footprint?.fields : null;
     if (ae) {
       const flag = (side) => boxes.push({ source: "gmi_flag", tf, side, bottom: null, top: null, weight: r2(ZONE_SOURCE_WEIGHT.gmi_flag * ZONE_TF_WEIGHT[tf]), at_price: true });
       if (ae.in_bull_order_block === true || ae.in_bull_mitigation === true) flag("demand");
@@ -140,7 +176,11 @@ export function zoneTypes(zones, evidence) {
     const type = d > 0 && d >= ZONE_RULES.dominance * s ? "demand" : s > 0 && s >= ZONE_RULES.dominance * d ? "supply" : d > 0 && s > 0 ? "mixed" : "none";
     const score = r2(type === "demand" ? d : type === "supply" ? s : Math.max(d, s));
     const strength = type === "none" ? null : score >= ZONE_RULES.strong ? "strong" : score >= ZONE_RULES.medium ? "medium" : "weak";
-    const touches = zoneTouches(z.low, z.high, evidence?.bars, band);
+    // Z1a: the most touches of the zone's own count and of the prophet_zone boxes typing it (each on its own chart's
+    // bars, the core's rule), capped as the count: worn dominates.
+    const own = zoneTouches(z.low, z.high, evidence?.bars, band);
+    const boxTouches = boxes.filter((b) => b.source === "prophet_zone" && isNum(b.touches) && boxTypes(b, z)).map((b) => b.touches);
+    const touches = boxTouches.length ? Math.min(ZONE_RULES.touch_cap, Math.max(own ?? 0, ...boxTouches)) : own;
     z.ds = { type, strength, score, freshness: freshnessOf(touches), touches, sources: [...new Set([...best.demand.keys(), ...best.supply.keys()])].sort() };
   }
   return zones;

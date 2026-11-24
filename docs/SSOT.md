@@ -419,6 +419,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
       - **liquidity:** Aether FVG open targets with their mass; the Spacetime Whale Map (active zones and mitigation blocks, with HP); GABFX QM BUY/SELL and RBS/SBR; the TDM profile POC, VAH, VAL, LVN and HVN.
       - **projection:** the SMC Fibonacci grid (15 ratios, warped); the probability cone (p90/p10, 50 bars); the tactical trendlines; PA support and resistance.
       - **session:** True Openings (year, month, week, day, Asia, London, NY AM, NY PM); day and week open, previous day and week high and low; the Daily session volume profile (30 rows, 70 % value area, from 1m bars on 15m and 1H, 5m on 4H, 15m on D1), current and previous session.
+      - **zones (Z1a, `local-engines/producer/src/adopt/prophet-ob.mjs`):** `zones.prophet`, every active Prophet R38 order block the core returns at the last bar (`active_order_block_zones`), the 4 nearest to the close per side: `{ side, top, bottom, age_bars, high_volume, touches }` (touches by the core's own rule: 0.15 x the chart's ATR(14), 40 bars, 3 bars apart). An adapter outside the hashed core; a failure leaves the plane without it. Read only by the demand/supply typing, never as a key level or by a room.
       - **Limits:** path-dependent state is replayed over the engines' 1000-bar window; True Openings come from the 15m bars, so they are the true open at the stated New York time on every chart. Nothing in it is a TradingView alert field: it is unverified context, never a decision. The pull adapter's `/health` names its version per chart (`last_hud_publish.charts.<chart>.chart_plane`).
     - **Zones:** the levels, sorted by price, are grouped while a group's span stays within 0.3 × the 1H ATR (at least 1 dollar).
       - **Independence (owner decision 2026-11-08, after the chart plane gave 11 candidates):** a zone's sources are its distinct level FAMILIES (Camarilla, pivot/CPR, value area, swing, previous day/week, round number, order block, Supertrend, and the readers' Band, Liquidity, Projection and Session), not (kind, timeframe) pairs, so one chart's KWW mean, Fibonacci and PA line no longer count as three confirmations. A zone's score adds, per family and timeframe, only the heaviest level.
@@ -430,7 +431,8 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - whale zones: support = demand, resistance = supply (a mitigated block already flipped); 0.9 active, 0.7 mitigation;
           - the best Prophet order blocks (`prophet_best`): 0.7;
           - the GABFX points: RBS 1.0 and QM buy 0.9 for demand; SBR 1.0 and QM sell 0.9 for supply;
-          - the 15m GMI order-block and mitigation flags (`gmi_flag`): 0.7, on the zone at price only.
+          - the 15m GMI order-block and mitigation flags (`gmi_flag`): 0.7, on the zone at price only;
+          - every active Prophet order block (`prophet_zone`, Z1a): the chart plane's `zones.prophet` (read by `prophetZoneBoxes` in `src/level-readers.mjs`, never as a level); bull = demand, bear = supply; 0.7, or 0.9 when the core flags the block `high_volume`. On a chart that has them, `prophet_best` is dropped (it is one of them).
         - **Typing.**
           - A box counts on a strict overlap; a point must lie inside the zone.
           - Per side, each (source, timeframe) adds its heaviest box.
@@ -442,6 +444,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
           - Prophet's touch rule: touches on the 40 closed 15m bars before the decision bar, within 0.15 x ATR(1H), at least 3 bars apart, counted up to 3.
           - 0 touches = fresh, 1-2 = tested, 3 = worn.
           - The window is 10 hours for every zone timeframe, so a 4H zone touched two days ago reads fresh.
+          - Z1a: a zone a `prophet_zone` box types reads the most touches of its own count and of those boxes (each counted by the core's rule on its own chart's bars), capped at 3: worn dominates.
         - **Output.** `z.ds = { type, strength, score, freshness, touches, sources }`. Source labels use timeframe words (`whale@4H`), never period numbers.
         - **Recorded.**
           - `decision.key_levels` (`aroundSet`, `keyLevelsAround`'s exact rule) adds `zone_type`, `zone_strength`, `zone_freshness` and `zone_rank` beside low and high.
@@ -453,6 +456,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
             - a stored decision replays it from its key_levels and trade.
           - `plan_setups` adds `entry_zone_type`, `stop_zone_type`, `tp1_zone_type` and `opposing_room_atr` (run-time ALTERs).
         - **Switch.** `KEY_LEVEL_ZONE_TYPES` = "on" (default) | "off". It travels through the strategy modes (`modes.zoneTypes`, as CHART_PATTERNS_MODE), and "off" removes every typed field: main's output byte for byte.
+        - **Source switch (Z1a).** `ZONE_SOURCES_OFF` (AI Worker; unset = every source on): tokens `prophet_zone`, `prophet_best`, `whale`, `gabfx`, `gmi_flag`, comma- or space-separated, through the strategy modes as `modes.zoneSourcesOff` (present only when a source is off; the capture keeps it). `prophet_zone` restores Z0's typing byte for byte.
         - **Replay.** 245 hourly captures, 2026-11-09 to 2026-11-23, without the pattern levels:
           - 34% of recorded zones are decisive;
           - decisive zones held 63% fresh, 51% tested and 39% worn;

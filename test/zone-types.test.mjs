@@ -17,9 +17,12 @@ import { agentContext, finishPlan, slimPlan } from "../src/strategy-agents.mjs";
 import { ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH, engineCodeSource, sha256Hex } from "../src/ledger-omega4.mjs";
 import {
   dsEvidence, zoneTypes, zoneTouches, freshnessOf, decisive, aroundSet, zoneAhead, withZoneAhead, zoneNeed, keyLevelZoneTypesMode,
-  ZONE_TF_WEIGHT, ZONE_TREND_LEAN, ZONE_NEED, ZONE_RULES, ZONE_SOURCE_WEIGHT
+  ZONE_TF_WEIGHT, ZONE_TREND_LEAN, ZONE_NEED, ZONE_RULES, ZONE_SOURCE_WEIGHT,
+  ZONE_SOURCES, ZONE_PROPHET_WEIGHT, zoneSourcesOffMode, zoneSourcesList, zoneSourcesModes
 } from "../src/zone-types.mjs";
-import { zoneScenario, zoneInputs, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
+import { readPlane, prophetZoneBoxes } from "../src/level-readers.mjs";
+import { projectionReading } from "../src/projection-agent.mjs";
+import { zoneScenario, zoneInputs, PROPHET_ZONES, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
 
 const M15 = 15 * 60_000;
@@ -344,4 +347,166 @@ test("Z0-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to it
   // managementFields reads only low/high: untouched by the words beside them.
   const m = ea.managementFields({ key_levels: [{ low: 3990, high: 3992, zone_type: "demand", zone_strength: "medium", zone_freshness: "fresh", zone_rank: "candidate" }] });
   assert.deepEqual(m, ea.managementFields({ key_levels: [{ low: 3990, high: 3992 }] }));
+});
+
+// ---------------------------------------------------------------- Z1a: every active Prophet order block as a source
+// (docs/RFC_DEMAND_SUPPLY_ZONES.md §4). The producer adds chart_plane.zones.prophet (local-engines/producer/src/adopt/
+// prophet-ob.mjs; its own tests in local-engines/producer/test/prophet-ob.test.mjs); the typing reads it here.
+/** A chart with Prophet zone boxes in its plane (chart_plane.zones.prophet). */
+const pchart = (tf, prophet, extra = {}) => { const c = chart(tf, extra); c.chart_plane.zones = { prophet }; return c; };
+const pz = (side, bottom, top, { high_volume = false, touches = 0, age_bars = 5 } = {}) => ({ side, top, bottom, age_bars, high_volume, touches });
+
+test("Z1a-1 the constants and ZONE_SOURCES_OFF: the tokens, their order, unknown tokens ignored; modes carry it only when a source is off", () => {
+  assert.deepEqual([...ZONE_SOURCES], ["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag"]);
+  assert.deepEqual({ ...ZONE_PROPHET_WEIGHT }, { active: 0.7, high_volume: 0.9 });
+  assert.deepEqual(zoneSourcesOffMode({}), []);
+  assert.deepEqual(zoneSourcesOffMode({ ZONE_SOURCES_OFF: " Whale, prophet_zone  x gmi_flag,whale" }), ["prophet_zone", "whale", "gmi_flag"]);
+  assert.deepEqual(zoneSourcesList("gabfx prophet_best"), ["prophet_best", "gabfx"]);
+  assert.deepEqual([zoneSourcesList(null), zoneSourcesList(7)], [[], []]);
+  assert.deepEqual(zoneSourcesModes({}), {}, "every source on: the modes are unchanged");
+  assert.deepEqual(zoneSourcesModes({ ZONE_SOURCES_OFF: "prophet_zone" }), { zoneSourcesOff: ["prophet_zone"] });
+});
+
+test("Z1a-2 typing: a Prophet zone box is demand or supply at 0.7 (0.9 high_volume) x TF_WEIGHT; one per (source, timeframe); prophet_best is dropped on its chart only", () => {
+  const z = zone(3995, 3999);
+  const one = typed(z, { "60": pchart("60", [pz("demand", 3996, 3998)]) });
+  assert.deepEqual([one.type, one.strength, one.score, one.sources], ["demand", "medium", 1.05, ["prophet_zone@1H"]]);
+  const hv = typed(zone(3995, 3999), { "60": pchart("60", [pz("demand", 3996, 3998), pz("demand", 3995.5, 3997, { high_volume: true })]) });
+  assert.deepEqual([hv.type, hv.score], ["demand", 1.35], "the heaviest box of 1H counts once");
+  const supply = typed(zone(4018, 4022, "resistance"), { "15": pchart("15", [pz("supply", 4019, 4021)]) });
+  assert.deepEqual([supply.type, supply.strength, supply.score, supply.sources], ["supply", "weak", 0.7, ["prophet_zone@15m"]]);
+  // The best block is one of the active blocks: on a chart with prophet_zone boxes it is not counted again ...
+  const both = typed(zone(3995, 3999), { "60": pchart("60", [pz("demand", 3996, 3998)], { ob: { bull_top: 3998, bull_bottom: 3996 } }) });
+  assert.deepEqual([both.score, both.sources], [1.05, ["prophet_zone@1H"]]);
+  // ... a chart without them (or with an empty list) keeps it; the other charts are unaffected.
+  const mixedCharts = typed(zone(3995, 3999), { "60": pchart("60", [pz("demand", 3996, 3998)]), "240": pchart("240", [], { ob: { bull_top: 3998, bull_bottom: 3996 } }) });
+  assert.deepEqual([mixedCharts.score, mixedCharts.sources], [2.45, ["prophet_best@4H", "prophet_zone@1H"]]);
+  // Strict overlap, as every box: an edge that only touches does not type the zone.
+  assert.equal(typed(zone(3995, 3999), { "60": pchart("60", [pz("demand", 3993, 3995)]) }).type, "none");
+  // A malformed box is no box (prophetZoneBoxes keeps the well-formed ones).
+  assert.deepEqual(prophetZoneBoxes({ zones: { prophet: [pz("demand", 3998, 3996), { ...pz("demand", 1, 2), side: "bull" }, pz("supply", null, 4)] } }), []);
+  assert.deepEqual(prophetZoneBoxes({ zones: { prophet: [pz("supply", 4019, 4021, { touches: 2, age_bars: 9 })] } }), [{ side: "supply", bottom: 4019, top: 4021, high_volume: false, touches: 2, age_bars: 9 }]);
+  assert.deepEqual([prophetZoneBoxes(null), prophetZoneBoxes({}), prophetZoneBoxes({ zones: {} })], [[], [], []]);
+});
+
+test("Z1a-3 freshness: the most touches of the zone's own count and its Prophet boxes', so worn dominates; a zone with 3 touches whose box has 0 reads worn", () => {
+  const z = (low = 3990, high = 3992) => zone(low, high);
+  const box = (touches) => ({ "60": pchart("60", [pz("demand", 3990.5, 3991.5, { touches })]) });
+  // Three spaced 15m touches, a box with 0: worn.
+  const worn = typed(z(), box(0), { bars15: touchBars([5, 15, 25]) });
+  assert.deepEqual([worn.freshness, worn.touches], ["worn", 3]);
+  // No 15m touch, a box tested twice on its own chart: tested; four times: worn, capped at 3.
+  assert.deepEqual([typed(z(), box(2), { bars15: touchBars([]) }).freshness, typed(z(), box(2), { bars15: touchBars([]) }).touches], ["tested", 2]);
+  assert.deepEqual([typed(z(), box(5), { bars15: touchBars([]) }).freshness, typed(z(), box(5), { bars15: touchBars([]) }).touches], ["worn", 3]);
+  // No 15m bars: the box's own count.
+  assert.equal(typed(z(), box(1), { bars15: [] }).freshness, "tested");
+  // A box that does not type the zone does not age it; neither does a box without a count.
+  const apart = { "60": pchart("60", [pz("demand", 3995, 3996, { touches: 3 })]) };
+  assert.equal(typed(z(), apart, { bars15: touchBars([]) }).freshness, "fresh");
+  assert.equal(typed(z(), { "60": pchart("60", [{ ...pz("demand", 3990.5, 3991.5), touches: null }]) }, { bars15: touchBars([]) }).freshness, "fresh");
+  // ZONE_SOURCES_OFF=prophet_zone: the zone's own count only.
+  const ev = dsEvidence({ snapshots: box(3), bars15: touchBars([]), atrH1: 10, sourcesOff: ["prophet_zone"] });
+  assert.equal(zoneTypes([z()], ev)[0].ds.freshness, "fresh");
+});
+
+test("Z1a-4 ZONE_SOURCES_OFF=prophet_zone deep-equals Z0's typing; zones and candidates never change; every token switches its source off", () => {
+  const plain = zoneInputs(), rich = zoneInputs(undefined, { prophet: true });
+  const z0 = se.buildStrategy(plain);
+  const off = se.buildStrategy({ ...rich, modes: { zoneSourcesOff: ["prophet_zone"] } });
+  assert.equal(JSON.stringify(off), JSON.stringify(z0), "modes: Z0's strategy byte for byte");
+  assert.equal(JSON.stringify(se.buildStrategy({ ...rich, env: { ZONE_SOURCES_OFF: "prophet_zone" } })), JSON.stringify(z0), "env too");
+  const on = se.buildStrategy(rich);
+  assert.notDeepEqual(on.key_levels.zones.map((z) => z.ds), z0.key_levels.zones.map((z) => z.ds), "on: the typing uses the new source");
+  assert.ok(on.key_levels.zones.some((z) => z.ds.sources.includes("prophet_zone@1H")));
+  // The overlay only: zones, candidates, scores, labels, members, roles and every price are those of Z0.
+  assert.equal(JSON.stringify(strip(on)), JSON.stringify(strip(z0)));
+  // On the fixture: a new typed zone, worn from its 1H box, and prophet_best gone where the boxes are.
+  const at = (low) => on.key_levels.zones.find((z) => z.low === low).ds;
+  assert.deepEqual([at(3985).type, at(3985).strength, at(3985).sources], ["demand", "medium", ["prophet_zone@1H"]]);
+  assert.equal(z0.key_levels.zones.find((z) => z.low === 3985).ds.type, "none");
+  assert.deepEqual([z0.key_levels.zones.find((z) => z.low === 4016.92).ds.freshness, at(4016.92).freshness], ["fresh", "worn"]);
+  assert.ok(!on.key_levels.zones.some((z) => z.ds.sources.some((l) => /^prophet_best@(1H|4H|daily)$/.test(l))), "dropped on the charts with boxes");
+  // Each token takes its source out.
+  for (const token of ZONE_SOURCES) {
+    const s = se.buildStrategy({ ...rich, modes: { zoneSourcesOff: [token] } });
+    assert.ok(!s.key_levels.zones.some((z) => z.ds.sources.some((l) => l.startsWith(`${token}@`))), token);
+    assert.equal(JSON.stringify(strip(s)), JSON.stringify(strip(z0)), `${token}: zones unchanged`);
+  }
+  // prophet_best off with prophet_zone off: neither Prophet source.
+  const neither = se.buildStrategy({ ...rich, modes: { zoneSourcesOff: ["prophet_zone", "prophet_best"] } });
+  assert.ok(!neither.key_levels.zones.some((z) => z.ds.sources.some((l) => l.startsWith("prophet"))));
+});
+
+test("Z1a-5 the switches travel: loadStrategyInputs and loadOwnTimeframePlanInputs carry zoneSourcesOff only when set; the capture keeps it; ownTimeframePlan honours it", async () => {
+  const modes = (await se.loadStrategyInputs({ ZONE_SOURCES_OFF: "prophet_zone" }, { now: NOW })).modes;
+  assert.deepEqual(modes, { chartPatterns: "on", tp1KeyZone: "on", entryZone: "edge", zoneTypes: "on", zoneSourcesOff: ["prophet_zone"] });
+  assert.equal("zoneSourcesOff" in (await se.loadStrategyInputs({}, { now: NOW })).modes, false, "the default modes are Z0's");
+  const rich = zoneInputs(undefined, { prophet: true });
+  const slim = slimInputs({ ...rich, modes });
+  assert.deepEqual(slim.modes, { zoneSourcesOff: ["prophet_zone"] });
+  assert.equal(JSON.stringify(se.buildStrategy(slim)), JSON.stringify(se.buildStrategy(slimInputs(zoneInputs()))), "the replay builds Z0's typing, as live");
+  assert.equal("modes" in slimInputs({ ...rich, modes: { zoneTypes: "on" } }), false, "stored inputs unchanged while every source is on");
+  assert.deepEqual(slimInputs({ ...rich, modes: { zoneTypes: "off", zoneSourcesOff: ["whale", "nope"] } }).modes, { zoneTypes: "off", zoneSourcesOff: ["whale"] });
+  // The capture keeps the planes' Prophet zones, so a replay sees the live source set.
+  assert.deepEqual(slim.h1Snapshot.chart_plane.zones, { prophet: PROPHET_ZONES["60"] });
+  assert.deepEqual((await se.loadOwnTimeframePlanInputs({ ZONE_SOURCES_OFF: "prophet_zone" })).modes, { chartPatterns: "on", zoneTypes: "on", zoneSourcesOff: ["prophet_zone"] });
+  assert.deepEqual((await se.loadOwnTimeframePlanInputs({})).modes, { chartPatterns: "on", zoneTypes: "on" });
+  for (const dir of [1, -1]) {
+    const z0 = se.ownTimeframePlan({ snapshot: zoneInputs().h1Snapshot, bars: rich.h1Bars }, dir);
+    const off = se.ownTimeframePlan({ snapshot: rich.h1Snapshot, bars: rich.h1Bars, modes: { zoneSourcesOff: ["prophet_zone"] } }, dir);
+    const on = se.ownTimeframePlan({ snapshot: rich.h1Snapshot, bars: rich.h1Bars }, dir);
+    assert.deepEqual(off, z0, `off: Z0's plan (${dir})`);
+    assert.deepEqual(strip(on), strip(z0), `prices unchanged (${dir})`);
+  }
+});
+
+test("Z1a-6 KEY_LEVEL_ZONE_TYPES off with Prophet zones in the planes: main's output byte for byte (Z0-9's pin), no typed field", async () => {
+  const off = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" }, prophet: true });
+  const { run, ...rest } = off;
+  // The strategy inputs differ only by the planes' zones, which nothing but the typing reads.
+  assert.equal(sha(rest), "a830079cae93d842555b61cbb3a799bfce47fd94266a48308d6d468189d630d5");
+  assert.deepEqual(z0Keys(rest), []);
+});
+
+test("Z1a-7 on: guardrails, council, EA signal, management fields, public output and plan_setups are byte-identical to off; ZONE_SOURCES_OFF=prophet_zone is Z0's record", async () => {
+  const on = await zoneScenario(mods, { db: d1, kv, prophet: true });
+  const off = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" }, prophet: true });
+  const z0 = await zoneScenario(mods, { db: d1, kv });
+  const z0Again = await zoneScenario(mods, { db: d1, kv, prophet: true, modes: { zoneSourcesOff: ["prophet_zone"] } });
+  assert.deepEqual(strip(on.strategy), off.strategy);
+  assert.deepEqual(strip(on.record), off.record);
+  for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(off.guards[side].checks), `${side} checks`);
+  for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(off[k]), k);
+  for (const k of ["strategy", "record", "stored", "evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(z0Again[k]), JSON.stringify(z0[k]), `prophet_zone off: ${k}`);
+  // The recorded words move with the new source (the trade's TP1 zone now reads worn from its 1H box).
+  assert.deepEqual(on.record.key_levels.map(({ low, high }) => ({ low, high })), z0.record.key_levels.map(({ low, high }) => ({ low, high })));
+  assert.equal(on.record.trade.opposing_ahead.o_freshness, "worn");
+  assert.equal(z0.record.trade.opposing_ahead.o_freshness, "fresh");
+  // Z1a adds no recorded key: the typed fields sit where Z0's do.
+  assert.deepEqual(z0Keys(on.record), z0Keys(z0.record));
+  // zoneAhead still replays from the record alone.
+  const t = on.record.trade;
+  assert.deepEqual(zoneAhead({ entry: t.entry, stop: t.stop }, on.record.key_levels, { dir: 1, atrH1: on.record.strategy.atr_h1, trend: t.opposing_ahead.trend_lean }), t.opposing_ahead);
+});
+
+test("Z1a-8 the readers and the rooms: readPlane and the Projection Agent read the plane as before; no new label reads like a price", async () => {
+  const rich = zoneInputs(undefined, { prophet: true }), plain = zoneInputs();
+  for (const k of ["m15Snapshot", "h1Snapshot", "h4Snapshot", "d1Snapshot"]) {
+    const tf = rich[k].timeframe;
+    assert.deepEqual(readPlane(rich[k].chart_plane, tf), readPlane(plain[k].chart_plane, tf), `${k}: no level from the zones`);
+    assert.equal(JSON.stringify(projectionReading({ bars: rich.m15Bars, plane: rich[k].chart_plane, timeframe: "15 minutes" })), JSON.stringify(projectionReading({ bars: plain.m15Bars, plane: plain[k].chart_plane, timeframe: "15 minutes" })), `${k}: the room's projection evidence`);
+  }
+  const { record, strategy } = await zoneScenario(mods, { db: d1, kv, prophet: true });
+  const leaves = [...z0Leaves(record), ...z0Leaves(strategy)];
+  for (const s of leaves) assert.doesNotMatch(s, pp.PRICE_LIKE, s);
+  const labels = strategy.key_levels.zones.flatMap((z) => z.ds.sources);
+  assert.ok(labels.includes("prophet_zone@1H") && labels.includes("prophet_zone@4H"));
+  for (const l of labels) assert.match(l, /^(prophet_zone|whale|prophet_best|gabfx|gmi_flag)@(15m|1H|4H|daily)$/);
+  for (const tf of ["15m", "1H", "4H", "daily"]) assert.doesNotMatch(`prophet_zone@${tf}`, pp.PRICE_LIKE);
+});
+
+test("Z1a-9 no hashed engine function changes: ENGINE_CODE_HASH and the behaviour hash are Z0's", async () => {
+  assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
+  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });

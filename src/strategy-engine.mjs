@@ -29,7 +29,7 @@ import { recentReleases } from "./econ-releases.mjs";
 import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
 import { orderImbalance } from "./producer/m5-orderbook.mjs";
-import { keyLevelZoneTypesMode, zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
+import { keyLevelZoneTypesMode, zoneWords, typedZones, withZoneAhead, zoneSourcesList, zoneSourcesOffMode, zoneSourcesModes } from "./zone-types.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -287,8 +287,9 @@ export function ownTimeframePlan({ snapshot = null, bars = [], modes = null } = 
   const atrH1 = atr(closed);
   if (!isNum(price) || !isNum(atrH1)) return null;
   // CHART_PATTERNS_MODE "off" leaves the 1H chart patterns out of this plan's zones too (Track A PR 1 review).
-  // KEY_LEVEL_ZONE_TYPES "off" leaves this plan's zones untyped too (Z0; the plan then carries no zone_types).
-  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1, patterns: modes?.chartPatterns === "off" ? "off" : "on", zoneTypes: modes?.zoneTypes === "off" ? "off" : "on" });
+  // KEY_LEVEL_ZONE_TYPES "off" leaves this plan's zones untyped too (Z0; the plan then carries no zone_types);
+  // ZONE_SOURCES_OFF leaves those sources out of its typing (Z1a).
+  const reading = buildKeyLevels({ snapshots: { "60": snapshot }, bars: { H1: closed }, price, atrH1, patterns: modes?.chartPatterns === "off" ? "off" : "on", zoneTypes: modes?.zoneTypes === "off" ? "off" : "on", zoneSourcesOff: zoneSourcesList(modes?.zoneSourcesOff) });
   const plan = tradeLevels({ dir, price, levels: zoneLevels(reading.zones), atrH1 });
   return plan ? { ...plan, source: "1H chart only", reference_price: r2(price), atr_h1: r2(atrH1) } : null;
 }
@@ -298,7 +299,7 @@ export async function loadOwnTimeframePlanInputs(env) {
   let snapshot = null;
   try { snapshot = await loadHudSnapshot(env, { timeframe: "60" }); } catch { snapshot = null; }
   const bars = await seriesCandles(env, "1h");
-  return { snapshot, bars: bars.slice(-60), modes: { chartPatterns: chartPatternsMode(env), zoneTypes: keyLevelZoneTypesMode(env) } };
+  return { snapshot, bars: bars.slice(-60), modes: { chartPatterns: chartPatternsMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env) } };
 }
 
 /** Vetoes and cautions for a direction from the 1H and 15m HUD snapshots, the news and the economic calendar. */
@@ -424,7 +425,9 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
     // Their measured record on gold scales their weights (src/pattern-calibration.mjs, hourly).
     calibration: patternCalibration,
     // Z0: demand/supply types on the zones (recorded only); KEY_LEVEL_ZONE_TYPES travels in the inputs as modes.zoneTypes.
-    zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env)
+    zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env),
+    // Z1a: ZONE_SOURCES_OFF travels in the inputs as modes.zoneSourcesOff (present only when a source is off).
+    zoneSourcesOff: zoneSourcesList([...zoneSourcesList(modes?.zoneSourcesOff), ...zoneSourcesOffMode(env)])
   });
   const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
@@ -552,7 +555,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env) },
     now
   };
 }
