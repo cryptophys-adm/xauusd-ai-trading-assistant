@@ -234,13 +234,36 @@ export async function runLearnedPromotion(env, { knowledge, now = Date.now() } =
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
 
+/**
+ * KA1 (owner 2026-11-24: "buka arm, biarkan system menilai dirinya sendiri"): an item the shadow arm closed on a final
+ * verdict other than better (src/shadow-knowledge.mjs planShadowClosures) is recorded here as 'retired', never live:
+ * reason "shadow:<not_better|holdout_failed|worse>", verdict_json the closure's evidence (CLOSURE schema, counts and p
+ * only). promoted_at is the closing time (the column is NOT NULL; the item never went live). promotedKeys then skips it,
+ * so the arm never tests that version again and planPromotions never promotes it. Idempotent; returns the rows written.
+ */
+export async function closeShadowItems(env, closures = [], { now = Date.now() } = {}) {
+  if (!env?.DB || !closures.length) return [];
+  await ensureSchema(env.DB);
+  const at = new Date(now).toISOString();
+  const written = [];
+  for (const c of closures) {
+    const item = c.item ?? { item_id: c.item_id, version: c.version };
+    const r = await env.DB.prepare("INSERT INTO learned_live (item_id, version, status, item_json, verdict_json, promoted_at, retired_at, reason) VALUES (?, ?, 'retired', ?, ?, ?, ?, ?) ON CONFLICT(item_id, version) DO NOTHING")
+      .bind(c.item_id, c.version, JSON.stringify(item), JSON.stringify(c.evidence), at, at, `shadow:${c.reason}`).run();
+    if (Number(r?.meta?.changes ?? 1) > 0) written.push(c);
+  }
+  return written;
+}
+
 /** For /api/tuning and the Aether page: the live items and the recent retirements. */
 export async function readLearnedLive(env) {
   if (!env?.DB) return null;
   await ensureSchema(env.DB);
-  const rows = (await env.DB.prepare("SELECT item_id, version, status, item_json, promoted_at, retired_at, reason FROM learned_live ORDER BY promoted_at DESC LIMIT 30").all()).results || [];
+  const rows = (await env.DB.prepare("SELECT item_id, version, status, item_json, verdict_json, promoted_at, retired_at, reason FROM learned_live ORDER BY promoted_at DESC LIMIT 30").all()).results || [];
+  // A shadow closure (KA1) carries its evidence; every other row reads as before.
+  const closure = (r) => { if (!String(r.reason ?? "").startsWith("shadow:")) return null; try { const v = JSON.parse(r.verdict_json); return v?.schema ? v : null; } catch { return null; } };
   return {
     version: LEARNED_LIVE_VERSION, mode: learnedAutoPromotion(env), rules: { ...LIVE_RULES },
-    items: rows.map((r) => { let it = {}; try { it = JSON.parse(r.item_json); } catch { it = {}; } return { item_id: r.item_id, version: r.version, status: r.status, agents: it.audience?.agents ?? [], chart: it.audience?.charts?.[0] ?? null, text: it.text ?? null, promoted_at: r.promoted_at, retired_at: r.retired_at, reason: r.reason }; })
+    items: rows.map((r) => { let it = {}; try { it = JSON.parse(r.item_json); } catch { it = {}; } const c = closure(r); return { item_id: r.item_id, version: r.version, status: r.status, agents: it.audience?.agents ?? [], chart: it.audience?.charts?.[0] ?? null, text: it.text ?? null, promoted_at: r.promoted_at, retired_at: r.retired_at, reason: r.reason, ...(c ? { closure: c } : {}) }; })
   };
 }

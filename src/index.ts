@@ -293,7 +293,7 @@ import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mj
 import { storeBrokerTrigger } from "./broker-trigger.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
-import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
+import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge, runShadowClosures } from "./shadow-knowledge.mjs";
 import { runLearnedPromotion, readLearnedLive } from "./learned-live.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
@@ -3284,6 +3284,14 @@ export default {
             if (promoted.status !== "no_pack" && (promoted.status !== "ok" || Number(promoted.promoted) || Number(promoted.retired))) console.log("learned_promotion", JSON.stringify({ ...promoted, message: undefined }));
             if (promoted.message) await sendTelegram(env, String(promoted.message)).catch((e) => console.error("learned_promotion_telegram_failed", e instanceof Error ? e.message : String(e)));
           } catch (e) { console.error("learned_promotion_failed", e instanceof Error ? e.message : String(e)); }
+          // KA1 (owner 2026-11-24: "buka arm, biarkan system menilai dirinya sendiri"): after the promotion, an item whose
+          // final shadow verdict is not better, failed its holdout or is worse closes by itself (learned_live 'retired');
+          // the first run settles the items tested until #492 once (KV shadow-knowledge:settle:v1). Only with the arm on.
+          try {
+            const closures = await runShadowClosures(env);
+            if (closures.status !== "disabled" && (closures.status !== "ok" || closures.closed?.length || closures.settle)) console.log("shadow_knowledge_closures", JSON.stringify({ ...closures, message: undefined }));
+            if (closures.message) await sendTelegram(env, String(closures.message)).catch((e) => console.error("shadow_knowledge_closures_telegram_failed", e instanceof Error ? e.message : String(e)));
+          } catch (e) { console.error("shadow_knowledge_closures_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
           // Neuron allocation by reputation (owner 2026-11-14, src/agent-allocation.mjs): a room agent below 45% over

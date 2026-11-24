@@ -146,3 +146,116 @@ test("since 2026-11-13 the arm also runs on the 15m War Room and the council, wi
   const k = compareShadowKnowledge([{ subject: "shadow-agent:risk@w1v1@15", agent: "risk", item_id: "w1", item_version: 1, arm: "note", statement_close: "2026-11-13T01:00:00Z", status: "ok", stance: "SELL", control_stance: "WAIT", result: "hit", control_result: "neutral" }]);
   assert.equal(k.candidates[0].chart, "15");
 });
+
+// ------------------------------------------------------------------ KA1: self-judging
+// Owner 2026-11-24 (relayed by the orchestrator): "buka arm, biarkan system menilai dirinya sendiri". An item with a final
+// verdict closes by itself: better goes live through learned-live; not better, holdout failed or worse retires.
+const H = 3_600_000, Q = 15 * 60_000;
+/** `n` stored rows of one subject; `pair(i)` gives [stance, result, control_stance, control_result]. */
+function rowsOf(subject, agent, itemId, n, pair, { start = Date.parse("2026-11-13T00:00:00Z"), step = Q, status = "ok" } = {}) {
+  return Array.from({ length: n }, (_, i) => {
+    const [stance, result, control_stance, control_result] = pair(i);
+    const t = new Date(start + i * step).toISOString();
+    return { subject, candle_key: `k${i}`, agent, item_id: itemId, item_version: itemId ? 1 : null, arm: itemId ? "note" : "aa", statement_close: t, created_at: t, stance, control_stance, status, result, control_result };
+  });
+}
+const same = () => ["WAIT", "hit", "WAIT", "hit"];
+const KNOW_NOW = Date.parse("2026-11-24T12:00:00Z");
+
+test("KA1-1. the closure rule: below the sample it collects; not better, holdout failed and worse retire; better is left to learned-live", async () => {
+  const { planShadowClosures, CLOSURE_VERSION } = await import("../src/shadow-knowledge.mjs");
+  const plan = (rows) => planShadowClosures(rows, { now: KNOW_NOW }).items;
+  // Too few readings: 299 scored pairs (199 discovery bars) stay in the queue.
+  assert.deepEqual(plan(rowsOf("shadow-agent:risk@n1v1@15", "risk", "n1", 299, same)).map((i) => [i.key, i.outcome, i.reason]), [["n1@1", "collecting", null]]);
+  // 300 pairs with the same stance on every bar: not better.
+  const nb = plan(rowsOf("shadow-agent:risk@n1v1@15", "risk", "n1", 300, same))[0];
+  assert.deepEqual([nb.outcome, nb.reason], ["retired", "not_better"]);
+  // The control right where the note was wrong, on every 8th bar: worse (reverse sign test, Holm-adjusted).
+  const worse = plan(rowsOf("shadow-agent:risk@w1v1@15", "risk", "w1", 320, (i) => (i % 8 === 0 ? ["SELL", "miss", "WAIT", "hit"] : same())))[0];
+  assert.deepEqual([worse.outcome, worse.reason], ["retired", "worse"]);
+  const s = worse.evidence.subjects[0];
+  assert.equal(worse.evidence.schema, CLOSURE_VERSION);
+  assert.deepEqual([s.rows, s.scored, s.treat_hits, s.control_hits, s.discovery.candidate_better, s.discovery.control_better], [320, 320, 280, 320, 0, 28]);
+  assert.ok(s.p_holm_worse < 0.05 && s.p_value === 1);
+  assert.deepEqual(s.aa, { changed: 0, total: 0 });
+  // Better in discovery, worse in the newest 100 bars: holdout failed.
+  const hf = plan(rowsOf("shadow-agent:risk@h1v1@15", "risk", "h1", 320, (i) => (i % 8 !== 0 ? same() : i < 220 ? ["SELL", "hit", "WAIT", "missed_opportunity"] : ["SELL", "miss", "WAIT", "hit"])))[0];
+  assert.deepEqual([hf.outcome, hf.reason], ["retired", "holdout_failed"]);
+  // Better on both slices: left to learned-live (outcome live, never closed here).
+  const better = plan(rowsOf("shadow-agent:risk@b1v1@15", "risk", "b1", 320, (i) => (i % 8 === 0 ? ["SELL", "hit", "WAIT", "missed_opportunity"] : same())))[0];
+  assert.deepEqual([better.outcome, better.reason], ["live", null]);
+  // An item is judged on its first final subject (the 15m one), the 1H one still collecting; A/A counts per agent and chart.
+  const two = plan([
+    ...rowsOf("shadow-agent:chronos_matrix@c9v1@15", "chronos_matrix", "c9", 300, same),
+    ...rowsOf("shadow-agent:chronos_matrix@c9v1", "chronos_matrix", "c9", 80, same, { step: H }),
+    ...rowsOf("shadow-agent:chronos_matrix@aa@15", "chronos_matrix", null, 10, (i) => (i < 3 ? ["SELL", null, "WAIT", null] : ["WAIT", null, "WAIT", null]))
+  ]);
+  assert.equal(two.length, 1, "the A/A arm is not an item");
+  assert.deepEqual([two[0].outcome, two[0].reason], ["retired", "not_better"]);
+  assert.deepEqual(two[0].evidence.subjects.map((x) => [x.chart, x.outcome, x.aa.changed, x.aa.total]), [["15", "not_better", 3, 10], ["60", "collecting", 0, 0]]);
+  // No price anywhere in the evidence: counts, p and ids only.
+  assert.doesNotMatch(JSON.stringify(two[0].evidence), /price|entry|stop|target|level/i);
+});
+
+test("KA1-2. with the switch off nothing is read or written (byte-identical to before)", async () => {
+  const { runShadowClosures } = await import("../src/shadow-knowledge.mjs");
+  const touched = [];
+  const env = { DB: { prepare(sql) { touched.push(sql); throw new Error("no D1 with the arm off"); } }, SIGNAL_CACHE: { async get(k) { touched.push(k); return null; }, async put(k) { touched.push(k); } } };
+  assert.deepEqual(await runShadowClosures(env, { now: KNOW_NOW }), { status: "disabled" });
+  assert.deepEqual(await runShadowClosures({ ...env, SHADOW_KNOWLEDGE_ENABLED: "false" }, { now: KNOW_NOW }), { status: "disabled" });
+  assert.deepEqual(touched, []);
+});
+
+test("KA1-3. the #492 items are settled once from their stored rows (KV marker); a closed item frees its slot and never returns", async () => {
+  const { runShadowClosures, SHADOW_SETTLE, closureMessage } = await import("../src/shadow-knowledge.mjs");
+  const { resetLearnedLiveForTests, readLearnedLive, promotedKeys, planPromotions } = await import("../src/learned-live.mjs");
+  const { pullLearnedPack, resetAetherPackSchemaCacheForTests } = await import("../src/aether-pack.mjs");
+  const { shadowItems } = await import("../src/shadow-knowledge.mjs");
+  resetShadowKnowledgeSchemaCacheForTests(); resetLearnedLiveForTests(); resetAetherPackSchemaCacheForTests();
+  const text = (id, agents) => ({ item_id: id, version: 1, kind: "role_reminder", label: "learned", audience: { agents, charts: [] }, text: `Note ${id}: keep to your own data.`, content_sha256: "c".repeat(64), review: "auto" });
+  const items = [text("k-old-final", ["risk", "moderator"]), text("k-old-short", ["trade_management", "moderator"]), text("k-new", ["prophet", "moderator"])];
+  const kv = new Map();
+  const env = {
+    DB: d1(), SHADOW_KNOWLEDGE_ENABLED: "true",
+    SIGNAL_CACHE: { async get(k) { return kv.get(k) ?? null; }, async put(k, v) { kv.set(k, v); } },
+    AETHER: { learnedPack: async () => ({ version: "cryptophys.learned-pack.v1", sha256: "a".repeat(64), items }) }
+  };
+  await pullLearnedPack(env, { now: KNOW_NOW - 10 * 86_400_000 });
+  const ins = env.DB.raw.prepare("INSERT INTO shadow_agent_outputs (subject, candle_key, agent, item_id, item_version, arm, statement_close, stance, control_stance, status, created_at, result, control_result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const put = (rows) => rows.forEach((r) => ins.run(r.subject, r.candle_key, r.agent, r.item_id, r.item_version, r.arm, r.statement_close, r.stance, r.control_stance, r.status, r.created_at, r.result, r.control_result));
+  // Before #492: one item reached its sample (300 pairs on 15m), one did not (120 pairs).
+  put(rowsOf("shadow-agent:risk@k-old-finalv1@15", "risk", "k-old-final", 300, same));
+  put(rowsOf("shadow-agent:trade_management@k-old-shortv1@15", "trade_management", "k-old-short", 120, same));
+  // After the reopening: more rows for the short one, which the settle must not read.
+  put(rowsOf("shadow-agent:trade_management@k-old-shortv1@15", "trade_management", "k-old-short", 400, same, { start: Date.parse("2026-11-24T00:00:00Z") }).map((r) => ({ ...r, candle_key: "n" + r.candle_key })));
+  assert.deepEqual((await shadowItems(env)).map((i) => i.item_id), ["k-new", "k-old-final", "k-old-short"].sort(), "all three queue before");
+
+  const first = await runShadowClosures(env, { now: KNOW_NOW });
+  assert.equal(first.status, "ok");
+  const marker = JSON.parse(kv.get(SHADOW_SETTLE.key));
+  assert.deepEqual([marker.until, marker.items, marker.live, marker.retired, marker.collecting, marker.closed], [SHADOW_SETTLE.until, 2, 0, 1, 1, ["k-old-final@1"]], "the settle reads only the rows stored before the reopening");
+  assert.deepEqual(first.closed, ["k-old-final@1", "k-old-short@1"], "then the hourly rule judges every stored row: the short one has 520 pairs now");
+  assert.match(first.message, /closed: k-old-final v1: not_better \(risk on 15m: 300 scored, note 300 vs control 300 hits/);
+  // Recorded in learned_live as retired with a machine-readable reason and evidence; never live.
+  const row = env.DB.raw.prepare("SELECT status, reason, verdict_json, retired_at FROM learned_live WHERE item_id = 'k-old-final'").get();
+  assert.deepEqual([row.status, row.reason], ["retired", "shadow:not_better"]);
+  const ev = JSON.parse(row.verdict_json);
+  assert.deepEqual([ev.reason, ev.subjects[0].rows, ev.subjects[0].scored, ev.subjects[0].treat_hits, ev.subjects[0].control_hits], ["not_better", 300, 300, 300, 300]);
+  assert.ok((await promotedKeys(env)).has("k-old-final@1"));
+  assert.deepEqual((await shadowItems(env)).map((i) => i.item_id), ["k-new"], "the slots are free; the closed items are never tested again");
+  const view = await readLearnedLive(env);
+  assert.equal(view.items.find((i) => i.item_id === "k-old-final").closure.reason, "not_better");
+  // A later better verdict never brings a closed version back.
+  const better = { subject: "shadow-agent:risk@k-old-finalv1@15", agent: "risk", chart: "15", item_id: "k-old-final", item_version: 1, verdict: "better_than_active: ready for owner review", discovery: {}, holdout: {}, paired: {} };
+  assert.equal(planPromotions({ candidates: [better], packItems: items, retired: [{ item_id: "k-old-final", version: 1 }], now: KNOW_NOW }).promote.length, 0);
+  // Once: the marker stays, nothing is closed twice.
+  const again = await runShadowClosures(env, { now: KNOW_NOW + H });
+  assert.deepEqual([again.settle, again.closed, again.message], [null, [], null]);
+  assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM learned_live").get().n, 2);
+  assert.equal(closureMessage([]), null);
+  // Nothing is written to a room, the bus or a decision.
+  for (const t of ["agent_thread_messages", "engine_decisions", "outcome_scores"]) {
+    const exists = env.DB.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = ?").get(t).n;
+    if (exists) assert.equal(env.DB.raw.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n, 0, t);
+  }
+});

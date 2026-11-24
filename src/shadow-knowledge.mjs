@@ -18,13 +18,15 @@
 // hour (default 8). The calls run after the room and the H1 decision, never before them.
 // Promotion (owner 2026-11-13: "buat agar autonomous"): a note this arm finds better goes live by itself for the
 // tested agents on the 1H chart (src/learned-live.mjs), and retires by itself; the bundled pack still changes by PR.
+// Self-judging (KA1, owner 2026-11-24: "buka arm, biarkan system menilai dirinya sendiri"): a note whose final verdict
+// is not better, failed its holdout or is worse closes by itself and frees its slot (runShadowClosures, below).
 
 import { storedPack } from "./aether-pack.mjs";
-import { promotedKeys } from "./learned-live.mjs";
+import { promotedKeys, closeShadowItems } from "./learned-live.mjs";
 import { callBusModel } from "./model-call.mjs";
 import { shadowAllowed } from "./shadow-switch.mjs";
 import { SCORING_VERSION, scoreStance } from "./outcome-scoring.mjs";
-import { pairedTally, holmAdjust, holmMonth, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
+import { pairedTally, holmAdjust, holmMonth, signTestP, SHADOW_MIN_SAMPLE, SHADOW_SIGNIFICANCE, HOLDOUT_BARS } from "./shadow-versions.mjs";
 
 export const SHADOW_KNOWLEDGE_VERSION = "cryptophys.shadow-knowledge.v1";
 // Owner 2026-11-16 ("opsi A"): 6 items at once (was 2), so the curator's daily items do not queue for weeks behind
@@ -238,10 +240,137 @@ export function compareShadowKnowledge(outputs = [], { now = Date.now() } = {}) 
   };
 }
 
+const OUTPUTS_SQL = "SELECT subject, candle_key, agent, item_id, item_version, arm, statement_close, stance, control_stance, status, result, control_result FROM shadow_agent_outputs WHERE statement_close >= ?";
+
 /** Read model for /api/tuning (replays.knowledge). */
 export async function readShadowKnowledge(env, { now = Date.now(), days = 60 } = {}) {
   await ensureSchema(env.DB);
   const since = new Date(now - days * 86_400_000).toISOString();
-  const outputs = (await env.DB.prepare("SELECT subject, candle_key, agent, item_id, item_version, arm, statement_close, stance, control_stance, status, result, control_result FROM shadow_agent_outputs WHERE statement_close >= ?").bind(since).all()).results || [];
+  const outputs = (await env.DB.prepare(OUTPUTS_SQL).bind(since).all()).results || [];
   return { enabled: shadowKnowledgeEnabled(env), max_calls_per_hour: maxCallsPerHour(env), ...compareShadowKnowledge(outputs, { now }) };
+}
+
+// ------------------------------------------------------------------ self-judging (KA1)
+//
+// Owner 2026-11-24 (relayed by the orchestrator): "buka arm, biarkan system menilai dirinya sendiri". An item that
+// reaches a final verdict leaves the queue by itself and frees its slot:
+//   better          goes live through src/learned-live.mjs runLearnedPromotion (unchanged; it runs first);
+//   not_better      the discovery slice is not better (accuracy or Holm-adjusted sign test);
+//   holdout_failed  better in discovery, worse in the newest HOLDOUT_BARS bars;
+//   worse           the control is significantly better: the reverse one-sided sign test on the discovery slice,
+//                   Holm-adjusted over the same family, below SHADOW_SIGNIFICANCE;
+// each of the last three is recorded in D1 learned_live as 'retired' (closeShadowItems) with the evidence (counts and
+// p only), so promotedKeys skips it and that version is never tested again. A subject below the minimum sample
+// (SHADOW_MIN_SAMPLE discovery bars, i.e. HOLDOUT_BARS more scored pairs) is still collecting. An item is judged on
+// its first final subject, like a promotion (the first better subject promotes it and stops the others): one look
+// at the fixed sample, never a second chance on more bars. Runs only with SHADOW_KNOWLEDGE_ENABLED.
+
+export const CLOSURE_VERSION = "cryptophys.knowledge-closure.v1";
+/** The one-shot settle of the items the arm tested until #492 (2026-11-19), on the rows stored before it stopped. */
+export const SHADOW_SETTLE = Object.freeze({ key: "shadow-knowledge:settle:v1", until: "2026-11-20T00:00:00.000Z" });
+const CLOSING = ["worse", "holdout_failed", "not_better"];
+
+/**
+ * Pure: every item of the stored rows with its outcome ("live" when a subject is better, "retired" with a reason on a
+ * final verdict, "collecting" otherwise) and the evidence per subject. `done` holds the versions learned_live already
+ * has (live or retired): they are reported, never closed again. `packItems` lends the closure its item.
+ */
+export function planShadowClosures(outputs = [], { now = Date.now(), done = new Set(), packItems = [] } = {}) {
+  const view = compareShadowKnowledge(outputs, { now });
+  const family = view.candidates.filter((k) => k.criteria.minimum_sample);
+  const worseP = family.map((k) => signTestP(k.discovery.control_better, k.discovery.candidate_better));
+  const worseHolm = holmAdjust(worseP);
+  const worse = new Map(family.map((k, i) => [k.subject, { p: worseP[i], p_holm: worseHolm[i] }]));
+  const ok = outputs.filter((o) => o.status === "ok");
+  const outcomeOf = (k) => {
+    if (!k.criteria.minimum_sample) return "collecting";
+    if (String(k.verdict).startsWith("better_than_active")) return "better";
+    const w = worse.get(k.subject);
+    if (k.discovery.control_better > k.discovery.candidate_better && w?.p_holm != null && w.p_holm < SHADOW_SIGNIFICANCE) return "worse";
+    return k.verdict === "holdout_failed" ? "holdout_failed" : "not_better";
+  };
+  const evidenceOf = (k) => {
+    const scored = ok.filter((o) => o.subject === k.subject && o.result && o.control_result);
+    const aa = ok.filter((o) => o.arm === "aa" && o.control_stance && o.agent === k.agent && chartOfSubject(o.subject) === k.chart);
+    const w = worse.get(k.subject);
+    return {
+      subject: k.subject, agent: k.agent, chart: k.chart, outcome: outcomeOf(k),
+      rows: k.calls, scored: k.same_bars, treat_hits: scored.filter((o) => o.result === "hit").length, control_hits: scored.filter((o) => o.control_result === "hit").length,
+      changed_stance: k.changed_stance,
+      discovery: { bars: k.discovery.bars, candidate_better: k.discovery.candidate_better, control_better: k.discovery.control_better },
+      holdout: { bars: k.holdout.bars, candidate_better: k.holdout.candidate_better, control_better: k.holdout.control_better },
+      p_value: k.discovery.p_value ?? null, p_holm: k.discovery.p_holm ?? null, p_value_worse: w?.p ?? null, p_holm_worse: w?.p_holm ?? null,
+      aa: { changed: aa.filter((o) => o.stance !== o.control_stance).length, total: aa.length }
+    };
+  };
+  const byItem = new Map();
+  for (const k of view.candidates) {
+    if (!k.item_id || !Number.isInteger(Number(k.item_version))) continue;
+    const key = `${k.item_id}@${Number(k.item_version)}`;
+    byItem.set(key, [...(byItem.get(key) || []), evidenceOf(k)]);
+  }
+  const inPack = new Map(packItems.map((it) => [`${it.item_id}@${it.version}`, it]));
+  const items = [...byItem].sort(([a], [b]) => a.localeCompare(b)).map(([key, subjects]) => {
+    const [item_id, version] = [key.slice(0, key.lastIndexOf("@")), Number(key.slice(key.lastIndexOf("@") + 1))];
+    const finals = subjects.filter((s) => s.outcome !== "collecting");
+    const reason = subjects.some((s) => s.outcome === "better") ? null : CLOSING.find((r) => finals.some((s) => s.outcome === r)) ?? null;
+    const outcome = subjects.some((s) => s.outcome === "better") ? "live" : reason ? "retired" : "collecting";
+    return {
+      key, item_id, version, outcome, reason, already: done.has(key), item: inPack.get(key) ?? null,
+      evidence: { schema: CLOSURE_VERSION, item_id, version, outcome, reason, judged_at: new Date(now).toISOString(), subjects }
+    };
+  });
+  return { version: CLOSURE_VERSION, items };
+}
+
+/** Pure: the owner's Telegram line for the items closed in one run (null when none). Counts and p only. */
+export function closureMessage(closed = []) {
+  if (!closed.length) return null;
+  const lines = ["🧠 Learned notes (judged in shadow)"];
+  for (const c of closed) {
+    const s = c.evidence.subjects.filter((x) => x.outcome === c.reason)[0] ?? c.evidence.subjects[0];
+    lines.push(`− closed: ${c.item_id} v${c.version}: ${c.reason} (${s.agent} on ${s.chart === "15" ? "15m" : "1H"}: ${s.scored} scored, note ${s.treat_hits} vs control ${s.control_hits} hits; on changed bars ${s.discovery.candidate_better} vs ${s.discovery.control_better}, p_holm ${s.p_holm ?? "?"}).`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Hourly sweep step, after runLearnedPromotion: closes the items with a final verdict other than better. The first run
+ * settles the items tested until #492 on their rows stored before SHADOW_SETTLE.until (one-shot, KV SIGNAL_CACHE
+ * SHADOW_SETTLE.key, written only here; the marker keeps the report); every run then judges all stored rows by the
+ * same rule. Off unless SHADOW_KNOWLEDGE_ENABLED: with the arm off nothing is read or written. Never throws.
+ */
+export async function runShadowClosures(env, { now = Date.now(), days = 60, settle = SHADOW_SETTLE } = {}) {
+  if (!shadowKnowledgeEnabled(env)) return { status: "disabled" };
+  if (!env?.DB) return { status: "unavailable" };
+  try {
+    await ensureSchema(env.DB);
+    const since = new Date(now - days * 86_400_000).toISOString();
+    let packItems = [];
+    try { packItems = (await storedPack(env))?.pack?.items || []; } catch { packItems = []; }
+    const judge = async (until) => {
+      const rows = (await (until ? env.DB.prepare(`${OUTPUTS_SQL} AND created_at < ?`).bind(since, until) : env.DB.prepare(OUTPUTS_SQL).bind(since)).all()).results || [];
+      const plan = planShadowClosures(rows, { now, done: await promotedKeys(env), packItems });
+      const closed = await closeShadowItems(env, plan.items.filter((i) => i.outcome === "retired" && !i.already), { now });
+      return { plan, closed };
+    };
+    const out = { status: "ok", closed: [], settle: null };
+    const kv = env.SIGNAL_CACHE;
+    if (typeof kv?.get === "function" && typeof kv?.put === "function" && !(await kv.get(settle.key))) {
+      const { plan, closed } = await judge(settle.until);
+      const count = (o) => plan.items.filter((i) => i.outcome === o).length;
+      const report = {
+        at: new Date(now).toISOString(), until: settle.until, items: plan.items.length, live: count("live"), retired: count("retired"), collecting: count("collecting"),
+        closed: closed.map((c) => c.key),
+        per_item: plan.items.map((i) => ({ key: i.key, outcome: i.outcome, reason: i.reason, subjects: i.evidence.subjects.map((s) => ({ agent: s.agent, chart: s.chart, outcome: s.outcome, scored: s.scored })) }))
+      };
+      await kv.put(settle.key, JSON.stringify(report), { expirationTtl: 90 * 86_400 });
+      out.settle = report;
+      out.closed.push(...closed);
+    }
+    const { plan, closed } = await judge(null);
+    out.closed.push(...closed);
+    out.collecting = plan.items.filter((i) => i.outcome === "collecting").length;
+    return { ...out, closed: out.closed.map((c) => c.key), message: closureMessage(out.closed) };
+  } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }
