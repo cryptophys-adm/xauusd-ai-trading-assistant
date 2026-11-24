@@ -41,6 +41,10 @@ export function knowledgeVerdictPostsEnabled(env) {
 // ------------------------------------------------------------------ the schema (platform PF3), checked before a call
 const ITEM_ID = /^k-[a-z0-9-]{1,40}$/;
 const TOKEN = /^[a-z0-9_.+-]{1,40}$/;
+// The platform's evidence.arm (PF3, confirmed by the orchestrator from the platform code): 1-32 of [a-z0-9_.-], no run
+// of 3+ digits. An agent id outside it is left out of the evidence (every key is optional) rather than refused.
+const ARM = /^[a-z0-9_.-]{1,32}$/;
+const armOk = (v) => typeof v === "string" && ARM.test(v) && !/\d{3,}/.test(v);
 const CHART_TOKEN = /^[a-z0-9]{1,8}$/;
 const ISO_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const PLAIN = /^[A-Za-z0-9 ,.;:()'-]+$/;
@@ -62,7 +66,7 @@ export function verdictPayloadProblems(p) {
   for (const [k, v] of Object.entries(e)) {
     if (!KNOWLEDGE_VERDICT_EVIDENCE_KEYS.includes(k)) { out.push(`evidence_key_not_allowed:${k}`); continue; }
     if (v === null || v === undefined) { out.push(`evidence_null:${k}`); continue; }
-    if (k === "arm" && (typeof v !== "string" || !TOKEN.test(v))) out.push("evidence_arm_invalid");
+    if (k === "arm" && !armOk(v)) out.push("evidence_arm_invalid");
     if ((k === "window_start" || k === "window_end") && (typeof v !== "string" || !ISO_Z.test(v) || !Number.isFinite(Date.parse(v)))) out.push(`evidence_${k}_invalid`);
     if (COUNTS.includes(k) && (!Number.isInteger(v) || v < 0)) out.push(`evidence_${k}_invalid`);
     if ((k === "p_value" || k === "p_holm") && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1)) out.push(`evidence_${k}_invalid`);
@@ -122,7 +126,7 @@ export function subjectEvidence(s, verdict, windows = {}) {
   const w = windows?.[s?.subject];
   const worse = verdict === "worse";
   return compact({
-    arm: typeof s?.agent === "string" && TOKEN.test(s.agent) ? s.agent : undefined,
+    arm: armOk(s?.agent) ? s.agent : undefined,
     window_start: w?.start, window_end: w?.end,
     rows: intOr(s?.rows), scored: intOr(s?.scored), treat_hits: intOr(s?.treat_hits), control_hits: intOr(s?.control_hits),
     aa_changed: intOr(s?.aa?.changed), aa_total: intOr(s?.aa?.total),
@@ -176,7 +180,7 @@ export function verdictEntries({ plan = null, live = [], packItems = [], firstSe
     const v = list[0] ?? {};
     const w = v.agent ? windows[subjectOf(v.agent, { item_id: r.item_id, version }, v.chart ?? "60")] : null;
     const scored = [v.discovery?.bars, v.holdout?.bars].every((n) => Number.isInteger(n)) ? v.discovery.bars + v.holdout.bars : undefined;
-    const base = { arm: typeof v.agent === "string" && TOKEN.test(v.agent) ? v.agent : undefined, window_start: w?.start, window_end: w?.end, scored, charts: chartsOf(list.map((x) => x.chart)) };
+    const base = { arm: armOk(v.agent) ? v.agent : undefined, window_start: w?.start, window_end: w?.end, scored, charts: chartsOf(list.map((x) => x.chart)) };
     if (r.status === "live") {
       out.push(entry(r.item_id, version, "live", reasonOf("live", v), compact({ ...base, p_value: pOr(v.discovery?.p_value), p_holm: pOr(v.discovery?.p_holm), rule: RULE.live })));
     } else if (r.status === "retired") {

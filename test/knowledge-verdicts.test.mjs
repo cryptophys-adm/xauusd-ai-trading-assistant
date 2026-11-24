@@ -364,3 +364,11 @@ test("KV-12. the marker store: a posted final verdict and a not_found item are s
   assert.equal(planVerdictPosts({ entries: [e("collecting", "w1")], markers: [m("collecting", "posted", "w1", "2026-11-23T23:05:00.000Z")], now: NOW }).length, 0, "same window");
   assert.equal(planVerdictPosts({ entries: [e("live")], markers: [m("collecting", "not_found", "w1")], now: NOW }).length, 0, "not_found: never again");
 });
+
+test("KV-13. evidence.arm follows the platform's rule (1-32 of [a-z0-9_.-], no run of 3+ digits); an agent outside it is left out, never refused", () => {
+  const base = { item_id: "k-role-x", item_version: 1, verdict: "collecting", reason: "Still collecting readings in shadow.", evidence: { rule: "collecting" } };
+  for (const arm of ["chronos_matrix", "trade_management", "r37_funnel", "aegis_footprint"]) assert.deepEqual(verdictPayloadProblems({ ...base, evidence: { ...base.evidence, arm } }), [], arm);
+  for (const arm of ["a+b", "agent_r380", "x".repeat(33), "Upper"]) assert.ok(verdictPayloadProblems({ ...base, evidence: { ...base.evidence, arm } }).includes("evidence_arm_invalid"), arm);
+  assert.equal(subjectEvidence({ agent: "agent_r380", rows: 3, scored: 3 }, "collecting").arm, undefined, "left out, not sent");
+  assert.equal(subjectEvidence({ agent: "chronos_matrix", rows: 3, scored: 3 }, "collecting").arm, "chronos_matrix");
+});
