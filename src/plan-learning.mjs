@@ -104,12 +104,31 @@ export function setupsFrom(decisions) {
       mode: TRADING_MODES.includes(d.mode) ? d.mode : null, action: d.action === "ENTER_MARKET" ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: d.at_level === true || d.at_level === 1,
       regime: typeof d.regime === "string" && d.regime ? d.regime : null,
       // A pattern family's plan: the Projection Agent's pattern it traded.
-      pattern: typeof d.pattern === "string" && d.pattern ? d.pattern : null
+      pattern: typeof d.pattern === "string" && d.pattern ? d.pattern : null,
+      // Z0 (recorded only): the zone types of its entry, stop and first target and the room to the opposing zone ahead.
+      ...zoneColumnsOf(d)
     };
     s.context = contextOf(s);
     out.push(s); cur[slot] = s;
   }
   return out;
+}
+
+/** Z0's plan_setups columns, in their order: the type words of a plan's zones and the room to the opposing zone ahead. */
+export const ZONE_SETUP_COLUMNS = Object.freeze(["entry_zone_type", "stop_zone_type", "tp1_zone_type", "opposing_room_atr"]);
+/** Pure: Z0's columns a decision plan carries ({} for an untyped plan: KEY_LEVEL_ZONE_TYPES off, or a plan of before Z0). */
+const zoneColumnsOf = (d) => (ZONE_SETUP_COLUMNS.some((k) => k in (d || {})) ? Object.fromEntries(ZONE_SETUP_COLUMNS.map((k) => [k, d[k] ?? null])) : {});
+/**
+ * Pure: Z0's columns from a plan's zone_types and opposing_ahead (objects, or JSON text from a json_extract), or {}
+ * when the plan has neither.
+ */
+export function zoneColumns(zoneTypes, opposingAhead) {
+  const parse = (v) => { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return null; } };
+  const zt = parse(zoneTypes), oa = parse(opposingAhead);
+  const typed = zt && typeof zt === "object", measured = oa && typeof oa === "object";
+  if (!typed && !measured) return {};
+  const word = (k) => (typed && typeof zt[k]?.type === "string" ? zt[k].type : null);
+  return { entry_zone_type: word("entry"), stop_zone_type: word("stop"), tp1_zone_type: word("tp1"), opposing_room_atr: measured && finite(oa.room_atr) ? oa.room_atr : null };
 }
 
 /** How long an entry of the setup may fill: while the engine repeated the plan, at least one bar, at most the ledger's window. */
@@ -275,6 +294,12 @@ export async function ensurePlanLearningSchema(db) {
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN source TEXT NOT NULL DEFAULT 'live'").run(); } catch { /* exists */ }
   // The target rule the setup was planned under ("tp1_kz:on" | "tp1_kz:off", ruleVersionOf). Rows of before MS2: NULL.
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN rule_version TEXT").run(); } catch { /* exists */ }
+  // Z0 (2026-11-24, src/zone-types.mjs): the demand/supply type of the setup's entry, stop and first-target zones and the
+  // room to the nearest decisive opposing zone ahead (in 1H ATR). Recorded only; NULL with KEY_LEVEL_ZONE_TYPES off.
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN entry_zone_type TEXT").run(); } catch { /* exists */ }
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN stop_zone_type TEXT").run(); } catch { /* exists */ }
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN tp1_zone_type TEXT").run(); } catch { /* exists */ }
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN opposing_room_atr REAL").run(); } catch { /* exists */ }
   schemaReady.add(db);
 }
 
@@ -286,7 +311,8 @@ async function loadDecisions(db, sinceIso) {
       json_extract(decision_json, '$.trade.side') AS side, json_extract(decision_json, '$.trade.entry') AS entry, json_extract(decision_json, '$.trade.stop') AS stop,
       json_extract(decision_json, '$.trade.tp') AS tp, json_extract(decision_json, '$.trade.action') AS action, json_extract(decision_json, '$.trade.at_level') AS at_level,
       json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.context.regime_1h') AS regime,
-      json_extract(decision_json, '$.strategy_plans') AS plans
+      json_extract(decision_json, '$.strategy_plans') AS plans,
+      json_extract(decision_json, '$.trade.zone_types') AS zone_types, json_extract(decision_json, '$.trade.opposing_ahead') AS opposing_ahead
     FROM engine_decisions WHERE stance IN ('BUY', 'SELL') AND bar_close >= ? ORDER BY bar_close`).bind(sinceIso).all()).results || [];
   return rows.filter((r) => r.side === r.stance).flatMap(decisionPlans).filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
 }
@@ -302,7 +328,7 @@ async function loadShadowDecisions(db, sinceIso) {
     let p = null;
     try { p = JSON.parse(r.plans_json); } catch { p = null; }
     const t = p?.trade ?? {};
-    return decisionPlans({ decision_key: r.decision_key, decided_at: r.decided_at, side: r.side, atr_h1: r.atr_h1, mode: r.mode, regime: r.regime, plans: p, entry: t.entry, stop: t.stop, tp: t.tp, action: t.action, at_level: t.at_level === true })
+    return decisionPlans({ decision_key: r.decision_key, decided_at: r.decided_at, side: r.side, atr_h1: r.atr_h1, mode: r.mode, regime: r.regime, plans: p, entry: t.entry, stop: t.stop, tp: t.tp, action: t.action, at_level: t.at_level === true, zone_types: t.zone_types ?? null, opposing_ahead: t.opposing_ahead ?? null })
       .map((d) => ({ ...d, rule_version: r.rule_version ?? null }));
   }).filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
 }
@@ -334,9 +360,9 @@ export function decisionPlans(r) {
   if (typeof plans === "string") { try { plans = JSON.parse(plans); } catch { plans = null; } }
   const mine = plans && typeof plans === "object" ? plans[r.side === "BUY" ? "long" : "short"] : null;
   const list = Object.entries(mine && typeof mine === "object" ? mine : {}).filter(([, p]) => p && typeof p === "object")
-    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true, pattern: typeof p.pattern === "string" ? p.pattern : null }));
+    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true, pattern: typeof p.pattern === "string" ? p.pattern : null, ...zoneColumns(p.zone_types, p.opposing_ahead) }));
   if (list.length) return list;
-  return [{ ...base, agent: DEFAULT_PLAN_AGENT, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), action: r.action, at_level: r.at_level === 1 || r.at_level === true }];
+  return [{ ...base, agent: DEFAULT_PLAN_AGENT, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), action: r.action, at_level: r.at_level === 1 || r.at_level === true, ...zoneColumns(r.zone_types, r.opposing_ahead) }];
 }
 
 /**
@@ -402,8 +428,12 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       if (!k) {
         // A plan already running when the window starts is the tail of an older setup, not a new one.
         if (!empty && s.opened_ms - since < HOUR) continue;
-        writes.push(db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)")
-          .bind(s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp, isShadow ? "shadow" : "live", isShadow ? s.rule_version : liveRule));
+        const values = [s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp, isShadow ? "shadow" : "live", isShadow ? s.rule_version : liveRule];
+        // Z0: a typed setup also writes its zone columns; an untyped one (KEY_LEVEL_ZONE_TYPES off) writes today's row.
+        const typed = ZONE_SETUP_COLUMNS.some((c) => c in s);
+        writes.push(typed
+          ? db.prepare(`INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version, ${ZONE_SETUP_COLUMNS.join(", ")}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values, ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null))
+          : db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)").bind(...values));
         if (isShadow) shadow.added += 1; else added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
         writes.push(db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key));
