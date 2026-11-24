@@ -78,5 +78,5 @@ test("CA2 each page with a chart renders the caption link: Liquidity, Chart patt
   const omega = u.renderToStaticMarkup(u.createElement(u.Mt5ChartCanvas, { tf: "M15", symbol: "XAUUSD", server: "", digits: 2, signal: null, positions: [], showBidAsk: true, showPlan: true, showPositions: true, keyZones: [], showKeyLevels: true, feedBasis: null, limit: null }));
   assert.match(omega, LINK, "Omega");
   assert.equal((omega.match(/Charts by TradingView/g) ?? []).length, 1, "once, in the chart's caption");
-  assert.match(omega, /candles, PLAN lines: TradingView feed · times GMT\+7<\/span>.*<a href="https:\/\/www\.tradingview\.com\/"/s, "in the caption, after its scale lines");
+  assert.match(omega, /prices: feed · MT5 lines not converted<\/span>.*<a href="https:\/\/www\.tradingview\.com\/"/s, "in the caption, after its scale line");
 });
