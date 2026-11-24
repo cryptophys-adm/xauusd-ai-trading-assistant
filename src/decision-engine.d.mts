@@ -44,7 +44,7 @@ export function notifyDecision(env: any, decision: any, send: ((text: string) =>
 export const DECISION_HEARTBEAT_MINUTES: number;
 export function heartbeatMinutes(env: unknown): number;
 export function heartbeatMessage(decision: any, since: string | null): string;
-export function assess(loaded: any, options?: { now?: number; env?: any; analytics?: any; witnessWeights?: { weights: Record<string, number>; id?: string; source?: string } | null }): { cards: any[]; quorum: any; guards: any; market: any; witness_weights?: Record<string, number>; witness_weights_source?: string; witness_weights_id?: string | null };
+export function assess(loaded: any, options?: { now?: number; env?: any; analytics?: any; witnessWeights?: { weights: Record<string, number>; id?: string; source?: string } | null; agentRecords?: any; witnesses?: { cards: any[]; quorum: any; market: any } | null }): { cards: any[]; quorum: any; guards: any; market: any; witness_weights?: Record<string, number>; witness_weights_source?: string; witness_weights_id?: string | null };
 export function buildDecisionRecord(input: Record<string, any>): Record<string, any>;
 export function askCouncil(env: any, evidence: unknown, options?: { clock?: () => number; deadlineMs?: number }): Promise<Record<string, any>>;
 type RunOptions = { now?: number; clock?: () => number; send?: ((text: string) => Promise<void>) | null; recordSignal?: ((decision: any) => Promise<number>) | null; loaded?: any };
@@ -72,6 +72,7 @@ export function independentWitnesses(loaded?: any, options?: { now?: number }): 
 export function calendarContextOf(outlook: any): Record<string, any> | null;
 export function pickStrategy(input: Record<string, any>): { mode: "auto" | "armed"; agent: string | null; trade: Record<string, any> | null; score: number | null; candidates: Array<Record<string, any>>; reason: string | null };
 export function selectionLine(selection: Record<string, any>): string;
+export function shadowModeDecisions(input: { loaded: any; assessment: any; council?: any; env?: any; now?: number; analytics?: any; witnessWeights?: any; agentRecords?: any; rooms?: Record<string, number> }): Array<{ mode: string; stance: string; agent: string | null; plans: Record<string, any> | null; trade: Record<string, any> | null; reason: string | null }>;
 // B15: lens B's council-only LIQUIDITY card (never in the quorum, the guardrails or the witness weights).
 export const LIQUIDITY_WITNESS: Readonly<{ share: number; cap: number; lean: number }>;
 export const LIQUIDITY_PROMPT: string;

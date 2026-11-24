@@ -19,7 +19,7 @@
 // Nexus Telegram line, and a strategy_arm.v1 item. Never throws.
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.mjs";
-import { CONTROL_ARM } from "./plan-learning.mjs";
+import { CONTROL_ARM, ensurePlanLearningSchema } from "./plan-learning.mjs";
 import { ensureStrategyArmSchema, readArmsFromDb, setStrategyArm, ARM_MAX } from "./strategy-arm.mjs";
 import { bootstrapLow } from "./grid-adapt.mjs";
 
@@ -146,7 +146,9 @@ export async function runStrategyCouncil(env, { now = Date.now(), call = callBus
     const day = new Date(now).toISOString().slice(0, 10);
     const prev = parse(await kv.get(COUNCIL_KEY));
     if (!force && prev?.day === day) return { status: "fresh" };
-    const rows = (await db.prepare("SELECT agent, results_json FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at").bind(new Date(now - WF.learn_days * DAY).toISOString()).all()).results ?? [];
+    // MS2: the live setups only (a shadow mode's setups are the mode selector's evidence, never a strategy's record).
+    await ensurePlanLearningSchema(db);
+    const rows = (await db.prepare("SELECT agent, results_json FROM plan_setups WHERE status = 'resolved' AND source = 'live' AND opened_at >= ? ORDER BY opened_at").bind(new Date(now - WF.learn_days * DAY).toISOString()).all()).results ?? [];
     const byAgent = {};
     for (const r of rows) { const x = parse(r.results_json)?.[CONTROL_ARM]; if (finite(x?.r)) (byAgent[r.agent ?? "zone_pullback"] ??= []).push(x.r); }
     // Live: each strategy's last closed Omega trades (Omega R), newest first.

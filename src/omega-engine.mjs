@@ -1248,7 +1248,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null, supersede = [] } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null, supersede = [], modeRisk = null } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -1269,7 +1269,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // check (the minimum lot against the cap, the open risk, the daily budget, the tick value) stays as it is.
   const probation = signal?.probation === true;
   const scale = probation && finite(signal?.risk_scale) && signal.risk_scale > 0 && signal.risk_scale < 1 ? signal.risk_scale : probation ? 0.5 : 1;
-  if (probation) S.risk_pct = roundTo(S.risk_pct * scale, 4);
+  // MS2, the mode probation (src/mode-selector.mjs, `modeRisk` from the sync): a signal decided in a mode the selector put
+  // on probation sizes its new entries at the probation's scale of the risk (0.5). Only the risk per trade: the profile's
+  // hard cap stays as it is (the minimum-lot rule is never above it), and an open position is never touched. With the
+  // reversal probation as well, the smaller scale (they do not compound).
+  const modeScale = finite(modeRisk?.scale) && modeRisk.scale > 0 && modeRisk.scale < 1 && typeof signal?.trading_mode === "string" && signal.trading_mode === modeRisk.mode ? modeRisk.scale : 1;
+  const riskScale = Math.min(probation ? scale : 1, modeScale);
+  if (riskScale < 1) S.risk_pct = roundTo(S.risk_pct * riskScale, 4);
   const limits = probation && profileLimits ? { ...profileLimits, hard_cap_pct: finite(profileLimits.hard_cap_pct) ? roundTo(profileLimits.hard_cap_pct * scale, 4) : profileLimits.hard_cap_pct } : profileLimits;
   // ADR-0020 Amendment 8: a position whose stop the council loosened (`pmLoosen.loosened`, from omega_intents) counts
   // as unprotected again (isProtected), whatever the switch says now. Without one the positions are the executor's.
@@ -1769,6 +1775,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     if (finite(price) && finite(sl)) it.r_dist = roundTo(Math.abs(price - sl), sym.digits);
     // ADR-0020 Amendment 8 (switch on): the ATR(14, 15m) at entry, the reference of a later loosening.
     if (S.pm_loosen_enabled === true && positive(sym.atr_value)) it.atr_entry = sym.atr_value;
+    // MS2: an entry sized under the mode probation is tagged with its scale.
+    if (modeScale < 1) it.mode_probation = modeScale;
     // Reversal probation: tagged, with the money it risks at the stop (its trades' R for the revert check).
     if (probation) {
       it.probation = true;

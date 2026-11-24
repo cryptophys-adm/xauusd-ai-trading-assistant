@@ -65,6 +65,8 @@ import { publishToPlatform } from "./platform-reports.mjs";
 import { positioningCard, positioningNow, POSITIONING_PROMPT } from "./positioning-lens.mjs";
 import { lensKnobs, readLensState } from "./lens-policy.mjs";
 import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS, SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
+import { RANGE_GATED_AGENTS, isRanging } from "./htf-cells.mjs";
+import { modeShadowEvidence, writeShadowPlans } from "./mode-shadow.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -1115,7 +1117,7 @@ export async function notifyDecision(env, d, send, { now = Date.now(), publish =
 }
 
 /** Pure: the witnesses, the quorum and both sides' guardrails (with their plans) from the loaded inputs. */
-export function assess(loaded, { now = Date.now(), env = null, analytics = null, witnessWeights = null, agentRecords = null } = {}) {
+export function assess(loaded, { now = Date.now(), env = null, analytics = null, witnessWeights = null, agentRecords = null, witnesses = null } = {}) {
   const { inputs = {}, strategy = null, global = null, macro = null, correlations = null, regime = null } = loaded || {};
   // The extended witnesses read their own data (owner 2026-11-10), and the session describes SESSION
   // (context: a session has no direction).
@@ -1150,9 +1152,10 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const source = tuned ? (tuned.source ?? "default") : decisionWeightedEnabled(env) ? "default" : "base";
   // POSITIONING (docs/RFC_POSITIONING_LIQUIDITY.md §3.4): lens A's witness at its per-mode weight (Aether moves it within
   // its bound; the owner's switch turns it off), outside the witness tuner: the set in force scales by 1 - w.
-  const cards = withPositioning(witnessCards({ global, strategy, context, env: effectiveEnv }), loaded?.positioning ?? null);
-  const quorum = quorumOf(cards, { now, analytics });
-  const market = marketContextOf(loaded, quorum, now);
+  // MS2 (shadowModeDecisions): another mode's deterministic pass keeps the live decision's witnesses, quorum and market.
+  const cards = witnesses?.cards ?? withPositioning(witnessCards({ global, strategy, context, env: effectiveEnv }), loaded?.positioning ?? null);
+  const quorum = witnesses?.quorum ?? quorumOf(cards, { now, analytics });
+  const market = witnesses?.market ?? marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
   const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }) };
   // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
@@ -1255,6 +1258,66 @@ export function liquidityQuorum(cards, card, { now = Date.now(), analytics = nul
   };
   const long = met(1), short = met(-1);
   return { score: q.score, bias: q.bias, long_share: q.long_share, short_share: q.short_share, neutral_share: q.neutral_share, witnesses: q.witnesses, weight: q.weight, share_needed_above: q.share_needed_above, quorum_min: t.quorum_min, long_met: long, short_met: short, met: long || short };
+}
+
+// ---------------------------------------------------------------- MS2: the shadow modes
+
+/**
+ * Pure (MS2, 2026-11-23): the deterministic part of this decision for every mode that is not in force, with the live
+ * decision's witnesses (cards, quorum, market) and the live council's answer; no model call, no room, no price in a room.
+ * For each mode m: m's geometry (the scalp flag and SCALP_TARGET "nearest", under TP1-KZ), m's thresholds
+ * (modeThresholds(m, knobs): quorum_min, min_rrr, lean), m's room (`rooms[m]`), m's vetoes, m's reward gate on each
+ * agent's plan (agentPlanPasses) and so m's speakers and agent selection; then decide() exactly as the live decision:
+ *   the side   the council's BUY or SELL (the one it wanted, even when the live gates overruled it); on the council's
+ *              WAIT, the side m's guardrails allow, unless the live guardrails allowed it too (the council saw that
+ *              side open and chose to wait: its judgement stands); both open: the quorum's lean; without a valid
+ *              answer, the deterministic fallback (the strategy engine's decision and confidence), as live;
+ *   the rest   the council's confidence, entry type, target and strategy, through m's guardrails, the confidence floor,
+ *              the agents' lean, the strategy arm and pickStrategy.
+ * Range trades only while the 1H regime ranges and only from the range strategies (RANGE_GATED_AGENTS): the others'
+ * plans are not offered, and a trade by another agent is WAIT. Returns [{ mode, stance, agent, plans, trade, reason }]
+ * (`plans`: the decided side's agent plans as the record keeps them; range: the range strategies' only).
+ */
+export function shadowModeDecisions({ loaded, assessment, council = null, env = null, now = Date.now(), analytics = null, witnessWeights = null, agentRecords = null, rooms = {} }) {
+  const live = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode;
+  const answer = council?.answer ?? null;
+  const witnesses = { cards: assessment.cards, quorum: assessment.quorum, market: assessment.market };
+  const out = [];
+  for (const m of TRADING_MODES_LIST) {
+    if (m === live) continue;
+    if (m === "range" && !isRanging(loaded?.regime ?? null)) { out.push({ mode: m, stance: "WAIT", agent: null, plans: null, trade: null, reason: "range_breakout" }); continue; }
+    const envM = { ...env, TRADING_MODE: m, ...(isNum(rooms?.[m]) ? { ROOM_CORRIDOR_ATR: rooms[m] } : {}) };
+    const a = assess(loaded, { now, env: envM, analytics, witnessWeights, agentRecords, witnesses });
+    if (assessment.guards?.arms) a.guards.arms = assessment.guards.arms;
+    const onlyRange = (plans) => Object.fromEntries(Object.entries(plans || {}).filter(([id]) => RANGE_GATED_AGENTS.includes(id)));
+    if (m === "range") {
+      a.guards.long.plans = onlyRange(a.guards.long.plans); a.guards.short.plans = onlyRange(a.guards.short.plans);
+      if (a.guards.consensus) a.guards.consensus = { ...a.guards.consensus, long: (a.guards.consensus.long || []).filter((x) => RANGE_GATED_AGENTS.includes(x.id)), short: (a.guards.consensus.short || []).filter((x) => RANGE_GATED_AGENTS.includes(x.id)) };
+    }
+    let asked = null;
+    if (answer) {
+      let stance = answer.stance;
+      if (stance !== "BUY" && stance !== "SELL") {
+        const open = [[1, a.guards.long, assessment.guards.long], [-1, a.guards.short, assessment.guards.short]].filter(([, g, lg]) => g.allowed && !lg.allowed).map(([dir]) => dir);
+        const dir = open.length === 1 ? open[0] : open.length === 2 ? Math.sign(assessment.quorum?.score ?? 0) : 0;
+        stance = stanceOf(dir);
+      }
+      asked = { ...answer, stance };
+    }
+    const d = decide({ answer: asked, guards: a.guards, strategy: loaded?.strategy ?? null, quorum: assessment.quorum, minConfidence: minConfidenceOf(env) });
+    let stance = d.stance, reason = d.overruled ? d.overruled.failed.map((f) => f.check).join(",") : null;
+    const agent = d.trade ? (d.trade.agent ?? d.trade.strategy ?? DEFAULT_AGENT) : null;
+    if (m === "range" && d.trade && !RANGE_GATED_AGENTS.includes(agent)) { stance = "WAIT"; reason = "range_mode_agent"; }
+    const trading = stance === "BUY" || stance === "SELL";
+    const side = stance === "BUY" ? "long" : "short";
+    out.push({
+      mode: m, stance, agent: trading ? agent : null,
+      plans: trading ? (strategyPlansOf(a.guards)?.[side] ?? {}) : null,
+      trade: trading ? { entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, action: d.trade.action, at_level: d.trade.at_level === true } : null,
+      reason
+    });
+  }
+  return out;
 }
 
 /**
@@ -1515,6 +1578,20 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };
     try { await env.SIGNAL_CACHE?.put?.(DECISION_LATEST_KEY, JSON.stringify(record), { expirationTtl: 2 * 86_400 }); } catch { /* D1 has it */ }
+    // MS2 (src/mode-shadow.mjs): the deterministic part of this decision for each mode not in force, with the same
+    // witnesses and council answer; a mode that would trade writes its plans to mode_shadow_plans, after the live record
+    // (which stays as it is). The mode selector's evidence only. MODE_SHADOW_EVIDENCE "off": nothing is computed or written.
+    if (modeShadowEvidence(env) === "on") {
+      try {
+        const rooms = {};
+        for (const m of TRADING_MODES_LIST) {
+          if (m === env.TRADING_MODE) continue;
+          try { rooms[m] = (await (await import("./room-tuning.mjs")).activeRoom(env, m, { now })).value; } catch { /* the rule's 1 */ }
+        }
+        const shadows = shadowModeDecisions({ loaded: data, assessment, council, env, now, analytics: data.analytics, witnessWeights, agentRecords, rooms });
+        await writeShadowPlans(env, { record, rows: shadows, now });
+      } catch { /* the live decision stands */ }
+    }
     let telegram = null, ledger = null;
     try { telegram = await notifyDecision(env, record, send, { now: clock() }); } catch (e) { telegram = { sent: false, reason: `failed: ${clip(e?.message ?? e, 120)}` }; }
     if (record.trade && typeof recordSignal === "function") { try { ledger = await recordSignal(record); } catch { ledger = 0; } }

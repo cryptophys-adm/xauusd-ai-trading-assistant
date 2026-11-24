@@ -133,11 +133,12 @@ test("MS1-3 the configured TRADING_MODE stays the only server pin: it wins over 
 function selectorEnv(over = {}) {
   resetModeSchemaForTests(); resetAiUsageSchemaCacheForTests();
   const db = d1();
-  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT, agent TEXT)");
+  // MS2: the plan learner's source and rule_version columns; the seeded setups are live ones of the rule in force.
+  db.raw.exec("CREATE TABLE plan_setups (setup_key TEXT PRIMARY KEY, mode TEXT, regime TEXT, entry REAL, stop REAL, status TEXT, opened_at TEXT, results_json TEXT, agent TEXT, decision_key TEXT, side TEXT, source TEXT NOT NULL DEFAULT 'live', rule_version TEXT)");
   return { DB: db, SIGNAL_CACHE: kv(), ...over };
 }
 const T = Date.parse("2026-11-18T12:00:00Z");
-const insert = (e, key, mode, r, openedMs, stop = 5) => e.DB.raw.prepare("INSERT INTO plan_setups (setup_key, mode, regime, entry, stop, status, opened_at, results_json) VALUES (?, ?, 'trend', 4000, ?, 'resolved', ?, ?)")
+const insert = (e, key, mode, r, openedMs, stop = 5) => e.DB.raw.prepare("INSERT INTO plan_setups (setup_key, mode, regime, entry, stop, status, opened_at, results_json, rule_version) VALUES (?, ?, 'trend', 4000, ?, 'resolved', ?, ?, 'tp1_kz:on')")
   .run(key, mode, 4000 - stop, new Date(openedMs).toISOString(), JSON.stringify({ "e0@s1": { r } }));
 const seed = (e, mode, n, r, stop = 5) => { for (let i = 0; i < n; i++) insert(e, `${mode}${String(i).padStart(3, "0")}`, mode, r + (i % 2 ? 0.05 : -0.05), T - 10 * DAY + i * 60_000, stop); };
 const seats = (verdict) => async (_e, req) => ({ status: "answered", obj: { verdict, reason: `${verdict} ${req.messages.length}` } });
@@ -158,10 +159,11 @@ test("MS1-4 every daily outcome is one recorded event with each mode's evidence 
   assert.deepEqual(Object.keys(ev).sort(), KEYS);
   assert.deepEqual([ev.day, ev.status, ev.action, ev.reason, ev.mode, ev.to, ev.proposed, ev.regime], ["2026-11-18", "unchanged", "none", "current_mode_best", "intraday", null, null, "trend"]);
   assert.deepEqual(Object.keys(ev.evidence), ["scalp", "intraday", "swing", "range"]);
-  for (const m of Object.keys(ev.evidence)) assert.deepEqual(Object.keys(ev.evidence[m]).sort(), ["mean_r", "n", "scope", "status"], m);
-  assert.deepEqual(ev.evidence.intraday, { n: 40, mean_r: 0.4, status: "pass", scope: "regime" });
-  assert.deepEqual(ev.evidence.scalp, { n: 0, mean_r: null, status: "collecting", scope: "all" });
-  assert.deepEqual(ev.evidence.range, { n: 0, mean_r: null, status: "collecting", scope: "cells" });
+  // MS2: with shadow evidence on (the default) each mode adds its live/shadow split (n_live, n_shadow).
+  for (const m of Object.keys(ev.evidence)) assert.deepEqual(Object.keys(ev.evidence[m]).sort(), ["mean_r", "n", "n_live", "n_shadow", "scope", "status"], m);
+  assert.deepEqual(ev.evidence.intraday, { n: 40, mean_r: 0.4, status: "pass", scope: "regime", n_live: 40, n_shadow: 0 });
+  assert.deepEqual(ev.evidence.scalp, { n: 0, mean_r: null, status: "collecting", scope: "all", n_live: 0, n_shadow: 0 });
+  assert.deepEqual(ev.evidence.range, { n: 0, mean_r: null, status: "collecting", scope: "cells", n_live: 0, n_shadow: 0 });
   assert.doesNotMatch(JSON.stringify(ev), /median_stop|price|lot|entry|stop"/);
   // fresh: the same day again records nothing.
   assert.equal((await runModeSelector(e, { now: T + 3_600_000, regime: "trend", log: a.log })).status, "fresh");
@@ -189,7 +191,7 @@ test("MS1-4 every daily outcome is one recorded event with each mode's evidence 
   const pinned = await runModeSelector(e2, { now: T + 5 * DAY, regime: "trend", log: p.log });
   assert.equal(pinned.status, "pinned");
   assert.deepEqual(p.events.map((x) => [x.action, x.detail.status, x.detail.reason, x.detail.mode]), [[MODE_RUN_EVENT, "pinned", "owner_pin", "intraday"]]);
-  assert.deepEqual(p.events[0].detail.evidence.swing, { n: 40, mean_r: 0.4, status: "pass", scope: "regime" });
+  assert.deepEqual(p.events[0].detail.evidence.swing, { n: 40, mean_r: 0.4, status: "pass", scope: "regime", n_live: 40, n_shadow: 0 });
   assert.equal(await e2.SIGNAL_CACHE.get(TRADING_MODE_KEY), "intraday");
 
   // pinned_by_server: the configured TRADING_MODE.

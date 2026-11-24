@@ -287,7 +287,7 @@ export const RECENT_FINGERPRINTS_SQL = "SELECT fingerprint FROM cfc_suggestions 
 export const CREATED_SINCE_SQL = "SELECT COUNT(*) AS n FROM cfc_suggestions WHERE created_at >= ?";
 export const SUGGESTIONS_SQL = "SELECT id, topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at FROM cfc_suggestions ORDER BY created_at DESC LIMIT ?";
 const SETUP_ARMS_SQL = `SELECT agent, pattern, opened_at, json_extract(results_json, '$."e0@s1".s') AS s, json_extract(results_json, '$."e0@s1".f') AS f
-  FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at DESC LIMIT ?`;
+  FROM plan_setups WHERE status = 'resolved' AND source = 'live' AND opened_at >= ? ORDER BY opened_at DESC LIMIT ?`;
 
 const tryRead = async (unavailable, what, fn, fb) => { try { return await fn(); } catch (e) { unavailable.push(`${what}: ${String(e?.message ?? e).slice(0, 100)}`); return fb; } };
 

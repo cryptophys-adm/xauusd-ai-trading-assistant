@@ -1,0 +1,10 @@
+export function modeShadowEvidence(env: unknown): "on" | "off";
+export function modeProbationMode(env: unknown): "on" | "off";
+export function ruleVersionOf(env: unknown): string;
+export const MODE_PROBATION_RULES: Readonly<{ min_live_setups: number; fail_setups: number; risk_scale: number }>;
+export const MODE_SHADOW_SCHEMA_SQL: string[];
+export function ensureModeShadowSchema(db: unknown): Promise<void>;
+export function writeShadowPlans(env: unknown, input: { record: Record<string, any>; rows: Array<Record<string, any>>; now?: number }): Promise<number>;
+export const MODE_SHADOW_KEEP_DAYS: number;
+export const MODE_SHADOW_PRUNE_MAX: number;
+export function pruneModeShadowPlans(env: unknown, options?: { now?: number; days?: number; max?: number }): Promise<{ status: string; pruned?: number; error?: string }>;
