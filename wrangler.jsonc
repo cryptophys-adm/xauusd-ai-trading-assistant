@@ -212,7 +212,12 @@
     // "Hentikan seluruh arm"; the record per arm is in docs/CHANGELOG.md): the learned-note arm and its A/A arm, the
     // metric rebuttals and the model arena make no model call. Their stored rows stay. The metric opening shadow stays:
     // it was better than its control (sign test 238 vs 170, Holm p 0.003).
-    "SHADOW_KNOWLEDGE_ENABLED": "false",
+    // The learned-note arm reopened 2026-11-24 (KA1; the owner, relayed by the orchestrator:
+    // "buka arm, biarkan system menilai dirinya sendiri"): an item with a final verdict closes by itself (better goes
+    // live through learned-live; not better, holdout failed or worse retires in learned_live), so the queue flows.
+    // Same cap (32 calls an hour, 6 items), kill switch and neuron breaker; its A/A arm runs with the first item, as
+    // before. The metric rebuttals and the model arena stay off.
+    "SHADOW_KNOWLEDGE_ENABLED": "true",
     "METRIC_REBUTTAL": "off",
     "MODEL_ARENA": "off",
     "LEARNED_KNOWLEDGE_ENABLED": "true"
