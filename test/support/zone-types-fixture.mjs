@@ -47,8 +47,31 @@ const op = (id, bias) => ({ id, status: "ok", stance: "WAIT", bias, confidence: 
 const room = (biases, barClose) => ({ bar_close: barClose, openings: biases.map((b, i) => op(`a${i}`, b)), conclusion: { status: "ok", stance: "WAIT", bias: null, confidence: 0.6 } });
 const bull = ["BULLISH", "BULLISH", "BULLISH", "NEUTRAL"];
 
-/** The strategy engine's inputs (loadStrategyInputs' shape); `modes` as given. */
-export function zoneInputs(modes = undefined) {
+/**
+ * Z1a: every active Prophet order block of a chart (chart_plane.zones.prophet, local-engines/producer/src/adopt/
+ * prophet-ob.mjs's shape), the 4 nearest per side. The 1H holds a high-volume demand block in the demand zone under
+ * price, a second demand block where Z0 had no type, and a supply block above, tested 3 times on the 1H bars where the
+ * 15m bars never touched it; the 4H holds the supply block its best block already was; the 15m holds none.
+ */
+export const PROPHET_ZONES = Object.freeze({
+  "60": [
+    { side: "demand", top: 3998.6, bottom: 3996.2, age_bars: 12, high_volume: true, touches: 3 },
+    { side: "demand", top: 3986.4, bottom: 3984.1, age_bars: 40, high_volume: false, touches: 0 },
+    { side: "supply", top: 4021.8, bottom: 4019.4, age_bars: 7, high_volume: false, touches: 3 }
+  ],
+  "240": [{ side: "supply", top: 3982.2, bottom: 3979.2, age_bars: 18, high_volume: false, touches: 0 }],
+  "15": [],
+  "1D": [{ side: "demand", top: 3961.5, bottom: 3955.5, age_bars: 30, high_volume: true, touches: 2 }]
+});
+/** The inputs with PROPHET_ZONES in each chart's plane (Z1a). */
+export function withProphetZones(inputs) {
+  const add = (s) => (s?.chart_plane ? { ...s, chart_plane: { ...s.chart_plane, zones: { prophet: PROPHET_ZONES[s.timeframe].map((z) => ({ ...z })) } } } : s);
+  return { ...inputs, h1Snapshot: add(inputs.h1Snapshot), m15Snapshot: add(inputs.m15Snapshot), h4Snapshot: add(inputs.h4Snapshot), d1Snapshot: add(inputs.d1Snapshot) };
+}
+
+/** The strategy engine's inputs (loadStrategyInputs' shape); `modes` as given; `prophet` adds Z1a's PROPHET_ZONES. */
+export function zoneInputs(modes = undefined, { prophet = false } = {}) {
+  if (prophet) return withProphetZones(zoneInputs(modes));
   return {
     rooms: { D1: room(bull, "2026-11-19T22:00:00.000Z"), H4: room(bull, "2026-11-20T12:00:00.000Z"), H1: room(bull, CLOSE), M15: { ...room(bull, null), bar_time: CLOSE } },
     news: null, confirmations: { m5_prophet_r38: { buy_confirmed: true, sell_confirmed: false, verified: true, candle_time: CLOSE } },
@@ -67,11 +90,11 @@ export const PLAN_COLUMNS = "setup_key, decision_key, agent, pattern, opened_at,
 /**
  * The scenario. `mods`: { se, de, ea, pp, pa, pl } (strategy-engine, decision-engine, ea-signal, public-projection,
  * public-analysis, plan-learning); `db` and `kv` make a D1 and a KV; `modes` the strategy's modes; `extraColumns` more
- * plan_setups columns to read.
+ * plan_setups columns to read; `prophet` adds Z1a's PROPHET_ZONES to the charts' planes.
  */
-export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes = undefined, env: extraEnv = {}, extraColumns = "" } = {}) {
+export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes = undefined, env: extraEnv = {}, extraColumns = "", prophet = false } = {}) {
   const env = { ...ZONE_ENV, ...extraEnv };
-  const inputs = zoneInputs(modes);
+  const inputs = zoneInputs(modes, { prophet });
   const strategy = se.buildStrategy(inputs);
   const loaded = { inputs, strategy, global: global(), correlations: null, regime: "normal-trending" };
   const assessment = de.assess(loaded, { now: NOW, env });

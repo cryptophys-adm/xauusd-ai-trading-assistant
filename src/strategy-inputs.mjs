@@ -14,6 +14,7 @@
 
 import { SCORING, scoreStance } from "./outcome-scoring.mjs";
 import { goldClosedAt } from "./parity-sweep.mjs";
+import { zoneSourcesList } from "./zone-types.mjs";
 
 export const STRATEGY_INPUTS_VERSION = "cryptophys.strategy-inputs.v1";
 export const STRATEGY_INPUTS_DAYS = 60;
@@ -63,6 +64,9 @@ const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone", "z
 /** The strategy switches that are off, in SLIM_MODES order, or null when all are on. */
 const offModes = (modes) => {
   const off = Object.fromEntries(SLIM_MODES.filter((k) => modes?.[k] === "off").map((k) => [k, "off"]));
+  // Z1a: the ZONE_SOURCES_OFF tokens, kept only when a source is off.
+  const sources = zoneSourcesList(modes?.zoneSourcesOff);
+  if (sources.length) off.zoneSourcesOff = sources;
   return Object.keys(off).length ? off : null;
 };
 /** Pure: the inputs buildStrategy reads, without the room texts or other unused fields. */

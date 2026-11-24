@@ -2,6 +2,9 @@ export const ZONE_TYPES_VERSION: string;
 export const ZONE_TF_WEIGHT: Readonly<Record<string, number>>;
 export const ZONE_TF_NAME: Readonly<Record<string, string>>;
 export const ZONE_SOURCE_WEIGHT: Readonly<Record<"whale_active" | "whale_mitigation" | "prophet_best" | "rbs" | "sbr" | "qm_buy" | "qm_sell" | "gmi_flag", number>>;
+export const ZONE_PROPHET_WEIGHT: Readonly<{ active: number; high_volume: number }>;
+export type ZoneSource = "prophet_zone" | "prophet_best" | "whale" | "gabfx" | "gmi_flag";
+export const ZONE_SOURCES: readonly ZoneSource[];
 export const ZONE_RULES: Readonly<{ dominance: number; medium: number; strong: number; touch_band_atr: number; touch_bars: number; touch_gap: number; touch_cap: number; around: number }>;
 export const ZONE_NEED: Readonly<{ risk: number; atr: number }>;
 export const ZONE_TREND_LEAN: number;
@@ -16,11 +19,14 @@ export interface OpposingAhead {
   o_type: ZoneType | null; o_strength: ZoneStrength; o_freshness: ZoneFreshness; o_rank: "candidate" | "qualified" | null;
   room_atr: number | null; room_r: number | null; need_r: number | null; trend_lean: number | null; with_trend: boolean; would_block: boolean;
 }
-export interface DsBox { source: string; tf: string; side: "demand" | "supply"; bottom: number | null; top: number | null; weight: number | null; point?: boolean; at_price?: boolean }
+export interface DsBox { source: string; tf: string; side: "demand" | "supply"; bottom: number | null; top: number | null; weight: number | null; point?: boolean; at_price?: boolean; touches?: number | null }
 
 export function keyLevelZoneTypesMode(env: unknown): "on" | "off";
+export function zoneSourcesOffMode(env: unknown): ZoneSource[];
+export function zoneSourcesModes(env: unknown): { zoneSourcesOff?: ZoneSource[] };
+export function zoneSourcesList(list: unknown): ZoneSource[];
 export function zoneNeed(risk: number, atrH1: number): number;
-export function dsEvidence(input?: { snapshots?: Record<string, any>; bars15?: unknown[]; atrH1?: number | null }): { boxes: DsBox[]; bars: Array<Record<string, any>>; atr_h1: number | null };
+export function dsEvidence(input?: { snapshots?: Record<string, any>; bars15?: unknown[]; atrH1?: number | null; sourcesOff?: unknown }): { boxes: DsBox[]; bars: Array<Record<string, any>>; atr_h1: number | null };
 export function boxTypes(box: DsBox, zone: { low: number; high: number; role?: string | null }): boolean;
 export function zoneTouches(low: number, high: number, bars: unknown[], band: number | null): number | null;
 export function freshnessOf(touches: number | null): ZoneFreshness;

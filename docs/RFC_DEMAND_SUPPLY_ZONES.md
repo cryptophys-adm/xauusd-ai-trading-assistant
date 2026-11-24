@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a, Z2, Z2b, Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) follows it; Z2, Z2b, Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -133,8 +133,48 @@ No ENGINE_CODE function changes: ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH and ERA
 
 **Reading.** Freshness separates as the design study did (64% / 51% / 45%). The type's edge is regime-bound, which is why Z0 records only and Z2 keeps the trend exemption.
 
-## 4. Risks
-- **Thin typing coverage.** Typing coverage is thin until Z1a (`prophet_best` only at intensity +3/-3).
+## 4. Z1a: every active Prophet order block as a source
+**Why.** The only order-block box in Z0 is Prophet's single best block per side, and the core picks one only at cycle intensity +3/-3 (`local-engines/prophet-r38/src/core.mjs`, orderBlockEngine). Production 2026-11-20 22:00: the 15m chart had 4 active bearish blocks and no best one. The core already returns every active block at the last bar (`active_order_block_zones`), and nothing read it.
+
+### 4.1 The export (producer)
+- **The adapter.** `local-engines/producer/src/adopt/prophet-ob.mjs` (new; the producer's `adopt/` folder, which B20 extends and B11 joins with `adopt/context.mjs`). `prophetZones(ob, chartBars, { perSide: 4, atr })` reads only the core's list:
+  - dir 1 = demand, dir -1 = supply;
+  - `top` and `bottom` as the core holds them at the last bar (after its own trims), 3 dp;
+  - `age_bars` = the last bar's index - `born`, on the snapshot's 1000-bar window;
+  - `high_volume` = the core's `highVolume`, mapped explicitly;
+  - `touches` by the core's own rule: a bar within 0.15 x the chart's ATR(14) of the block, on the 40 bars before the last, at least 3 bars after the touch counted before it (not capped here);
+  - the 4 nearest to the close per side, demand first: at most 8 boxes a chart.
+- **Where it lands.** `hud-snapshot.mjs` sets `chart_plane.zones = { prophet: [...] }`, failure-isolated like `buildChartPlane`: a failure leaves the plane without `zones`. It is not a HUD section, so no room agent appears. The HUD sections, the plane's existing fields, `hud-reading`, the parity comparables and the identity hashes are byte-identical (test pins taken before Z1a).
+- **The core is unedited.** `core.mjs`, `src/prophet-r37-kernel.mjs` and `src/prophet-r37-oscillator.mjs` keep their provenance hashes; `hud-snapshot.mjs` and `adopt/` are in no provenance record.
+- **Size.** About 95 bytes a box, so at most about 0.8 KB a snapshot (the store's limit is 64 KiB; the fixture snapshots stay under 48 KiB).
+- **Deploy.** It ships with market-data-ingestion (local-publisher.mjs imports hud-snapshot) and the AI Worker. The export is always on; its use is switchable.
+
+### 4.2 The source (`zone-types.mjs`)
+- **`prophet_zone`.** Labels `prophet_zone@15m`, `@1H`, `@4H`, `@daily`. Weight 0.7, or 0.9 when `high_volume`, times `TF_WEIGHT`. The typing rule is Z0's: strict overlap, the heaviest box per (source, timeframe), 2x dominance, the same strength floors.
+- **`prophet_best` is dropped on a chart that has `prophet_zone` boxes.** The best block is one of the active ones, so counting both would count one block twice. A chart without boxes (an older snapshot, or no active block) keeps it.
+- **Freshness.** A zone typed by a `prophet_zone` box reads MAX(its own Z0 count, those boxes' touches), capped at 3, so worn dominates. A box's touches are counted on its own chart's bars (40 of them: 10 hours on the 15m, 40 hours on the 1H, about a week on the 4H), so a higher-timeframe test the 15m window misses still ages the zone. Without 15m bars the boxes' count alone is used.
+- **The reader.** `src/level-readers.mjs` `prophetZoneBoxes(plane)` reads `chart_plane.zones.prophet`. `readPlane` does not read it, so the Key Level Agent's levels, zones, candidates, scores and roles never change.
+
+### 4.3 The switches
+- **`ZONE_SOURCES_OFF`** (AI Worker; unset = every source on): tokens `prophet_zone`, `prophet_best`, `whale`, `gabfx`, `gmi_flag`, comma- or space-separated; unknown tokens are ignored.
+  - It travels through the strategy modes as `modes.zoneSourcesOff`, beside `modes.zoneTypes`: `loadStrategyInputs`, `loadOwnTimeframePlanInputs`, and the capture's slim inputs. It is present only when a source is off, so the default modes and the stored captures are Z0's.
+  - `ZONE_SOURCES_OFF=prophet_zone` restores Z0's typing byte for byte (test/zone-types.test.mjs Z1a-4, Z1a-5 and Z1a-7: the strategy, the decision record and everything downstream).
+- **`KEY_LEVEL_ZONE_TYPES=off`** still removes every typed field: with Prophet zones in the planes, the output is Z0-9's pinned main output (Z1a-6).
+
+### 4.4 What Z1a does not touch
+The guardrails, the council's evidence and messages, the EA signal, `managementFields`, Omega, the Position Manager, `publicAnalysis` and `publicRecap` are byte-identical with it on (Z1a-7). No ENGINE_CODE function changes: ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…) and ERA_SWITCHES are unchanged, and no era moves. No EA or cron change.
+
+### 4.5 Evidence (production D1, SELECT only, 2026-11-24)
+**Coverage,** from the 259 hourly strategy captures (2026-11-09 to 2026-11-24), which keep each chart's order-block HUD:
+- every capture had more active blocks than best blocks: on average 9.5 boxes (the 4-per-side cap applied) against 0.9 best blocks;
+- the 15m chart had an active bearish block but no best one in 168 of 259 captures (bullish 106); the 1H in 145 (67); the 4H in 153 of 190 (49);
+- 165 chart snapshots held more than 4 blocks on a side, where the cap applied.
+
+**The typing replay and ZONE_NEED.** Not re-run in this PR: the stored captures predate the export (no `zones.prophet`), and D1 holds only about four days of 1m bars, short of the 1000 bars per chart (with the feed's volume) the core needs to rebuild the blocks. The captures keep the chart plane, so from Z1a's deploy on they carry the boxes; the replay with the new source and the ZONE_NEED re-check run on them before Z2 turns the gate on.
+
+## 5. Risks
+- **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
+- **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.
 - **Size.** decision_json grows for two reasons. In the test fixture the total went from 10.8 KB to 13.2 KB, with 3 agent plans:
   - the zone words of `key_levels`: about 95 bytes a zone, so about 1.1 KB for 12 zones;

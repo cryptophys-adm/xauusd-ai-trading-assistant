@@ -21,6 +21,8 @@
 //                     the daily timeframe ("D") and the freshest snapshot wins.
 // The TDM POC/VAH/VAL and the previous day and week high/low are already read elsewhere (the
 // value area of each chart and the bars), so the readers skip them.
+// The plane's `zones.prophet` (Z1a, every active Prophet order block) is read by prophetZoneBoxes for the demand/supply
+// typing only (src/zone-types.mjs); no reader turns it into levels.
 
 export const LEVEL_READERS_VERSION = "cryptophys.level-readers.v1";
 export const READERS = Object.freeze({
@@ -125,6 +127,20 @@ export function readPlane(plane, tf) {
     ...projectionLevels(plane).map((l) => ({ ...l, reader: "projection" })),
     ...sessionLevels(plane).map((l) => ({ ...l, reader: "session" }))
   ];
+}
+
+/**
+ * Pure (Z1a): the active Prophet order blocks the producer adds to a chart plane (`zones.prophet`,
+ * local-engines/producer/src/adopt/prophet-ob.mjs): [{ side, bottom, top, high_volume, touches, age_bars }], the
+ * well-formed ones only. They are demand/supply evidence for src/zone-types.mjs, never key levels: readPlane does not
+ * read them, so the Key Level Agent's levels, zones and candidates do not change.
+ */
+export function prophetZoneBoxes(plane) {
+  const list = plane?.zones?.prophet;
+  if (!Array.isArray(list)) return [];
+  const count = (v) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+  return list.filter((z) => (z?.side === "demand" || z?.side === "supply") && isNum(z.bottom) && isNum(z.top) && z.top >= z.bottom)
+    .map((z) => ({ side: z.side, bottom: z.bottom, top: z.top, high_volume: z.high_volume === true, touches: count(z.touches), age_bars: count(z.age_bars) }));
 }
 
 /**
