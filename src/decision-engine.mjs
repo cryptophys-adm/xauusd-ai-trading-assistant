@@ -58,6 +58,7 @@ import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
+import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
 import { aroundSet } from "./zone-types.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
@@ -820,7 +821,7 @@ export function validateCouncil(o) {
 export function decide({ answer = null, guards, strategy = null, quorum, minConfidence = MIN_CONFIDENCE }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
-  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null;
+  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null, softened = null;
   if (answer) {
     stance = answer.stance; confidence = r2(Math.max(0, Math.min(0.95, answer.confidence)));
     entryType = answer.entry_type; target = answer.target; chosen = answer.strategy ?? null;
@@ -851,21 +852,33 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
         const word = dir > 0 ? "buy" : "sell";
         const speakers = [...((dir > 0 ? guards.consensus?.long : guards.consensus?.short) || [])].sort((a, b) => (b.voice - a.voice) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
         const lean = guards.consensus?.lean;
-        if (isNum(lean) && dir * lean <= -LEAN) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` }] };
+        const opposite = (dir > 0 ? guards.consensus?.short : guards.consensus?.long) || [];
+        // SV1b (src/agent-veto.mjs, AGENT_VETO_RULE "two_sided"): an agent that speaks on both sides does not count
+        // against the side it also speaks for (A6: the lean veto needs A6_MIN_ONE_SIDED one-sided opposing agents; A7:
+        // the arm veto ignores such an armed agent). "classic" (the default): the vetoes as before.
+        const twoSided = guards.veto_rule === "two_sided";
+        const alsoFor = (x) => speakers.some((o) => o.id === x.id);
+        const leanDetail = isNum(lean) ? `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` : null;
+        const leanAgainst = isNum(lean) && dir * lean <= -LEAN;
+        if (leanAgainst && (!twoSided || opposite.filter((x) => !alsoFor(x)).length >= A6_MIN_ONE_SIDED)) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: leanDetail }] };
         else if (guards.arms?.mode === "live") {
+          if (leanAgainst) softened = { rule: "A6", old_detail: leanDetail };
           // The strategy arm (owner 2026-11-17, docs/RFC_STRATEGY_RECOMMENDATION.md): 1 to 3 armed, only they; none
           // armed, AUTO: every speaker. Either way ONE strategy, the best by measured confidence x confluence.
-          const opposite = (dir > 0 ? guards.consensus?.short : guards.consensus?.long) || [];
           const armed = Array.isArray(guards.arms.ids) ? guards.arms.ids : [];
+          const armedAgainst = opposite.filter((x) => armed.includes(x.id));
+          const armBlocks = twoSided ? armedAgainst.filter((x) => !alsoFor(x)) : armedAgainst;
           if (guards.arms.known === false) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: "the arm state could not be read" }] };
-          else if (armed.length && opposite.some((x) => armed.includes(x.id))) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: `an armed strategy sees its setup on the other side (${opposite.filter((x) => armed.includes(x.id)).map((x) => x.id).join(", ")})` }] };
+          else if (armed.length && armBlocks.length) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: `an armed strategy sees its setup on the other side (${armBlocks.map((x) => x.id).join(", ")})` }] };
           else {
+            if (armed.length && armedAgainst.length) softened ??= { rule: "A7", old_detail: `an armed strategy sees its setup on the other side (${armedAgainst.map((x) => x.id).join(", ")})` };
             const pick = pickStrategy({ side: dir > 0 ? "long" : "short", speakers, plans: g.plans, agentConfidence: guards.agent_confidence, quorum, strategy, armed, stance, opts });
             selection = pick;
             if (!pick.agent) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: pick.reason }] };
             else trade = { ...pick.trade, agent: pick.agent };
           }
         } else {
+          if (leanAgainst) softened = { rule: "A6", old_detail: leanDetail };
           const pickOf = speakers.find((x) => x.id === chosen) ?? speakers.find((x) => g.plans?.[x.id]?.plan);
           if (!pickOf) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `no live strategy agent sees its setup on the ${word} side` }] };
           else {
@@ -884,7 +897,8 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
     if (overruled) stance = "WAIT";
   }
   const bias = answer?.bias ?? quorum.bias;
-  return { stance, bias, confidence, source, trade, overruled, selection };
+  // SV1b: a BUY or SELL that trades only because A6 or A7 lifted a veto the classic rule would have kept says so.
+  return { stance, bias, confidence, source, trade, overruled, selection, ...(softened && !overruled && trade ? { veto_softened: softened } : {}) };
 }
 
 /**
@@ -1170,6 +1184,8 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
   guards.strategy_execution = strategyExecutionEnabled(env);
   guards.consensus = consensus;
+  // SV1b (src/agent-veto.mjs): the two-sided veto rule, only when it is in force (runDecisionEngine resolves it into env).
+  if (agentVetoRuleOf(env) === "two_sided") guards.veto_rule = "two_sided";
   try { guards.agent_confidence = agentConfidences(plans, { score: quorum.score, records: agentRecords, passes, statuses }); } catch { guards.agent_confidence = null; }
   // The Projection Agent's reading of the price action, for the council's choice of strategy.
   let priceAction = [];
@@ -1403,6 +1419,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
+    // SV1b: only a BUY or SELL that trades because A6 or A7 lifted a classic veto ({ rule, old_detail }, words only).
+    ...(d.veto_softened ? { veto_softened: d.veto_softened } : {}),
     // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): each live agent's
     // confidence on both sides at this close, and at the close one bar before (null when that decision is missing).
     strategy_execution: guards.strategy_execution === true,
@@ -1531,7 +1549,11 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     // loaded lazily (that module reads this one). Unreadable: the rule's 1.
     let room = SQUEEZE_RULE.corridor_atr;
     try { room = (await (await import("./room-tuning.mjs")).activeRoom(env, mode, { now })).value; } catch { room = SQUEEZE_RULE.corridor_atr; }
-    env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room };
+    // SV1b (src/agent-veto.mjs): the strategy agents' veto rule in force (the owner's force, else the automatic revert,
+    // else AGENT_VETO_RULE), on the same copy. Unreadable: "classic".
+    let vetoRule = "classic";
+    try { vetoRule = (await resolveAgentVetoRule(env, { now })).rule; } catch { vetoRule = "classic"; }
+    env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room, AGENT_VETO_RULE: vetoRule };
     const data = loaded ?? await loadDecisionInputs(env, { now });
     // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens A's facts known at this close
     // (cotAt: released before now) at the mode's knobs, lens B's state for the council's sweep evidence.

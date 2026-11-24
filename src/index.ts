@@ -278,6 +278,7 @@ import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { relayProfileChanges } from "./profile-agent.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
+import { runAgentVetoRevert, setAgentVetoForce, agentVetoStatus } from "./agent-veto.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { pollCouncilDecisions, platformStates, decisionsPollStatus } from "./council-decisions.mjs";
@@ -1895,6 +1896,19 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
     return setCouncilAuto(this.env, { on: input?.on === true, actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null }) as Promise<JsonObject>;
   }
+  /**
+   * SV1b: the owner's force of the strategy agents' veto rule (src/agent-veto.mjs): "two_sided" or "classic" pins it, "auto"
+   * clears the force. Through the Omega Worker's owner-only POST /api/strategy-council; checked again here, audited, one line.
+   */
+  async setAgentVetoRule(input: { rule?: string; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
+    const result = await setAgentVetoForce(this.env, { rule: String(input?.rule ?? ""), actor: String(input?.actor ?? "owner") }) as JsonObject;
+    if (result?.ok === true && result?.changed === true) {
+      const text = `XAUUSD SYSTEM · Strategy-agent veto rule ${result.force === "auto" ? "handed back to the automatic setting" : `forced to ${String(result.force).replace("_", "-")}`} by the owner: in force now ${String(result.rule).replace("_", "-")} (${String(result.source).replace("_", " ")}).`;
+      try { await sendTelegram(this.env, text); } catch (e) { console.error("agent_veto_telegram_failed", e instanceof Error ? e.message : String(e)); }
+    }
+    return result;
+  }
   /** The owner's manual arm or disarm pins a strategy against the council until the owner unpins it. */
   async unpinStrategy(input: { strategy_id?: string; actor_sub?: string | null }): Promise<JsonObject> {
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
@@ -2403,7 +2417,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
     // and the one the trade took.
     try {
-      const [state, latest, reco, council] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env)]);
+      const [state, latest, reco, council, veto] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env), agentVetoStatus(env).catch(() => null)]);
       const verdicts = (((council as Record<string, any> | null)?.verdicts ?? {}) as Record<string, any>);
       const d = latest as Record<string, any> | null;
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
@@ -2416,6 +2430,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         council: council ? { day: (council as Record<string, any>).day ?? null, acting: (council as Record<string, any>).acting ?? false } : null,
         // The patterns the breaker holds back (their own trades here lost; the rest of the family trades on).
         suspended_patterns: suspendedPatterns(records),
+        // SV1b (src/agent-veto.mjs): the veto rule in force and its source, the softened decisions, the closed softened trades and their mean R.
+        veto_rule: veto,
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
       });
     } catch (error) {
@@ -2930,6 +2946,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // The grid's automatic entry/stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): once a UTC day.
   const grid = await runGridAdapt(env, { send: (text: string) => sendTelegram(env, text) });
   if (grid.status === "computed" || grid.status === "failed") console.log("grid_adapt", JSON.stringify(grid));
+  // SV1b (src/agent-veto.mjs, owner 2026-11-24: "auto-revert"): the strategy agents' softened veto rule back to classic for
+  // 7 days once its latest 15 closed softened trades average below 0R; once a UTC day, beside the grid's check.
+  const veto = await runAgentVetoRevert(env, { send: (text: string) => sendTelegram(env, text) });
+  if (veto.status === "reverted" || veto.status === "failed") console.log("agent_veto", JSON.stringify(veto));
   // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
   // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
   const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });
