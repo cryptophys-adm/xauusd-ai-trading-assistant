@@ -259,3 +259,14 @@ test("KA1-3. the #492 items are settled once from their stored rows (KV marker);
     if (exists) assert.equal(env.DB.raw.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n, 0, t);
   }
 });
+
+test("KA1-4. a moderator-only item takes no slot, even when the room's roster lists the moderator (it is never called, so it would hold a slot forever)", () => {
+  const withModerator = [...roster, "moderator"];
+  const modOnly = Array.from({ length: MAX_ITEMS }, (_, i) => item(`mod${i}`, ["moderator"]));
+  const plan = planShadowCalls({ items: [...modOnly, item("g1", ["gmi"])], roster: withModerator, openings });
+  assert.deepEqual(plan.filter((c) => c.arm === "note").map((c) => c.item.item_id), ["g1"], "the testable item gets a slot behind six moderator-only items");
+  assert.equal(plan.some((c) => c.agent === "moderator"), false, "the moderator is never called");
+  // An item for the moderator and a testable agent still takes its slot and calls the testable agent only.
+  const mixed = planShadowCalls({ items: [item("m1", ["moderator", "gmi"])], roster: withModerator, openings });
+  assert.deepEqual(mixed.map((c) => [c.agent, c.arm]), [["gmi", "note"], ["gmi", "aa"]]);
+});

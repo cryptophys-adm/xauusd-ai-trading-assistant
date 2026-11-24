@@ -103,7 +103,9 @@ export function planShadowCalls({ items = [], roster = [], openings = [], chart 
   const answered = new Map((openings || []).filter((m) => m?.status === "ok").map((m) => [String(m.agent ?? m.id), m.stance]));
   const text = (items || []).filter((it) => TEXT_KINDS.has(it?.kind) && typeof it.text === "string" && it.text.trim())
     .filter((it) => !Array.isArray(it.audience?.charts) || !it.audience.charts.length || it.audience.charts.includes(code))
-    .filter((it) => (it.audience?.agents || []).some((a) => roster.includes(a)))
+    // A slot goes only to an item this room can test: the moderator is never called (below), so a moderator-only
+    // item would take one of the MAX_ITEMS slots, make no call and hold it forever (KA1 review).
+    .filter((it) => (it.audience?.agents || []).some((a) => a !== "moderator" && roster.includes(a)))
     .slice(0, MAX_ITEMS);
   const calls = [];
   text.forEach((item, i) => {
