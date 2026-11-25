@@ -254,8 +254,8 @@ export const VIEWS: Entry[] = [
       "edge +0.059", "own 43% n153 · untyped 37% n86", "+0.15R", "+0.10R vs +0.30R", "+0.05R vs +0.20R", "tripped", "Rule version tp1_kz:on+zone_ahead@1.",
       "30 days · prior 20", "▲</span> demand", "▼</span> supply", "untyped", "from_above", "All readings", ">245<", ">40%<", ">0.62<", ">0.51<", "aria-sort=\"ascending\"",
       "▲ BUY", "▼ SELL", "−0.15R", "75%", "100%", "−0.1 · 0 · +0.4R", "−0.20R", "7 days · 672 decisions", "WAIT", ">24<",
-      "intent:level_source_zone", "pm:zone_trail", "−0.009R", "−0.017R", ">advisory<", ">16<"],
-    hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", NO_EFFECT_NOTE, "price", "feed scale", "broker scale", "also seen by"],
+      "intent:level_source_zone", "pm:zone_trail", "−0.009R", "−0.017R", ">advisory<", ">16<", NO_EFFECT_NOTE],
+    hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", "price", "feed scale", "broker scale", "also seen by"],
     missing: [zonesOffBody]
   },
   { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesLegacy, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
