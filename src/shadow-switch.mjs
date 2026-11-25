@@ -15,7 +15,13 @@
 //     "shadow:<schema name>" in ai_usage_daily) pass SHADOW_NEURONS_PER_DAY_MAX neurons (default 25,000), it
 //     turns the switch off itself and tells the owner. It stays off until the owner turns it on again.
 // `SHADOW_MODE` "off" (a Worker variable) holds it off whatever the switch says.
+//
+// SB1 (owner 2026-11-25, "news_compare saja"): a call the model router sent to Beam (src/model-router.mjs) has no
+// Workers AI neuron rate, so the neuron count alone would let it pass at 0. The day's Beam rows are read as Beam's own
+// counters instead (`beam`: calls, tokens in and out against MODEL_ROUTER_LIMITS); the router's day limits are this
+// reading (with its own request count, D1 model_router_events), and every fallback is a Workers AI call priced in neurons as before. No Beam row, no `beam` key.
 import { neuronsOf, ensureAiUsageSchema, FREE_NEURONS_PER_DAY, USD_PER_1K_NEURONS } from "./ai-usage.mjs";
+import { routerCounters, modelRouterConfig, MODEL_ROUTER_DEFAULTS } from "./model-router.mjs";
 
 export const SHADOW_SWITCH_KEY = "shadow-mode:switch:v1";
 export const SHADOW_MODES = Object.freeze(["on", "off"]);
@@ -53,8 +59,11 @@ export async function gateShadowTurns(env, allocation) {
   return { ...allocation, shadow: [], shadow_off: true };
 }
 
-/** Today's (UTC) shadow spend from the meter: neurons, by source and in all. Never throws. */
-export async function shadowSpendToday(db, { now = Date.now() } = {}) {
+/**
+ * Today's (UTC) shadow spend from the meter: neurons, by source and in all; with `beam`, Beam's own counters when the
+ * model router sent a call there today (`routerModel`, the router's MODEL_ID). Never throws.
+ */
+export async function shadowSpendToday(db, { now = Date.now(), routerModel = MODEL_ROUTER_DEFAULTS.model } = {}) {
   const day = new Date(now).toISOString().slice(0, 10);
   try {
     await ensureAiUsageSchema(db);
@@ -62,16 +71,19 @@ export async function shadowSpendToday(db, { now = Date.now() } = {}) {
     const bySource = {};
     let neurons = 0, calls = 0, unpriced = 0;
     for (const r of rows) {
-      const n = neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0);
+      const beam = r.model === routerModel;
+      const n = beam ? null : neuronsOf(r.model, Number(r.p) || 0, Number(r.c) || 0, Number(r.k) || 0);
       const s = bySource[r.source] || { calls: 0, neurons: 0 };
       s.calls += Number(r.calls) || 0;
       calls += Number(r.calls) || 0;
-      if (n == null) unpriced += (Number(r.p) || 0) + (Number(r.c) || 0);
+      // A Beam row is counted by Beam's own counters below, never as an unpriced pass.
+      if (beam) { /* counted in `beam` */ } else if (n == null) unpriced += (Number(r.p) || 0) + (Number(r.c) || 0);
       else { s.neurons += n; neurons += n; }
       bySource[r.source] = s;
     }
     for (const s of Object.values(bySource)) s.neurons = Math.round(s.neurons);
-    return { day, calls, neurons: Math.round(neurons), unpriced_tokens: unpriced, by_source: bySource };
+    const beam = routerCounters(rows, routerModel);
+    return { day, calls, neurons: Math.round(neurons), unpriced_tokens: unpriced, by_source: bySource, ...(beam ? { beam } : {}) };
   } catch {
     return { day, calls: 0, neurons: 0, unpriced_tokens: 0, by_source: {}, error: "meter_unavailable" };
   }
@@ -129,14 +141,17 @@ export function shadowModeMessage(result, { reason = "", spend = null, budget = 
 export async function checkShadowBudget(env, { now = Date.now(), send = null } = {}) {
   try {
     if (!env?.DB || !(await shadowAllowed(env))) return { status: "off" };
-    const spend = await shadowSpendToday(env.DB, { now });
+    const spend = await shadowSpendToday(env.DB, { now, routerModel: modelRouterConfig(env).model });
     const budget = shadowBudget(env);
-    if (spend.neurons <= budget) return { status: "within_budget", neurons: spend.neurons, budget };
+    // SB1: Beam's own counters ride along (the router falls back to Workers AI at any of their limits).
+    const beam = spend.beam ? { beam: spend.beam } : {};
+    if (spend.beam?.at_limit) console.log("model_router_limit", JSON.stringify({ reason: spend.beam.at_limit, calls: spend.beam.calls, tokens_in: spend.beam.tokens_in, tokens_out: spend.beam.tokens_out }));
+    if (spend.neurons <= budget) return { status: "within_budget", neurons: spend.neurons, budget, ...beam };
     const result = await setShadowMode(env, { mode: "off", reason: `today's shadow calls reached ${spend.neurons} neurons, budget ${budget}`, actor: BREAKER_ACTOR }, { now });
     if (result.ok && result.changed && send) {
       try { await send(shadowModeMessage(result, { spend: spend.neurons, budget })); } catch (e) { console.error("shadow_breaker_telegram_failed", e instanceof Error ? e.message : String(e)); }
     }
-    return { status: result.ok ? "tripped" : "trip_failed", neurons: spend.neurons, budget, by_source: spend.by_source, ...(result.ok ? {} : { error: result.error }) };
+    return { status: result.ok ? "tripped" : "trip_failed", neurons: spend.neurons, budget, by_source: spend.by_source, ...beam, ...(result.ok ? {} : { error: result.error }) };
   } catch (e) {
     return { status: "error", error: String(e?.message ?? e).slice(0, 200) };
   }

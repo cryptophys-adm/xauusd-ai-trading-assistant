@@ -1,0 +1,33 @@
+export const MODEL_ROUTER_SECRETS: readonly string[];
+export const MODEL_ROUTER_DEFAULTS: Readonly<{ base: string; model: string }>;
+export const MODEL_ROUTER_LIMITS: Readonly<{ tokens_in_day: number; tokens_out_day: number; requests_day: number; rpm: number }>;
+export const MODEL_ROUTER_MAX_TOKENS: number;
+export const MODEL_ROUTER_EFFORT: string;
+export const MODEL_ROUTER_TIMEOUT_MS: number;
+export const MODEL_ROUTER_BREAKER: Readonly<{ failures: number; window_ms: number }>;
+export const MODEL_ROUTER_STATUS_CACHE_MS: number;
+export const MODEL_ROUTER_AGENT: string;
+export const MODEL_ROUTER_CAPABILITIES: Readonly<{ status: string; report_paid: string }>;
+export const MODEL_ROUTER_PAID_KEY: string;
+export const MODEL_ROUTER_REASONS: readonly string[];
+export interface RouterCounters { model: string; calls: number; requests: number; tokens_in: number; tokens_out: number; limits: Record<string, number>; at_limit: string | null }
+export function shadowModelRouterMode(env: unknown): "on" | "off";
+export function modelRouterConfig(env?: unknown): { base: string; model: string; has_key: boolean };
+export function routerCounters(rows: unknown, model?: string): RouterCounters | null;
+export function routerLimitReached(c: { tokens_in?: number; tokens_out?: number; requests?: number } | null, options?: { maxTokens?: number }): string | null;
+export function resetModelRouterForTests(): void;
+export function routerKernelStatus(env: unknown, options?: { now?: number; fresh?: boolean }): Promise<{ at: number; status: "on" | "off" | "unknown"; detail: string | null }>;
+export function routeShadowCall<T>(env: unknown, options: {
+  site: string;
+  allow: readonly string[];
+  reading?: string | null;
+  messages: Array<{ role: string; content: string }>;
+  meterSource: string;
+  accept: (obj: Record<string, unknown>) => T | null;
+  fallback: () => Promise<T | null>;
+  spendToday?: (() => Promise<{ beam?: RouterCounters | null } | null>) | null;
+  fetcher?: (url: string, init: Record<string, unknown>) => Promise<Response>;
+  clock?: () => number;
+  timeoutMs?: number;
+}): Promise<{ via: "beam"; value: T } | { via: "workers_ai"; reason: string; value: T | null }>;
+export function readRouterEvents(db: unknown, options?: { limit?: number }): Promise<Array<Record<string, unknown>>>;

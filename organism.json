@@ -206,6 +206,16 @@
           ],
           "tier_max": 1,
           "voter": false
+        },
+        {
+          "id": "xauusd-model-router",
+          "display_name": "Model Router",
+          "capabilities": [
+            "model_router.status",
+            "model_router.report_paid"
+          ],
+          "tier_max": 1,
+          "voter": false
         }
       ],
       "engines": [
