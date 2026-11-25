@@ -11,5 +11,6 @@ export function subjectEvidence(subject: unknown, verdict: string, windows?: Rec
 export function untestableReason(item: unknown): string | null;
 export function verdictEntries(input?: { plan?: unknown; live?: unknown[]; packItems?: unknown[]; firstSeen?: Record<string, string> }): Array<{ key: string; item_id: string; version: number; verdict: string; window_end: string; payload: Record<string, any> }>;
 export function planVerdictPosts(input?: { entries?: unknown[]; markers?: unknown[]; now?: number }): Array<{ key: string; item_id: string; version: number; verdict: string; window_end: string; payload: Record<string, any> }>;
+export function supersededBy(row: unknown, itemRows?: unknown[]): string | null;
 export function resetKnowledgeVerdictsForTests(): void;
 export function postKnowledgeVerdicts(env: unknown, options?: { plan?: unknown; now?: number; limit?: number; timeoutMs?: number }): Promise<Record<string, any> & { status: string }>;

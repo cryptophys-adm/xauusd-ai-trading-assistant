@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import {
   KNOWLEDGE_VERDICT_AGENT_ID, KNOWLEDGE_VERDICT_CAPABILITY, KNOWLEDGE_VERDICTS, KNOWLEDGE_VERDICT_EVIDENCE_KEYS, KNOWLEDGE_VERDICT_RULES, KNOWLEDGE_VERDICT_TIMEOUT_MS,
   knowledgeVerdictPostsEnabled, verdictPayloadProblems, subjectEvidence, untestableReason, verdictEntries, planVerdictPosts,
-  postKnowledgeVerdicts, resetKnowledgeVerdictsForTests
+  postKnowledgeVerdicts, resetKnowledgeVerdictsForTests, KNOWLEDGE_VERDICT_SCHEMA_SQL, supersededBy
 } from "../src/knowledge-verdicts.mjs";
 import { planShadowClosures, runShadowClosures, resetShadowKnowledgeSchemaCacheForTests, CLOSURE_VERSION } from "../src/shadow-knowledge.mjs";
 import { resetLearnedLiveForTests, LEARNED_LIVE_SCHEMA_SQL } from "../src/learned-live.mjs";
@@ -212,10 +212,11 @@ async function world({ answer = () => ({ outcome: "succeeded", result: { verdict
   const c = chronosLive();
   env.DB.raw.prepare("INSERT INTO learned_live (item_id, version, status, item_json, verdict_json, promoted_at, retired_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(c.item_id, c.version, c.status, JSON.stringify(items[0]), c.verdict_json, c.promoted_at, c.retired_at, c.reason);
   kv.set("shadow-knowledge:settle:v1", JSON.stringify({ items: 11 }));
-  const run = async (now, opts = {}) => {
+  // mapPlan: the plan the sender is given (default: runShadowClosures' own), e.g. one an item has left.
+  const run = async (now, { mapPlan = (p) => p, ...opts } = {}) => {
     const closures = await runShadowClosures(env, { now });
     assert.equal(closures.status, "ok");
-    return postKnowledgeVerdicts(env, { plan: closures.plan, now, ...opts });
+    return postKnowledgeVerdicts(env, { plan: mapPlan(closures.plan), now, ...opts });
   };
   return { env, calls, kv, run, put, markers: () => env.DB.raw.prepare("SELECT item_id, verdict, window_end, status, attempts FROM knowledge_verdict_posts ORDER BY item_id, verdict").all() };
 }
@@ -317,30 +318,43 @@ test("KV-9. a denial backs off and one whoami decides; a transport error is retr
   assert.equal(t.calls.at(-1).input.item_id, COLLECTING.map(([id]) => id).sort()[0], "then the next item");
 });
 
-test("KV-9b. a timeout is unknown: pending, no attempt, the run stops; a later deduplicated reply marks it posted; other errors still count", async () => {
-  // Every call times out (the kernel never answers within the timeout): the row stays pending with 0 attempts.
+test("KV-9b. a timeout is unknown: pending, an attempt but no strike, the run stops; a later deduplicated reply marks it posted; other errors count too", async () => {
+  // KA2 fix (2026-11-25): a timeout now counts an attempt (it used to count none, so a row that kept timing out was
+  // retried without bound). Still no strike: the call may have landed.
   let mode = "slow";
   const w = await world({ answer: (input) => (mode === "slow" ? new Promise(() => {}) : mode === "error" ? { outcome: "failed", reason: "kernel_error" } : { outcome: "succeeded", result: { verdict_id: "kv", deduplicated: input.item_id === CHRONOS } }) });
-  for (let i = 0; i < KNOWLEDGE_VERDICT_RULES.max_attempts + 2; i++) {
+  for (let i = 0; i < 2; i++) {
     const out = await w.run(NOW + i * 2 * H, { limit: 20, timeoutMs: 5 });
     assert.deepEqual([out.stopped, out.reason, out.failed, out.posted.length], ["transport", "timeout", 0, 0], "one call a run, then the run stops");
   }
-  assert.equal(w.calls.length, KNOWLEDGE_VERDICT_RULES.max_attempts + 2, "more timeouts than the cap: still retried");
+  assert.equal(w.calls.length, 2);
   assert.ok(w.calls.every((c) => c.input.item_id === CHRONOS));
-  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 0]], "no attempt counted toward the cap");
+  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 2]], "each timeout counts toward the cap");
   assert.equal(w.env.DB.raw.prepare("SELECT reason FROM knowledge_verdict_posts").get().reason, "timeout");
   assert.equal(w.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_strikes").get().n, 0, "no strike: the call may have landed");
-  // A non-timeout error still counts.
+  // A non-timeout error counts too, with a strike.
   mode = "error";
-  const failed = await w.run(NOW + 20 * H, { limit: 20, timeoutMs: 5 });
+  const failed = await w.run(NOW + 4 * H, { limit: 20, timeoutMs: 5 });
   assert.deepEqual([failed.stopped, failed.failed], ["failed", 1]);
-  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 1]]);
+  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 3]]);
   // The platform kept the first call: the repeat answers deduplicated: true, which is posted.
   mode = "ok";
-  const later = await w.run(NOW + 22 * H, { limit: 20, timeoutMs: 5 });
+  const later = await w.run(NOW + 6 * H, { limit: 20, timeoutMs: 5 });
   assert.equal(later.posted[0], `${CHRONOS}@1:not_better`);
   const chronos = w.env.DB.raw.prepare("SELECT status, reason, attempts FROM knowledge_verdict_posts WHERE item_id = ?").get(CHRONOS);
-  assert.deepEqual({ ...chronos }, { status: "posted", reason: "deduplicated", attempts: 2 });
+  assert.deepEqual({ ...chronos }, { status: "posted", reason: "deduplicated", attempts: 4 });
+});
+
+test("KV-9d. timeouts are bounded: max_attempts timeouts make the row final failed (attempts_exhausted:timeout), never retried, no strike", async () => {
+  const w = await world({ answer: () => new Promise(() => {}) });
+  const outs = [];
+  for (let i = 0; i < KNOWLEDGE_VERDICT_RULES.max_attempts + 2; i++) outs.push(await w.run(NOW + i * 2 * H, { limit: 20, timeoutMs: 5 }));
+  const chronos = w.env.DB.raw.prepare("SELECT status, reason, attempts FROM knowledge_verdict_posts WHERE item_id = ?").get(CHRONOS);
+  assert.deepEqual({ ...chronos }, { status: "failed", reason: "attempts_exhausted:timeout", attempts: KNOWLEDGE_VERDICT_RULES.max_attempts });
+  assert.equal(w.calls.filter((c) => c.input.item_id === CHRONOS).length, KNOWLEDGE_VERDICT_RULES.max_attempts, "bounded");
+  assert.deepEqual(outs[KNOWLEDGE_VERDICT_RULES.max_attempts - 1].exhausted, [`${CHRONOS}@1:not_better`]);
+  assert.equal(w.calls.at(-1).input.item_id, COLLECTING.map(([id]) => id).sort()[0], "then the next item");
+  assert.equal(w.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_strikes").get().n, 0);
 });
 
 test("KV-9c. the 20 s timeout is knowledge.verdict's own; the other kernel calls keep PLATFORM_CALL_TIMEOUT_MS", async () => {
@@ -418,4 +432,316 @@ test("KV-13. evidence.arm follows the platform's rule (1-32 of [a-z0-9_.-], no r
   for (const arm of ["a+b", "agent_r380", "x".repeat(33), "Upper"]) assert.ok(verdictPayloadProblems({ ...base, evidence: { ...base.evidence, arm } }).includes("evidence_arm_invalid"), arm);
   assert.equal(subjectEvidence({ agent: "agent_r380", rows: 3, scored: 3 }, "collecting").arm, undefined, "left out, not sent");
   assert.equal(subjectEvidence({ agent: "chronos_matrix", rows: 3, scored: 3 }, "collecting").arm, "chronos_matrix");
+});
+
+// ------------------------------------------------------------------ KA2 fix (2026-11-25): pending rows the plan no longer makes
+// Production D1 (read-only, 2026-11-25): one row stuck since 00:11:58Z, never touched again: k-caution-h1-60-new-york
+// v1, collecting, window_end 00:00Z, pending, reason timeout, attempts 1. A collecting entry's row keys on window_end
+// and each run makes a new window_end, so the old row was never among the current entries, and only those were tried.
+const H1 = "k-caution-h1-60-new-york";
+const H1_SUBJECT = `shadow-agent:h1@${H1}v1`;
+const STUCK_END = "2026-11-25T00:00:00.000Z", STUCK_AT = "2026-11-25T00:11:58.000Z";
+const iso = (t) => new Date(t).toISOString();
+const at = (hhmm) => Date.parse(`2026-11-25T${hhmm}:00Z`);
+const row = (w, item_id, verdict, window_end = "") => w.env.DB.raw.prepare("SELECT status, reason, attempts, payload_json, updated_at FROM knowledge_verdict_posts WHERE item_id = ? AND verdict = ? AND window_end = ?").get(item_id, verdict, window_end);
+function insertRow(w, { item_id = H1, verdict = "collecting", window_end, status = "pending", reason = "timeout", attempts = 1, payload, updated_at, posted_at = null }) {
+  w.env.DB.raw.prepare("INSERT INTO knowledge_verdict_posts (item_id, item_version, verdict, window_end, status, attempts, reason, payload_json, created_at, updated_at, posted_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(item_id, verdict, window_end, status, attempts, reason, typeof payload === "string" ? payload : JSON.stringify(payload), updated_at, updated_at, posted_at);
+}
+/** The plan once h1 has left it (production: after 00:11Z no other row for the h1 item was ever written). */
+const withoutH1 = (p) => ({ ...p, items: p.items.filter((it) => it.item_id !== H1) });
+const strikes = (w) => w.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_strikes").get().n;
+const h1Rows = (w) => w.env.DB.raw.prepare("SELECT window_end, status FROM knowledge_verdict_posts WHERE item_id = ? ORDER BY window_end").all(H1).map((r) => [r.window_end, r.status]);
+/** The h1 collecting payload the sender posted, moved to another window_end (the payload of an older run). */
+const h1PayloadAt = (w, window_end) => {
+  const p = JSON.parse(w.env.DB.raw.prepare("SELECT payload_json FROM knowledge_verdict_posts WHERE item_id = ? AND verdict = 'collecting' AND status = 'posted'").get(H1).payload_json);
+  return { ...p, evidence: { ...p.evidence, window_end } };
+};
+/** The h1 payload moved to another item that has left the pack and the plan (an orphan nothing can supersede). */
+const gonePayloadAt = (w, window_end, item_id = "k-caution-gone-60-new-york") => ({ ...h1PayloadAt(w, window_end), item_id });
+const callsFor = (w, item_id, window_end) => w.calls.filter((c) => c.input.item_id === item_id && (window_end === undefined || c.input.evidence?.window_end === window_end));
+
+async function productionRow(reply) {
+  const w = await world({ answer: (input, n) => (input.item_id === H1 && input.evidence?.window_end === STUCK_END ? reply(input, n) : { outcome: "succeeded", result: { verdict_id: "kv" } }) });
+  await w.run(NOW, { limit: 20 });
+  assert.equal(w.calls.length, 14, "the 24th: everything posted");
+  // The h1 agent keeps opening: one row an hour up to 00:00Z, the window of the 00:11 run, whose post timed out.
+  const hour = (t, tag) => w.put(rowsOf(H1_SUBJECT, "h1", H1, 1, same, { start: t, step: H, tag }));
+  for (let t = Date.parse("2026-11-24T19:00:00Z"); t <= Date.parse(STUCK_END); t += H) hour(t, `p${t}`);
+  insertRow(w, { window_end: STUCK_END, payload: h1PayloadAt(w, STUCK_END), updated_at: STUCK_AT });
+  return { w, hour };
+}
+
+const H1_FIRST = iso(Date.parse("2026-11-13T00:00:00Z") + 15 * H); // the h1 window posted on the 24th (16 hourly rows)
+
+test("KV-14. the production row (no newer row posted for the item): retried from payload_json after the gap, up to max_attempts, then final failed", async () => {
+  const { w } = await productionRow(() => new Promise(() => {}));
+  const stored = JSON.parse(row(w, H1, "collecting", STUCK_END).payload_json);
+  // 00:40, inside the gap: the row is still the current entry (its window is the newest), so it waits like any pending row.
+  assert.equal(verdictEntries({ plan: (await runShadowClosures(w.env, { now: at("00:40") })).plan }).find((e) => e.item_id === H1).window_end, STUCK_END);
+  const early = await w.run(at("00:40"), { limit: 20, timeoutMs: 5 });
+  assert.deepEqual([w.calls.length, early.due, early.orphans], [14, 0, 0], "not retried inside the gap");
+  // 01:11: the plan no longer makes an h1 entry, and the only other h1 row is the 24th's, an older window (rule (4)).
+  assert.deepEqual(h1Rows(w), [[H1_FIRST, "posted"], [STUCK_END, "pending"]]);
+  const closures = await runShadowClosures(w.env, { now: at("01:11") });
+  const entries = verdictEntries({ plan: withoutH1(closures.plan), live: [chronosLive()] });
+  assert.equal(entries.some((e) => e.item_id === H1), false, "the stuck row is not among the current entries");
+  const markers = w.env.DB.raw.prepare("SELECT * FROM knowledge_verdict_posts").all();
+  const plan = planVerdictPosts({ entries, markers, now: at("01:11") });
+  // The old code posted planVerdictPosts' current entries only: the stuck row was never among them.
+  assert.equal(plan.filter((e) => !e.orphan).some((e) => e.item_id === H1), false, "before the fix: skipped for ever");
+  assert.deepEqual(plan.filter((e) => e.orphan).map((e) => [e.item_id, e.verdict, e.window_end, e.superseded ?? null]), [[H1, "collecting", STUCK_END, null]], "now: retried, not superseded (only an older window was posted)");
+  const first = await w.run(at("01:11"), { limit: 20, timeoutMs: 5, mapPlan: withoutH1 });
+  assert.deepEqual([first.orphans, first.posted, first.superseded, first.stopped, first.reason], [1, [], [], "transport", "timeout"]);
+  assert.deepEqual(callsFor(w, H1, STUCK_END).map((c) => c.input), [stored], "retried from its stored payload, byte for byte");
+  assert.deepEqual([row(w, H1, "collecting", STUCK_END).status, row(w, H1, "collecting", STUCK_END).attempts], ["pending", 2]);
+  // Every hour at :11 it times out again: 3, 4, then 5 = max_attempts, final failed; never tried after that.
+  for (const [hh, attempts] of [["02", 3], ["03", 4], ["04", 5], ["05", 5], ["06", 5]]) {
+    await w.run(at(`${hh}:11`), { limit: 20, timeoutMs: 5, mapPlan: withoutH1 });
+    assert.equal(row(w, H1, "collecting", STUCK_END).attempts, attempts, hh);
+  }
+  const final = row(w, H1, "collecting", STUCK_END);
+  assert.deepEqual([final.status, final.reason, final.attempts], ["failed", "attempts_exhausted:timeout", KNOWLEDGE_VERDICT_RULES.max_attempts]);
+  assert.equal(callsFor(w, H1, STUCK_END).length, KNOWLEDGE_VERDICT_RULES.max_attempts - 1, "four retries after the first attempt");
+  assert.equal(callsFor(w, H1).length, 1 + KNOWLEDGE_VERDICT_RULES.max_attempts - 1, "the 24th's post and the retries, nothing else for h1");
+  assert.deepEqual(h1Rows(w), [[H1_FIRST, "posted"], [STUCK_END, "failed"]], "no other h1 row written");
+  assert.equal(w.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_posts WHERE status = 'pending'").get().n, 0, "nothing left pending");
+  assert.equal(strikes(w), 0, "timeouts never strike");
+});
+
+test("KV-15. the production row, answered deduplicated: true on its first retry, is marked posted and never sent again", async () => {
+  const { w } = await productionRow(() => ({ outcome: "succeeded", result: { verdict_id: "kv", deduplicated: true } }));
+  const out = await w.run(at("01:11"), { limit: 20, mapPlan: withoutH1 });
+  assert.deepEqual([out.orphans, out.posted, out.superseded, out.stopped], [1, [`${H1}@1:collecting`], [], null], "the stuck row, retried");
+  const r = row(w, H1, "collecting", STUCK_END);
+  assert.deepEqual([r.status, r.reason, r.attempts], ["posted", "deduplicated", 2]);
+  for (const hh of ["02", "03"]) await w.run(at(`${hh}:11`), { limit: 20, mapPlan: withoutH1 });
+  assert.equal(callsFor(w, H1, STUCK_END).length, 1);
+});
+
+// ------------------------------------------------------------------ superseded (orchestrator ruling on the KA2 fix)
+// An orphan collecting row is closed `superseded`, without a call, once the same item@version has a posted collecting
+// row with a later window_end (case a, in an earlier run or earlier in the same run) or a posted final verdict (case b).
+test("KV-14a. case (a), a later window posted in an earlier run: the orphan is superseded:<that window_end>, no call, no attempt, no strike, never retried", async () => {
+  const { w, hour } = await productionRow(() => new Promise(() => {}));
+  // The code before this fix posted the 01:00Z window at 01:11 and passed the stuck row by.
+  const NEWER = "2026-11-25T01:00:00.000Z";
+  hour(at("01:00"), "p1");
+  insertRow(w, { window_end: NEWER, status: "posted", reason: null, attempts: 1, payload: h1PayloadAt(w, NEWER), updated_at: iso(at("01:11")), posted_at: iso(at("01:11")) });
+  const out = await w.run(at("02:11"), { limit: 20, timeoutMs: 5 });
+  assert.deepEqual([out.orphans, out.posted, out.superseded, out.stopped], [1, [], [`${H1}@1:${STUCK_END}`], null]);
+  assert.equal(callsFor(w, H1, STUCK_END).length, 0, "no call");
+  const r = row(w, H1, "collecting", STUCK_END);
+  assert.deepEqual([r.status, r.reason, r.attempts, r.updated_at], ["superseded", `superseded:${NEWER}`, 1, iso(at("02:11"))], "the attempts it had, no more");
+  assert.equal(strikes(w), 0);
+  // (6) Never retried, never touched again, on any later run.
+  for (const hh of ["03", "04", "05", "06", "07", "08"]) await w.run(at(`${hh}:11`), { limit: 20, timeoutMs: 5 });
+  assert.equal(callsFor(w, H1, STUCK_END).length, 0);
+  const later = row(w, H1, "collecting", STUCK_END);
+  assert.deepEqual([later.status, later.attempts, later.updated_at], ["superseded", 1, iso(at("02:11"))]);
+  assert.equal(strikes(w), 0);
+});
+
+test("KV-14b. case (a), the newer window posted earlier in the same run: the orphan is superseded in that run; the platform never gets the older window after the newer one", async () => {
+  const { w, hour } = await productionRow(() => new Promise(() => {}));
+  const NEWER = "2026-11-25T01:00:00.000Z";
+  hour(at("01:00"), "p1");
+  // The plan alone cannot tell (the newer row is not yet posted): the orphan comes due, then the run supersedes it.
+  const closures = await runShadowClosures(w.env, { now: at("01:11") });
+  const plan = planVerdictPosts({ entries: verdictEntries({ plan: closures.plan, live: [chronosLive()] }), markers: w.env.DB.raw.prepare("SELECT * FROM knowledge_verdict_posts").all(), now: at("01:11") });
+  assert.deepEqual(plan.filter((e) => e.item_id === H1).map((e) => [e.window_end, Boolean(e.orphan), e.superseded ?? null]), [[NEWER, false, null], [STUCK_END, true, null]]);
+  const out = await w.run(at("01:11"), { limit: 20, timeoutMs: 5 });
+  assert.deepEqual([out.orphans, out.posted, out.superseded, out.stopped], [1, [`${H1}@1:collecting`], [`${H1}@1:${STUCK_END}`], null], "the current entry posts, then the stuck row is closed");
+  assert.deepEqual(callsFor(w, H1).slice(1).map((c) => c.input.evidence.window_end), [NEWER], "the newer window only: the stuck one is never sent");
+  const r = row(w, H1, "collecting", STUCK_END);
+  assert.deepEqual([r.status, r.reason, r.attempts], ["superseded", `superseded:${NEWER}`, 1]);
+  assert.equal(strikes(w), 0);
+  for (const hh of ["02", "03", "04", "05", "06"]) { hour(at(`${hh}:00`), `p${hh}`); await w.run(at(`${hh}:11`), { limit: 20, timeoutMs: 5 }); }
+  assert.equal(callsFor(w, H1, STUCK_END).length, 0, "(6) never retried");
+  assert.deepEqual([row(w, H1, "collecting", STUCK_END).status, row(w, H1, "collecting", STUCK_END).attempts], ["superseded", 1]);
+});
+
+test("KV-14c. case (b), a posted final verdict: the orphan is superseded:<verdict>, no call; a final-verdict orphan is never superseded", async () => {
+  const { w } = await productionRow(() => new Promise(() => {}));
+  const closed = { item_id: H1, item_version: 1, verdict: "not_better", reason: "Closed in shadow: the note did not make h1 better than its own answer on the hourly chart (Holm-adjusted sign test on the discovery bars).", evidence: { arm: "h1", charts: ["60"], rule: "sign_holm.better" } };
+  insertRow(w, { verdict: "not_better", window_end: "", status: "posted", reason: null, payload: closed, updated_at: iso(at("01:11")), posted_at: iso(at("01:11")) });
+  // Inside the orphan's own gap too: no call is made, so there is nothing to wait for.
+  insertRow(w, { verdict: "collecting", window_end: "2026-11-25T00:30:00.000Z", payload: h1PayloadAt(w, "2026-11-25T00:30:00.000Z"), updated_at: iso(at("01:50")) });
+  const out = await w.run(at("02:11"), { limit: 20, timeoutMs: 5, mapPlan: withoutH1 });
+  assert.deepEqual([out.posted, [...out.superseded].sort(), out.stopped], [[], [`${H1}@1:${STUCK_END}`, `${H1}@1:2026-11-25T00:30:00.000Z`], null]);
+  assert.equal(callsFor(w, H1).length, 1, "only the 24th's post");
+  assert.deepEqual([row(w, H1, "collecting", STUCK_END).status, row(w, H1, "collecting", STUCK_END).reason], ["superseded", "superseded:not_better"]);
+  assert.equal(row(w, H1, "collecting", "2026-11-25T00:30:00.000Z").reason, "superseded:not_better");
+  assert.equal(strikes(w), 0);
+
+  // (5) A pending final verdict (not_tested) whose item has a posted later collecting window and a posted final verdict
+  // is still retried, and ends final failed like any other.
+  const gone = { item_id: "k-gone-moderator-note", item_version: 1, verdict: "not_tested", reason: "Never tested here: the note is for the moderator only, and the shadow arm never calls the moderator.", evidence: { rule: "untestable.moderator_only" } };
+  const o = await world({ answer: (input) => (input.item_id === gone.item_id ? new Promise(() => {}) : { outcome: "succeeded", result: {} }) });
+  await o.run(NOW, { limit: 20 });
+  insertRow(o, { item_id: gone.item_id, verdict: "collecting", window_end: "2026-11-24T23:00:00.000Z", status: "posted", reason: null, payload: { ...gone, verdict: "collecting" }, updated_at: iso(NOW - 2 * H), posted_at: iso(NOW - 2 * H) });
+  insertRow(o, { item_id: gone.item_id, verdict: "live", window_end: "", status: "posted", reason: null, payload: { ...gone, verdict: "live" }, updated_at: iso(NOW - 2 * H), posted_at: iso(NOW - 2 * H) });
+  insertRow(o, { item_id: gone.item_id, verdict: "not_tested", window_end: "", attempts: 0, payload: gone, updated_at: iso(NOW - H) });
+  for (let i = 1; i <= KNOWLEDGE_VERDICT_RULES.max_attempts + 2; i++) {
+    const r = await o.run(NOW + i * H, { limit: 20, timeoutMs: 5 });
+    assert.deepEqual(r.superseded, [], `run ${i}`);
+  }
+  assert.deepEqual(callsFor(o, gone.item_id).map((c) => c.input), Array(KNOWLEDGE_VERDICT_RULES.max_attempts).fill(gone));
+  const r = row(o, gone.item_id, "not_tested");
+  assert.deepEqual([r.status, r.reason], ["failed", "attempts_exhausted:timeout"]);
+});
+
+test("KV-16. a timed-out final verdict: still current, it waits the gap and then posts; no longer current, it is retried from payload_json and ends final", async () => {
+  // Current: the four-hour not_tested times out; inside the gap the run passes it by; after the gap it posts.
+  let slow = true;
+  const w = await world({ answer: (input) => (slow && input.item_id === "k-caution-macro-four-hour" ? new Promise(() => {}) : { outcome: "succeeded", result: {} }) });
+  const first = await w.run(NOW, { limit: 20, timeoutMs: 5 });
+  assert.deepEqual([first.posted.length, first.stopped, first.reason], [11, "transport", "timeout"]);
+  assert.deepEqual([row(w, "k-caution-macro-four-hour", "not_tested").status, row(w, "k-caution-macro-four-hour", "not_tested").attempts], ["pending", 1]);
+  const inside = await w.run(NOW + 30 * 60_000, { limit: 20, timeoutMs: 5 });
+  assert.deepEqual(inside.posted, ["k-exec-plan-scalp-london@1:not_tested", "k-moderator-london-reminder@1:not_tested"], "inside the gap: the others, not it");
+  assert.equal(callsFor(w, "k-caution-macro-four-hour").length, 1);
+  slow = false;
+  const after = await w.run(NOW + H, { limit: 20, timeoutMs: 5 });
+  assert.deepEqual(after.posted, ["k-caution-macro-four-hour@1:not_tested"]);
+  assert.deepEqual([row(w, "k-caution-macro-four-hour", "not_tested").status, row(w, "k-caution-macro-four-hour", "not_tested").attempts], ["posted", 2]);
+
+  // No longer current (the item left the pack): a pending not_tested row (window_end "") is retried on its own and
+  // ends failed after max_attempts timeouts.
+  const gone = { item_id: "k-gone-moderator-note", item_version: 1, verdict: "not_tested", reason: "Never tested here: the note is for the moderator only, and the shadow arm never calls the moderator.", evidence: { rule: "untestable.moderator_only" } };
+  const o = await world({ answer: (input) => (input.item_id === gone.item_id ? new Promise(() => {}) : { outcome: "succeeded", result: {} }) });
+  await o.run(NOW, { limit: 20 });
+  insertRow(o, { item_id: gone.item_id, verdict: "not_tested", window_end: "", attempts: 0, payload: gone, updated_at: iso(NOW - H) });
+  for (let i = 1; i <= KNOWLEDGE_VERDICT_RULES.max_attempts + 2; i++) await o.run(NOW + i * H, { limit: 20, timeoutMs: 5 });
+  assert.deepEqual(callsFor(o, gone.item_id).map((c) => c.input), Array(KNOWLEDGE_VERDICT_RULES.max_attempts).fill(gone));
+  const r = row(o, gone.item_id, "not_tested");
+  assert.deepEqual([r.status, r.reason, r.attempts], ["failed", "attempts_exhausted:timeout", KNOWLEDGE_VERDICT_RULES.max_attempts]);
+  // A kernel failure on the last attempt keeps its own reason.
+  const f = await world({ answer: (input) => (input.item_id === gone.item_id ? { outcome: "failed", reason: "kernel_error" } : { outcome: "succeeded", result: {} }) });
+  await f.run(NOW, { limit: 20 });
+  insertRow(f, { item_id: gone.item_id, verdict: "not_tested", window_end: "", attempts: KNOWLEDGE_VERDICT_RULES.max_attempts - 1, payload: gone, updated_at: iso(NOW - H) });
+  const last = await f.run(NOW + H, { limit: 20 });
+  assert.deepEqual([last.failed, last.exhausted, row(f, gone.item_id, "not_tested").status, row(f, gone.item_id, "not_tested").reason], [1, [`${gone.item_id}@1:not_tested`], "failed", "attempts_exhausted:kernel_error"]);
+});
+
+test("KV-17. an orphan row goes through the same gates: per_run, strikes, not_found, not_registered, the denial, the payload check, the cap, the switch", async () => {
+  // The orphan is a collecting row of an item the plan no longer makes and that has no other row, so it is never
+  // superseded (KV-14a to KV-14c) and each gate is the one that decides.
+  const GONE = "k-caution-gone-60-new-york";
+  const STALE = "2026-11-13T10:00:00.000Z";
+  const orphanWorld = async (answer, { post = true } = {}) => {
+    const w = await world({ answer: (input, n) => (input.item_id === GONE && input.evidence?.window_end === STALE ? answer(input, n) : { outcome: "succeeded", result: {} }) });
+    if (post) await w.run(NOW, { limit: 20 });
+    return w;
+  };
+  const ok = () => ({ outcome: "succeeded", result: {} });
+  // per_run: the current entries first; the orphan waits for the next run.
+  const p = await orphanWorld(ok, { post: false });
+  p.env.DB.raw.exec(KNOWLEDGE_VERDICT_SCHEMA_SQL.join(";"));
+  insertRow(p, { item_id: GONE, window_end: STALE, payload: { item_id: GONE, item_version: 1, verdict: "collecting", reason: "Still collecting in shadow: h1 on the hourly chart has fewer scored bars than the sample a verdict needs.", evidence: { window_start: "2026-11-13T00:00:00.000Z", window_end: STALE, rows: 11, scored: 11, charts: ["60"], rule: "min_sample.discovery" } }, updated_at: iso(NOW - 2 * H) });
+  const capped = await p.run(NOW, { limit: 14 });
+  assert.deepEqual([capped.due, capped.orphans, capped.stopped, p.calls.length, callsFor(p, GONE, STALE).length], [15, 1, "per_run", 14, 0]);
+  const next = await p.run(NOW + H, { limit: 14 });
+  assert.deepEqual([next.posted, next.superseded, row(p, GONE, "collecting", STALE).status], [[`${GONE}@1:collecting`], [], "posted"]);
+
+  // The rest start from a posted world and an orphan two hours old.
+  const withOrphan = async (answer, extra = {}) => {
+    const w = await orphanWorld(answer);
+    insertRow(w, { item_id: GONE, window_end: STALE, payload: gonePayloadAt(w, STALE), updated_at: iso(NOW - 2 * H), ...extra });
+    return w;
+  };
+  const untouched = (w, attempts = 1) => {
+    const r = row(w, GONE, "collecting", STALE);
+    assert.deepEqual([r.status, r.attempts, r.updated_at], ["pending", attempts, iso(NOW - 2 * H)]);
+  };
+  // Strikes: three refusals in the hour stop the run before the orphan.
+  const s = await withOrphan(ok);
+  for (const t of [NOW + H - 30 * 60_000, NOW + H - 20 * 60_000, NOW + H - 10 * 60_000]) s.env.DB.raw.prepare("INSERT INTO knowledge_verdict_strikes (at_ms) VALUES (?)").run(t);
+  assert.equal((await s.run(NOW + H, { limit: 20 })).stopped, "local_budget");
+  assert.equal(callsFor(s, GONE, STALE).length, 0);
+  untouched(s);
+  // An item marked not_found: its orphan is never sent.
+  const nf = await withOrphan(ok);
+  insertRow(nf, { item_id: GONE, verdict: "live", window_end: "", status: "not_found", reason: "knowledge_proposal_not_found", payload: {}, updated_at: iso(NOW - H) });
+  assert.equal((await nf.run(NOW + H, { limit: 20 })).due, 0);
+  assert.equal(callsFor(nf, GONE, STALE).length, 0);
+  // The orphan answered not_found: marked, a strike, never again.
+  const nf2 = await withOrphan(() => ({ outcome: "failed", reason: "knowledge_proposal_not_found" }));
+  assert.deepEqual((await nf2.run(NOW + H, { limit: 20 })).not_found, [`${GONE}@1`]);
+  assert.equal(row(nf2, GONE, "collecting", STALE).status, "not_found");
+  assert.equal(nf2.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_strikes").get().n, 1);
+  await nf2.run(NOW + 3 * H, { limit: 20 });
+  assert.equal(callsFor(nf2, GONE, STALE).length, 1);
+  // Not registered: nothing is marked, the row keeps its attempts and its updated_at.
+  const nr = await withOrphan(() => ({ outcome: "denied", reason: "unknown_agent" }));
+  assert.deepEqual([(await nr.run(NOW + H, { limit: 20 })).status, callsFor(nr, GONE, STALE).length], ["not_registered", 1]);
+  untouched(nr);
+  // A denial backs the agent off: the next run inside the backoff calls nothing.
+  const dn = await withOrphan(() => ({ outcome: "denied", reason: "capability_not_granted" }));
+  assert.equal((await dn.run(NOW + H, { limit: 20 })).stopped, "denied");
+  assert.equal((await dn.run(NOW + H + 20 * 60_000, { limit: 20 })).status, "backoff");
+  assert.equal(callsFor(dn, GONE, STALE).length, 1);
+  untouched(dn);
+  // The payload check: an unreadable payload_json, or one that is not the row's own, is marked invalid without a call.
+  const bad = await withOrphan(ok, { payload: "{not json" });
+  insertRow(bad, { item_id: GONE, verdict: "collecting", window_end: "2026-11-13T11:00:00.000Z", payload: { ...gonePayloadAt(bad, "2026-11-13T11:00:00.000Z"), item_id: "k-other-item" }, updated_at: iso(NOW - 2 * H) });
+  const checked = await bad.run(NOW + H, { limit: 20 });
+  assert.deepEqual([checked.invalid, checked.superseded], [[`${GONE}@1:collecting`, `${GONE}@1:collecting`], []]);
+  assert.deepEqual([row(bad, GONE, "collecting", STALE).reason, row(bad, GONE, "collecting", STALE).payload_json], ["not_an_object", "{not json"], "the stored payload is kept as it was");
+  assert.equal(row(bad, GONE, "collecting", "2026-11-13T11:00:00.000Z").reason, "payload_not_the_row");
+  assert.equal(callsFor(bad, GONE).length, 0, "no call for either");
+  // A pending row already at the cap (left by the code before this fix) is final now, without a call.
+  const cap = await withOrphan(ok, { attempts: KNOWLEDGE_VERDICT_RULES.max_attempts });
+  const capOut = await cap.run(NOW + H, { limit: 20 });
+  assert.deepEqual([capOut.exhausted, callsFor(cap, GONE, STALE).length, row(cap, GONE, "collecting", STALE).reason], [[`${GONE}@1:collecting`], 0, "attempts_exhausted:timeout"]);
+  // Switch off: nothing read, written or called, the pending row as it was.
+  const off = await world({ posts: "off" });
+  off.env.DB.raw.exec(KNOWLEDGE_VERDICT_SCHEMA_SQL.join(";"));
+  insertRow(off, { item_id: GONE, window_end: STALE, payload: { item_id: GONE }, updated_at: iso(NOW - 2 * H) });
+  const closures = await runShadowClosures(off.env, { now: NOW + H });
+  assert.deepEqual(await postKnowledgeVerdicts(off.env, { plan: closures.plan, now: NOW + H }), { status: "disabled" });
+  assert.deepEqual(off.calls, []);
+  untouched(off);
+});
+
+test("KV-18. the plan: a pending row waits retry_gap_ms on its own updated_at; orphans come after the current entries, oldest first", () => {
+  assert.equal(KNOWLEDGE_VERDICT_RULES.retry_gap_ms, 50 * 60_000);
+  const e = (item_id, verdict, window_end = "") => ({ key: `${item_id}@1`, item_id, version: 1, verdict, window_end, payload: {} });
+  const m = (item_id, verdict, window_end, status, updated_at, created_at = updated_at) => ({ item_id, item_version: 1, verdict, window_end, status, attempts: 1, payload_json: JSON.stringify({ item_id }), created_at, updated_at });
+  const now = Date.parse("2026-11-25T01:11:00Z");
+  const fresh = "2026-11-25T00:30:00.000Z", old = "2026-11-25T00:11:58.000Z";
+  assert.equal(planVerdictPosts({ entries: [e("k-a", "not_better")], markers: [m("k-a", "not_better", "", "pending", fresh)], now }).length, 0, "41 minutes: waits");
+  assert.equal(planVerdictPosts({ entries: [e("k-a", "not_better")], markers: [m("k-a", "not_better", "", "pending", old)], now }).length, 1, "59 minutes: due");
+  const plan = planVerdictPosts({
+    entries: [e("k-z", "not_tested"), e("k-c", "collecting", "w9")],
+    markers: [
+      m("k-b", "collecting", "w1", "pending", old, "2026-11-24T20:00:00.000Z"), m("k-a", "collecting", "w1", "pending", old, "2026-11-24T23:00:00.000Z"),
+      m("k-d", "collecting", "w1", "pending", fresh), m("k-e", "worse", "", "failed", old), m("k-c", "collecting", "w1", "posted", old)
+    ],
+    now
+  });
+  assert.deepEqual(plan.map((x) => [x.item_id, x.window_end, Boolean(x.orphan)]), [["k-z", "", false], ["k-c", "w9", false], ["k-b", "w1", true], ["k-a", "w1", true]], "current first, then the oldest orphans; a fresh or a final row waits");
+  assert.deepEqual(plan[2].payload, { item_id: "k-b" });
+});
+
+test("KV-19. supersededBy and the plan: a later posted window or a posted final verdict supersedes a collecting orphan, at once; nothing else does", () => {
+  const m = (verdict, window_end, status, updated_at = "2026-11-25T00:11:58.000Z") => ({ item_id: "k-a", item_version: 1, verdict, window_end, status, attempts: 1, payload_json: "{}", created_at: updated_at, updated_at });
+  const orphan = m("collecting", "2026-11-25T00:00:00.000Z", "pending");
+  assert.equal(supersededBy(orphan, [orphan]), null, "nothing else: retried");
+  assert.equal(supersededBy(orphan, [orphan, m("collecting", "2026-11-24T23:00:00.000Z", "posted")]), null, "(4) only an older window posted: retried");
+  assert.equal(supersededBy(orphan, [orphan, m("collecting", "2026-11-25T02:00:00.000Z", "pending"), m("collecting", "2026-11-25T03:00:00.000Z", "failed")]), null, "a later window not posted does not count");
+  assert.equal(supersededBy(orphan, [orphan, m("collecting", "2026-11-25T01:00:00.000Z", "posted"), m("collecting", "2026-11-25T02:00:00.000Z", "posted")]), "superseded:2026-11-25T02:00:00.000Z", "(a) the newest later window");
+  assert.equal(supersededBy(orphan, [orphan, m("not_tested", "", "posted")]), "superseded:not_tested", "(b)");
+  assert.equal(supersededBy(orphan, [orphan, m("not_better", "", "pending")]), null, "a final verdict not posted does not count");
+  // (5) A final-verdict orphan is never superseded.
+  const finalOrphan = m("not_tested", "", "pending");
+  assert.equal(supersededBy(finalOrphan, [finalOrphan, m("collecting", "2026-11-25T09:00:00.000Z", "posted"), m("live", "", "posted")]), null);
+  // The plan: inside its gap, a superseded orphan is still closed now (no call); a plain one waits; a final one waits.
+  const now = Date.parse("2026-11-25T01:11:00Z"), fresh = "2026-11-25T00:50:00.000Z";
+  const plan = planVerdictPosts({ entries: [], markers: [m("collecting", "2026-11-25T00:00:00.000Z", "pending", fresh), m("collecting", "2026-11-25T01:00:00.000Z", "posted", fresh), { ...m("collecting", "w0", "pending", fresh), item_id: "k-b" }, { ...m("worse", "", "pending", fresh), item_id: "k-b" }], now });
+  assert.deepEqual(plan.map((x) => [x.item_id, x.window_end, x.superseded]), [["k-a", "2026-11-25T00:00:00.000Z", "superseded:2026-11-25T01:00:00.000Z"]]);
+  // (6) A superseded row is done: never an orphan again, and a current entry with its window is not posted.
+  const done = m("collecting", "2026-11-25T00:00:00.000Z", "superseded");
+  assert.deepEqual(planVerdictPosts({ entries: [], markers: [done], now }), []);
+  assert.deepEqual(planVerdictPosts({ entries: [{ key: "k-a@1", item_id: "k-a", version: 1, verdict: "collecting", window_end: "2026-11-25T00:00:00.000Z", payload: {} }], markers: [done], now }), []);
 });
