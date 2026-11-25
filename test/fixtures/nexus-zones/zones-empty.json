@@ -1,0 +1,18 @@
+{
+  "status": "ok",
+  "schema": "cryptophys.zones-view.v1",
+  "generated_at": "2026-11-25T03:40:00.000Z",
+  "window_days": 30,
+  "prior": 20,
+  "readings": [],
+  "zone_blocked": [],
+  "rule_arms": [],
+  "breaker": null,
+  "stances": [],
+  "omega_attribution": [],
+  "omega_advisory": {
+    "closes": 0,
+    "mean_r": null,
+    "advisory": false
+  }
+}

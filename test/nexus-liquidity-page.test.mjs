@@ -51,7 +51,7 @@ test("LQ1 NAV and PAGES: Liquidity at /#/liquidity, key liquidity, icon Droplets
   const shell = src("components/AppShell.tsx");
   const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf('{ title: "Settings"'));
   const labels = [...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Neuron allocation", "Decision audit", "Alerts"]);
+  assert.deepEqual(labels, ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
   assert.match(intel, /\{ label: "Liquidity", href: "\/#\/liquidity", key: "liquidity", icon: Droplets \}/);
   assert.match(shell, /import \{[^}]*\bDroplets\b[^}]*\} from "lucide-react";/);
   assert.ok(!shell.includes("Opening range"), "Opening range comes with its own track (C4)");

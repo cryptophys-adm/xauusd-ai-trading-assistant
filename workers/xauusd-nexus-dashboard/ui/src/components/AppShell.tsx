@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Shapes, Swords, ToggleRight, Trophy, Users, X, Zap, Cpu } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, Layers, LineChart, Menu, Puzzle, Shapes, Swords, ToggleRight, Trophy, Users, X, Zap, Cpu } from "lucide-react";
 import { StatusRow, StatusStrip } from "./HeaderStatus";
 import { omegaCell, roomCell } from "../lib/headerStatus";
 import { useWarRoom } from "../lib/warroom";
@@ -38,6 +38,8 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     // Liquidity (Track C2), lens B of the Positioning & Liquidity analyst on its own page.
     { label: "Chart patterns", href: "/#/patterns", key: "patterns", icon: Shapes },
     { label: "Liquidity", href: "/#/liquidity", key: "liquidity", icon: Droplets },
+    // Zones (ZN1, owner 2026-11-25: "setuju mockup ZN1"): Z5's demand and supply zones, the zone breaker and its record.
+    { label: "Zones", href: "/#/zones", key: "zones", icon: Layers },
     { label: "Neuron allocation", href: "/#/neurons", key: "neurons", icon: Cpu },
     { label: "Decision audit", href: "/#/audit", key: "audit", icon: BookOpenCheck },
     { label: "Alerts", href: "/#/alerts", key: "alerts", icon: BellRing }

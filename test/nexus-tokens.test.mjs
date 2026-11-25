@@ -26,7 +26,9 @@ const DIRECTION_FILES = [
   // Track C3: the Chart patterns page.
   "pages/Patterns.tsx",
   // FS1: the Feature switches page (no direction colour at all: on is the ok cyan).
-  "pages/Switches.tsx"
+  "pages/Switches.tsx",
+  // ZN1: the Zones page (a side's word and a zone type's glyph only; rates, outcomes and R neutral).
+  "pages/Zones.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

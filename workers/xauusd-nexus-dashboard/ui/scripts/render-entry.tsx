@@ -3,7 +3,7 @@
 // it with renderToStaticMarkup over the fixture, the routes' not_found bodies, each path nulled in turn and each array
 // emptied, and fails on a throw, "NaN", "undefined" or "[object Object]" in the markup. A page that joins Intelligence
 // (Track C) adds its view and its test/fixtures/nexus-intel/*.json here (C2: the Liquidity page's LiquidityView; C3: the
-// Chart patterns page's PatternsView).
+// Chart patterns page's PatternsView; ZN1: the Zones page's ZonesView over test/fixtures/nexus-zones/*.json).
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import lens from "../../../../test/fixtures/nexus-intel/lens.json";
@@ -28,6 +28,14 @@ import fs1Revert from "../../../../test/fixtures/nexus-fs1/feature-switches-reve
 import fs1Replies from "../../../../test/fixtures/nexus-fs1/post-replies.json";
 import fs1Record from "../../../../test/fixtures/nexus-fs1/feature-switches-record.json";
 import fs1Hold from "../../../../test/fixtures/nexus-fs1/feature-switches-hold.json";
+import zonesHeld from "../../../../test/fixtures/nexus-zones/zones.json";
+import zonesClear from "../../../../test/fixtures/nexus-zones/zones-clear.json";
+import zonesEmpty from "../../../../test/fixtures/nexus-zones/zones-empty.json";
+import zonesOffBody from "../../../../test/fixtures/nexus-zones/zones-off.json";
+import zonesErrorBody from "../../../../test/fixtures/nexus-zones/zones-error.json";
+import zonesSwitches from "../../../../test/fixtures/nexus-zones/feature-switches-held.json";
+import { BreakerPanel, ZonesLoading, ZonesUnread, ZonesView } from "../src/pages/Zones";
+import { NO_EFFECT_NOTE, breakerOf } from "../src/lib/zones";
 import { ConfirmBody, SwitchRowView, SwitchesLoading, SwitchesView, type RowStatus } from "../src/pages/Switches";
 import { ConfirmDialog } from "../src/components/ConfirmDialog";
 import { POST_ERRORS, confirmText, rowOf, type Change } from "../src/lib/featureSwitches";
@@ -221,7 +229,54 @@ const FS1_ROW_VIEW = (canControl: boolean, open = false) => ({ d }: { d: any }) 
   return r ? <SwitchRowView r={r} canControl={canControl} open={open} onTip={() => {}} onChange={() => {}} /> : <p>no row</p>;
 };
 
+/**
+ * ZN1, the Zones page (Intelligence › Zones, the owner-approved mockup) over GET /api/zones: test/fixtures/nexus-zones/
+ * *.json, the seed's real zonesView answers (test/support/nexus-zones-seed.mjs): held (zone_ahead, tp and stop held by the
+ * tick of 2026-11-24 07:22 UTC), clear (nothing held), empty (no table yet), off (404) and error (500), with the held
+ * state's read-only GET /api/feature-switches for the holds' since and until. ZONES_OWN_TIMES and ZONES_EFFECTIVE are the
+ * page's own stand-ins for fields xauusd may add to breaker.held (since, until, effective); they are not a contract.
+ */
+const ZH = zonesHeld as any;
+const heldWith = (extra: Record<string, Record<string, unknown>>) => merged(ZH, { breaker: { held: ZH.breaker.held.map((h: any) => ({ ...h, ...(extra[h.rule] ?? {}) })) } });
+export const ZONES_OWN_TIMES = heldWith({ zone_ahead: { since: "2026-11-24T08:00:00.000Z", until: "2026-12-01T08:00:00.000Z" } });
+export const ZONES_EFFECTIVE = heldWith({ tp: { effective: false }, stop: { effective: true } });
+const zonesUnread = (code: string): Poll => ({ data: null, error: code, loading: false, refresh: () => {}, lastOk: 1, lastFail: 2, failures: 1, stale: false, intervalMs: 120_000 });
+const zonesStale: Poll = { data: ZH, error: "/api/zones 500 zones_unavailable", loading: false, refresh: () => {}, lastOk: 1, lastFail: 2, failures: 4, stale: true, intervalMs: 120_000 };
+const HELD_SPAN = ["since", "11-24 07:22 UTC · 14:22 GMT+7", "until", "12-01 07:22 UTC · 14:22 GMT+7"];
+const ZONES_PANELS = ["Zone breaker", "Readings", "Held back", "Rule arms", "Stances", "Omega attribution"];
+
 export const VIEWS: Entry[] = [
+  {
+    name: "ZonesHeld", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: zonesHeld,
+    shows: [...ZONES_PANELS, ...HELD_SPAN, "Zones", "Intelligence · Z5 · demand and supply zones", "zone readings on", "cryptophys.zones-view.v1", "03:40 UTC · 10:40 GMT+7",
+      "checked 11-24 07:22 UTC · 14:22 GMT+7", "Feature switches", "href=\"/#/switches\"", "bg-late-fill", ">clear<", "no hold", "rule:tp_typed", "rule:stop_skip", ">block<",
+      "edge +0.059", "own 43% n153 · untyped 37% n86", "+0.15R", "+0.10R vs +0.30R", "+0.05R vs +0.20R", "tripped", "Rule version tp1_kz:on+zone_ahead@1.",
+      "30 days · prior 20", "▲</span> demand", "▼</span> supply", "untyped", "from_above", "All readings", ">245<", ">40%<", ">0.62<", ">0.51<", "aria-sort=\"ascending\"",
+      "▲ BUY", "▼ SELL", "−0.15R", "75%", "100%", "−0.1 · 0 · +0.4R", "−0.20R", "7 days · 672 decisions", "WAIT", ">24<",
+      "intent:level_source_zone", "pm:zone_trail", "−0.009R", "−0.017R", ">advisory<", ">16<"],
+    hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", NO_EFFECT_NOTE, "price", "feed scale", "broker scale", "also seen by"],
+    missing: [zonesOffBody]
+  },
+  { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesHeld, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
+  { name: "ZonesHeldOwnTimes", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_OWN_TIMES, shows: ["11-24 08:00 UTC · 15:00 GMT+7", "12-01 08:00 UTC · 15:00 GMT+7", "12-01 07:22 UTC · 14:22 GMT+7"] },
+  { name: "ZonesEffective", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_EFFECTIVE, shows: [`Held: tp joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`], hides: [`Held: stop joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`] },
+  { name: "ZonesClear", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesClear,
+    shows: [">clear<", "no hold", "n &lt; 30", "— vs —", "n0", "edge +0.059", "0 resolved · 30 days", "Fills once zone_ahead holds a decision back and its setup resolves.", "Fills while a Z2b rule (tp, stop) is on and its plans resolve.", "0 zone-attributed closes · 30 days", "no advisory"],
+    hides: ["bg-late-fill", ">tripped<", ">since<"] },
+  { name: "ZonesEmpty", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesEmpty,
+    shows: [...ZONES_PANELS, "zone readings on", "no breaker tick yet", "The breaker ticks hourly once ZONE_READINGS is on.", "0 readings · 30 days", "Readings arrive once a decision&#x27;s 8 closed 15m bars are in.",
+      "0 decisions · 7 days", "Fills from the Decision Engine&#x27;s records.", "0 zone-attributed closes · 30 days", "Fills when Omega closes a trade a zone placed or managed.", "no advisory"],
+    hides: ["Checks", "All readings", "checked "] },
+  { name: "ZonesOff", View: ZonesView, fixture: zonesOffBody, shows: ["Zones", "zone readings off", "ZONE_READINGS off · nothing recorded, no hold reaches a decision", "/api/zones 404 · zone_readings_off", "Feature switches", "href=\"/#/switches\""], hides: ["zone readings on", "Zone breaker"] },
+  { name: "ZonesUnread500", View: ({ d }) => <ZonesUnread poll={zonesUnread(`/api/zones 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: zonesErrorBody, shows: ["/api/zones 500 zones_unavailable", "retry 2m", "last ok", "Retry now", "zone readings on"] },
+  { name: "ZonesUnread502", View: ({ d }) => <ZonesUnread poll={zonesUnread(`/api/zones 502 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "proxy_failed" }, shows: ["/api/zones 502 proxy_failed", "Retry now"], hides: ["zone readings on"] },
+  { name: "ZonesStale", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} poll={zonesStale} />, fixture: zonesHeld, shows: ["stale", "Retry now", "Zone breaker", "rule:tp_typed"] },
+  { name: "ZonesLoading", View: () => <ZonesLoading />, fixture: zonesHeld, shows: ["Zones", "animate-pulse"], hides: ["zone readings"] },
+  { name: "ZonesSortedByN", View: ({ d }) => <ZonesView d={d} initialSort={{ key: "n", dir: "desc" }} />, fixture: zonesHeld, shows: ["aria-sort=\"descending\"", "All readings"] },
+  // The breaker and the switches' body as the varied body, so each of their paths is nulled (the page's variants are capped).
+  { name: "ZonesBreaker", View: ({ d }) => <BreakerPanel b={breakerOf({ breaker: d }, zonesSwitches)} />, fixture: ZH.breaker, shows: [...HELD_SPAN, "rule:stop_skip", "tripped"] },
+  { name: "ZonesSwitches", View: ({ d }) => <ZonesView d={zonesHeld} switches={d} />, fixture: zonesSwitches, shows: [...HELD_SPAN] },
+
   {
     name: "FS1Owner", View: SwitchesView, fixture: fs1Owner,
     shows: [...FS1_GROUPS, "Feature switches", "Settings · owner", "3 overrides", "as of 03:40 UTC · 10:40 GMT+7", "omega_settings", "role=\"switch\"", "aria-pressed=\"true\"",

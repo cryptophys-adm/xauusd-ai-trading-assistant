@@ -1,0 +1,285 @@
+{
+  "status": "ok",
+  "schema": "cryptophys.zones-view.v1",
+  "generated_at": "2026-11-25T03:40:00.000Z",
+  "window_days": 30,
+  "prior": 20,
+  "readings": [
+    {
+      "zone_type": "demand",
+      "approach": "from_above",
+      "zone_strength": "medium",
+      "n": 34,
+      "held": 16,
+      "broke": 9,
+      "neither": 9,
+      "held_rate": 0.471,
+      "held_rate_shrunk": 0.446,
+      "mfe_atr": 0.63,
+      "mae_atr": 0.5
+    },
+    {
+      "zone_type": "demand",
+      "approach": "from_above",
+      "zone_strength": "strong",
+      "n": 22,
+      "held": 12,
+      "broke": 4,
+      "neither": 6,
+      "held_rate": 0.545,
+      "held_rate_shrunk": 0.478,
+      "mfe_atr": 0.72,
+      "mae_atr": 0.38
+    },
+    {
+      "zone_type": "demand",
+      "approach": "from_above",
+      "zone_strength": "weak",
+      "n": 18,
+      "held": 6,
+      "broke": 7,
+      "neither": 5,
+      "held_rate": 0.333,
+      "held_rate_shrunk": 0.371,
+      "mfe_atr": 0.62,
+      "mae_atr": 0.52
+    },
+    {
+      "zone_type": "demand",
+      "approach": "from_below",
+      "zone_strength": "medium",
+      "n": 6,
+      "held": 1,
+      "broke": 3,
+      "neither": 2,
+      "held_rate": 0.167,
+      "held_rate_shrunk": 0.349,
+      "mfe_atr": 0.31,
+      "mae_atr": 0.56
+    },
+    {
+      "zone_type": "demand",
+      "approach": "inside",
+      "zone_strength": "medium",
+      "n": 12,
+      "held": 5,
+      "broke": 4,
+      "neither": 3,
+      "held_rate": 0.417,
+      "held_rate_shrunk": 0.409,
+      "mfe_atr": 0.67,
+      "mae_atr": 0.52
+    },
+    {
+      "zone_type": "mixed",
+      "approach": "from_above",
+      "zone_strength": "medium",
+      "n": 8,
+      "held": 3,
+      "broke": 3,
+      "neither": 2,
+      "held_rate": 0.375,
+      "held_rate_shrunk": 0.396,
+      "mfe_atr": 0.71,
+      "mae_atr": 0.59
+    },
+    {
+      "zone_type": "supply",
+      "approach": "from_below",
+      "zone_strength": "medium",
+      "n": 28,
+      "held": 12,
+      "broke": 8,
+      "neither": 8,
+      "held_rate": 0.429,
+      "held_rate_shrunk": 0.418,
+      "mfe_atr": 0.68,
+      "mae_atr": 0.49
+    },
+    {
+      "zone_type": "supply",
+      "approach": "from_below",
+      "zone_strength": "strong",
+      "n": 16,
+      "held": 8,
+      "broke": 4,
+      "neither": 4,
+      "held_rate": 0.5,
+      "held_rate_shrunk": 0.447,
+      "mfe_atr": 0.7,
+      "mae_atr": 0.51
+    },
+    {
+      "zone_type": "supply",
+      "approach": "from_below",
+      "zone_strength": "weak",
+      "n": 14,
+      "held": 4,
+      "broke": 6,
+      "neither": 4,
+      "held_rate": 0.286,
+      "held_rate_shrunk": 0.355,
+      "mfe_atr": 0.48,
+      "mae_atr": 0.63
+    },
+    {
+      "zone_type": "supply",
+      "approach": "inside",
+      "zone_strength": "medium",
+      "n": 9,
+      "held": 3,
+      "broke": 4,
+      "neither": 2,
+      "held_rate": 0.333,
+      "held_rate_shrunk": 0.382,
+      "mfe_atr": 0.6,
+      "mae_atr": 0.66
+    },
+    {
+      "zone_type": "untyped",
+      "approach": "from_above",
+      "zone_strength": "none",
+      "n": 41,
+      "held": 16,
+      "broke": 14,
+      "neither": 11,
+      "held_rate": 0.39,
+      "held_rate_shrunk": 0.395,
+      "mfe_atr": 0.62,
+      "mae_atr": 0.48
+    },
+    {
+      "zone_type": "untyped",
+      "approach": "from_below",
+      "zone_strength": "none",
+      "n": 37,
+      "held": 13,
+      "broke": 14,
+      "neither": 10,
+      "held_rate": 0.351,
+      "held_rate_shrunk": 0.37,
+      "mfe_atr": 0.53,
+      "mae_atr": 0.55
+    }
+  ],
+  "zone_blocked": [
+    {
+      "side": "BUY",
+      "n": 30,
+      "mean_r": 0.15,
+      "fill_rate": 1
+    },
+    {
+      "side": "SELL",
+      "n": 12,
+      "mean_r": -0.15,
+      "fill_rate": 0.75
+    }
+  ],
+  "rule_arms": [
+    {
+      "rule": "stop_skip",
+      "n": 30,
+      "acted_mean_r": 0.05,
+      "base_mean_r": 0.2,
+      "delta_r": -0.15
+    },
+    {
+      "rule": "tp_typed",
+      "n": 30,
+      "acted_mean_r": 0.1,
+      "base_mean_r": 0.3,
+      "delta_r": -0.2
+    }
+  ],
+  "breaker": {
+    "checked_at": "2026-11-24T07:22:00.000Z",
+    "rule_version": "tp1_kz:on+zone_ahead@1",
+    "held": [
+      {
+        "rule": "zone_ahead",
+        "by": [
+          "block"
+        ]
+      },
+      {
+        "rule": "tp",
+        "by": [
+          "rule:tp_typed"
+        ]
+      },
+      {
+        "rule": "stop",
+        "by": [
+          "rule:stop_skip"
+        ]
+      }
+    ],
+    "checks": {
+      "typing": {
+        "own_n": 153,
+        "untyped_n": 86,
+        "own_held_rate": 0.431,
+        "untyped_held_rate": 0.372,
+        "edge": 0.059,
+        "tripped": false
+      },
+      "block": {
+        "n": 30,
+        "mean_r": 0.15,
+        "tripped": true
+      },
+      "rules": {
+        "tp_typed": {
+          "n": 30,
+          "acted_mean_r": 0.1,
+          "base_mean_r": 0.3,
+          "tripped": true
+        },
+        "stop_skip": {
+          "n": 30,
+          "acted_mean_r": 0.05,
+          "base_mean_r": 0.2,
+          "tripped": true
+        }
+      }
+    }
+  },
+  "stances": [
+    {
+      "stance": "BUY",
+      "n": 75,
+      "share": 0.112,
+      "zone_blocked": 0
+    },
+    {
+      "stance": "SELL",
+      "n": 55,
+      "share": 0.082,
+      "zone_blocked": 0
+    },
+    {
+      "stance": "WAIT",
+      "n": 542,
+      "share": 0.807,
+      "zone_blocked": 24
+    }
+  ],
+  "omega_attribution": [
+    {
+      "source": "intent:level_source_zone",
+      "n": 8,
+      "mean_r": -0.001
+    },
+    {
+      "source": "pm:zone_trail",
+      "n": 8,
+      "mean_r": -0.017
+    }
+  ],
+  "omega_advisory": {
+    "closes": 16,
+    "mean_r": -0.009,
+    "advisory": true
+  }
+}

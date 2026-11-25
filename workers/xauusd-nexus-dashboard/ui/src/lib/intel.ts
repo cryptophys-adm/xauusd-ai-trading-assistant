@@ -40,6 +40,17 @@ export const CHART_PATTERNS_READS = {
 } as const;
 export type ChartPatternsRead = keyof typeof CHART_PATTERNS_READS;
 
+/**
+ * The Zones page's reads (ZN1, Z5's GET /api/zones): the view (120 s) and the read-only feature switches (120 s), whose
+ * ZONE_AHEAD_MODE and ZONE_AIM_OFF `zone_hold` carry a hold's since and until while the view's breaker.held has none.
+ * Both reach the AI Worker through the Nexus /api/* proxy; a failed switches read only leaves the times out.
+ */
+export const ZONES_READS = {
+  zones: { path: "/api/zones", everyMs: 120_000, chart: false },
+  switches: { path: "/api/feature-switches", everyMs: 120_000, chart: false }
+} as const;
+export type ZonesRead = keyof typeof ZONES_READS;
+
 /** The allow-list's paths. */
 export const allowedPaths = (reads: Record<string, { path: string }>): string[] => Object.values(reads).map((r) => r.path);
 
