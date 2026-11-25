@@ -53,9 +53,9 @@ test("FSU1 NAV: Settings › Feature switches is the last group, at /#/switches,
   assert.deepEqual([...settings.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Feature switches"], "one item in the group");
   assert.match(settings, /\{ title: "Settings", items: \[\{ label: "Feature switches", href: "\/#\/switches", key: "switches", icon: ToggleRight \}\] \}\n\];/);
   assert.match(shell, /import \{[^}]*\bToggleRight\b[^}]*\} from "lucide-react";/);
-  // The Intelligence group is unchanged and still ends with Alerts.
+  // The Intelligence group still ends with Alerts (ZN1 added Zones after Liquidity).
   const intel = nav.slice(nav.indexOf('{ title: "Intelligence"'), nav.indexOf('{ title: "Settings"'));
-  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Neuron allocation", "Decision audit", "Alerts"]);
+  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
   const app = src("App.tsx");
   assert.match(app, /import Switches from "\.\/pages\/Switches";/);
   assert.match(app, /neurons: Neurons, councils: Councils, switches: Switches \};/);
@@ -320,7 +320,11 @@ test("FSU12 one write path: POST /omega/api/feature-switches from the controls o
   const root = new URL("../workers/xauusd-nexus-dashboard/ui/src/", import.meta.url);
   const files = readdirSync(root, { recursive: true }).map(String).filter((f) => /\.(tsx?)$/.test(f));
   const hits = files.filter((f) => /feature-switches/.test(readFileSync(new URL(f, root), "utf8")));
-  assert.deepEqual(hits.sort(), ["lib/featureSwitches.ts", "pages/Switches.tsx"]);
+  const omegaRoute = hits.filter((f) => /\/omega\/api\/feature-switches/.test(readFileSync(new URL(f, root), "utf8")));
+  assert.deepEqual(omegaRoute.sort(), ["lib/featureSwitches.ts", "pages/Switches.tsx"]);
+  // ZN1: the Zones page reads the AI Worker's read-only GET /api/feature-switches (lib/intel.ts ZONES_READS), never this route.
+  assert.deepEqual(hits.filter((f) => !omegaRoute.includes(f)).sort(), ["lib/intel.ts", "lib/zones.ts", "pages/Zones.tsx"]);
+  assert.match(src("lib/intel.ts"), /switches: \{ path: "\/api\/feature-switches", everyMs: 120_000, chart: false \}/);
   assert.ok(pg.split("\n").filter((l) => l.includes("feature-switches")).every((l) => /^\s*\/\//.test(l)), "the page names the route in comments only");
 });
 

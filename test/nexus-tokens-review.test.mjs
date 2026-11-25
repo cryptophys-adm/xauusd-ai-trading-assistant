@@ -21,7 +21,9 @@ const REVIEW_FILES = [
   // Track C3: the Chart patterns page, the charts' lines and the pattern agents' rules.
   "pages/Patterns.tsx", "lib/lines-primitive.ts", "lib/patternRules.ts",
   // FS1: the Feature switches page and its pure model.
-  "pages/Switches.tsx", "lib/featureSwitches.ts"
+  "pages/Switches.tsx", "lib/featureSwitches.ts",
+  // ZN1: the Zones page and its pure model.
+  "pages/Zones.tsx", "lib/zones.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {
