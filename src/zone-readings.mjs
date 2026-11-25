@@ -529,6 +529,35 @@ export function applyZoneHolds(env, held) {
 }
 
 /**
+ * ZN1, pure: does the stored hold `hold` of `rule` change a decision right now under `env` (the run's env with the FS1
+ * overrides applied)? Exactly when applyZoneHolds would apply it, so the two cannot disagree: ZONE_READINGS on, the
+ * hold made on `env`'s rule version (or carrying none), and the rule on under the owner's switches. zone_ahead: the
+ * check in the guardrails (ZONE_PRIORITY on, KEY_LEVEL_ZONE_TYPES not off, ZONE_AHEAD_MODE 'trend' or 'all'); tp,
+ * stop, factor: Z2b in force (ZONE_PRIORITY on, KEY_LEVEL_ZONE_TYPES not off) with that token not in ZONE_AIM_OFF.
+ * Any other rule: false. One rule's hold never changes whether another acts, so each is decided on its own.
+ */
+export function zoneHoldEffective(env, rule, hold) {
+  if (!ZONE_HOLDABLE.includes(rule)) return false;
+  return applyZoneHolds(env, { [rule]: hold }).held.some((x) => x.rule === rule);
+}
+
+/**
+ * ZN1, pure: a stored breaker hold's { since, until } (ISO strings as zoneHoldStep wrote them, else null). The one
+ * reader of both FS1's zone_hold (zoneHoldRows) and GET /api/zones' breaker.held, so the two always show the same.
+ */
+/**
+ * ZN1, pure: is a stored breaker hold one of the current rule version (`rv`, ruleVersionOf of the env in force), or one
+ * carrying none? The one filter of both FS1's zone_hold (zoneHoldRows) and GET /api/zones' breaker.held: a hold made
+ * on an older rule version is released by the version change and shows in neither.
+ */
+export const zoneHoldCurrent = (hold, rv) => Boolean(hold && typeof hold === "object" && (typeof hold.rule_version !== "string" || hold.rule_version === rv));
+
+export function zoneHoldTimes(hold) {
+  const h = hold && typeof hold === "object" ? hold : {};
+  return { since: typeof h.since === "string" ? h.since : null, until: typeof h.until === "string" ? h.until : null };
+}
+
+/**
  * FS1 (src/feature-switch-store.mjs): the breaker's holds for the panel rows, from one KV read of ZONE_BREAKER_KEY, as
  * { zone_ahead: { since, until, by } | null, aim: { tp, stop, factor } | null } (aim lists only the tokens held). A
  * hold made on another rule version than `env`'s (the owner changed a zone switch; the next tick releases it) is left
@@ -540,8 +569,8 @@ export async function zoneHoldRows(env) {
   try {
     const st = parse(await env?.SIGNAL_CACHE?.get?.(ZONE_BREAKER_KEY), null);
     const rv = ruleVersionOf(env);
-    const row = (h) => (h && typeof h === "object" && (typeof h.rule_version !== "string" || h.rule_version === rv)
-      ? { since: typeof h.since === "string" ? h.since : null, until: typeof h.until === "string" ? h.until : null, by: Array.isArray(h.by) ? h.by.filter((b) => typeof b === "string") : [] } : null);
+    const row = (h) => (zoneHoldCurrent(h, rv)
+      ? { ...zoneHoldTimes(h), by: Array.isArray(h.by) ? h.by.filter((b) => typeof b === "string") : [] } : null);
     const aim = Object.fromEntries(ZONE_AIM_TOKENS.map((t) => [t, row(st?.held?.[t])]).filter(([, v]) => v));
     return { zone_ahead: row(st?.held?.zone_ahead), aim: Object.keys(aim).length ? aim : null };
   } catch { return none; }
@@ -682,7 +711,9 @@ export async function runZoneBreaker(env, { now = Date.now(), send = null, force
 /**
  * The Nexus zones view: readings by type x approach x strength (n, held rate shrunk toward the overall rate with a
  * prior of 20), the zone_blocked cohort per side (n, mean R, fill rate), the rule arms, the breaker's state, the
- * stance shares of the last 7 days and Omega's attribution. Words, ATR and R only; no account or identity key, no
+ * stance shares of the last 7 days and Omega's attribution. breaker.held[]: { rule, by, since, until, effective } (ZN1:
+ * since/until as FS1's zone_hold shows them; effective, whether the hold changes a decision now). Words, ATR, R and
+ * booleans only; no account or identity key, no
  * price. SELECT only: a table that does not exist yet reads as []. Throws on any other read failure.
  */
 export async function zonesView(env, { now = Date.now() } = {}) {
@@ -703,7 +734,12 @@ export async function zonesView(env, { now = Date.now() } = {}) {
   const rule_arms = (await safeAll(db, "SELECT rule, COUNT(*) AS n, AVG(acted_r) AS acted, AVG(base_r) AS base FROM zone_rule_arms WHERE status = 'resolved' AND opened_at >= ? GROUP BY rule ORDER BY rule", [since]))
     .map((r) => ({ rule: r.rule, n: Number(r.n), acted_mean_r: r3(Number(r.acted)), base_mean_r: r3(Number(r.base)), delta_r: r3(Number(r.acted) - Number(r.base)) }));
   const st = parse(await env.SIGNAL_CACHE?.get?.(ZONE_BREAKER_KEY), null);
-  const breaker = st ? { checked_at: st.checked_at ?? null, rule_version: st.rule_version ?? null, held: Object.entries(st.held ?? {}).map(([rule, x]) => ({ rule, by: Array.isArray(x?.by) ? x.by : [] })), checks: st.checks ?? null } : null;
+  // ZN1: only the holds of the current rule version (zoneHoldCurrent, FS1's filter); each hold's since/until
+  // (zoneHoldTimes, FS1's reader) and whether it acts now (zoneHoldEffective) under the
+  // env the Decision Engine runs on: the FS1 overrides applied (already, behind the fetch entry; a no-op then).
+  let runEnv = env;
+  if (st) { try { runEnv = await (await import("./feature-switch-store.mjs")).withFeatureSwitches(env); } catch { runEnv = env; } }
+  const breaker = st ? { checked_at: st.checked_at ?? null, rule_version: st.rule_version ?? null, held: Object.entries(st.held ?? {}).filter(([, x]) => zoneHoldCurrent(x, ruleVersionOf(runEnv))).map(([rule, x]) => ({ rule, by: Array.isArray(x?.by) ? x.by : [], ...zoneHoldTimes(x), effective: zoneHoldEffective(runEnv, rule, x) })), checks: st.checks ?? null } : null;
   const stanceRows = await safeAll(db, `SELECT stance, COUNT(*) AS n, SUM(CASE WHEN json_extract(decision_json, '$.zone_blocked') IS NOT NULL THEN 1 ELSE 0 END) AS zone_blocked
     FROM engine_decisions WHERE bar_close >= ? GROUP BY stance ORDER BY stance`, [iso(now - 7 * DAY)]);
   const nStances = stanceRows.reduce((a, r) => a + Number(r.n), 0);
