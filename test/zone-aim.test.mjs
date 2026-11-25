@@ -395,9 +395,9 @@ test("ZA-16 the frozen 2026-11-20 22:00 capture: Z2b moves no price there, label
   }
 });
 
-test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 68e6e3f8… (B5 moved it, after Z3a); the behaviour hash is ecfe3f90…", async () => {
+test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 700aa453… (B5 moved it, after Z3a); the behaviour hash is ecfe3f90…", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "68e6e3f823a55494d04f03ee98f9bda8be2b7095665d296305cd5e84fc9eac01");
+  assert.equal(ENGINE_CODE_HASH, "700aa453179e96daee7a8b4c80d7e77634ff35dfe1c44569273102d41468213b");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

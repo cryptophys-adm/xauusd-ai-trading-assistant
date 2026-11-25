@@ -19,11 +19,15 @@ export function lineBreakerVerdict(closes?: Array<number | { r?: unknown }>, opt
 export function normalizeDoc(raw: unknown, options?: { now?: number }): { doc: Record<string, any>; bumped: string[] };
 export function breakerOff(doc: unknown): string[];
 export function offLinesOf(doc: unknown, envOff?: string[]): string[];
-export function resetPmLineMemoForTests(): void;
+export function clearPmLineMemo(): void;
 export function readPmLinesLive(env: unknown, options?: { now?: number }): Promise<{ off: string[] }>;
 export function linesOffAt(history: unknown, t: number): string[];
 export function readPmLineHistory(db: unknown, options?: { limit?: number }): Promise<Array<{ at_ms: number; off: string[] }>>;
 export function riskUsdOf(open: unknown, options?: { tickValuePer001?: number }): number | null;
+export const PM_LINE_ACK_WINDOW_MS: number;
+export const PM_LINE_DEFER_MS: number;
+/** A close intent not done (and not failed) within PM_LINE_ACK_WINDOW_MS before the deal's close: possibly that close with its ack lost. */
+export function unackedCloseBefore(intents?: Array<{ kind?: string; status?: string; created_ms?: number }>, closeMs?: number): boolean;
 export function closeCause(intents?: Array<{ id: string; kind: string; created_ms: number }>, closeMs?: number): { intent_id: string; at_ms: number; via: "close" | "change" } | null;
 export function holdR(input: Record<string, any>): { r: number | null; final: boolean };
 export function lineOffMessage(id: string, verdict: { n: number; mean_r: number | null }): string;

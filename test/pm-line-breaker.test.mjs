@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  PM_LINES, PM_LINE_IDS, PM_FAST_LINE_IDS, PM_LINE_BREAKER_KEY, PM_LINE_RULE, lineBreakerVerdict, pmLinesOffEnv, readPmLinesLive, resetPmLineMemoForTests,
-  pmLineBreakerTick, setPmLine, normalizeDoc, linesOffAt, readPmLineHistory, closeCause, riskUsdOf, holdR, lineTag, pmLinesView, offLinesOf
+  PM_LINES, PM_LINE_IDS, PM_FAST_LINE_IDS, PM_LINE_BREAKER_KEY, PM_LINE_RULE, lineBreakerVerdict, pmLinesOffEnv, readPmLinesLive, clearPmLineMemo,
+  pmLineBreakerTick, setPmLine, normalizeDoc, linesOffAt, readPmLineHistory, closeCause, riskUsdOf, holdR, lineTag, pmLinesView, offLinesOf, unackedCloseBefore, PM_LINE_DEFER_MS
 } from "../src/pm-line-breaker.mjs";
 import { positionFacts, positionAction, pmLinesJson, runPositionManager, readPositionManager, heldExitPrice, positionReport } from "../src/position-manager.mjs";
 import { ensurePositionSchema, resetPositionSchemaCacheForTests } from "../src/position-actions.mjs";
@@ -44,7 +44,7 @@ function kv() {
 }
 function world() {
   resetPositionSchemaCacheForTests();
-  resetPmLineMemoForTests();
+  clearPmLineMemo();
   const db = d1();
   db.raw.exec("CREATE TABLE omega_intents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL, updated_ms INTEGER)");
   db.raw.exec("CREATE TABLE ea_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, deal_ticket INTEGER, position_ticket INTEGER, side TEXT, volume REAL, entry_price REAL, exit_price REAL, profit REAL, commission REAL DEFAULT 0, swap REAL DEFAULT 0, currency TEXT, reason TEXT, closed_ms INTEGER)");
@@ -119,7 +119,7 @@ test("B5-3 the tick: 14 closes at -0.1R do not trip; the 15th trips once (KV, on
   assert.equal(events(env, "pm_line_off").length, 1);
   assert.equal(sent.length, 1);
   // The live read: the line is off for the Position Manager.
-  resetPmLineMemoForTests();
+  clearPmLineMemo();
   assert.deepEqual((await readPmLinesLive(env, { now: NOW + 900_000 })).off, ["cut_loss"]);
 });
 
@@ -145,6 +145,43 @@ test("B5-4 what counts as a close: one the line sent, else the last applied stop
   assert.equal(riskUsdOf({ r_dist: 10, volume: 0.02 }), 20);
   assert.equal(riskUsdOf({ entry: 2000, sl: 1995, volume: 0.01 }), 5);
   assert.equal(riskUsdOf({}), null);
+});
+
+test("B5-15 a lost-ack close (expired or pending, not failed) right before the deal: no credit to the last stop/target change and the ticket stays unseen; once the intent reads done (CA1), the close's own line is credited; 30 min after the close it falls back", async () => {
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "expired", created_ms: 9_000 }], 10_000), true);
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "pending", created_ms: 9_000 }], 10_000), true);
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "failed", created_ms: 9_000 }], 10_000), false, "a failed close closed nothing");
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "done", created_ms: 9_000 }], 10_000), false);
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "expired", created_ms: 4_000 }], 10_000), false, "more than 5 s before");
+  assert.equal(unackedCloseBefore([{ kind: "close", status: "expired", created_ms: 10_200 }], 10_000), false, "after the deal (a :1 retry)");
+  const build = async () => {
+    const env = world(), raw = env.DB.raw, ticket = 3001;
+    const beAt = NOW - 3600_000, beBar = Math.floor(beAt / 300_000);
+    const closeMs = NOW - 10 * M1, clAt = closeMs - 1000, clBar = Math.floor(clAt / 300_000);
+    await ensurePositionSchema(env.DB);
+    raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms) VALUES (?, 'open', ?, 'done', ?, ?)").run(`open:${ticket}:B`, JSON.stringify({ side: "BUY", volume: 0.01, entry: 2000, sl: 1990, tp: 2020, r_dist: 10 }), JSON.stringify({ ok: true, ticket }), beAt - 600_000);
+    // breakeven: an applied stop change (its line's cause), acked done.
+    raw.prepare("INSERT INTO position_actions (id, ticket, bar, at_ms, side, action, rule, why, status, lines_json) VALUES (?, ?, ?, ?, 'BUY', 'sl', 'breakeven', 'w', 'applied', ?)").run(`pm:${ticket}:${beBar}`, ticket, beBar, beAt, JSON.stringify({ present: [], cause: lineTag("breakeven") }));
+    raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms) VALUES (?, 'modify_sl', ?, 'done', ?, ?)").run(`pm:${ticket}:s:${beBar}`, JSON.stringify({ ticket, reason: "pm_breakeven" }), JSON.stringify({ ok: true }), beAt + 1000);
+    // cut_loss: its close went out 1 s before the deal, but the ack was lost (expired, no result).
+    raw.prepare("INSERT INTO position_actions (id, ticket, bar, at_ms, side, action, rule, why, status, lines_json) VALUES (?, ?, ?, ?, 'BUY', 'close', 'cut_loss', 'w', 'expired', ?)").run(`pm:${ticket}:${clBar}`, ticket, clBar, clAt - 500, JSON.stringify({ present: [], cause: lineTag("cut_loss") }));
+    raw.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms) VALUES (?, 'close', ?, 'expired', NULL, ?)").run(`pm:${ticket}:c:${clBar}`, JSON.stringify({ ticket, reason: "pm_cut_loss" }), clAt);
+    raw.prepare("INSERT INTO ea_deals (deal_ticket, position_ticket, side, volume, entry_price, exit_price, profit, currency, reason, closed_ms) VALUES (?, ?, 'BUY', 0.01, 2000, 1992, -0.8, 'USD', 'expert', ?)").run(ticket * 10, ticket, closeMs);
+    return { env, ticket, closeMs, clBar };
+  };
+  const { env, ticket, closeMs, clBar } = await build();
+  let r = await pmLineBreakerTick(env, { now: NOW });
+  assert.deepEqual(r.counted ?? [], [], "not credited to breakeven");
+  assert.equal(state(env).seen?.[String(ticket)], undefined, "the ticket is not marked seen");
+  // CA1 reconciles the close from ea_deals: the intent reads done, and the next tick credits cut_loss.
+  env.DB.raw.prepare("UPDATE omega_intents SET status = 'done' WHERE id = ?").run(`pm:${ticket}:c:${clBar}`);
+  r = await pmLineBreakerTick(env, { now: NOW + 300_000 });
+  assert.deepEqual(r.counted.map((c) => [c.line, c.ticket]), [["cut_loss", ticket]]);
+  // Never reconciled: 30 minutes after the close the ticket is credited from the done intents as before.
+  const late = await build();
+  r = await pmLineBreakerTick(late.env, { now: late.closeMs + PM_LINE_DEFER_MS + M1 });
+  assert.deepEqual(r.counted.map((c) => [c.line, c.ticket]), [["breakeven", late.ticket]]);
+  assert.ok(Number(state(late.env).seen[String(late.ticket)]) > 0);
 });
 
 test("B5-5 r_vs_hold: R minus holding to the plan's SL/TP on the broker's 1m bars (the report's first-touch rule), settled once touched or after 24 h", () => {
@@ -323,7 +360,7 @@ test("B5-12 a version bump turns a line back on and resets its window; so does t
   assert.deepEqual(state(e2).lines.breakeven, { version: 1, since_ms: NOW, off_since: null, trip_mean_r: null, closes: 0, last: [] });
   assert.deepEqual(events(e2, "pm_line_on").map((e) => [e.actor, e.detail]), [["owner", { line: "breakeven", version: 1, by: "owner", was_off: true, off: [] }]]);
   assert.match(sent[0], /line breakeven@1 on \(owner\)/);
-  resetPmLineMemoForTests();
+  clearPmLineMemo();
   assert.deepEqual((await readPmLinesLive(e2, { now: NOW })).off, []);
 });
 

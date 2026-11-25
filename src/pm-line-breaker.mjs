@@ -73,6 +73,11 @@ export const HOLD_HORIZON_MS = 24 * 3600_000;
 /** The applied line actions the tick looks back over, and the most tickets it settles per run. */
 export const PM_LINE_LOOKBACK_MS = 30 * 86_400_000;
 const TICKETS_PER_RUN = 40;
+/** A close intent not (yet) done within this window before the deal's close may be that close with its ack lost: the
+ * ticket waits (no credit, not seen) until the intent is done (CA1 reconciles it from ea_deals), at most PM_LINE_DEFER_MS
+ * after the close, after which it is credited from the done intents as before. */
+export const PM_LINE_ACK_WINDOW_MS = 5_000;
+export const PM_LINE_DEFER_MS = 30 * 60_000;
 const M1 = 60_000;
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 const r3 = (x) => (finite(x) ? Math.round(x * 1000) / 1000 : null);
@@ -148,7 +153,7 @@ export function offLinesOf(doc, envOff = []) {
 
 let liveMemo = new WeakMap();
 const LIVE_MEMO_MS = M1;
-export function resetPmLineMemoForTests() { liveMemo = new WeakMap(); }
+export function clearPmLineMemo() { liveMemo = new WeakMap(); }
 /**
  * The off lines for a run ({ off: [ids] }): PM_LINES_OFF and the breaker's state (KV, read at most once a minute per
  * isolate). A missing or unreadable state reads as no breaker off: every line acts, as before B5.
@@ -193,6 +198,15 @@ export function riskUsdOf(open, { tickValuePer001 = 1 } = {}) {
   const vol = Number(open?.volume);
   const risk = (rd / 0.01) * tickValuePer001 * vol;
   return finite(risk) && risk > 0 ? Math.round(risk * 100) / 100 : null;
+}
+
+/**
+ * Pure: a close intent that is not done (pending, sent or expired; a failed one closed nothing) created within
+ * PM_LINE_ACK_WINDOW_MS before the deal's close `closeMs`: the close may be its own, with the ack lost.
+ */
+export function unackedCloseBefore(intents = [], closeMs) {
+  return (Array.isArray(intents) ? intents : []).some((i) => i?.kind === "close" && i.status !== "done" && i.status !== "failed"
+    && finite(Number(i.created_ms)) && Number(i.created_ms) <= closeMs && closeMs - Number(i.created_ms) <= PM_LINE_ACK_WINDOW_MS);
 }
 
 /**
@@ -286,9 +300,13 @@ export async function pmLineBreakerTick(env, { now = Date.now(), send = null } =
       const it = parse(openRow?.payload, null);
       if (it && Number(it.volume) > 0 && Number(deal.vol) + 1e-9 < Number(it.volume)) continue; // a partial exit: still open
       const closeMs = Number(deal.closed_ms);
+      const all = (await db.prepare("SELECT id, kind, status, created_ms FROM omega_intents WHERE json_extract(payload, '$.ticket') = ? AND kind IN ('close', 'modify_sl', 'modify_tp', 'modify_sltp') ORDER BY created_ms").bind(ticket).all().catch(() => ({ results: [] }))).results ?? [];
+      // A close whose ack was lost (pending or expired, not failed) right before the deal: wait for it to read done rather
+      // than credit the position's last stop or target change, and leave the ticket unseen so a later tick credits it.
+      if (finite(closeMs) && now - closeMs < PM_LINE_DEFER_MS && unackedCloseBefore(all, closeMs)) continue;
       doc.seen[String(ticket)] = finite(closeMs) ? closeMs : now;
       dirty = true;
-      const intents = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE json_extract(payload, '$.ticket') = ? AND kind IN ('close', 'modify_sl', 'modify_tp', 'modify_sltp') AND status = 'done' ORDER BY created_ms").bind(ticket).all().catch(() => ({ results: [] }))).results ?? [];
+      const intents = all.filter((i) => i.status === "done");
       const cause = closeCause(intents, finite(closeMs) ? closeMs : Infinity);
       const actionId = cause ? actionIdOfIntent(cause.intent_id) : null;
       if (!actionId) continue;
@@ -329,7 +347,7 @@ export async function pmLineBreakerTick(env, { now = Date.now(), send = null } =
       tripped.push({ id, ...v });
     }
     if (counted.length) dirty = true;
-    if (dirty) { doc.updated_ms = now; await kv.put(PM_LINE_BREAKER_KEY, JSON.stringify(doc)); resetPmLineMemoForTests(); }
+    if (dirty) { doc.updated_ms = now; await kv.put(PM_LINE_BREAKER_KEY, JSON.stringify(doc)); clearPmLineMemo(); }
     for (const t of tripped) {
       await lineEvent(db, now, PM_LINE_ACTOR, "pm_line_off", { line: t.id, version: pmLine(t.id).version, closes: t.n, mean_r: t.mean_r, off: offLinesOf(doc, envOff) });
       console.log("pm_line_off", JSON.stringify({ line: t.id, mean_r: t.mean_r }));
@@ -360,7 +378,7 @@ export async function setPmLine(env, { line, enabled, actor = "owner", send = nu
     doc.lines[line] = freshLine(pmLine(line), now);
     doc.updated_ms = now;
     await kv.put(PM_LINE_BREAKER_KEY, JSON.stringify(doc));
-    resetPmLineMemoForTests();
+    clearPmLineMemo();
     await lineEvent(db, now, actor, "pm_line_on", { line, version: pmLine(line).version, by: "owner", was_off: was?.off_since != null, off: offLinesOf(doc, envOff) });
     if (typeof send === "function") { try { await send(`XAUUSD SYSTEM · Position Manager line ${lineTag(line)} on (owner): a fresh window of ${PM_LINE_RULE.n} closes starts now.`); } catch { /* best effort */ } }
     return { ok: true };
