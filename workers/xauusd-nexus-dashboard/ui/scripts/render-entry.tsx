@@ -29,6 +29,7 @@ import fs1Replies from "../../../../test/fixtures/nexus-fs1/post-replies.json";
 import fs1Record from "../../../../test/fixtures/nexus-fs1/feature-switches-record.json";
 import fs1Hold from "../../../../test/fixtures/nexus-fs1/feature-switches-hold.json";
 import zonesHeld from "../../../../test/fixtures/nexus-zones/zones.json";
+import zonesLegacy from "../../../../test/fixtures/nexus-zones/zones-legacy.json";
 import zonesClear from "../../../../test/fixtures/nexus-zones/zones-clear.json";
 import zonesEmpty from "../../../../test/fixtures/nexus-zones/zones-empty.json";
 import zonesOffBody from "../../../../test/fixtures/nexus-zones/zones-off.json";
@@ -257,7 +258,8 @@ export const VIEWS: Entry[] = [
     hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", NO_EFFECT_NOTE, "price", "feed scale", "broker scale", "also seen by"],
     missing: [zonesOffBody]
   },
-  { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesHeld, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
+  { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesLegacy, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
+  { name: "ZonesHeldOwnTimesNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesHeld, shows: ["bg-late-fill", "rule:tp_typed", ">since<", ">until<"] },
   { name: "ZonesHeldOwnTimes", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_OWN_TIMES, shows: ["11-24 08:00 UTC · 15:00 GMT+7", "12-01 08:00 UTC · 15:00 GMT+7", "12-01 07:22 UTC · 14:22 GMT+7"] },
   { name: "ZonesEffective", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_EFFECTIVE, shows: [`Held: tp joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`], hides: [`Held: stop joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`] },
   { name: "ZonesClear", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesClear,

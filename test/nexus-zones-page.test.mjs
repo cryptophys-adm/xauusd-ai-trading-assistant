@@ -103,6 +103,11 @@ test("ZN4 lib/zones.ts: the breaker's rules and order are the backend's; since a
   for (const sw of [SW, null]) {
     assert.deepEqual(viewOwn(sw), [["zone_ahead", true, "block", ...T, true], ["tp", true, "rule:tp_typed", ...T, false], ["stop", true, "rule:stop_skip", ...T, false], ["factor", false, "", null, null, null]], "the view's own times and effective, with or without the switches");
   }
+  // The view's effective false carries the "no effect" note; the legacy cells (effective null) carry none.
+  const heldCells = u.breakerOf(HELD, SW).cells, legacyCells = u.breakerOf(LEGACY, SW).cells;
+  assert.ok(u.cellTip(heldCells[1]).endsWith(u.NO_EFFECT_NOTE) && u.cellTip(heldCells[2]).endsWith(u.NO_EFFECT_NOTE), "tp and stop: effective false");
+  assert.ok(!u.cellTip(heldCells[0]).includes(u.NO_EFFECT_NOTE), "zone_ahead: effective true");
+  for (const c of legacyCells) assert.ok(!u.cellTip(c).includes(u.NO_EFFECT_NOTE), `${c.rule}: legacy, no note`);
   // The fallback (zones-legacy.json: held[] as { rule, by }, a backend before ZN1): times from the switches, effective unknown.
   const b = u.breakerOf(LEGACY, SW);
   assert.deepEqual(b.cells.map((c) => [c.rule, c.held, c.by.join(), c.since, c.until, c.effective]), [
@@ -232,7 +237,7 @@ test("ZN7 the states: clear, empty tables, 404 off, 500 with nothing on screen, 
 test("ZN8 the render check registers a view per state, and the page is in the token, review and poll-state lists", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
   const names = u.VIEWS.map((v) => v.name).filter((n) => n.startsWith("Zones"));
-  assert.deepEqual(names, ["ZonesHeld", "ZonesHeldNoSwitches", "ZonesHeldOwnTimes", "ZonesEffective", "ZonesClear", "ZonesEmpty", "ZonesOff", "ZonesUnread500", "ZonesUnread502", "ZonesStale", "ZonesLoading", "ZonesSortedByN", "ZonesBreaker", "ZonesSwitches"]);
+  assert.deepEqual(names, ["ZonesHeld", "ZonesHeldNoSwitches", "ZonesHeldOwnTimesNoSwitches", "ZonesHeldOwnTimes", "ZonesEffective", "ZonesClear", "ZonesEmpty", "ZonesOff", "ZonesUnread500", "ZonesUnread502", "ZonesStale", "ZonesLoading", "ZonesSortedByN", "ZonesBreaker", "ZonesSwitches"]);
   assert.match(read("test/nexus-tokens.test.mjs"), /"pages\/Zones\.tsx"/);
   assert.match(read("test/nexus-tokens-review.test.mjs"), /"pages\/Zones\.tsx", "lib\/zones\.ts"/);
   assert.match(read("test/nexus-poll-states.test.mjs"), /"pages\/Zones\.tsx"/);
