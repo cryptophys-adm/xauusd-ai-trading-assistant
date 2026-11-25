@@ -9,8 +9,8 @@
 //   - KM1 (owner 2026-11-25): each chart's own key-level map (zones_by_chart H1, H4, D1, the agent's clustering over
 //     that chart's levels alone) and the bar close it was read at (closed), for one CTA post per close.
 // What it never holds: the system's decision (BUY, SELL, WAIT), the council's reasons, a plan, an entry, a
-// stop, a target for a trade, a lot, the account or Omega. Decisions stay in the delayed recap only
-// (src/public-projection.mjs, 24 hours). Pure; the AI Worker serves it through PublicProjection.analysis().
+// stop, a target for a trade, a lot, the account or Omega. Decisions stay in the recap only
+// (src/public-projection.mjs, after PUBLIC_DELAY_HOURS: 0 in production since 2026-11-25, owner "Semua sekarang"). Pure; the AI Worker serves it through PublicProjection.analysis().
 import { patternInfo } from "./chart-patterns.mjs";
 
 export const PUBLIC_ANALYSIS_VERSION = "cryptophys.public-analysis.v1";

@@ -7,8 +7,11 @@
 //                            own policy (signal_ledger r_omega sized by omega_size, closed at omega_closed_at), shown
 //                            with no parity gate. "v4": the v4 replay through the live engine (ledger_omega4), shown
 //                            only while the v4 parity check against the live account passes (src/ledger-omega4.mjs).
-// Aggregates only: no plan, side, time or price of any single trade, no money, lot, balance or account. Only results
-// closed more than the public delay ago (PUBLIC_DELAY_HOURS, default 24) count, as for every public recap.
+// Aggregates only: no plan, side, time or price of any single trade, no money, lot, balance or account. Only closed
+// results count (a closed timestamp and an R; the managed exit only omega_status 'closed'), and only those closed more
+// than the public delay ago (PUBLIC_DELAY_HOURS, src/public-projection.mjs). Realtime with Nexus since 2026-11-25
+// (owner: "harus realtime", then "Semua sekarang"): production sets the delay to 0, so a result counts once it closes;
+// kept 1 minute per isolate.
 import { publicDelayHours, PUBLIC_FORBIDDEN_KEYS } from "./public-projection.mjs";
 import { OMEGA4_PARITY_KEY } from "./signal-ledger.mjs";
 
@@ -86,11 +89,11 @@ export function forbiddenKeys(value, found = []) {
   return found;
 }
 
-const MEMO_MS = 10 * 60_000;
+const MEMO_MS = 60_000;
 let memo = { at: 0, body: null };
 export function resetTrackRecordMemoForTests() { memo = { at: 0, body: null }; }
 
-/** The public track record, read from D1 and the parity in KV, kept 10 minutes per isolate. Never throws. */
+/** The public track record, read from D1 and the parity in KV, kept 1 minute per isolate. Never throws. */
 export async function readPublicTrackRecord(env, { now = Date.now() } = {}) {
   if (memo.body && now - memo.at < MEMO_MS) return memo.body;
   const delayHours = publicDelayHours(env);
