@@ -21,14 +21,17 @@ function snapshot(extra = {}) {
   };
 }
 
-test("validation rejects wrong schema, keys, stale or future snapshots, unknown HUDs and credentials", () => {
+test("validation rejects wrong schema, keys, stale or future snapshots, malformed HUDs and credentials", () => {
   assert.equal(validateHudSnapshot(snapshot(), now).valid, true);
   assert.ok(validateHudSnapshot(snapshot({ schema_version: "x" }), now).errors.includes("unsupported_schema_version"));
   assert.ok(validateHudSnapshot(snapshot({ timeframe: "5" }), now).errors.includes("unsupported_timeframe"));
   assert.ok(validateHudSnapshot(snapshot({ candle_key: "OANDA:XAUUSD:15:" + Date.parse("2026-11-05T11:00:00Z") }), now).errors.includes("candle_key_invalid"));
   assert.ok(validateHudSnapshot(snapshot({ computed_at: "2026-11-05T10:00:00Z" }), now).errors.includes("snapshot_stale"));
   assert.ok(validateHudSnapshot(snapshot({ computed_at: "2026-11-05T13:00:00Z" }), now).errors.includes("computed_at_in_future"));
-  assert.ok(validateHudSnapshot(snapshot({ huds: { not_a_hud: { fields: {} } } }), now).errors.includes("huds_invalid"));
+  // B7: an unknown HUD id is dropped, not rejected (test/parity-groups.test.mjs); a malformed known HUD still is.
+  assert.deepEqual(validateHudSnapshot(snapshot({ huds: { not_a_hud: { fields: {} } } }), now), { valid: true, errors: [], dropped_huds: ["not_a_hud"] });
+  assert.ok(validateHudSnapshot(snapshot({ huds: { prophet: { fields: null } } }), now).errors.includes("huds_invalid"));
+  assert.ok(validateHudSnapshot(snapshot({ huds: [] }), now).errors.includes("huds_invalid"));
   assert.ok(validateHudSnapshot(snapshot({ secret: "x" }), now).errors.includes("credential_fields_not_permitted"));
 });
 

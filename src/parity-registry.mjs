@@ -62,6 +62,92 @@ export function normalizeHash(value) {
 
 export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud"]);
 
+/**
+ * Parity field groups (B7): a group of fields of one engine's records that earns its own parity
+ * trust, so one bad field revokes only its group and not the whole engine identity. Keyed by group
+ * id. Each group names the base engine whose records carry it, the webhook source it is compared
+ * with, and its fields as { local field: webhook field } (the fieldMap of compareWithWebhooks).
+ * A group's identity is the engine identity (its source and implementation hashes) plus the group
+ * id (groupIdentityOf), so it has its own 24-candle window, approval and revocation in the same
+ * registry tables.
+ *   - kind "hud": a HUD group; only a HUD group may set nullEqual (null === null counts as equal).
+ *   - kind "witness": requireFinite, a candle matches only when every field is a finite number on
+ *     both sides; null (or any non-finite value) on both sides is incomplete, never a match.
+ * Inert until B11 wires a group: a group is compared only for an engine whose records are ingested
+ * and observed (evidence-fusion INGEST_ENGINES), and no producer emits these fields yet.
+ */
+export const PARITY_GROUPS = Object.freeze({
+  // MZ1, the Mizan witness (owner 2026-11-23). Carried by the Mizan Probe's records (engine
+  // probe_mizan, B26) and its alert (source probe_mizan_hud, B10). Nothing produces either yet.
+  probe_mizan_witness: Object.freeze({
+    engine: "probe_mizan",
+    source: "probe_mizan_hud",
+    kind: "witness",
+    fields: Object.freeze({ net_witness: "net_witness", prior_edge: "prior_edge" }),
+    nullEqual: false,
+    requireFinite: true
+  })
+});
+
+const TIMEFRAME_SUFFIX = /_(m5|m15|h4|d1)$/;
+
+/**
+ * Pure: the declaration problems of a group registry ([] when sound). A group id never starts
+ * with "mizan" (isTrusted reads an engine id starting with "mizan" as the Mizan library, trusted
+ * only through its dependants), never equals or scopes a base engine id, and never carries a
+ * timeframe suffix (groupIdentityOf adds it).
+ */
+export function parityGroupProblems(groups = PARITY_GROUPS) {
+  const problems = [];
+  for (const [groupId, g] of Object.entries(groups || {})) {
+    if (!/^[a-z][a-z0-9_]*$/.test(groupId)) problems.push(`${groupId}:id_invalid`);
+    if (groupId.startsWith("mizan")) problems.push(`${groupId}:id_starts_with_mizan`);
+    if (BASE_ENGINES.includes(groupId) || BASE_ENGINES.includes(groupId.replace(TIMEFRAME_SUFFIX, ""))) problems.push(`${groupId}:id_is_an_engine`);
+    if (TIMEFRAME_SUFFIX.test(groupId)) problems.push(`${groupId}:id_has_timeframe_suffix`);
+    if (typeof g?.engine !== "string" || !g.engine) problems.push(`${groupId}:engine_missing`);
+    if (typeof g?.source !== "string" || !g.source) problems.push(`${groupId}:source_missing`);
+    if (!isRecord(g?.fields) || !Object.keys(g.fields).length || !Object.values(g.fields).every((f) => typeof f === "string" && f)) problems.push(`${groupId}:fields_invalid`);
+    if (g?.nullEqual === true && g?.kind !== "hud") problems.push(`${groupId}:null_equal_outside_hud`);
+    if (g?.nullEqual === true && g?.requireFinite === true) problems.push(`${groupId}:null_equal_with_require_finite`);
+  }
+  return problems;
+}
+
+/** Pure: the group ids declared for a base engine, in declaration order. */
+export function groupsFor(engine, groups = PARITY_GROUPS) {
+  return Object.entries(groups || {}).filter(([, g]) => g?.engine === engine).map(([id]) => id);
+}
+
+/** Pure: the compareWithWebhooks options of a group: its fieldMap, and nullEqual only for a HUD group. */
+export function groupCompareOptions(groupId, groups = PARITY_GROUPS) {
+  const g = groups?.[groupId];
+  if (!g) return null;
+  return {
+    fieldMap: { [g.source]: { ...g.fields } },
+    nullEqual: g.kind === "hud" && g.nullEqual === true,
+    requireFinite: g.requireFinite === true
+  };
+}
+
+/**
+ * The registry identity of a field group on one record: the record's engine identity (its source
+ * and implementation hashes) under the engine id <group id><timeframe suffix> (probe_mizan_witness
+ * on 15m: probe_mizan_witness_m15), never a Mizan dependant. Null when the record does not carry
+ * the group (another engine) or has no identity.
+ */
+export function groupIdentityOf(record, groupId, groups = PARITY_GROUPS) {
+  const g = groups?.[groupId];
+  if (!g || record?.engine !== g.engine) return null;
+  const id = identityOf(record);
+  if (!id) return null;
+  return {
+    engine: groupId + id.engine.slice(String(record.engine).length),
+    sourceHash: id.sourceHash, implementationHash: id.implementationHash,
+    mizanSourceHash: null, mizanImplementationHash: null,
+    group: groupId, parentEngine: id.engine
+  };
+}
+
 // Registry engine ids are scoped by chart timeframe. H1 keeps the bare id, so the
 // approved H1 prophet/gmi rows (and their streaks) are untouched; every other
 // timeframe earns its own approval under a suffixed id (prophet_m5, gmi_m5, ...).
@@ -156,20 +242,42 @@ function localDiagnostics(record) {
 function comparedValues(record, webhookPayloads, fieldMap) {
   const comparable = isRecord(record?.values?.comparable) ? record.values.comparable : {};
   const out = {};
-  for (const [source, fields] of Object.entries(fieldMap)) {
+  for (const [source, map] of Object.entries(fieldMap)) {
+    // A group fieldMap ({ local field: webhook field }) names the webhook's fields by their own names.
+    const fields = Array.isArray(map) ? map : Object.keys(map);
+    const hookFields = Array.isArray(map) ? map : Object.values(map);
     const local = isRecord(comparable[source]) ? comparable[source] : {};
     const webhook = isRecord(webhookPayloads?.[source]) ? webhookPayloads[source] : {};
     out[source] = {
       local: Object.fromEntries(fields.filter((f) => f in local).map((f) => [f, local[f]])),
-      webhook: Object.fromEntries([...fields, "shared_core_status"].filter((f) => f in webhook).map((f) => [f, webhook[f]]))
+      webhook: Object.fromEntries([...hookFields, "shared_core_status"].filter((f) => f in webhook).map((f) => [f, webhook[f]]))
     };
   }
   return out;
 }
 
-export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_POLICY) {
+/** A group fieldMap as { source: { local field: webhook field } } (an array maps each field to itself). */
+function normalizeFieldMap(fieldMap) {
+  const out = {};
+  for (const [source, fields] of Object.entries(fieldMap)) {
+    out[source] = Array.isArray(fields) ? Object.fromEntries(fields.map((f) => [f, f])) : isRecord(fields) ? { ...fields } : {};
+  }
+  return out;
+}
+
+/**
+ * Options (B7, field groups; without them the comparison is exactly the engine's):
+ *   - fieldMap: { source: [fields] | { local field: webhook field } } replaces PARITY_FIELDS[engine];
+ *   - nullEqual: local null and webhook null count as equal (HUD groups only, groupCompareOptions);
+ *   - requireFinite: every field must be a finite number on both sides; non-finite on both sides
+ *     is incomplete (missing "null:<source>:<field>", listed in null_fields), on one side a mismatch.
+ */
+export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_POLICY, options = {}) {
   const engine = record?.engine;
-  const fieldMap = PARITY_FIELDS[engine];
+  const grouped = isRecord(options?.fieldMap);
+  const fieldMap = grouped ? normalizeFieldMap(options.fieldMap) : PARITY_FIELDS[engine];
+  const nullEqual = grouped && options.nullEqual === true;
+  const requireFinite = grouped && options.requireFinite === true;
   if (!fieldMap) return { status: "not_comparable", reason: "engine_has_no_webhook_counterpart" };
   const sources = Object.keys(fieldMap);
   const absentSources = sources.filter((source) => !isRecord(webhookPayloads?.[source]));
@@ -179,6 +287,7 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
   const candle = isRecord(record?.values?.candle) ? record.values.candle : {};
   const mismatches = [];
   const missing = [];
+  const nullFields = [];
   let compared = 0;
 
   for (const source of sources) {
@@ -190,6 +299,25 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
       if (!sameValue(candle[field], webhook[field], policy)) mismatches.push({ source, field: `input:${field}`, local: candle[field], webhook: webhook[field] });
     }
     const local = isRecord(comparable[source]) ? comparable[source] : null;
+    if (grouped) {
+      for (const [field, hookField] of Object.entries(fieldMap[source])) {
+        if (!local || !(field in local)) { missing.push(`${source}:${field}`); continue; }
+        if (!(hookField in webhook)) { missing.push(`webhook:${source}:${hookField}`); continue; }
+        const a = local[field], b = webhook[hookField];
+        const at = hookField === field ? {} : { webhook_field: hookField };
+        if (requireFinite) {
+          const fa = isFiniteNum(a), fb = isFiniteNum(b);
+          if (!fa && !fb) { missing.push(`null:${source}:${field}`); nullFields.push(`${source}:${field}`); continue; }
+          compared++;
+          if (!fa || !fb || !sameValue(a, b, policy)) mismatches.push({ source, field, ...at, local: a, webhook: b });
+          continue;
+        }
+        compared++;
+        if (nullEqual && a === null && b === null) continue;
+        if (!sameValue(a, b, policy)) mismatches.push({ source, field, ...at, local: a, webhook: b });
+      }
+      continue;
+    }
     for (const field of fieldMap[source]) {
       if (!local || !(field in local)) { missing.push(`${source}:${field}`); continue; }
       if (!(field in webhook)) { missing.push(`webhook:${source}:${field}`); continue; }
@@ -204,7 +332,8 @@ export function compareWithWebhooks(record, webhookPayloads, policy = DEFAULT_PO
   // apart and does not revoke; repeated input mismatches still do (see recordComparison).
   if (mismatches.length && mismatches.every((m) => String(m.field).startsWith("input:"))) return { status: "input_mismatch", compared, mismatches, missing: uniqueMissing };
   if (mismatches.length) return { status: "mismatch", compared, mismatches, missing: uniqueMissing, values: comparedValues(record, webhookPayloads, fieldMap), ...localDiagnostics(record) };
-  if (uniqueMissing.length) return { status: "incomplete", compared, mismatches: [], missing: uniqueMissing };
+  // A witness group whose fields are null on both sides: an explicit incomplete state, never a match.
+  if (uniqueMissing.length) return { status: "incomplete", compared, mismatches: [], missing: uniqueMissing, ...(nullFields.length ? { reason: "fields_not_finite", null_fields: nullFields } : {}) };
   return { status: "match", compared, mismatches: [], missing: [] };
 }
 

@@ -9,7 +9,8 @@
 // "computed from verified bars" when the candle also has a parity comparison whose input
 // bar (open, high, low, close, volume) equalled TradingView's (barsVerified). Everything
 // else reads as not yet calibrated.
-import { containsCredentialFields } from "./evidence-fusion.mjs";
+import { containsCredentialFields, INGEST_ENGINES } from "./evidence-fusion.mjs";
+import { PARITY_GROUPS } from "./parity-registry.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
@@ -37,10 +38,20 @@ export function validateHudSnapshot(p, now = Date.now()) {
   if (!Number.isFinite(computedAt)) errors.push("computed_at_invalid");
   else if (computedAt > now + 5 * 60 * 1000) errors.push("computed_at_in_future");
   else if (now - computedAt > MAX_AGE_MS) errors.push("snapshot_stale");
-  if (!isRecord(p.huds) || !Object.keys(p.huds).every((id) => HUD_IDS.includes(id) && isRecord(p.huds[id]?.fields))) errors.push("huds_invalid");
+  // An unknown HUD id (a producer ahead of this Worker) is dropped, not a reason to reject the
+  // snapshot: the known HUDs are kept and the dropped ids are listed (dropped_huds).
+  const dropped = isRecord(p.huds) ? Object.keys(p.huds).filter((id) => !HUD_IDS.includes(id)) : [];
+  if (!isRecord(p.huds) || !Object.keys(p.huds).every((id) => !HUD_IDS.includes(id) || isRecord(p.huds[id]?.fields))) errors.push("huds_invalid");
   if (containsCredentialFields(p)) errors.push("credential_fields_not_permitted");
   if (JSON.stringify(p).length > MAX_BYTES) errors.push("snapshot_too_large");
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors, ...(dropped.length ? { dropped_huds: dropped } : {}) };
+}
+
+/** The snapshot without its unknown HUD ids, which it lists in dropped_huds (none: the snapshot itself). */
+function withoutUnknownHuds(p, dropped) {
+  if (!dropped?.length) return p;
+  const huds = Object.fromEntries(Object.entries(p.huds).filter(([id]) => !dropped.includes(id)));
+  return { ...p, huds, dropped_huds: dropped };
 }
 
 export async function storeHudSnapshot(env, p, now = Date.now()) {
@@ -48,10 +59,12 @@ export async function storeHudSnapshot(env, p, now = Date.now()) {
   if (!validation.valid) return { status: 400, body: { error: validation.errors[0], validation_errors: validation.errors } };
   const kv = env.SIGNAL_CACHE;
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
-  const stored = { ...p, received_at: new Date(now).toISOString() };
+  const dropped = validation.dropped_huds || [];
+  if (dropped.length) console.warn("hud_snapshot_dropped_huds", p.timeframe, p.candle_key, dropped.join(","));
+  const stored = { ...withoutUnknownHuds(p, dropped), received_at: new Date(now).toISOString() };
   await kv.put(`hud:${p.timeframe}:${p.candle_key}`, JSON.stringify(stored), TTL);
   await kv.put(`hud:${p.timeframe}:latest`, JSON.stringify(stored), { expirationTtl: latestTtlSeconds(p.timeframe) });
-  return { status: 202, body: { status: "accepted", candle_key: p.candle_key, timeframe: p.timeframe } };
+  return { status: 202, body: { status: "accepted", candle_key: p.candle_key, timeframe: p.timeframe, ...(dropped.length ? { dropped_huds: dropped } : {}) } };
 }
 
 export async function loadHudSnapshot(env, { timeframe = "60", candleKey = null } = {}) {
@@ -60,14 +73,24 @@ export async function loadHudSnapshot(env, { timeframe = "60", candleKey = null 
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-/** The approved comparable fields of a candle (prophet_r38, prophet_r37_ssot, gmi_v12_70), or null. */
-export async function approvedComparable(env, candleKey) {
+/**
+ * The approved comparable fields of a candle (prophet_r38, prophet_r37_ssot, gmi_v12_70), or null.
+ * Merged per source and per field group (B7): a trusted group's copy (localcalc:<candle>:<group id>)
+ * adds its own fields to its source, so they read as verified even while another group of the same
+ * source, or the whole engine, is revoked. Only groups of an ingested engine are read (none today).
+ */
+export async function approvedComparable(env, candleKey, { groups = PARITY_GROUPS } = {}) {
   const out = {};
+  const merge = (comparable) => {
+    if (!isRecord(comparable)) { Object.assign(out, comparable); return; }
+    for (const [source, fields] of Object.entries(comparable)) out[source] = isRecord(out[source]) && isRecord(fields) ? { ...out[source], ...fields } : fields;
+  };
+  const groupIds = Object.keys(groups || {}).filter((id) => INGEST_ENGINES.includes(groups[id]?.engine));
   // gmi_hud: the HUD parity identity (Grid Bot Protocol fields, source gmi_v12_70_hud).
-  for (const engine of ["prophet", "gmi", "gmi_hud"]) {
-    const raw = await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + engine);
+  for (const key of ["prophet", "gmi", "gmi_hud", ...groupIds]) {
+    const raw = await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + key);
     if (!raw) continue;
-    try { Object.assign(out, JSON.parse(raw)?.values?.comparable || {}); } catch { /* malformed record is ignored */ }
+    try { merge(JSON.parse(raw)?.values?.comparable || {}); } catch { /* malformed record is ignored */ }
   }
   return Object.keys(out).length ? out : null;
 }
@@ -128,6 +151,7 @@ export async function hudReadings(env, snapshot) {
     verified_against_approved_record: Boolean(approved),
     bars_verified: bars,
     not_computed: Array.isArray(snapshot.not_computed) ? snapshot.not_computed : [],
+    ...(Array.isArray(snapshot.dropped_huds) && snapshot.dropped_huds.length ? { dropped_huds: snapshot.dropped_huds } : {}),
     readings
   };
 }
