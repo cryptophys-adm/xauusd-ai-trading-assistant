@@ -210,7 +210,7 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 - **Untouched.** The EA signal, `managementFields`, Omega, the Position Manager, `publicAnalysis`, the hashed local engines; ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…) and ERA_SWITCHES; no era moves. v4 replays the stored decisions.
 
 ### 5.4 The switches
-- `ZONE_PRIORITY` = "on" | "off". wrangler.jsonc ships "off": the gate goes on in a follow-up PR once the typing replay and the `ZONE_NEED` re-check have run on live captures carrying 1H/4H Prophet boxes. Unset reads "off", so a config without it (and every test that does not set it) is byte-identical to before Z2.
+- `ZONE_PRIORITY` = "on" | "off". wrangler.jsonc sets "on" since 2026-11-25, after the typing replay and the `ZONE_NEED` re-check on 8 live captures carrying 1H/4H Prophet boxes (need kept at max(1R, 0.75 ATR): room/need has no plan between 0.72 and 1.15). Unset reads "off", so a config without it (and every test that does not set it) is byte-identical to before Z2.
 - `ZONE_AHEAD_MODE` = "trend" (default) | "all" (owner-set only, read from the Worker's env; one `zone_ahead_mode_all` warning line per decision; Z5 alarms on its block share) | "record" (no check; the plan keeps `would_block`; the council's words stay) | "off". An unknown value reads "trend".
 - `KEY_LEVEL_ZONE_TYPES` "off" (env or the strategy's modes) leaves the zones untyped, so the check is out too.
 - Z5's breaker can drop the check to "record".

@@ -1,6 +1,6 @@
 // Z2 (docs/RFC_DEMAND_SUPPLY_ZONES.md §5): the zone_ahead check of the Decision Engine's guardrails, its plan filter
 // outside the consensus and the quorum, the record, the council, the doctrine facts, the public recap, rule_version and
-// MS2's shadow replay. Switches: ZONE_PRIORITY ("off" in wrangler.jsonc until the live-capture replay; unset reads "off") and ZONE_AHEAD_MODE.
+// MS2's shadow replay. Switches: ZONE_PRIORITY ("on" in wrangler.jsonc since the live-capture replay of 2026-11-25; unset reads "off") and ZONE_AHEAD_MODE.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -57,7 +57,7 @@ const agentPlan = (opposing, extra = {}) => ({ entry: 4000, stop: 3990, tp1: 402
 
 // ---------------------------------------------------------------- the switches
 
-test("Z2-1 the switches: ZONE_PRIORITY (unset reads off), ZONE_AHEAD_MODE, untyped zones read off; wrangler.jsonc ships off and trend", () => {
+test("Z2-1 the switches: ZONE_PRIORITY (unset reads off), ZONE_AHEAD_MODE, untyped zones read off; wrangler.jsonc sets on and trend", () => {
   assert.equal(zonePriorityMode({}), "off");
   assert.equal(zonePriorityMode({ ZONE_PRIORITY: " On " }), "on");
   assert.deepEqual(ZONE_AHEAD_MODES, ["trend", "all", "record", "off"]);
@@ -71,7 +71,7 @@ test("Z2-1 the switches: ZONE_PRIORITY (unset reads off), ZONE_AHEAD_MODE, untyp
   assert.equal(zoneAheadMode(ON, { zoneTypes: "off" }), "off");
   assert.equal(ZONE_TREND_LEAN, se.STRATEGY_PARAMS.lean);
   const w = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(w, /"ZONE_PRIORITY": "off"/, "shipped off until the live-capture replay (follow-up PR flips it on)");
+  assert.match(w, /"ZONE_PRIORITY": "on"/, "on after the live-capture replay (2026-11-25)");
   assert.match(w, /"ZONE_AHEAD_MODE": "trend"/);
 });
 
