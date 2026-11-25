@@ -5,6 +5,9 @@ export const ZONE_SOURCE_WEIGHT: Readonly<Record<"whale_active" | "whale_mitigat
 export const ZONE_PROPHET_WEIGHT: Readonly<{ active: number; high_volume: number }>;
 export const ZONE_GMI_OB_WEIGHT: number;
 export const ZONE_SAME_BLOCK_TOL: number;
+export const ZONE_SOURCE_LABELS_MAX: number;
+export const ZONE_SOURCE_LABEL_MAX: number;
+export function dsSourceLabels(ds: unknown): string[] | null;
 export type ZoneSource = "prophet_zone" | "prophet_best" | "whale" | "gabfx" | "gmi_flag" | "gmi_ob";
 export const ZONE_SOURCES: readonly ZoneSource[];
 export const ZONE_RULES: Readonly<{ dominance: number; medium: number; strong: number; touch_band_atr: number; touch_bars: number; touch_gap: number; touch_cap: number; around: number }>;

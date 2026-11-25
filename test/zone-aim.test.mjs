@@ -22,7 +22,7 @@ import {
 } from "../src/zone-types.mjs";
 import { zoneScenario, zoneInputs, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
-import { inertOutputs, wranglerVars } from "./support/zone-aim-inert.mjs";
+import { inertOutputs, wranglerVars, withoutDsSources } from "./support/zone-aim-inert.mjs";
 import { CAPTURE_2026_11_20_22 } from "./fixtures/z2-capture-2026-11-20-22.mjs";
 
 const mods = { se, de, ea, pp, pa, pl };
@@ -360,11 +360,11 @@ async function pins(extra) {
   const out = {};
   for (const prophet of [false, true]) {
     const { run, ...rest } = await zoneScenario(mods, { db: d1, kv, env: extra, prophet });
-    out[prophet ? "prophet" : "scenario"] = sha(rest);
+    out[prophet ? "prophet" : "scenario"] = sha(withoutDsSources(rest));
   }
   const loaded = bearLoaded(), env = { ...ZONE_ENV, ...extra };
   const a = de.assess(loaded, { now: NOW, env });
-  out.bear_record = sha(de.buildDecisionRecord({ key: KEY, barClose: CLOSE, loaded, assessment: a, council: SELL, now: NOW, env }));
+  out.bear_record = sha(withoutDsSources(de.buildDecisionRecord({ key: KEY, barClose: CLOSE, loaded, assessment: a, council: SELL, now: NOW, env })));
   out.bear_shadow = sha(de.shadowModeDecisions({ loaded, assessment: a, council: SELL, env, now: NOW }));
   const slim = await gunzipJson(CAPTURE_2026_11_20_22);
   const strategy = se.buildStrategy(slim);

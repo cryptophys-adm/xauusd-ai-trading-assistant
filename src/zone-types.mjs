@@ -232,15 +232,35 @@ export const typedZones = (zones) => Array.isArray(zones) && zones.some((z) => z
 /**
  * Pure: the recorded set, keyLevelsAround's exact rule (src/decision-engine.mjs): the candidate or qualified zones
  * nearest to price, at most `n`, lowest first, { low, high } on the feed's scale, and beside them, when typed, the
- * words zone_type, zone_strength, zone_freshness and zone_rank ("candidate" | "qualified").
+ * words zone_type, zone_strength, zone_freshness and zone_rank ("candidate" | "qualified"), and (Z1b) ds_sources, the
+ * source labels (dsSourceLabels) when it has any.
  */
+/** Z1b: at most this many source labels per recorded level (ds_sources), each at most ZONE_SOURCE_LABEL_MAX chars. */
+export const ZONE_SOURCE_LABELS_MAX = 12;
+export const ZONE_SOURCE_LABEL_MAX = 32;
+const LABEL = /^[a-z_]+@(15m|1H|4H|daily)(\(dup\))?$/;
+/**
+ * Pure (Z1b): a typed zone's source labels for the recorded set, words only: its weighted sources (`prophet_zone@1H`)
+ * sorted, then the same-block duplicates that added no weight as `<source>@<tf>(dup)` (`gmi_ob@1H(dup)`), sorted;
+ * at most ZONE_SOURCE_LABELS_MAX. Null when there are none.
+ */
+export function dsSourceLabels(ds) {
+  if (!ds || typeof ds !== "object") return null;
+  const words = (list) => (Array.isArray(list) ? list.filter((l) => typeof l === "string" && l.length <= ZONE_SOURCE_LABEL_MAX) : []);
+  const out = [...words(ds.sources).sort(), ...words(ds.also).map((l) => `${l}(dup)`).sort()]
+    .filter((l) => l.length <= ZONE_SOURCE_LABEL_MAX && LABEL.test(l)).slice(0, ZONE_SOURCE_LABELS_MAX);
+  return out.length ? out : null;
+}
+
 export function aroundSet(zones, price, n = ZONE_RULES.around) {
   const list = (zones || []).filter((z) => (z?.candidate || z?.qualified) && isNum(z.low) && isNum(z.high) && z.low <= z.high);
   if (!isNum(price) || !list.length) return [];
   const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
   return list.sort((a, b) => dist(a) - dist(b)).slice(0, n).map((z) => ({
     low: r2(z.low), high: r2(z.high),
-    ...(z.ds ? { zone_type: z.ds.type, zone_strength: z.ds.strength, zone_freshness: z.ds.freshness, zone_rank: z.candidate ? "candidate" : "qualified" } : {})
+    ...(z.ds ? { zone_type: z.ds.type, zone_strength: z.ds.strength, zone_freshness: z.ds.freshness, zone_rank: z.candidate ? "candidate" : "qualified" } : {}),
+    // Z1b: the sources behind the type, for Z5's readings by source (zone_readings.ds_sources); absent when none.
+    ...(z.ds && dsSourceLabels(z.ds) ? { ds_sources: dsSourceLabels(z.ds) } : {})
   })).sort((a, b) => a.low - b.low);
 }
 

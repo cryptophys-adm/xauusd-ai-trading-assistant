@@ -617,3 +617,29 @@ test("ZR-19 FS1: the GET rows show the breaker's holds (zone_hold on ZONE_AHEAD_
   const b = await rows({ ...base, SIGNAL_CACHE: broken });
   assert.deepEqual([b.ZONE_AHEAD_MODE.zone_hold, b.ZONE_AIM_OFF.zone_hold], [null, null]);
 });
+
+test("ZR-ds (Z1b) a new zone_readings row carries the recorded level's ds_sources; an old row stays NULL (no backfill, INSERT OR IGNORE, no UPDATE)", async () => {
+  // The reading of a level that carries its source labels.
+  const labelled = { ...DEMAND, ds_sources: ["prophet_zone@1H", "whale@15m", "gmi_ob@1H(dup)"] };
+  const r = zoneReadings([decisionAt(1, [labelled])], barsOf([...lead, [4000, 4002, 3999, 4001], [4001, 4004, 4000, 4003.5], ...flat(6)])).readings[0];
+  assert.equal(r.ds_sources, "prophet_zone@1H,whale@15m,gmi_ob@1H(dup)");
+  const label = (env) => env.DB.raw.prepare("UPDATE engine_decisions SET decision_json = json_set(decision_json, '$.key_levels', json(?))").run(JSON.stringify([labelled]));
+  const rows = (env) => env.DB.raw.prepare("SELECT reading_key, ds_sources FROM zone_readings ORDER BY reading_key").all().map((x) => ({ ...x }));
+  // A run over labelled decisions: the new row carries the labels.
+  const fresh = await readingsEnv();
+  label(fresh);
+  await runZoneReadings(fresh, { now: RNOW });
+  assert.deepEqual(rows(fresh).map((x) => x.ds_sources), ["prophet_zone@1H,whale@15m,gmi_ob@1H(dup)"]);
+  // The same run where that reading was already written before Z1b (NULL): it stays NULL.
+  const old = await readingsEnv();
+  await zr.ensureZoneReadingsSchema(old.DB);
+  const d = decisionAt(1, [DEMAND]);
+  old.DB.raw.prepare("INSERT INTO zone_readings (reading_key, decision_key, bar_close, zone_type, approach, outcome, mfe_atr, mae_atr, bars, version) VALUES (?, ?, ?, 'demand', 'from_above', 'held', 0.6, 0, 2, ?)")
+    .run(`${d.decision_key}#0`, d.decision_key, d.bar_close, zr.ZONE_READINGS_VERSION);
+  label(old);
+  await runZoneReadings(old, { now: RNOW });
+  assert.deepEqual(rows(old), [{ reading_key: `${d.decision_key}#0`, ds_sources: null }], "not backfilled");
+  // The writer has no UPDATE of zone_readings.
+  const src = (await import("node:fs")).readFileSync(new URL("../src/zone-readings.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /UPDATE\s+zone_readings/i);
+});

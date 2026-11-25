@@ -18,7 +18,7 @@ import { ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH, engineCodeSource, sha256Hex } 
 import {
   dsEvidence, zoneTypes, zoneTouches, freshnessOf, decisive, aroundSet, zoneAhead, withZoneAhead, zoneNeed, keyLevelZoneTypesMode,
   ZONE_TF_WEIGHT, ZONE_TREND_LEAN, ZONE_NEED, ZONE_RULES, ZONE_SOURCE_WEIGHT,
-  ZONE_SOURCES, ZONE_PROPHET_WEIGHT, zoneSourcesOffMode, zoneSourcesList, zoneSourcesModes, ZONE_GMI_OB_WEIGHT, ZONE_SAME_BLOCK_TOL
+  ZONE_SOURCES, ZONE_PROPHET_WEIGHT, zoneSourcesOffMode, zoneSourcesList, zoneSourcesModes, ZONE_GMI_OB_WEIGHT, ZONE_SAME_BLOCK_TOL, ZONE_SOURCE_LABELS_MAX, dsSourceLabels
 } from "../src/zone-types.mjs";
 import { readPlane, prophetZoneBoxes, aegisZoneBoxes } from "../src/level-readers.mjs";
 import { projectionReading } from "../src/projection-agent.mjs";
@@ -28,7 +28,7 @@ import { d1, kv } from "./fixtures/mode-shadow.mjs";
 const M15 = 15 * 60_000;
 const sha = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 const mods = { se, de, ea, pp, pa, pl };
-const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank"]);
+const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank", "ds_sources"]);
 /** A value without Z0's keys, at any depth. */
 const strip = (v) => (Array.isArray(v) ? v.map(strip) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !Z0_KEYS.has(k)).map(([k, x]) => [k, strip(x)])) : v);
 /** Every Z0 key path in a value. */
@@ -657,7 +657,10 @@ test("Z1b-6 the scenario: gmi_ob off is Z1a's record and everything downstream; 
   assert.deepEqual(strip(on.record), typesOff.record);
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(typesOff.guards[side].checks), `${side} checks`);
   for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(typesOff[k]), k);
-  assert.deepEqual(z0Keys(on.record), z0Keys(z1a.record), "Z1b adds no recorded key");
+  // Z1b's only new recorded key is ds_sources (orchestrator ruling): on a level Z1a left untyped, now typed by gmi_ob.
+  const noSrc = (keys) => keys.filter((k) => !k.endsWith(".ds_sources"));
+  assert.deepEqual(noSrc(z0Keys(on.record)), noSrc(z0Keys(z1a.record)), "Z1b adds no other recorded key");
+  assert.ok(on.record.key_levels.every((z) => !("ds_sources" in z) || (Array.isArray(z.ds_sources) && z.ds_sources.length >= 1 && z.ds_sources.length <= ZONE_SOURCE_LABELS_MAX)));
   assert.notEqual(JSON.stringify(on.record.key_levels), JSON.stringify(z1a.record.key_levels), "the recorded words move with the new source");
   const labels = on.strategy.key_levels.zones.flatMap((z) => z.ds.sources);
   assert.ok(labels.includes("gmi_ob@15m") && labels.includes("gmi_ob@1H"));
@@ -676,4 +679,28 @@ test("Z1b-7 the readers: readPlane and the Projection Agent read a plane with ae
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+});
+
+test("Z1b-8 ds_sources: the recorded set's source labels (words only, weighted sources then '(dup)' provenance, bounded); absent from the public analysis, the EA signal and managementFields", async () => {
+  assert.deepEqual(dsSourceLabels({ sources: ["whale@15m", "prophet_zone@1H"], also: ["gmi_ob@1H"] }), ["prophet_zone@1H", "whale@15m", "gmi_ob@1H(dup)"]);
+  assert.equal(dsSourceLabels({ sources: [], also: [] }), null);
+  assert.equal(dsSourceLabels(null), null);
+  // Words only: anything not <source>@<15m|1H|4H|daily> is dropped; at most ZONE_SOURCE_LABELS_MAX.
+  assert.deepEqual(dsSourceLabels({ sources: ["prophet_zone@1H", "x y@1H", "a@5m", 7, "<b>@1H", "z".repeat(40) + "@1H"] }), ["prophet_zone@1H"]);
+  const many = ZONE_SOURCES.flatMap((s) => ["15m", "1H", "4H", "daily"].map((tf) => `${s}@${tf}`));
+  assert.equal(dsSourceLabels({ sources: many, also: many }).length, ZONE_SOURCE_LABELS_MAX);
+  // In the recorded set: present on a typed level with sources, absent on one without.
+  const set = aroundSet([
+    { low: 3990, high: 3992, candidate: true, ds: { type: "demand", strength: "medium", freshness: "fresh", sources: ["prophet_zone@1H"], also: ["gmi_ob@1H"] } },
+    { low: 4010, high: 4012, candidate: true, ds: { type: "none", strength: null, freshness: "fresh", sources: [] } },
+    { low: 4020, high: 4022, candidate: true }
+  ], 4000);
+  assert.deepEqual(set.map((z) => z.ds_sources), [["prophet_zone@1H", "gmi_ob@1H(dup)"], undefined, undefined]);
+  // The scenario: the record carries labels; the public analysis, the EA signal and managementFields never do.
+  const on = await zoneScenario(mods, { db: d1, kv, aegis: true });
+  assert.ok(on.record.key_levels.some((z) => Array.isArray(z.ds_sources)), "the record carries ds_sources");
+  for (const k of ["analysis", "signal", "management"]) {
+    const text = JSON.stringify(on[k]);
+    assert.ok(!/ds_sources|\(dup\)|prophet_zone@|gmi_ob@/.test(text), `${k}: no source label`);
+  }
 });
