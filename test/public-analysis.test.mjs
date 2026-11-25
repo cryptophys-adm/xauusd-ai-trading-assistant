@@ -3,7 +3,7 @@
 // metrics, never a price or a trade word among them.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicAnalysis, zoneMetrics, analysisLeaks } from "../src/public-analysis.mjs";
+import { publicAnalysis, zoneMetrics, analysisLeaks, cutAtWord } from "../src/public-analysis.mjs";
 
 const zone = (members, extra = {}) => ({ low: 3898, high: 3902.4, role: "resistance", strength: "strong", sources: 4, members, ...extra });
 
@@ -15,6 +15,35 @@ test("a zone's metric names: its heaviest levels by name, unique, at most three,
   assert.deepEqual(zoneMetrics(zone([{ label: "4H Ascending Triangle: measured target" }, { label: "1H entry 3901.5 level" }])), ["4H Ascending Triangle: measured projection"]);
   assert.deepEqual(zoneMetrics(zone([])), []);
   assert.deepEqual(zoneMetrics(null), []);
+});
+
+test("ZN-names: a Fibonacci ratio is written to two decimals, a long name is cut at a word boundary, and no price survives", () => {
+  // The three names the public map and the CTA Telegram showed cut short (owner via orchestrator, 2026-11-25).
+  assert.deepEqual(zoneMetrics(zone([{ label: "1H Fibonacci 0.618 (OTE)" }])), ["1H Fibonacci 0.62 (OTE)"]);
+  assert.deepEqual(zoneMetrics(zone([{ label: "1H Fibonacci 1.272 Extension" }])), ["1H Fibonacci 1.27 Extension"]);
+  const long = zoneMetrics(zone([{ label: "1H right-angled descending broadening formation: measured target" }]))[0];
+  assert.equal(long, "1H right-angled descending broadening formation: measured");
+  assert.ok(long.length <= 60);
+  assert.equal(zoneMetrics(zone([{ label: "4H Fibonacci 0.705 retracement" }]))[0], "4H Fibonacci 0.71 retracement");
+  assert.equal(zoneMetrics(zone([{ label: "D1 Fibonacci 0.5" }]))[0], "D1 Fibonacci 0.5", "a short ratio stays as it is");
+  // cutAtWord never cuts mid-word and drops a dangling separator.
+  assert.equal(cutAtWord("alpha beta gamma", 10), "alpha beta");
+  assert.equal(cutAtWord("alpha beta: gamma", 11), "alpha beta");
+  assert.equal(cutAtWord("short", 60), "short");
+  // The property: across names with prices, ratios and long words, no run of three or more digits survives, no name is
+  // cut inside a word, and none is longer than 60.
+  const words = ["1H", "4H", "D1", "Fibonacci", "0.618", "1.272", "0.786", "2.618", "3901.5", "4217", "$3420.25", "(OTE)", "Extension", "swing", "high", "right-angled", "descending", "broadening", "formation:", "measured", "target", "Camarilla", "H4", "level", "38.2%"];
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < 400; i++) {
+    const n = 2 + Math.floor(rnd() * 12);
+    const label = Array.from({ length: n }, () => words[Math.floor(rnd() * words.length)]).join(" ");
+    for (const name of zoneMetrics(zone([{ label }]))) {
+      assert.ok(!/\d{3,}/.test(name), `no price-shaped number: ${label} -> ${name}`);
+      assert.ok(name.length <= 60, `≤ 60: ${name}`);
+      assert.ok(label.replace(/\s+/g, " ").includes(name.split(" ").at(-1)) || /\d\.\d\d$/.test(name.split(" ").at(-1)) || name.split(" ").at(-1) === "projection" || name.split(" ").at(-1) === "number", `ends on a whole word: ${label} -> ${name}`);
+    }
+  }
 });
 
 test("the public analysis carries each zone's metric names and nothing a trade needs", () => {
