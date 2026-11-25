@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-25
+- fix(hud): the latest HUD snapshot per chart outlives its bar (HT1, orchestrator-approved; found in the Z2 live replay). `src/hud-store.mjs` `HUD_LATEST_TTL_S`: `hud:<tf>:latest` keeps 3 hours for 15m and 1H, 5 hours for 4H (was 3) and 26 hours for 1D (was 3), so the last hour of each 4H bar and most of each day no longer read without a 4H or 1D chart. Per-candle keys keep 14 days. Test: test/hud-store.test.mjs HT1. No engine hash, EA or cron change.
 - feat(decision): `ZONE_PRIORITY` "on" in wrangler.jsonc: the Z2 zone_ahead check goes live in 'trend' (orchestrator ruling on Z2: on only after the live-capture replay). Replay on 8 hourly captures (2026-11-24 16:41Z to 2026-11-25 00:41Z) with 1H/4H Prophet boxes: 55 plans, 28 with a decisive opposing zone within need, 15 (27%) fail in 'trend' (all counter-trend longs), 28 (51%) would fail in 'all'; Z1a on vs off changes no plan verdict (typed 75.0% vs 74.0%). `ZONE_NEED` kept at max(1R, 0.75 ATR). `rule_version` becomes `tp1_kz:on+zone_ahead@1` from this deploy, so the mode selector's evidence restarts, as TP1-KZ did. No code change; Z2's off pins stay.
 
 ## 2026-11-24
