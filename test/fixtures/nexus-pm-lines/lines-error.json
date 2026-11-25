@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "version": "cryptophys.position-manager.v1",
+  "error": "D1_ERROR: the database is unavailable",
+  "rows": []
+}

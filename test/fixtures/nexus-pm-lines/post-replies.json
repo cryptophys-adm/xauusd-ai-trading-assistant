@@ -1,0 +1,117 @@
+{
+  "off_by_PM_LINES_OFF": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "off_by_PM_LINES_OFF"
+    }
+  },
+  "ok": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "unknown_line": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "unknown_line"
+    }
+  },
+  "enabled_not_true": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "enabled must be true (turning a line on is the only action)"
+    }
+  },
+  "unavailable": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "unavailable"
+    }
+  },
+  "owner_only": {
+    "status": 403,
+    "body": {
+      "error": "owner_only"
+    }
+  },
+  "forbidden": {
+    "status": 403,
+    "body": {
+      "error": "forbidden",
+      "hint": "a person makes this change, never a service token"
+    }
+  },
+  "access_denied": {
+    "status": 403,
+    "body": {
+      "error": "access_denied",
+      "hint": "Omega is reached through Cloudflare Access"
+    }
+  },
+  "cross_origin_refused": {
+    "status": 403,
+    "body": {
+      "error": "cross_origin_refused"
+    }
+  },
+  "same_origin_only": {
+    "status": 403,
+    "body": {
+      "error": "same_origin_only"
+    }
+  },
+  "content_type_must_be_json": {
+    "status": 415,
+    "body": {
+      "error": "content_type_must_be_json"
+    }
+  },
+  "body_too_large": {
+    "status": 413,
+    "body": {
+      "error": "body_too_large"
+    }
+  },
+  "invalid_json": {
+    "status": 400,
+    "body": {
+      "error": "invalid_json"
+    }
+  },
+  "not_an_object": {
+    "status": 400,
+    "body": {
+      "error": "body must be a JSON object"
+    }
+  },
+  "pm_lines_unavailable": {
+    "status": 503,
+    "body": {
+      "ok": false,
+      "error": "pm_lines_unavailable"
+    }
+  },
+  "pm_lines_failed": {
+    "status": 502,
+    "body": {
+      "error": "pm_lines_failed"
+    }
+  },
+  "omega_binding_missing": {
+    "status": 503,
+    "body": {
+      "error": "omega_binding_missing"
+    }
+  },
+  "method_not_allowed": {
+    "status": 405,
+    "body": {
+      "error": "method_not_allowed"
+    }
+  }
+}

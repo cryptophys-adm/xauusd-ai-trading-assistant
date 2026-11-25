@@ -55,6 +55,15 @@ import { Post } from "../src/components/Post";
 import { VerdictLine } from "../src/pages/Strategy";
 import { CorrectionControl, CorrectionFooter, CorrectionPanel, GateOverride, ROW, type Phase } from "../src/components/Correction";
 import { OpinionCard } from "../src/pages/Councils";
+import pmOn from "../../../../test/fixtures/nexus-pm-lines/lines-on.json";
+import pmOff from "../../../../test/fixtures/nexus-pm-lines/lines-off.json";
+import pmHandOff from "../../../../test/fixtures/nexus-pm-lines/lines-hand-off.json";
+import pmNew from "../../../../test/fixtures/nexus-pm-lines/lines-new.json";
+import pmAfterOn from "../../../../test/fixtures/nexus-pm-lines/lines-after-on.json";
+import pmError from "../../../../test/fixtures/nexus-pm-lines/lines-error.json";
+import pmReplies from "../../../../test/fixtures/nexus-pm-lines/post-replies.json";
+import { PmLinesFrame, PmLinesLoading, PmLinesView, type PmLinesProps } from "../src/components/PmLines";
+import { replyResult } from "../src/lib/pmLines";
 import { councilOpinionTarget, councilOptionsTarget, emptyDraft, engineTarget, errorOf, gateOf, replyOf, roomConclusionTarget, roomMessageTarget, strategyVerdictTarget, type Draft, type Target } from "../src/lib/corrections";
 
 export type Entry = {
@@ -335,6 +344,50 @@ export const H3F_VIEWS: Entry[] = [
     correction={<CorrectionControl target={roomConclusionTarget(d?.thread, "H1")} className={`mt-[12px] ${ROW}`} />} /></GateOverride.Provider>, fixture: h3fH1, shows: ['aria-label="Rate / correct"'] }
 ];
 
+/**
+ * C5, the Position Manager lines on the Omega page (test/fixtures/nexus-pm-lines/*.json, the seed's answers of the real
+ * readPositionManager, pmLineBreakerTick, setPmLine and the Omega Worker's POST route: test/support/nexus-pm-lines-seed.mjs).
+ * Every state of the block: all on, one off by its breaker (owner and viewer), off by the switch only and by both (the
+ * button's refusal "also off by the switch"), no closes yet, after the owner's turn-on, the AI Worker's failed read, a
+ * failed GET, the confirm box, sending, and each code the POST answers. R is neutral: no bull or bear class anywhere.
+ */
+type PmReply = { status: number; body: any };
+const PM_REPLIES = pmReplies as unknown as Record<string, PmReply>;
+const pmView = (props: Partial<PmLinesProps> = {}) => ({ d }: { d: any }) => <PmLinesView d={d} canControl {...props} />;
+const pmRefused = ({ d }: { d: any }) => {
+  const r = replyResult(Number(d?.status) || 0, d?.body);
+  return <PmLinesView d={pmOff} canControl open="pm_fast_cut" error={r.ok ? null : r.error} />;
+};
+const PM_NO_DIRECTION = ["text-bull", "text-bear", "emerald", "rose-"];
+const PM_OFF_SINCE = "off since Mon 23 Nov 16:35 UTC · 23:35 GMT+7";
+const pmUnread = (code: string): Poll => ({ data: null, error: code, loading: false, refresh: () => {}, lastOk: null, lastFail: 1, failures: 1, stale: false, intervalMs: 60_000 });
+export const PM_VIEWS: Entry[] = [
+  { name: "PmLinesAllOn", View: pmView(), fixture: pmOn,
+    shows: ["Position Manager lines", "take_profit_weakening", "@1", "Last 15", "vs hold", "Closes", "+0.31R", "+0.12R", "−0.38R", "+0.21R", "+1.12R", "−0.06R", ">23<", ">41<", "text-ok", "tp_further_key_level_beyond"],
+    hides: ["Turn back on", "text-fault", "off since", "off by the", ...PM_NO_DIRECTION] },
+  { name: "PmLinesBreakerOff", View: pmView(), fixture: pmOff, shows: ["pm_fast_cut", "text-fault", ">off<", "−0.29R", "−0.11R", PM_OFF_SINCE, "Turn back on"], hides: ["off by the", "Refused", ...PM_NO_DIRECTION] },
+  { name: "PmLinesBreakerOffViewer", View: pmView({ canControl: false }), fixture: pmOff, shows: [PM_OFF_SINCE, ">off<"], hides: ["Turn back on", "<button"] },
+  { name: "PmLinesSwitchOff", View: pmView(), fixture: pmHandOff, shows: ["tp2_target", "off by the", 'href="/#/switches"', ">switch<", PM_OFF_SINCE, "Turn back on"], hides: ["Refused", ...PM_NO_DIRECTION] },
+  { name: "PmLinesSwitchOffOnly", View: pmView(), fixture: { ...pmHandOff, lines: (pmHandOff as any).lines.filter((l: any) => l.id !== "pm_fast_cut") }, shows: ["off by the", 'href="/#/switches"'], hides: ["Turn back on", "off since"] },
+  { name: "PmLinesAlsoOffBySwitch", View: pmView({ open: "pm_fast_cut", error: (replyResult(PM_REPLIES.off_by_PM_LINES_OFF.status, PM_REPLIES.off_by_PM_LINES_OFF.body) as any).error }), fixture: pmHandOff,
+    shows: ["Refused: off_by_PM_LINES_OFF", "also off by the", 'role="alert"', 'href="/#/switches"', "Confirm"], hides: ["@1 back on."] },
+  { name: "PmLinesNoClosesYet", View: pmView(), fixture: pmNew, shows: ["take_profit_weakening", "—", ">0<", "text-ok"], hides: ["R<", "Turn back on", "text-fault"] },
+  { name: "PmLinesAfterTurnOn", View: pmView({ done: "pm_fast_cut@1" }), fixture: pmAfterOn, shows: ["pm_fast_cut@1 back on.", "+0.31R"], hides: ["off since", "Turn back on", "text-fault"] },
+  { name: "PmLinesConfirm", View: pmView({ open: "pm_fast_cut" }), fixture: pmOff, shows: ["glass-inner", "back on?", "pm_fast_cut@1", "Confirm", "Cancel", PM_OFF_SINCE], hides: ["Turn back on", "Sending…", "Refused"] },
+  { name: "PmLinesSending", View: pmView({ open: "pm_fast_cut", phase: "sending" }), fixture: pmOff, shows: ["Sending…", 'disabled=""', "Cancel"], hides: ["Confirm<", "Refused"] },
+  ...Object.keys(PM_REPLIES).filter((k) => k !== "ok" && k !== "off_by_PM_LINES_OFF").map((k) => ({
+    name: `PmLinesRefused_${k}`, View: pmRefused, fixture: PM_REPLIES[k], shows: ["Refused: ", 'role="alert"', "Confirm", PM_OFF_SINCE], hides: ["@1 back on."]
+  })),
+  { name: "PmLinesRefusedNoBody", View: pmRefused, fixture: { status: 503, body: {} }, shows: ["Refused: HTTP 503", "nothing changed."] },
+  { name: "PmLinesRefusedNetwork", View: ({ d }) => <PmLinesView d={pmOff} canControl open="pm_fast_cut" error={String(d?.error ?? "network")} />, fixture: { error: "network" }, shows: ["Refused: network", "no answer from Omega. Nothing changed."] },
+  { name: "PmLinesOkReply", View: ({ d }) => { const r = replyResult(Number(d?.status) || 0, d?.body); return <PmLinesView d={pmAfterOn} canControl done={r.ok ? "pm_fast_cut@1" : null} />; }, fixture: PM_REPLIES.ok, shows: ["pm_fast_cut@1 back on."] },
+  { name: "PmLinesReadFailed", View: pmView(), fixture: pmError, shows: ["/api/omega/position-manager read failed: D1_ERROR: the database is unavailable", "last ok"], hides: ["Last 15", "No lines yet"] },
+  { name: "PmLinesNoLines", View: pmView(), fixture: { status: "ok", lines: [] }, shows: ["No lines yet", "The route sent no Position Manager lines."], hides: ["Last 15"] },
+  { name: "PmLinesUnread", View: ({ d }) => <PmLinesFrame><PollError poll={pmUnread(`/api/omega/position-manager 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} /></PmLinesFrame>, fixture: { error: "internal_error" },
+    shows: ["Position Manager lines", "/api/omega/position-manager 500 internal_error", "retry 60s", "Retry now"] },
+  { name: "PmLinesLoading", View: () => <PmLinesLoading />, fixture: pmOn, shows: ["Position Manager lines", "animate-pulse"], hides: ["Last 15"] }
+];
+
 export const VIEWS: Entry[] = [
   {
     name: "ZonesHeld", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: zonesHeld,
@@ -502,6 +555,7 @@ export const VIEWS: Entry[] = [
   { name: "PatternsUnread500", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { status: "error", error: "chart_patterns_unavailable" }, shows: ["/api/chart-patterns 500 chart_patterns_unavailable"] },
   { name: "PatternsUnread404", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/chart-patterns 404 Not found"] },
   { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] },
+  ...PM_VIEWS,
   ...H3F_VIEWS
 ];
 

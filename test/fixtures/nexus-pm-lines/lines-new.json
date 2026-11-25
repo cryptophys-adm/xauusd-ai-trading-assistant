@@ -1,0 +1,170 @@
+{
+  "status": "ok",
+  "version": "cryptophys.position-manager.v1",
+  "mode": "live",
+  "cap_usd": 5,
+  "spent_usd": 0,
+  "threshold_pips": 30,
+  "band_r": {
+    "scalp": 0.3,
+    "intraday": 0.5,
+    "range": 0.5,
+    "swing": 0.7
+  },
+  "rows": [],
+  "lines": [
+    {
+      "id": "take_profit_weakening",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "lock_tp1",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "breakeven",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp2_target",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp2_breakeven",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "cut_loss",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "loosen_atr_expansion",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "loosen_key_level_outside",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "loosen_high_impact_release",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_momentum_fading",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_key_level_before",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_confidence_drop",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_further_atr_expansion_trend",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_further_key_level_beyond",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "liquidity",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "pm_fast_tp",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "pm_fast_cut",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "status": "ok",
+  "version": "cryptophys.position-manager.v1",
+  "mode": "live",
+  "cap_usd": 5,
+  "spent_usd": 0,
+  "threshold_pips": 30,
+  "band_r": {
+    "scalp": 0.3,
+    "intraday": 0.5,
+    "range": 0.5,
+    "swing": 0.7
+  },
+  "rows": [
+    {
+      "id": "pm:5139:5984234",
+      "ticket": 5139,
+      "bar": 5984234,
+      "at_ms": 1795270380000,
+      "side": "BUY",
+      "pips": null,
+      "price": null,
+      "action": "close",
+      "rule": "breakeven",
+      "sl": null,
+      "tp": null,
+      "why": "seeded",
+      "council": null,
+      "orig_sl": null,
+      "orig_tp": null,
+      "basis": null,
+      "status": "applied",
+      "lines_json": "{\"present\":[],\"cause\":\"breakeven@1\"}"
+    }
+  ],
+  "lines": [
+    {
+      "id": "take_profit_weakening",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 23,
+      "mean_r_last15": 0.31,
+      "r_vs_hold": 0.12
+    },
+    {
+      "id": "lock_tp1",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 17,
+      "mean_r_last15": 1.12,
+      "r_vs_hold": -0.06
+    },
+    {
+      "id": "breakeven",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 41,
+      "mean_r_last15": 0.08,
+      "r_vs_hold": 0.03
+    },
+    {
+      "id": "tp2_target",
+      "version": 1,
+      "enabled": false,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp2_breakeven",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 12,
+      "mean_r_last15": 0.64,
+      "r_vs_hold": 0.09
+    },
+    {
+      "id": "cut_loss",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 12,
+      "mean_r_last15": -0.38,
+      "r_vs_hold": 0.21
+    },
+    {
+      "id": "loosen_atr_expansion",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "loosen_key_level_outside",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "loosen_high_impact_release",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_momentum_fading",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_key_level_before",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_nearer_confidence_drop",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_further_atr_expansion_trend",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "tp_further_key_level_beyond",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "liquidity",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 0,
+      "mean_r_last15": null,
+      "r_vs_hold": null
+    },
+    {
+      "id": "pm_fast_tp",
+      "version": 1,
+      "enabled": true,
+      "off_since": null,
+      "closes": 19,
+      "mean_r_last15": 0.47,
+      "r_vs_hold": 0.05
+    },
+    {
+      "id": "pm_fast_cut",
+      "version": 1,
+      "enabled": false,
+      "off_since": 1795451700000,
+      "closes": 16,
+      "mean_r_last15": -0.29,
+      "r_vs_hold": -0.11
+    }
+  ]
+}
