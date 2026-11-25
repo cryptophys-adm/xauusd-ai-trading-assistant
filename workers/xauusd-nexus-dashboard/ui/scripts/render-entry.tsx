@@ -27,6 +27,7 @@ import fs1Viewer from "../../../../test/fixtures/nexus-fs1/feature-switches-view
 import fs1Revert from "../../../../test/fixtures/nexus-fs1/feature-switches-revert.json";
 import fs1Replies from "../../../../test/fixtures/nexus-fs1/post-replies.json";
 import fs1Record from "../../../../test/fixtures/nexus-fs1/feature-switches-record.json";
+import fs1Hold from "../../../../test/fixtures/nexus-fs1/feature-switches-hold.json";
 import { ConfirmBody, SwitchRowView, SwitchesLoading, SwitchesView, type RowStatus } from "../src/pages/Switches";
 import { ConfirmDialog } from "../src/components/ConfirmDialog";
 import { POST_ERRORS, confirmText, rowOf, type Change } from "../src/lib/featureSwitches";
@@ -237,6 +238,14 @@ export const VIEWS: Entry[] = [
   { name: "FS1ConfigOnly", View: ({ d }) => <SwitchesView d={d} open="ZONE_AHEAD_MODE" />, fixture: fs1Record,
     shows: ["record is set in the config (wrangler.jsonc) and cannot be set here; the panel sets trend or all.", "Set in the config; not settable here"], hides: ["aria-pressed=\"true\">trend<"] },
   { name: "FS1SavedNote", View: ({ d }) => <SwitchesView d={d} open="ENTRY_ZONE_MODE" status={{ ENTRY_ZONE_MODE: { phase: "saved", at: FS1_SAVED_AT, changed: true, era: false } }} />, fixture: fs1Owner, shows: ["Takes effect within ~30 s."] },
+  // Z5: the zone breaker's holds (feature-switches-hold.json, its real tick): the held mark, one tooltip line per hold.
+  { name: "FS1ZoneHold", View: ({ d }) => <SwitchesView d={d} open="ZONE_AHEAD_MODE" />, fixture: fs1Hold,
+    shows: [">held<", "Held by the zone breaker since 2026-11-24 07:22 UTC · 14:22 GMT+7 until 2026-12-01 07:22 UTC · 14:22 GMT+7 (block): your setting is unchanged."] },
+  { name: "FS1ZoneHoldTokens", View: ({ d }) => <SwitchesView d={d} open="ZONE_AIM_OFF" />, fixture: fs1Hold,
+    shows: ["tp held by the zone breaker since 2026-11-24 07:22 UTC · 14:22 GMT+7 until 2026-12-01 07:22 UTC · 14:22 GMT+7 (rule:tp_typed): your setting is unchanged.", "stop held by the zone breaker since", "(rule:stop_skip)"],
+    hides: ["factor held by"] },
+  { name: "FS1RowZoneHold", View: FS1_ROW_VIEW(true, true), fixture: FS1_ROW("ZONE_AIM_OFF", fs1Hold), shows: ["Zone aims", ">held<", "tp held by the zone breaker"] },
+  { name: "FS1RowZoneHoldSingle", View: FS1_ROW_VIEW(true, true), fixture: FS1_ROW("ZONE_AHEAD_MODE", fs1Hold), shows: [">held<", "Held by the zone breaker since"] },
   { name: "FS1TipOpen", View: ({ d }) => <SwitchesView d={d} open="CFC_MODE" />, fixture: fs1Owner, shows: ["aria-expanded=\"true\"", "aria-describedby=\"fs-tip-CFC_MODE\"", "2026-11-24 22:05 UTC · 05:05 GMT+7"] },
   { name: "FS1Saving", View: fs1Status("ENTRY_ZONE_MODE", { phase: "saving" }), fixture: fs1Owner, shows: ["saving…", "aria-busy=\"true\""] },
   { name: "FS1Saved", View: fs1Status("ENTRY_ZONE_MODE", { phase: "saved", at: FS1_SAVED_AT, changed: true, era: false }), fixture: fs1Owner, shows: ["saved", "03:41 UTC · 10:41 GMT+7 · owner"], hides: ["· new parity era"] },

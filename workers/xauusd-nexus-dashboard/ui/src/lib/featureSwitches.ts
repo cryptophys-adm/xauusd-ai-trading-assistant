@@ -28,7 +28,15 @@ export type SwitchRow = {
    * The GET payload does not carry the field today (src/feature-switches.mjs switchRow); read when it does, else [].
    */
   config_only: string[];
+  /**
+   * Z5: the zone breaker's decision-side hold (ZONE_AHEAD_MODE: one hold; ZONE_AIM_OFF: one per held token). The row's
+   * value stays the owner's; null when nothing is held or the breaker's store cannot be read.
+   */
+  zone_hold: ZoneHold | null;
 };
+/** One hold of the zone breaker: since and until (ISO, null when missing) and why ("typing", "block", "rule:<name>", or any other word). */
+export type ZoneHoldEntry = { since: string | null; until: string | null; by: string[] };
+export type ZoneHold = { kind: "single"; hold: ZoneHoldEntry } | { kind: "tokens"; holds: [string, ZoneHoldEntry][] };
 export type SwitchGroup = { id: string; label: string; rows: SwitchRow[] };
 export type Switches = { at: number | null; canControl: boolean; groups: SwitchGroup[]; rows: SwitchRow[]; overrides: number };
 export type ControlKind = "toggle" | "segmented" | "tokens";
@@ -40,6 +48,20 @@ const SOURCES: Source[] = ["override", "config", "default"];
 export const ROLE_WORDS = ["owner", "aether", "agent", "system"];
 const iso = (v: unknown): string | null => (isStr(v) && Number.isFinite(Date.parse(v)) ? v : null);
 const valueOf = (v: unknown): SwitchValue | null => (Array.isArray(v) ? strs(v) : isStr(v) ? v : null);
+
+const holdEntry = (h: any): ZoneHoldEntry | null => (h && typeof h === "object" && !Array.isArray(h)
+  ? { since: iso(h.since), until: iso(h.until), by: strs(h.by).map((b) => b.slice(0, 40)).filter(Boolean) } : null);
+/**
+ * Z5's zone_hold, null-safe: a token row's { tp?: hold, stop?: hold, factor?: hold } (in the row's token order, then any
+ * other key), any other row's { since, until, by }. Unknown `by` words are kept; a missing since or until is null.
+ */
+export function zoneHoldOf(z: any, tokens: string[] | null): ZoneHold | null {
+  if (!z || typeof z !== "object" || Array.isArray(z)) return null;
+  if (!tokens) { const h = holdEntry(z); return h ? { kind: "single", hold: h } : null; }
+  const keys = [...tokens.filter((t) => t in z), ...Object.keys(z).filter((k) => !tokens.includes(k))];
+  const holds = keys.map((k) => [k.slice(0, 40), holdEntry(z[k])] as [string, ZoneHoldEntry | null]).filter((x): x is [string, ZoneHoldEntry] => x[1] != null);
+  return holds.length ? { kind: "tokens", holds } : null;
+}
 
 /** One payload row, null-safe: null when it has no key. */
 export function rowOf(x: any): SwitchRow | null {
@@ -57,7 +79,8 @@ export function rowOf(x: any): SwitchRow | null {
     era_switch: x.era_switch === true, restarts_mode_evidence: x.restarts_mode_evidence === true, emergency_stop: x.emergency_stop === true,
     read_only: x.read_only === true, write: x.write === "omega-settings" ? "omega-settings" : "feature-switch",
     auto_revert: ar && (ar.since || ar.until) ? ar : null,
-    config_only: strs(x.config_only)
+    config_only: strs(x.config_only),
+    zone_hold: zoneHoldOf(x.zone_hold, tokens ? (values as TokenValues).tokens : null)
   };
 }
 
@@ -228,6 +251,19 @@ export const MARK_ERA = "era: a change starts a new parity era.";
 export const MARK_EV = "ev: a change restarts the mode evidence (rule_version moves, so the mode selector counts setups again).";
 export const MARK_STOP = "Emergency stop: a change asks for the key to be typed.";
 export const READ_ONLY_LINE = "Read only: shown for information; it changes in the config only.";
+export const HELD_TITLE = "Held by the zone breaker on the decision side; your setting is unchanged.";
+const holdSpan = (h: ZoneHoldEntry): string => `${h.since ? ` since ${whenText(h.since)}` : ""}${h.until ? ` until ${whenText(h.until)}` : ""}${h.by.length ? ` (${h.by.join(", ")})` : ""}`;
+/**
+ * The tooltip's hold lines (Z5): "Held by the zone breaker since … until … (typing, block): your setting is unchanged.",
+ * or for a token list one line per held token ("tp held by the zone breaker since … until … (rule:tp_typed): …").
+ */
+export function holdLines(r: SwitchRow): string[] {
+  const z = r.zone_hold;
+  if (!z) return [];
+  if (z.kind === "single") return [`Held by the zone breaker${holdSpan(z.hold)}: your setting is unchanged.`];
+  return z.holds.map(([t, h]) => `${t} held by the zone breaker${holdSpan(h)}: your setting is unchanged.`);
+}
+
 /** After a saved change: other isolates read the override store at most every 30 s, then KV spreads it. */
 export const PROPAGATION_NOTE = "Takes effect within ~30 s.";
 export const OMEGA_LINE = "An Omega setting: saved through the Omega settings write path (its validation, audit row and era start).";
@@ -245,7 +281,8 @@ export function tipOf(r: SwitchRow): { dl: [string, string][]; notes: string[] }
   const notes = [
     fixed ? `${fixed} is set in the config (wrangler.jsonc) and cannot be set here; the panel sets ${optionsOf(r).join(" or ")}.` : null,
     r.config_only.length && !fixed ? `Config only: ${r.config_only.join(", ")} (set in wrangler.jsonc, never here).` : null,
-    ar ? `Automatic revert to classic: since ${whenText(ar.since)}, until ${whenText(ar.until)}.` : null,
+    ...holdLines(r),
+    ar ? `Automatic revert to ${valueText(r.value)}: since ${whenText(ar.since)}, until ${whenText(ar.until)}.` : null,
     r.emergency_stop ? MARK_STOP : null,
     r.era_switch ? MARK_ERA : null,
     r.restarts_mode_evidence ? MARK_EV : null,

@@ -15,7 +15,7 @@ const UI = fileURLToPath(new URL("../workers/xauusd-nexus-dashboard/ui/", import
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const src = (p) => read(`workers/xauusd-nexus-dashboard/ui/src/${p}`);
 const fixture = (f) => JSON.parse(read(`test/fixtures/nexus-fs1/${f}`));
-const RECORD = fixture("feature-switches-record.json");
+const RECORD = fixture("feature-switches-record.json"), HOLD = fixture("feature-switches-hold.json");
 const OWNER = fixture("feature-switches.json"), VIEWER = fixture("feature-switches-viewer.json"), REVERT = fixture("feature-switches-revert.json"), REPLIES = fixture("post-replies.json");
 const EMAIL = /[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
 const row = (key, d = OWNER) => d.switches.find((r) => r.key === key);
@@ -70,6 +70,7 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
   assert.deepEqual(REVERT, seed.revert);
   assert.deepEqual(REPLIES, seed.replies);
   assert.deepEqual(RECORD, seed.record);
+  assert.deepEqual(HOLD, seed.hold);
   assert.equal(OWNER.version, "cryptophys.feature-switches.v1");
   assert.deepEqual(Object.keys(OWNER), ["version", "at", "viewer", "groups", "switches"]);
   assert.deepEqual([OWNER.viewer.can_control, VIEWER.viewer.can_control], [true, false]);
@@ -348,6 +349,47 @@ test("FSU14 the coordinator's final details: config-only values, resolve, ZONE_A
   assert.equal(count(await page(OWNER), /Takes effect within ~30 s/g), 0);
 });
 
+test("FSU15 Z5: the zone breaker's hold, a held mark on the row and one tooltip line per hold; the owner's value unchanged", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  // The fixture is the breaker's real tick (runZoneBreaker) read back by the real GET: zone_ahead by block, tp and stop by their rules.
+  const zam = row("ZONE_AHEAD_MODE", HOLD), aim = row("ZONE_AIM_OFF", HOLD);
+  assert.deepEqual(zam.zone_hold, { since: "2026-11-24T07:22:00.000Z", until: "2026-12-01T07:22:00.000Z", by: ["block"] });
+  assert.deepEqual(Object.keys(aim.zone_hold), ["tp", "stop"], "only the tokens held");
+  assert.deepEqual([aim.zone_hold.tp.by, aim.zone_hold.stop.by], [["rule:tp_typed"], ["rule:stop_skip"]]);
+  // The owner's value is the row's value, held or not.
+  for (const k of ["ZONE_AHEAD_MODE", "ZONE_AIM_OFF"]) {
+    assert.deepEqual([row(k, HOLD).value, row(k, HOLD).source], [row(k).value, row(k).source], k);
+    assert.equal(row(k).zone_hold, null, `${k}: nothing held in the main fixture`);
+  }
+  for (const r of OWNER.switches) if (!["ZONE_AHEAD_MODE", "ZONE_AIM_OFF"].includes(r.key)) assert.ok(!("zone_hold" in r), r.key);
+  // Null: no mark, no line.
+  const plain = await page(OWNER, { open: "ZONE_AHEAD_MODE" });
+  assert.ok(!plain.includes(">held<") && !/[Hh]eld by the zone breaker/.test(plain));
+  // A hold: one mark per held row (late amber), the lines in the tooltip only, the control on the owner's value.
+  const html = await page(HOLD, { open: "ZONE_AHEAD_MODE" });
+  clean(html);
+  assert.equal(count(html, />held</g), 2);
+  assert.match(html, /<span class="mono rounded-sm border border-late-fill\/40 bg-late-fill\/10 px-1 text-\[10\.5px\] leading-\[14px\] text-late" title="Held by the zone breaker on the decision side; your setting is unchanged\.">held<\/span>/);
+  const line = "Held by the zone breaker since 2026-11-24 07:22 UTC · 14:22 GMT+7 until 2026-12-01 07:22 UTC · 14:22 GMT+7 (block): your setting is unchanged.";
+  assert.equal(count(html, new RegExp(line.replace(/[()+.]/g, "\\$&"), "g")), 1);
+  assert.ok(html.slice(html.indexOf('id="fs-tip-ZONE_AHEAD_MODE"')).includes(line), "inside the tooltip");
+  assert.match(html, /aria-pressed="true"[^>]*>trend</, "the control keeps the owner's trend");
+  assert.equal(count(html, /aria-pressed="true"[^>]*>(tp|stop|factor)</g), 0, "ZONE_AIM_OFF keeps the owner's none-on");
+  // ZONE_AIM_OFF: one line per held token.
+  assert.deepEqual(u.holdLines(u.rowOf(aim)), [
+    "tp held by the zone breaker since 2026-11-24 07:22 UTC · 14:22 GMT+7 until 2026-12-01 07:22 UTC · 14:22 GMT+7 (rule:tp_typed): your setting is unchanged.",
+    "stop held by the zone breaker since 2026-11-24 07:22 UTC · 14:22 GMT+7 until 2026-12-01 07:22 UTC · 14:22 GMT+7 (rule:stop_skip): your setting is unchanged."
+  ]);
+  // Null-safe: unknown by words kept, a missing since or until left out, junk ignored.
+  assert.deepEqual(u.holdLines(u.rowOf({ ...zam, zone_hold: { by: ["typing", "block", "something_new", 5] } })), ["Held by the zone breaker (typing, block, something_new): your setting is unchanged."]);
+  assert.deepEqual(u.holdLines(u.rowOf({ ...zam, zone_hold: { since: "nope", until: "2026-12-01T07:22:00.000Z" } })), ["Held by the zone breaker until 2026-12-01 07:22 UTC · 14:22 GMT+7: your setting is unchanged."]);
+  assert.deepEqual(u.holdLines(u.rowOf({ ...aim, zone_hold: { factor: { by: ["typing"] }, tp: null, stop: "x" } })), ["factor held by the zone breaker (typing): your setting is unchanged."]);
+  for (const z of [null, undefined, "held", [], 3, {}]) assert.deepEqual(u.holdLines(u.rowOf({ ...aim, zone_hold: z })), [], JSON.stringify(z));
+  assert.equal(u.rowOf({ ...aim, zone_hold: {} }).zone_hold, null);
+  const names = u.VIEWS.map((v) => v.name);
+  for (const n of ["FS1ZoneHold", "FS1ZoneHoldTokens", "FS1RowZoneHold", "FS1RowZoneHoldSingle"]) assert.ok(names.includes(n), n);
+});
+
 test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no price; the row is label, key, control, chip and marks", { skip: NO_UI_DEPS }, async () => {
   for (const f of ["pages/Switches.tsx", "lib/featureSwitches.ts"]) {
     const s = src(f);
@@ -370,5 +412,5 @@ test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no
   const names = u.VIEWS.map((v) => v.name);
   for (const n of ["FS1Owner", "FS1Viewer", "FS1Revert", "FS1TipOpen", "FS1Saving", "FS1Saved", "FS1SavedOmega", "FS1Loading", "FS1GetError", "FS1RowReadOnly", "FS1RowVeto", ...u.POST_ERRORS.map((c) => `FS1Failed_${c}`)]) assert.ok(names.includes(n), n);
   const entry = read("workers/xauusd-nexus-dashboard/ui/scripts/render-entry.tsx");
-  for (const f of ["feature-switches.json", "feature-switches-viewer.json", "feature-switches-revert.json", "feature-switches-record.json", "post-replies.json"]) assert.ok(entry.includes(`test/fixtures/nexus-fs1/${f}`), f);
+  for (const f of ["feature-switches.json", "feature-switches-viewer.json", "feature-switches-revert.json", "feature-switches-record.json", "feature-switches-hold.json", "post-replies.json"]) assert.ok(entry.includes(`test/fixtures/nexus-fs1/${f}`), f);
 });
