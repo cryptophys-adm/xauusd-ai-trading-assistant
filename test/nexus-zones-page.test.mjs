@@ -16,7 +16,7 @@ const UI = fileURLToPath(new URL("../workers/xauusd-nexus-dashboard/ui/", import
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const src = (p) => read(`workers/xauusd-nexus-dashboard/ui/src/${p}`);
 const fixture = (f) => JSON.parse(read(`test/fixtures/nexus-zones/${f}`));
-const HELD = fixture("zones.json"), CLEAR = fixture("zones-clear.json"), EMPTY = fixture("zones-empty.json"), SW = fixture("feature-switches-held.json");
+const HELD = fixture("zones.json"), LEGACY = fixture("zones-legacy.json"), CLEAR = fixture("zones-clear.json"), EMPTY = fixture("zones-empty.json"), SW = fixture("feature-switches-held.json");
 
 const NO_UI_DEPS = ["esbuild", "react", "react-dom"].some((p) => !existsSync(`${UI}node_modules/${p}/package.json`))
   && "the Nexus UI packages are not installed (npm ci in workers/xauusd-nexus-dashboard/ui)";
@@ -97,25 +97,33 @@ test("ZN4 lib/zones.ts: the breaker's rules and order are the backend's; since a
   assert.deepEqual([u.BREAKER_RULES.window, u.BREAKER_RULES.min_group, u.BREAKER_RULES.min_setups, u.BREAKER_RULES.block_mean_r, u.BREAKER_RULES.hold_days * 86_400_000],
     [ZONE_BREAKER.window, ZONE_BREAKER.min_group, ZONE_BREAKER.min_setups, ZONE_BREAKER.block_mean_r, ZONE_BREAKER.hold_ms]);
   assert.equal(HELD.prior, ZONE_VIEW_PRIOR);
-  const b = u.breakerOf(HELD, SW);
+  // ZN1 backend: the view carries since, until and effective itself (zones.json).
+  const viewOwn = (sw) => u.breakerOf(HELD, sw).cells.map((c) => [c.rule, c.held, c.by.join(), c.since, c.until, c.effective]);
+  const T = ["2026-11-24T07:22:00.000Z", "2026-12-01T07:22:00.000Z"];
+  for (const sw of [SW, null]) {
+    assert.deepEqual(viewOwn(sw), [["zone_ahead", true, "block", ...T, true], ["tp", true, "rule:tp_typed", ...T, false], ["stop", true, "rule:stop_skip", ...T, false], ["factor", false, "", null, null, null]], "the view's own times and effective, with or without the switches");
+  }
+  // The fallback (zones-legacy.json: held[] as { rule, by }, a backend before ZN1): times from the switches, effective unknown.
+  const b = u.breakerOf(LEGACY, SW);
   assert.deepEqual(b.cells.map((c) => [c.rule, c.held, c.by.join(), c.since, c.until, c.effective]), [
-    ["zone_ahead", true, "block", "2026-11-24T07:22:00.000Z", "2026-12-01T07:22:00.000Z", null],
-    ["tp", true, "rule:tp_typed", "2026-11-24T07:22:00.000Z", "2026-12-01T07:22:00.000Z", null],
-    ["stop", true, "rule:stop_skip", "2026-11-24T07:22:00.000Z", "2026-12-01T07:22:00.000Z", null],
+    ["zone_ahead", true, "block", ...T, null],
+    ["tp", true, "rule:tp_typed", ...T, null],
+    ["stop", true, "rule:stop_skip", ...T, null],
     ["factor", false, "", null, null, null]
   ]);
   assert.equal(b.checkedAt, "2026-11-24T07:22:00.000Z");
   assert.equal(b.ruleVersion, HELD.breaker.rule_version);
   // No switches body (a failed read): held, no times. Never invented.
   for (const sw of [null, undefined, {}, { error: "proxy_failed" }, { switches: "x" }, { switches: [null, 1, { key: "ZONE_AHEAD_MODE", zone_hold: "x" }] }]) {
-    assert.deepEqual(u.breakerOf(HELD, sw).cells.map((c) => [c.held, c.since, c.until]), [[true, null, null], [true, null, null], [true, null, null], [false, null, null]]);
+    assert.deepEqual(u.breakerOf(LEGACY, sw).cells.map((c) => [c.held, c.since, c.until]), [[true, null, null], [true, null, null], [true, null, null], [false, null, null]]);
   }
   // The view's own since and until win over the switches'.
   const own = u.breakerOf(u.ZONES_OWN_TIMES, SW).cells[0];
   assert.deepEqual([own.since, own.until], ["2026-11-24T08:00:00.000Z", "2026-12-01T08:00:00.000Z"]);
   // effective: read only when present; the note only on a held cell whose effective is false.
   const eff = u.breakerOf(u.ZONES_EFFECTIVE, SW).cells;
-  assert.deepEqual(eff.map((c) => c.effective), [null, false, true, null]);
+  // ZONES_EFFECTIVE (render-entry's heldWith over zones.json) overrides tp and stop; zone_ahead keeps the view's own true.
+  assert.deepEqual(eff.map((c) => c.effective), [true, false, true, null]);
   assert.ok(u.cellTip(eff[1]).endsWith(u.NO_EFFECT_NOTE));
   assert.ok(!u.cellTip(eff[2]).includes(u.NO_EFFECT_NOTE) && !u.cellTip(eff[0]).includes(u.NO_EFFECT_NOTE));
   // An unknown held rule is kept, after the four; junk is dropped.
@@ -180,10 +188,12 @@ test("ZN6 the held page as the mockup: the breaker, the readings, both counterfa
   assert.match(html, /<span class="text-bear">▼ <!-- -->SELL<\/span>|<span class="text-bear">▼ SELL<\/span>/);
   assert.doesNotMatch(html, /\b(emerald|rose)-\d|feed scale|broker scale|\bprice\b/);
   assert.doesNotMatch(html, /\bsample\b/, "the mockup's sample chips are gone");
-  // Holds without the switches' times show none.
-  const bare = await page(HELD, { switches: null });
+  // Holds without their own times (zones-legacy.json) and without the switches' times show none.
+  const bare = await page(LEGACY, { switches: null });
   assert.doesNotMatch(bare, />since</);
   assert.match(bare, /rule:tp_typed/);
+  // The view's own times show without the switches (ZN1 backend).
+  assert.match(await page(HELD, { switches: null }), />since</);
 });
 
 test("ZN7 the states: clear, empty tables, 404 off, 500 with nothing on screen, stale with data, the first load", { skip: NO_UI_DEPS }, async () => {
