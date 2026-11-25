@@ -14,6 +14,10 @@
 //      is SV1b's owner force (src/agent-veto.mjs setAgentVetoForce writes it to the same override store).
 //   ROOM_BREAKOUT_WAIVE (RM1b) is a plain "feature-switch" row whose GET row also carries its automatic revert's hold
 //      (auto_revert, src/room-waive.mjs), as AGENT_VETO_RULE's does.
+//   ZONE_AHEAD_MODE and ZONE_AIM_OFF (Z5) carry the zone breaker's decision-side holds as `zone_hold` (one KV read of
+//      zone-priority:breaker:v1, src/zone-readings.mjs zoneHoldRows): { since, until, by } on ZONE_AHEAD_MODE, a map of
+//      the tokens held on ZONE_AIM_OFF, null when nothing is held or the state is unreadable. The row's value stays the
+//      owner's: a hold never changes the owner's switch.
 
 import {
   FEATURE_SWITCHES, FEATURE_SWITCH_GROUPS, FEATURE_SWITCHES_VERSION, FEATURE_SWITCH_OVERRIDE_KEY, FEATURE_SWITCH_MEMO_MS,
@@ -22,6 +26,7 @@ import {
 } from "./feature-switches.mjs";
 import { resolveAgentVetoRule, readOwnerForceDoc, setAgentVetoForce, AGENT_VETO_AUTO_KEY, autoRevertAt } from "./agent-veto.mjs";
 import { readRoomHold } from "./room-waive.mjs";
+import { zoneHoldRows } from "./zone-readings.mjs";
 import { readSettings, writeSettings, readSettingsKeyMeta } from "./omega-broker.mjs";
 import { OMEGA_DEFAULTS } from "./omega-engine.mjs";
 import { ownerCheck } from "./strategy-arm.mjs";
@@ -104,7 +109,12 @@ async function holdState(env, e, now) {
 }
 
 /** Pure: one row from the states read. */
-function rowFrom(e, { env, doc, veto, omega, holds = {} }) {
+/** Z5: the zone breaker's holds for the zone_hold rows, on the env the overrides resolve to; null rows when unreadable. */
+async function zoneHoldState(env, doc) {
+  try { return await zoneHoldRows({ ...env, ...overridePatch(doc).patch }); } catch { return { zone_ahead: null, aim: null }; }
+}
+
+function rowFrom(e, { env, doc, veto, omega, holds = {}, zoneHolds = null }) {
   if (e.resolve === "omega-settings") {
     const stored = omega?.settings?.[e.key];
     const value = readSwitch(e, isSet(stored) ? stored : OMEGA_DEFAULTS[e.key]);
@@ -128,6 +138,8 @@ function rowFrom(e, { env, doc, veto, omega, holds = {} }) {
     const h = holds[e.key] ?? null;
     return { ...switchRow(e, { ...r, value: h ? "off" : r.value, config_value }), auto_revert: h ? { since: isoOrNull(h.since), until: isoOrNull(h.until) } : null };
   }
+  // Z5: the breaker's decision-side hold beside the owner's value (never instead of it).
+  if (e.zone_hold) return { ...switchRow(e, { ...r, config_value }), zone_hold: zoneHolds?.[e.zone_hold] ?? null };
   return switchRow(e, { ...r, config_value });
 }
 
@@ -141,11 +153,12 @@ export async function featureSwitchesPayload(env, { now = Date.now(), canControl
   const omega = await omegaState(env);
   const holds = {};
   for (const e of FEATURE_SWITCHES) if (e.hold) holds[e.key] = await holdState(env, e, now);
+  const zoneHolds = await zoneHoldState(env, doc);
   return {
     version: FEATURE_SWITCHES_VERSION, at: new Date(now).toISOString(),
     viewer: { can_control: canControl === true },
     groups: FEATURE_SWITCH_GROUPS.map((g) => ({ id: g.id, label: g.label })),
-    switches: FEATURE_SWITCHES.map((e) => rowFrom(e, { env, doc, veto, omega, holds }))
+    switches: FEATURE_SWITCHES.map((e) => rowFrom(e, { env, doc, veto, omega, holds, zoneHolds }))
   };
 }
 
@@ -155,7 +168,9 @@ async function currentRow(env, e, now) {
   const veto = e.resolve === "agent-veto" ? await vetoState(env, now) : null;
   const omega = e.resolve === "omega-settings" ? await omegaState(env) : null;
   const holds = e.hold ? { [e.key]: await holdState(env, e, now) } : {};
-  return rowFrom(e, { env, doc: parseOverrides(r.raw), veto, omega, holds });
+  const doc = parseOverrides(r.raw);
+  const zoneHolds = e.zone_hold ? await zoneHoldState(env, doc) : null;
+  return rowFrom(e, { env, doc, veto, omega, holds, zoneHolds });
 }
 
 /** The Telegram line of a feature-switch change (no price, no person: "the owner"). */

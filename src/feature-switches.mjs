@@ -60,7 +60,7 @@ const CHANGE_TOKENS = Object.freeze(["conf", "tpw", "limit", "skip", "stance"]);
 const tokensGiven = (raw) => new Set(String(raw ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean));
 
 const entry = (e) => Object.freeze({
-  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [], hold: null,
+  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [], hold: null, zone_hold: null,
   ...e,
   values: Array.isArray(e.values) ? Object.freeze([...e.values]) : Object.freeze({ type: "tokens", tokens: Object.freeze([...e.values.tokens]) })
 });
@@ -79,7 +79,7 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn
   }),
   entry({
-    key: "ZONE_AHEAD_MODE", label: "Zone-ahead check", group: "zones", restarts_mode_evidence: true,
+    key: "ZONE_AHEAD_MODE", label: "Zone-ahead check", group: "zones", restarts_mode_evidence: true, zone_hold: "zone_ahead",
     description: "Z2: no trade into a decisive opposing zone inside max(1R, 0.75 ATR(1H)); trend exempts a with-trend plan, all exempts none (owner-set only, one warning line per decision). record and off are config-only.",
     values: ["trend", "all"], config_only: ["record", "off"], default_value: "trend", config_value: "trend",
     read: (raw) => { const v = s(isSet(raw) ? raw : "trend"); return ["trend", "all", "record", "off"].includes(v) ? v : "trend"; }
@@ -90,7 +90,7 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
   }),
   entry({
-    key: "ZONE_AIM_OFF", label: "Zone aims", group: "zones", restarts_mode_evidence: true,
+    key: "ZONE_AIM_OFF", label: "Zone aims", group: "zones", restarts_mode_evidence: true, zone_hold: "aim",
     description: "Z2b: the execution plans aimed by zone type; the tokens listed are the rules ON (tp: TP2 at the next decisive opposing zone; stop: the stop past a decisive opposing zone; factor: pickStrategy's zone factor). Note: stop on with tp off, the reward gate holds stop_skip back more often (the stop widens, the target stays); ZONE_AIM_TP only matters while tp is on.",
     values: { tokens: ZONE_AIM_TOKENS }, default_value: [...ZONE_AIM_TOKENS], config_value: [],
     // The env holds the rules left OFF; the panel shows the rules ON.
@@ -109,6 +109,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "ZONE_AIM_TP", label: "Zone aim: TP1", group: "zones", restarts_mode_evidence: true,
     description: "Z2b: label keeps TP1's price (its words only); qualified moves TP1 to a nearer decisive opposing qualified zone at or beyond ZONE_NEED, owner-set only and only after the owner's TP1-KZ amendment (tp1_kz@2). Matters only while the tp aim is on.",
     values: ["label", "qualified"], default_value: "label", config_value: "label", read: (raw) => (s(raw) === "qualified" ? "qualified" : "label")
+  }),
+  entry({
+    key: "ZONE_READINGS", label: "Zone readings and breaker", group: "zones",
+    description: "Z5: the zone readings, the counterfactual tables (zone_blocked_setups, zone_rule_arms) and the decision-side zone breaker, which holds Z2/Z2b's rules back by itself when their own record turns against them; off writes nothing, the breaker is idle and GET /api/zones answers 404.",
+    values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
   }),
   // ---- Plans, entries and targets (src/strategy-engine.mjs, src/grid-adapt.mjs, src/projection-agent.mjs)
   entry({

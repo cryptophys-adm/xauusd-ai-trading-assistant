@@ -188,6 +188,10 @@
     // for their evidence.
     "ZONE_AIM_OFF": "tp,stop,factor",
     "ZONE_AIM_TP": "label",
+    // Z5 (src/zone-readings.mjs; docs/RFC_DEMAND_SUPPLY_ZONES.md §7): the zone readings, the counterfactual tables and the
+    // decision-side zone breaker (it only holds Z2/Z2b's rules, for the run, and never writes an owner switch); GET
+    // /api/zones. "on" | "off" (nothing written, the breaker idle, the route 404).
+    "ZONE_READINGS": "on",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.

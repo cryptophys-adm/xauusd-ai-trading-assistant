@@ -20,6 +20,7 @@ import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch, resetFea
 import { resolveAgentVetoRule, migrateAgentVetoOwner, runAgentVetoRevert, AGENT_VETO_OWNER_KEY, AGENT_VETO_AUTO_KEY, AGENT_VETO_RULES, agentVetoRuleOf } from "../src/agent-veto.mjs";
 import { zonePriorityMode, zoneAheadMode, keyLevelZoneTypesMode, zoneAimOffMode, zoneAimTpMode, zoneSourcesOffMode, ZONE_AIM_TOKENS, ZONE_SOURCES, ZONE_AHEAD_MODES } from "../src/zone-types.mjs";
 import { entryZoneMode, tp1KeyZoneMode } from "../src/strategy-engine.mjs";
+import { zoneReadingsMode } from "../src/zone-readings.mjs";
 import { chartPatternsMode } from "../src/projection-agent.mjs";
 import { gridAdaptMode } from "../src/grid-adapt.mjs";
 import { roomBreakoutWaiveOf } from "../src/room-waive.mjs";
@@ -113,8 +114,9 @@ test("FS-1 the registry: every switch's config_value is wrangler.jsonc's, read f
   for (const k of ["OMEGA_ENGINE_ENABLED", "EA_SIGNALS_ENABLED", "STRATEGY_ARM_MODE", "STRATEGY_COUNCIL_ARM", "live_armed", "enabled", "OWNER_ACCESS_SUB", "TELEGRAM_BOT_TOKEN", "WEBHOOK_SECRET", "DB", "SIGNAL_CACHE", "AGENTS", "AETHER", "risk_pct", "max_positions"]) assert.equal(switchByKey(k), null, `${k} is not a panel switch`);
   // era_switch: exactly ERA_SWITCHES' members (a parity era starts on change).
   for (const e of FEATURE_SWITCHES) assert.equal(e.era_switch, ERA_SWITCHES.includes(e.key), e.key);
-  // restarts_mode_evidence: TP1_KEY_ZONE_MODE and every ZONE_* switch, KEY_LEVEL_ZONE_TYPES included; nothing else.
-  for (const e of FEATURE_SWITCHES) assert.equal(e.restarts_mode_evidence, e.key === "TP1_KEY_ZONE_MODE" || e.key === "KEY_LEVEL_ZONE_TYPES" || e.key.startsWith("ZONE_"), e.key);
+  // restarts_mode_evidence: TP1_KEY_ZONE_MODE and every ZONE_* switch, KEY_LEVEL_ZONE_TYPES included, but Z5's
+  // ZONE_READINGS (measurement and the decision-side brake, no rule of its own); nothing else.
+  for (const e of FEATURE_SWITCHES) assert.equal(e.restarts_mode_evidence, e.key === "TP1_KEY_ZONE_MODE" || e.key === "KEY_LEVEL_ZONE_TYPES" || (e.key.startsWith("ZONE_") && e.key !== "ZONE_READINGS"), e.key);
   assert.deepEqual(FEATURE_SWITCHES.filter((e) => e.emergency_stop).map((e) => e.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED"]);
   assert.deepEqual(FEATURE_SWITCHES.filter((e) => e.read_only).map((e) => e.key), ["METRIC_REBUTTAL"]);
   // The values the code knows: the panel's ⊆ the code's; ZONE_AHEAD_MODE's record and off are config-only.
@@ -141,6 +143,7 @@ const ACCESSOR = {
   ZONE_AIM_OFF: (env) => ZONE_AIM_TOKENS.filter((t) => !zoneAimOffMode(env).includes(t)),
   ZONE_SOURCES_OFF: (env) => ZONE_SOURCES.filter((t) => !zoneSourcesOffMode(env).includes(t)),
   ZONE_AIM_TP: (env) => zoneAimTpMode(env),
+  ZONE_READINGS: (env) => zoneReadingsMode(env),
   ENTRY_ZONE_MODE: (env) => entryZoneMode(env),
   TP1_KEY_ZONE_MODE: (env) => tp1KeyZoneMode(env),
   CHART_PATTERNS_MODE: (env) => chartPatternsMode(env),
@@ -301,7 +304,7 @@ test("FS-6 GET payload: the promised shape; no email, account or identity key; s
   assert.equal(p.switches.length, FEATURE_SWITCHES.length);
   for (const r of p.switches) {
     const keys = Object.keys(r);
-    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" ? ["auto_revert"] : [], `${r.key}: no extra key`);
+    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" ? ["auto_revert"] : r.key === "ZONE_AHEAD_MODE" || r.key === "ZONE_AIM_OFF" ? ["zone_hold"] : [], `${r.key}: no extra key`);
     assert.deepEqual(ROW_KEYS.filter((k) => !keys.includes(k)), [], `${r.key}: every key`);
     assert.ok(["override", "config", "default"].includes(r.source));
     assert.ok(r.set_by === null || ["owner", "aether", "agent", "system"].includes(r.set_by), `${r.key}: set_by a role word`);
