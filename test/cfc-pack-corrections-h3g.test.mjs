@@ -158,3 +158,20 @@ test("H3g: the learned-item pack reads the item's own refs and subject, never a 
   for (const r of pack.refs) assert.match(r, REF_RE, r);
   assert.deepEqual(priceKeysIn(pack), []);
 });
+
+test("H3g: a correction the platform rejected is left out of seat and item packs; pending and sent stay", async () => {
+  const env = await envOn();
+  const pending = await correct(env, { ref: "ev:xauusd/agent_thread_messages/31", text: "pending one", at: NOW - 3 * HOUR });
+  const sent = await correct(env, { ref: "ev:xauusd/agent_thread_messages/32", text: "sent one", at: NOW - 2 * HOUR });
+  const rejected = await correct(env, { ref: "ev:xauusd/agent_thread_messages/33", text: "rejected one", at: NOW - HOUR });
+  env.DB.db.prepare("UPDATE owner_corrections SET status = 'sent' WHERE correction_id = ?").run(sent);
+  env.DB.db.prepare("UPDATE owner_corrections SET status = 'rejected', reason = 'contract' WHERE correction_id = ?").run(rejected);
+  const block = (await buildEvidencePack(env, "seat:risk@15", { now: NOW })).sections.owner_corrections;
+  assert.deepEqual(block.items.map((i) => i.correction_id).sort(), [pending, sent].sort());
+  assert.ok(!JSON.stringify(block).includes("rejected one"));
+  const itemId = await correct(env, { subject: "agent:risk", ref: "ev:xauusd/learned_live/note-9/v1#status", text: "item rejected", at: NOW - HOUR });
+  assert.ok(JSON.stringify((await buildEvidencePack(env, "knowledge:note-9", { now: NOW })).sections).includes("item rejected"), "read while pending");
+  env.DB.db.prepare("UPDATE owner_corrections SET status = 'rejected' WHERE correction_id = ?").run(itemId);
+  const item = await buildEvidencePack(env, "knowledge:note-9", { now: NOW });
+  assert.ok(!JSON.stringify(item.sections ?? item).includes("item rejected"));
+});

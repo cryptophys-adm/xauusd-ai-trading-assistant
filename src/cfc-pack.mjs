@@ -486,8 +486,8 @@ async function safe(what, fn) { try { return await fn(); } catch (e) { return fa
  * the masked record_json is read (secrets redacted, prices already [level]); original_json is never selected. Each
  * query reads the window's newest CORRECTIONS_READ rows of its target, newest first.
  */
-const CORRECTIONS_SEAT_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE created_ms >= ? AND created_ms <= ? AND json_extract(record_json, '$.target.subject') IN (?, ?) ORDER BY created_ms DESC LIMIT ?";
-const CORRECTIONS_ITEM_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE created_ms >= ? AND created_ms <= ? AND (substr(json_extract(record_json, '$.target.ref'), 1, ?) = ? OR json_extract(record_json, '$.target.subject') IN (?, ?, ?)) ORDER BY created_ms DESC LIMIT ?";
+const CORRECTIONS_SEAT_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE status != 'rejected' AND created_ms >= ? AND created_ms <= ? AND json_extract(record_json, '$.target.subject') IN (?, ?) ORDER BY created_ms DESC LIMIT ?";
+const CORRECTIONS_ITEM_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE status != 'rejected' AND created_ms >= ? AND created_ms <= ? AND (substr(json_extract(record_json, '$.target.ref'), 1, ?) = ? OR json_extract(record_json, '$.target.subject') IN (?, ?, ?)) ORDER BY created_ms DESC LIMIT ?";
 const DIGIT_RUN = /\p{Nd}{3,}/u;
 
 /** Pure: the newest correction per target ref, at most PACK_LIMITS.corrections, without a text that still holds a 3+ digit run. */
