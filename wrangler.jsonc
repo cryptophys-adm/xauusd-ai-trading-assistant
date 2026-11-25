@@ -167,6 +167,7 @@
     // keeps would_block) | "off".
     // On since Z2b-flip (2026-11-25), after the typing replay and the ZONE_NEED re-check on 8 live captures with 1H/4H
     // Prophet boxes (Z1a): need max(1R, 0.75 ATR) kept; in 'trend' 15 of 55 plans fail, all counter-trend longs.
+    // Owner decision 2026-11-25 (relayed by the orchestrator): "Turn on, 'trend' mode".
     "ZONE_PRIORITY": "on",
     "ZONE_AHEAD_MODE": "trend",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
