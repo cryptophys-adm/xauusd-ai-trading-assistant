@@ -30,7 +30,9 @@ const DIRECTION_FILES = [
   // ZN1: the Zones page (a side's word and a zone type's glyph only; rates, outcomes and R neutral).
   "pages/Zones.tsx",
   // H3f: the owner's correction control (no direction colour at all: up is the ok cyan, down the off grey).
-  "components/Correction.tsx"
+  "components/Correction.tsx",
+  // C5: the Position Manager lines on the Omega page (no direction colour at all: on is the ok cyan, off the fault red, R neutral).
+  "components/PmLines.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

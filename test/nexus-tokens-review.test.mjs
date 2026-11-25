@@ -25,7 +25,9 @@ const REVIEW_FILES = [
   // ZN1: the Zones page and its pure model.
   "pages/Zones.tsx", "lib/zones.ts",
   // H3f: the owner's correction control and its pure model.
-  "components/Correction.tsx", "lib/corrections.ts"
+  "components/Correction.tsx", "lib/corrections.ts",
+  // C5: the Position Manager lines on the Omega page and their pure model.
+  "components/PmLines.tsx", "lib/pmLines.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {

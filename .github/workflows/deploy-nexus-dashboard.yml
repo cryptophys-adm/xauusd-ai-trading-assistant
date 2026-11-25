@@ -232,3 +232,43 @@ jobs:
           if (body?.schema !== "cryptophys.zones-view.v1") { console.error(`/api/zones: schema ${body?.schema}`); process.exit(1); }
           console.log(JSON.stringify({ zones: { schema: body.schema, readings: Array.isArray(body.readings) ? body.readings.length : null, breaker: body.breaker ? { checked_at: body.breaker.checked_at ?? null, held: Array.isArray(body.breaker.held) ? body.breaker.held.map((h) => h?.rule) : null } : null, stances: Array.isArray(body.stances) ? body.stances.length : null } }));
           NODE
+
+      - name: Smoke test the Position Manager lines
+        # C5 (the Omega page's Position Manager lines, B5's read): GET /api/omega/position-manager?limit=1 through the Nexus
+        # proxy answers 200 JSON with no-store under the CI service token, with the 17 lines of PM_LINES, each with B5's
+        # fields, and the Access login redirect without it. Read only: the panel's POST is the owner's alone.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
+          import { PM_LINES } from "./src/pm-line-breaker.mjs";
+          const URL_ = "https://nexus.cryptophys.work/api/omega/position-manager?limit=1";
+          const token = accessToken();
+          if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
+          // Without the token: Cloudflare Access answers with its login redirect, never the lines.
+          const bare = await fetch(URL_, { redirect: "manual", signal: AbortSignal.timeout(20000) });
+          if (!isAccessLogin(bare)) { console.error(`/api/omega/position-manager without the token: expected the Access login redirect, got ${bare.status}`); process.exit(1); }
+          console.log(`/api/omega/position-manager without the token: Access login redirect (${bare.status})`);
+          // With the token: 200 JSON, no-store, the lines (the AI Worker may still be deploying: retry for up to 5 minutes).
+          let r = null, body = null;
+          for (let i = 0; i < 30; i++) {
+            try {
+              r = await fetch(URL_, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+              body = await r.json().catch(() => null);
+              if (r.status === 200 && Array.isArray(body?.lines)) break;
+              console.log("position manager lines not ready:", r.status, JSON.stringify(body).slice(0, 200));
+            } catch (e) { console.log("position manager lines error:", e?.name); }
+            await new Promise((res) => setTimeout(res, 10000));
+          }
+          if (!r || r.status !== 200) { console.error(`/api/omega/position-manager: HTTP ${r?.status ?? "no answer"} ${JSON.stringify(body).slice(0, 200)}`); process.exit(1); }
+          if (!/\bjson\b/i.test(r.headers.get("content-type") ?? "")) { console.error(`/api/omega/position-manager: not JSON (${r.headers.get("content-type")})`); process.exit(1); }
+          if (!/no-store/i.test(r.headers.get("cache-control") ?? "")) { console.error(`/api/omega/position-manager: cache-control ${r.headers.get("cache-control")}, expected no-store`); process.exit(1); }
+          const lines = Array.isArray(body?.lines) ? body.lines : null;
+          if (!lines) { console.error(`/api/omega/position-manager: no lines (${JSON.stringify(body?.error ?? null)})`); process.exit(1); }
+          const keys = ["id", "version", "enabled", "off_since", "closes", "mean_r_last15", "r_vs_hold"];
+          const bad = lines.filter((l) => JSON.stringify(Object.keys(l ?? {})) !== JSON.stringify(keys));
+          if (lines.length !== PM_LINES.length || bad.length) { console.error(`/api/omega/position-manager: ${lines.length} lines (want ${PM_LINES.length}), ${bad.length} not in B5's shape`); process.exit(1); }
+          console.log(JSON.stringify({ pm_lines: { n: lines.length, off: lines.filter((l) => !l.enabled).map((l) => `${l.id}@${l.version}${l.off_since == null ? " (switch)" : ""}`) } }));
+          NODE

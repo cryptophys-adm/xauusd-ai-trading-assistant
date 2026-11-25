@@ -20,6 +20,7 @@ import { createChart, LineStyle, type IChartApi, type IPriceLine, type ISeriesAp
 import { Badge, ChartCredit, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../components/ui";
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import OmegaWhy from "../components/OmegaWhy";
+import PmLines from "../components/PmLines";
 import { CHART_READ, get } from "../lib/api";
 import { C } from "../components/charts";
 import { CANDLE, T, tagText, volumeColor } from "../lib/tokens";
@@ -2783,6 +2784,8 @@ export default function Omega() {
                 ) : null}
               </dd>
             </dl>
+            {/* C5: the Position Manager lines (B5), one block under Reversal probation; its own read and the owner's Turn back on. */}
+            <PmLines canControl={canControl} />
             <form
               id="engine-form"
               onSubmit={(ev) => {
