@@ -285,6 +285,7 @@ import { computeRecommendations, readRecommendations } from "./strategy-recommen
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
+import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runZoneReadingsStep, runZoneBreaker, zonesView, zoneReadingsMode } from "./zone-readings.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
@@ -2527,7 +2528,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
     // and the one the trade took.
     try {
-      const [state, latest, reco, council, veto] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env), agentVetoStatus(env).catch(() => null)]);
+      const [state, latest, reco, council, veto, cdGate] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env), agentVetoStatus(env).catch(() => null), cdGateStatus(env).catch(() => null)]);
       const verdicts = (((council as Record<string, any> | null)?.verdicts ?? {}) as Record<string, any>);
       const d = latest as Record<string, any> | null;
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
@@ -2542,6 +2543,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         suspended_patterns: suspendedPatterns(records),
         // SV1b (src/agent-veto.mjs): the veto rule in force and its source, the softened decisions, the closed softened trades and their mean R.
         veto_rule: veto,
+        // CDG (src/cd-gate.mjs): the learned confidence-drop gate's cells per agent|side|bucket, read only.
+        cd_gate: cdGate,
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
       });
     } catch (error) {
@@ -3078,6 +3081,13 @@ async function runLedgerStep(env: Env): Promise<void> {
   // latest 15 closed waived trades average below 0R; once a UTC day, beside SV1b's check (the same rule, no cron of its own).
   const roomWaive = await runRoomWaiveRevert(env, { send: (text: string) => sendTelegram(env, text) });
   if (roomWaive.status === "reverted" || roomWaive.status === "failed") console.log("room_waive", JSON.stringify(roomWaive));
+  // CDG (src/cd-gate.mjs, owner 2026-11-25: "Learned gate, hold otherwise (Recommended)"): the learned confidence-drop
+  // gate once a UTC day (KV, its history, one Omega event and one Telegram line per pass/fail change), then its named
+  // auto-revert (cd_gate back to "off" once, if its first 15 outcomes average worse than the earlier rule). No cron of its own.
+  try {
+    const cdg = await runCdGate(env, { send: (text: string) => sendTelegram(env, text), write: (body: Record<string, unknown>, actor: string) => writeSettings(env, { body, actor }) });
+    if (cdg.gate.status === "changed" || cdg.gate.status === "failed" || cdg.revert.status === "reverted" || cdg.revert.status === "kept" || cdg.revert.status === "failed") console.log("cd_gate", JSON.stringify({ gate: cdg.gate.status, revert: cdg.revert }));
+  } catch (e) { console.error("cd_gate_failed", e instanceof Error ? e.message : String(e)); }
   // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
   // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
   const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });

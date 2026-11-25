@@ -12,6 +12,7 @@ export interface OmegaSettings {
   pm_fast_1m?: "on" | "off";
   reentry_1m?: "on" | "off";
   limit_supersede?: "on" | "off";
+  cd_gate?: "on" | "off";
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;
@@ -44,7 +45,9 @@ export function planIntents(input?: {
   supersede?: { ticket: number; deleted: boolean | null }[];
   /** MS2: the mode probation's risk scale (src/mode-selector.mjs modeProbationRisk). */
   modeRisk?: { mode: string; scale: number } | null;
-}): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[]; entry_request?: Record<string, any> | null; limit_used?: string[]; limit_dropped?: { id: string; reason: string }[]; fill_checks?: { ticket: number; guard: string | null }[] };
+  /** CDG: the learned confidence-drop gate in force (src/cd-gate.mjs), only while cd_gate is "on". */
+  cdGate?: { cells: Record<string, { pass?: boolean; n?: number; lift?: number | null }> };
+}): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[]; cd_gate?: Record<string, any>[]; entry_request?: Record<string, any> | null; limit_used?: string[]; limit_dropped?: { id: string; reason: string }[]; fill_checks?: { ticket: number; guard: string | null }[] };
 export const ROLLOVER_QUARANTINE_UTC: string;
 export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]>; gates?: Record<string, Record<string, any>> }): Array<Record<string, any>>;
 export const STOP_COMMAND_MS: number;

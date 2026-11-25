@@ -85,7 +85,7 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
   assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.read_only).map((r) => r.key), ["METRIC_REBUTTAL"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.source === "override").map((r) => r.key), ["ENTRY_ZONE_MODE", "CFC_MODE", "change_thresholds"]);
-  assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede"]);
+  assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate"]);
   assert.ok(!row("zone_mgmt"), "the mockup's zone_mgmt row is not in the code");
   assert.deepEqual(row("AGENT_VETO_RULE").auto_revert, null);
   assert.deepEqual(row("AGENT_VETO_RULE", REVERT).auto_revert, { since: "2026-11-24T08:00:00.000Z", until: "2026-12-01T08:00:00.000Z" });
@@ -112,7 +112,7 @@ test("FSU4 the pure view over the fixture: groups in the payload's order, one co
   assert.deepEqual(sw.rows.filter(u.wideControl).map((r) => r.key), ["ZONE_SOURCES_OFF"], "only the five sources take their own line");
   const cols = u.columnsOf(sw.groups);
   assert.deepEqual([cols.left.map((g) => g.id), cols.right.map((g) => g.id), cols.wide.map((g) => g.id)], [["zones", "plans"], ["agents", "modes", "lens", "knowledge"], ["omega"]]);
-  assert.deepEqual(u.halves(cols.wide[0].rows).map((h) => h.map((r) => r.key)), [["profit_lock_gate", "change_thresholds", "pm_fast_1m"], ["reentry_1m", "limit_supersede"]]);
+  assert.deepEqual(u.halves(cols.wide[0].rows).map((h) => h.map((r) => r.key)), [["profit_lock_gate", "change_thresholds", "pm_fast_1m"], ["reentry_1m", "limit_supersede", "cd_gate"]]);
   // The phone keeps the payload's order: the columns are contiguous runs.
   assert.deepEqual([...cols.left, ...cols.right, ...cols.wide].map((g) => g.id), sw.groups.map((g) => g.id));
   // Times in UTC and GMT+7.
@@ -402,8 +402,9 @@ test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no
   }
   const html = await page(OWNER);
   assert.doesNotMatch(html, /style="/, "no style attribute in the markup");
-  // The marks: era on the five Omega settings, ev on the mode-evidence switches, the caution on the three emergency stops.
-  assert.equal(count(html, />era</g), 5);
+  // The marks: era on the six Omega settings (CDG's cd_gate the sixth), ev on the mode-evidence switches, the caution on
+  // the three emergency stops.
+  assert.equal(count(html, />era</g), 6);
   assert.equal(count(html, />ev</g), OWNER.switches.filter((r) => r.restarts_mode_evidence).length);
   assert.equal(count(html, /aria-label="Emergency stop"/g), 3);
   // The description lives in the tooltip only (once per row, inside role="tooltip").

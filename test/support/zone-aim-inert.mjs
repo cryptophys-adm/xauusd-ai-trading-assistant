@@ -6,11 +6,21 @@ import { createHash } from "node:crypto";
 // Z1b adds ds_sources (the source labels) to the recorded key_levels; the pins hold everything else byte for byte.
 // On a tree without the field (main 6135237) this is the identity.
 // Stored rows hold the record as JSON text, so a string that parses as an object or array is stripped inside too.
+// CDG (2026-11-25) adds atr_range_ratio (a measurement, a number only) to the decision record: stripped the same way.
 export const withoutDsSources = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
-  if (k === "ds_sources") return undefined;
+  if (k === "ds_sources" || k === "atr_range_ratio") return undefined;
   if (typeof x === "string" && /^[[{]/.test(x)) { try { return JSON.stringify(withoutDsSources(JSON.parse(x))); } catch { return x; } }
   return x;
 }));
+/**
+ * CDG (2026-11-25): the decision record's atr_range_ratio (a measurement nothing reads for a decision) stripped, so the
+ * records pinned before it compare byte for byte. Stored rows hold the record as JSON text: stripped inside too. Pure.
+ */
+export const withoutAtrRangeRatio = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v, (k, x) => {
+  if (k === "atr_range_ratio") return undefined;
+  if (typeof x === "string" && /^[[{]/.test(x)) { try { return JSON.stringify(withoutAtrRangeRatio(JSON.parse(x))); } catch { return x; } }
+  return x;
+})));
 
 /** The top-level `vars` of a wrangler.jsonc (comments and trailing commas stripped; strings kept whole). */
 export function wranglerVars(url) {
