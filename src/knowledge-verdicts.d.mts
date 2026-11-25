@@ -3,6 +3,7 @@ export const KNOWLEDGE_VERDICT_CAPABILITY: string;
 export const KNOWLEDGE_VERDICTS: readonly string[];
 export const KNOWLEDGE_VERDICT_EVIDENCE_KEYS: readonly string[];
 export const KNOWLEDGE_VERDICT_RULES: { readonly per_run: number; readonly max_attempts: number; readonly strikes_per_hour: number; readonly backoff_ms: number };
+export const KNOWLEDGE_VERDICT_TIMEOUT_MS: number;
 export const KNOWLEDGE_VERDICT_SCHEMA_SQL: readonly string[];
 export function knowledgeVerdictPostsEnabled(env: unknown): boolean;
 export function verdictPayloadProblems(payload: unknown): string[];

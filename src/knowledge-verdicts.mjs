@@ -21,6 +21,10 @@
 // agent off (the documented exception of AGENTS.md rule 7: one whoami decides after it); a kernel failure or a
 // transport error stops the run and is retried, at most KNOWLEDGE_VERDICT_RULES.max_attempts times. At most
 // KNOWLEDGE_VERDICT_RULES.strikes_per_hour refused or failed calls an hour, below the kernel's suspension at 5.
+// A timeout (KNOWLEDGE_VERDICT_TIMEOUT_MS, 20 s: each call takes about 5 s on the platform) is unknown, not failed:
+// the call may have landed. It stops the run like any transport error, leaves the row pending without counting an
+// attempt or a strike, and the next run posts again; the platform's idempotency answers a repeat of the same
+// (proposal, verdict, window_end) with deduplicated: true, which is marked posted.
 // Switch: off unless SHADOW_KNOWLEDGE_ENABLED is "true" and KNOWLEDGE_VERDICT_POSTS is "on"; off, nothing is read,
 // written or called.
 
@@ -30,13 +34,15 @@ import { LEARNED_LIVE_SCHEMA_SQL } from "./learned-live.mjs";
 import { shadowKnowledgeEnabled, subjectOf, untestableReason, IDLE_RULES } from "./shadow-knowledge.mjs";
 // Moved to src/shadow-knowledge.mjs (KA3 needs it there); exported here as before.
 export { untestableReason };
-import { kernelSyscall, readAgentBackoff, writeAgentBackoff, clearAgentBackoff, kernelAgentStatus, PLATFORM_CALL_TIMEOUT_MS } from "./platform-reports.mjs";
+import { kernelSyscall, readAgentBackoff, writeAgentBackoff, clearAgentBackoff, kernelAgentStatus } from "./platform-reports.mjs";
 
 export const KNOWLEDGE_VERDICT_AGENT_ID = "shadow-knowledge";
 export const KNOWLEDGE_VERDICT_CAPABILITY = "knowledge.verdict";
 export const KNOWLEDGE_VERDICTS = Object.freeze(["live", "retired", "not_better", "worse", "holdout_failed", "collecting", "inconclusive", "not_tested"]);
 export const KNOWLEDGE_VERDICT_EVIDENCE_KEYS = Object.freeze(["arm", "window_start", "window_end", "rows", "scored", "treat_hits", "control_hits", "aa_changed", "aa_total", "p_value", "p_holm", "charts", "rule"]);
 export const KNOWLEDGE_VERDICT_RULES = Object.freeze({ per_run: 12, max_attempts: 5, strikes_per_hour: 3, backoff_ms: 55 * 60_000 });
+/** The knowledge.verdict call's own timeout (2026-11-25); PLATFORM_CALL_TIMEOUT_MS stays for the other kernel calls. */
+export const KNOWLEDGE_VERDICT_TIMEOUT_MS = 20_000;
 
 export function knowledgeVerdictPostsEnabled(env) {
   return shadowKnowledgeEnabled(env) && String(env?.KNOWLEDGE_VERDICT_POSTS ?? "off").trim().toLowerCase() === "on";
@@ -282,7 +288,7 @@ const NOT_FOUND = /knowledge_proposal_not_found/;
  * Hourly, after runShadowClosures (its non-enumerable `plan`). Never throws. Returns what it did, for one log line:
  * { status: "ok" | "not_registered" | "backoff" | ..., due, posted, not_found, invalid, failed, stopped }.
  */
-export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now(), limit = KNOWLEDGE_VERDICT_RULES.per_run, timeoutMs = PLATFORM_CALL_TIMEOUT_MS } = {}) {
+export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now(), limit = KNOWLEDGE_VERDICT_RULES.per_run, timeoutMs = KNOWLEDGE_VERDICT_TIMEOUT_MS } = {}) {
   if (!knowledgeVerdictPostsEnabled(env)) return { status: "disabled" };
   if (!env?.DB || typeof env?.AGENTS?.syscall !== "function") return { status: "unavailable" };
   if (!plan || !Array.isArray(plan.items)) return { status: "no_plan" };
@@ -325,6 +331,12 @@ export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now()
       }
       // Not yet registered on the platform: nothing is marked, the next run tries again.
       if (NOT_REGISTERED.test(reason)) { out.status = "not_registered"; out.stopped = "not_registered"; break; }
+      // A timeout is unknown (the kernel may have stored it): pending, no attempt and no strike; the run still stops.
+      if (r?.outcome === "transport" && r?.reason === "timeout") {
+        await mark(db, e, "pending", "timeout", at, attemptsOf(e));
+        Object.assign(out, { stopped: "transport", reason: "timeout" });
+        break;
+      }
       await strike(db, now);
       if (NOT_FOUND.test(reason)) { await mark(db, e, "not_found", reason, at, attemptsOf(e) + 1); out.not_found.push(e.key); continue; }
       if (r?.outcome === "denied") {

@@ -3,6 +3,10 @@
 // test/parity-groups.test.mjs compares its output with test/fixtures/parity-b7-main.json, which was
 // generated with this module on main before the field groups existed: the sweep output, the stored
 // trust (registry rows, comparisons, the trusted KV lane) and the parity view must stay byte-identical.
+// Regenerated once on 2026-11-25 for the approved_at bind fix: on main every promotion stored
+// approved_at "24.0", so the scenario's one-time reclassification (its marker is absent here) saw no
+// mismatch "after" the approval and restored gmi, gmi_hud, gmi_m15 and gmi_hud_m15, which were revoked
+// by real indicator mismatches. They now stay revoked; see test/parity-approved-at.test.mjs PF-8.
 import { DatabaseSync } from "node:sqlite";
 import { reconcileLocalComputation, reconcileRecentCandles } from "../../src/parity-sweep.mjs";
 import { resetSchemaCacheForTests, ensureSchema, registerIdentity, identityOf, listRegistry } from "../../src/parity-registry.mjs";
