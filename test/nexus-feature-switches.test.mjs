@@ -85,8 +85,9 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
   assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.read_only).map((r) => r.key), ["METRIC_REBUTTAL"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.source === "override").map((r) => r.key), ["ENTRY_ZONE_MODE", "CFC_MODE", "change_thresholds"]);
-  assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate"]);
-  assert.ok(!row("zone_mgmt"), "the mockup's zone_mgmt row is not in the code");
+  assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt"]);
+  // Z3a (2026-11-25): the mockup's zone_mgmt row is in the code now, an Omega owner setting (off | omega, default off).
+  assert.deepEqual([row("zone_mgmt").values, row("zone_mgmt").value, row("zone_mgmt").source, row("zone_mgmt").era_switch], [["off", "omega"], "off", "default", true]);
   assert.deepEqual(row("AGENT_VETO_RULE").auto_revert, null);
   assert.deepEqual(row("AGENT_VETO_RULE", REVERT).auto_revert, { since: "2026-11-24T08:00:00.000Z", until: "2026-12-01T08:00:00.000Z" });
 });
@@ -107,12 +108,12 @@ test("FSU4 the pure view over the fixture: groups in the payload's order, one co
   assert.deepEqual([sw.canControl, sw.overrides, sw.at], [true, 3, Date.parse("2026-11-25T03:40:00Z")]);
   const kinds = Object.fromEntries(sw.rows.map((r) => [r.key, u.controlKind(r)]));
   assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "tokens").map(([k]) => k), ["ZONE_AIM_OFF", "ZONE_SOURCES_OFF", "change_thresholds"]);
-  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "AGENT_VETO_RULE", "CFC_MODE", "LENS_ROOM_LINE", "profit_lock_gate"]);
+  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "AGENT_VETO_RULE", "CFC_MODE", "LENS_ROOM_LINE", "profit_lock_gate", "zone_mgmt"]);
   for (const r of sw.rows) if (kinds[r.key] === "toggle") assert.deepEqual([...r.values].sort(), ["off", "on"], r.key);
   assert.deepEqual(sw.rows.filter(u.wideControl).map((r) => r.key), ["ZONE_SOURCES_OFF"], "only the five sources take their own line");
   const cols = u.columnsOf(sw.groups);
   assert.deepEqual([cols.left.map((g) => g.id), cols.right.map((g) => g.id), cols.wide.map((g) => g.id)], [["zones", "plans"], ["agents", "modes", "lens", "knowledge"], ["omega"]]);
-  assert.deepEqual(u.halves(cols.wide[0].rows).map((h) => h.map((r) => r.key)), [["profit_lock_gate", "change_thresholds", "pm_fast_1m"], ["reentry_1m", "limit_supersede", "cd_gate"]]);
+  assert.deepEqual(u.halves(cols.wide[0].rows).map((h) => h.map((r) => r.key)), [["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m"], ["limit_supersede", "cd_gate", "zone_mgmt"]]);
   // The phone keeps the payload's order: the columns are contiguous runs.
   assert.deepEqual([...cols.left, ...cols.right, ...cols.wide].map((g) => g.id), sw.groups.map((g) => g.id));
   // Times in UTC and GMT+7.
@@ -140,7 +141,7 @@ test("FSU5 owner against read only: controls only when viewer.can_control, never
   const owner = await page(OWNER), viewer = await page(VIEWER);
   const toggles = OWNER.switches.filter((r) => Array.isArray(r.values) && [...r.values].sort().join() === "off,on" && !r.read_only).length;
   assert.equal(count(owner, /role="switch"/g), toggles);
-  assert.equal(count(owner, /role="group"/g), 11, "8 segmented and 3 token lists");
+  assert.equal(count(owner, /role="group"/g), 12, "9 segmented (Z3a's zone_mgmt the ninth) and 3 token lists");
   assert.ok(!owner.includes('aria-label="Metric rebuttals (METRIC_REBUTTAL)"'), "a read-only row never shows a control, even for the owner");
   for (const t of ["role=\"switch\"", "aria-pressed", "Reset to", "role=\"group\""]) assert.ok(!viewer.includes(t), `viewer: ${t}`);
   for (const t of ["Settings · viewer", "read only", "none on", "conf,tpw,limit,skip", "two_sided", "suggest"]) assert.ok(viewer.includes(t), `viewer: ${t}`);
@@ -406,9 +407,9 @@ test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no
   }
   const html = await page(OWNER);
   assert.doesNotMatch(html, /style="/, "no style attribute in the markup");
-  // The marks: era on the six Omega settings (CDG's cd_gate the sixth), ev on the mode-evidence switches, the caution on
-  // the three emergency stops.
-  assert.equal(count(html, />era</g), 6);
+  // The marks: era on the seven Omega settings (CDG's cd_gate the sixth, Z3a's zone_mgmt the seventh), ev on the
+  // mode-evidence switches, the caution on the three emergency stops.
+  assert.equal(count(html, />era</g), 7);
   assert.equal(count(html, />ev</g), OWNER.switches.filter((r) => r.restarts_mode_evidence).length);
   assert.equal(count(html, /aria-label="Emergency stop"/g), 3);
   // The description lives in the tooltip only (once per row, inside role="tooltip").

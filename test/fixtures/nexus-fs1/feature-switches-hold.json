@@ -760,6 +760,28 @@
       "emergency_stop": false,
       "read_only": false,
       "write": "omega-settings"
+    },
+    {
+      "key": "zone_mgmt",
+      "label": "Zone-typed management (Z3a)",
+      "description": "Z3a: omega moves SL+ behind the position's own decisive demand or supply zone (at most 0.15-0.30R looser than today's, never below the lock) and the trailing TP to a decisive opposing zone at most one zone further; one modify per position per 3 minutes across this and the 1m fast layer. off: the engine as before (the documented rollback). The owner's switch only.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "off",
+        "omega"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
     }
   ]
 }

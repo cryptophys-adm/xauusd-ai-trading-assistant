@@ -163,17 +163,24 @@ export function entryZoneFields(t, side) {
  * Power"; "Bull/Bear power dihasilkan decision engine hasil quorum"). `power` is the quorum's score
  * (-1 bearish to +1 bullish) at `power_ms`, the decision's close; `key_levels` the Key Level Agent's
  * candidate zones on the feed's scale ("low:high" joined by ","); `feed_basis` the broker minus the feed.
+ * Z3a (docs/RFC_DEMAND_SUPPLY_ZONES.md §8): `key_level_types`, only when every kept level carries its zone words
+ * (Z0's zone_type, KEY_LEVEL_ZONE_TYPES on): "type/strength/freshness" per level ("-" for none), joined by ",", aligned
+ * 1:1 with key_levels; Omega reads it only while its setting zone_mgmt is not "off". An untyped decision's signal is
+ * byte for byte as before. Not named tp2 or extended_tp.
  * Flat values only: the EA parses a flat JSON object and ignores these.
  */
 export function managementFields(decision, { basis = null } = {}) {
   const close = keyCloseMs(decision?.decision_key);
   const score = decision?.quorum?.score;
   const levels = (Array.isArray(decision?.key_levels) ? decision.key_levels : []).filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high);
+  const word = (w) => (typeof w === "string" && /^[a-z_]+$/.test(w) ? w : "-");
+  const types = levels.length && levels.every((z) => typeof z.zone_type === "string") ? levels.map((z) => `${word(z.zone_type)}/${word(z.zone_strength)}/${word(z.zone_freshness)}`).join(",") : null;
   return {
     trading_mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "",
     power: Number.isFinite(score) ? Math.max(-1, Math.min(1, score)) : 0,
     power_ms: Number.isFinite(close) && Number.isFinite(score) ? close : 0,
     key_levels: levels.map((z) => `${z.low}:${z.high}`).join(","),
+    ...(types ? { key_level_types: types } : {}),
     feed_basis: Number.isFinite(basis) ? basis : 0,
     feed_basis_known: Number.isFinite(basis),
     // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): whether the rules run,

@@ -99,7 +99,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // "on", a confidence_drop close only where the learned gate passes for the agent x side x drop bucket, every other
   // drop held (no close, no stop move); "off", today's engine byte for byte. The owner's switch only; Aether's policy
   // never writes it. Its automatic revert sets it to "off" once (cdGateRevert).
-  cd_gate: "on"
+  cd_gate: "on",
+  // Z3a, typed zones in Omega's management (owner 2026-11-23: "Langsung prioritaskan"; docs/RFC_DEMAND_SUPPLY_ZONES.md
+  // §8): "omega", SL+ behind the position's own decisive zones (within a giveback cap) and the trailing TP to a decisive
+  // opposing zone at most one zone further; "off" (default), today's engine byte for byte. The owner's switch only;
+  // Aether's policy and its rollback never write it (Z3b adds omega_pm, Z4 adds full).
+  zone_mgmt: "off"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -230,6 +235,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.cd_gate !== undefined) {
     if (typeof body.cd_gate !== "string" || !CD_GATE_MODES.includes(body.cd_gate)) return { error: "cd_gate must be 'on' or 'off'" };
     out.cd_gate = body.cd_gate;
+  }
+  if (body.zone_mgmt !== undefined) {
+    if (typeof body.zone_mgmt !== "string" || !ZONE_MGMT_MODES.includes(body.zone_mgmt)) return { error: "zone_mgmt must be 'off' or 'omega'" };
+    out.zone_mgmt = body.zone_mgmt;
   }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
@@ -379,20 +388,75 @@ export const POWER_STRONG = 0.5;
 export const POWER_WEAK = 0.2;
 export const POWER_FRESH_MS = 35 * 60_000;
 
-/** Pure: the signal's key levels on the broker's scale ({ low, high }, lowest first), or null without a known basis. */
-export function brokerKeyLevels(signal) {
+// Z3a, typed zones in management (the Omega setting zone_mgmt; docs/RFC_DEMAND_SUPPLY_ZONES.md §8). "off" (the default) is
+// today's engine byte for byte; "omega" lets the key levels' demand and supply words (the signal's key_level_types) move
+// SL+ and the trailing TP. Z3b adds omega_pm and Z4 full; each includes "omega".
+export const ZONE_MGMT_MODES = Object.freeze(["off", "omega"]);
+/** Pure: whether typed zones steer Omega's SL+ and trailing TP (zone_mgmt set and not "off"). */
+export function zoneMgmtOn(settings) {
+  const v = settings?.zone_mgmt;
+  return typeof v === "string" && v !== "off" && ZONE_MGMT_MODES.includes(v);
+}
+/**
+ * How much looser than today's SL+ a typed SL+ may sit (behind the position's own decisive zone), in R of the stop
+ * distance at entry, per the mode the position opened in (an unknown mode: intraday). Unknown R: only tighter.
+ */
+export const ZONE_GIVEBACK_R = Object.freeze({ scalp: 0.15, intraday: 0.25, range: 0.25, swing: 0.3 });
+/**
+ * One modify per position per this window across the 1m fast layer (src/pm-fast.mjs) and zone management: a zone-driven
+ * move waits this long after a fast action of the same position (management is then today's, untyped), and a fast
+ * action waits this long after a zone-driven move (pm-fast's rate limit reads it). The fast layer's own rate, 3 minutes.
+ */
+export const ZONE_MGMT_RATE_MS = 3 * 60_000;
+const ZONE_WORD_TYPES = new Set(["demand", "supply", "mixed", "none"]);
+const ZONE_WORD_STRENGTHS = new Set(["strong", "medium", "weak"]);
+const ZONE_WORD_FRESHNESS = new Set(["fresh", "tested", "worn"]);
+/**
+ * Pure (Z3a): the signal's key_level_types ("type/strength/freshness" tokens, "-" for none) as words aligned 1:1 with its
+ * key_levels parts, or null when either is absent or the counts differ (then nothing is typed).
+ */
+export function typedLevels(signal) {
+  if (typeof signal?.key_level_types !== "string" || !signal.key_level_types || typeof signal.key_levels !== "string" || !signal.key_levels) return null;
+  const parts = signal.key_levels.split(","), tokens = signal.key_level_types.split(",");
+  if (tokens.length !== parts.length) return null;
+  return tokens.map((t) => {
+    const [type, strength, freshness] = t.split("/");
+    return { type: ZONE_WORD_TYPES.has(type) ? type : "none", strength: ZONE_WORD_STRENGTHS.has(strength) ? strength : null, freshness: ZONE_WORD_FRESHNESS.has(freshness) ? freshness : null };
+  });
+}
+/** Pure (Z3a): a typed level that is demand or supply of medium or higher strength (zone-types.mjs decisive's rule). */
+export function typedDecisive(z) {
+  return (z?.type === "demand" || z?.type === "supply") && (z.strength === "medium" || z.strength === "strong");
+}
+
+/** Pure (Z3a): a position's giveback cap in price (ZONE_GIVEBACK_R of its mode x its R at entry), or null when R is unknown. */
+export function zoneGiveback(meta) {
+  const rd = Number(meta?.r_dist);
+  if (!positive(rd)) return null;
+  const mode = typeof meta?.mode === "string" && Object.hasOwn(ZONE_GIVEBACK_R, meta.mode) ? meta.mode : "intraday";
+  return ZONE_GIVEBACK_R[mode] * rd;
+}
+
+/**
+ * Pure: the signal's key levels on the broker's scale ({ low, high }, lowest first), or null without a known basis.
+ * Z3a: with `typed` and a key_level_types whose token count matches the key levels, each key level also carries its
+ * words { type, strength, freshness } and lens B's levels type "none"; otherwise (and always without `typed`) today's.
+ */
+export function brokerKeyLevels(signal, { typed = false } = {}) {
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4; owner 2026-11-20,
   // "rekomendasi"): sweep extremes, untaken pools and high-volume nodes join the key levels with source "liquidity",
   // already on the broker's scale (no basis added), only while the lens is on (the signal's liquidity_on).
   const liquidity = signalLiquidityLevels(signal);
+  const words = typed ? typedLevels(signal) : null;
   const out = [];
   if (signal?.feed_basis_known === true && finite(signal.feed_basis) && typeof signal.key_levels === "string" && signal.key_levels) {
-    for (const part of signal.key_levels.split(",")) {
-      const [lo, hi] = part.split(":").map(Number);
-      if (positive(lo) && positive(hi) && lo <= hi) out.push({ low: lo + signal.feed_basis, high: hi + signal.feed_basis });
+    const parts = signal.key_levels.split(",");
+    for (let i = 0; i < parts.length; i += 1) {
+      const [lo, hi] = parts[i].split(":").map(Number);
+      if (positive(lo) && positive(hi) && lo <= hi) out.push(words ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...words[i] } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis });
     }
   }
-  out.push(...liquidity);
+  out.push(...(words ? liquidity.map((z) => ({ ...z, type: "none", strength: null, freshness: null })) : liquidity));
   return out.length ? out.sort((a, b) => a.low - b.low) : null;
 }
 
@@ -417,8 +481,18 @@ export function powerBand(p) {
  *                the old target, less the buffer; with a weaker power the target stays and is taken.
  * The stop only moves in the position's favour and keeps the broker's stop distance from price. `lockPx` (SLG1, the
  * profit-lock gate on) replaces the small-profit lock with the gate's first lock.
+ * Z3a (zone_mgmt not "off"): with `zone` ({ cap }: the giveback in price, null when the position's R is unknown) and
+ * typed levels (brokerKeyLevels with `typed`), the plan is computed both ways:
+ *   SL+          behind the position's own passed decisive zones (demand for a long, supply for a short; medium or
+ *                stronger): strong behind the own zone before the last (two needed), normal behind the last own one,
+ *                weak the tighter of that and the 5m swing; always at or past the lock. Taken when it is at or tighter
+ *                than today's SL+, or looser by at most `cap`; else today's (no cap: tighter only);
+ *   trailing TP  the first decisive opposing zone among the first two beyond the target (at most one zone further),
+ *                else today's next level.
+ * The typed plan's prices then go through the same room and forward-only checks; `sl_zone` / `tp_zone` mark a price
+ * the typing changed (absent when it is today's). Without `zone` the result is today's, byte for byte.
  */
-export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(), extend = true, lockPx = null }) {
+export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(), extend = true, lockPx = null, zone = null }) {
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), curSl = Number(p.sl), curTp = Number(p.tp);
   const digits = Number.isInteger(sym.digits) ? sym.digits : 2;
@@ -436,34 +510,61 @@ export function keyLevelPlan({ position: p, sym, signal, levels, now = Date.now(
   const behind = (z) => (buy ? z.low - buffer : z.high + buffer);
   const better = (a, b) => (!finite(b) ? true : buy ? a > b + point : a < b - point);
   const room = (sl) => (buy ? sl < sym.bid - floorPx : sl > sym.ask + floorPx);
-  const candidates = [];
+  // Z3a: typed only with `zone` and levels that carry words (brokerKeyLevels with `typed` and a matching count).
+  const zoned = zone != null && typeof zone === "object" && levels.some((z) => typeof z?.type === "string");
+  const candidates = [], typedCandidates = [];
   // SL+: the key levels wholly beyond the entry that price has passed, nearest to price first.
   const passed = levels.filter((z) => (buy ? z.low > open && z.high < price - buffer : z.high < open && z.low > price + buffer)).sort((a, b) => (buy ? b.high - a.high : a.low - b.low));
   if (passed.length) {
     // SLG1: with the profit-lock gate on, the lock floor is the gate's first lock (`lockPx`, break-even plus the spread
     // plus 0.1 x ATR(M5)); SL+ goes further than it only after the gate.
     const lock = finite(lockPx) ? lockPx : open + dir * Math.max(2 * spreadPx, buffer);
+    const swing = band === "weak" && positive(buy ? signal?.m5_swing_low : signal?.m5_swing_high) ? (buy ? signal.m5_swing_low - buffer : signal.m5_swing_high + buffer) : null;
     let sl = band === "strong" ? (passed[1] ? behind(passed[1]) : lock) : behind(passed[0]);
-    if (band === "weak" && positive(buy ? signal?.m5_swing_low : signal?.m5_swing_high)) {
-      const swing = buy ? signal.m5_swing_low - buffer : signal.m5_swing_high + buffer;
-      if (better(swing, sl)) sl = swing;
-    }
+    if (swing != null && better(swing, sl)) sl = swing;
     if (!better(sl, lock)) sl = lock;
     candidates.push(sl);
+    let typedSl = sl;
+    if (zoned) {
+      const own = passed.filter((z) => z.type === (buy ? "demand" : "supply") && typedDecisive(z));
+      const ownZone = band === "strong" ? own[1] : own[0];
+      if (ownZone) {
+        let t = behind(ownZone);
+        if (swing != null && better(swing, t)) t = swing;
+        if (!better(t, lock)) t = lock;
+        // How much looser than today's SL+ (> 0: looser): tighter or equal always, looser within the cap only.
+        const looser = dir * (sl - t);
+        if (looser <= point / 2 || (positive(zone.cap) && looser <= zone.cap + 1e-9)) typedSl = t;
+      }
+    }
+    typedCandidates.push(typedSl);
   }
   // Trailing TP: near the target with a strong power, the next key level beyond it.
-  let tp = null;
+  let tp = null, typedTp = null;
   // Owner 2026-11-16 (docs/RFC_STRATEGY_EXECUTION.md): the target is extended only while the agent's confidence holds.
   if (extend && finite(curTp) && curTp > 0 && band === "strong") {
     const near = Math.max(atr5 ? 0.5 * atr5 : 0, 3 * spreadPx, 0.2 * Math.abs(curTp - open));
     if (dir * (curTp - price) <= near) {
-      const next = levels.filter((z) => (buy ? z.low > curTp + buffer : z.high < curTp - buffer)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
-      if (next) { tp = roundTo(buy ? next.low : next.high, digits); candidates.push(curTp - dir * buffer); }
+      const beyond = levels.filter((z) => (buy ? z.low > curTp + buffer : z.high < curTp - buffer)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high));
+      const next = beyond[0];
+      if (next) {
+        tp = roundTo(buy ? next.low : next.high, digits);
+        candidates.push(curTp - dir * buffer);
+        typedCandidates.push(curTp - dir * buffer);
+        // Z3a: the first decisive opposing zone among the first two beyond the target (at most one zone further).
+        const opp = zoned ? beyond.slice(0, 2).find((z) => z.type === (buy ? "supply" : "demand") && typedDecisive(z)) : null;
+        typedTp = opp ? roundTo(buy ? opp.low : opp.high, digits) : tp;
+      }
     }
   }
-  const valid = candidates.map((x) => roundTo(x, digits)).filter((x) => x > 0 && room(x) && better(x, curSl));
-  const sl = valid.length ? valid.reduce((a, b) => (buy ? Math.max(a, b) : Math.min(a, b))) : null;
-  return { sl, tp, band };
+  const pick = (list) => {
+    const valid = list.map((x) => roundTo(x, digits)).filter((x) => x > 0 && room(x) && better(x, curSl));
+    return valid.length ? valid.reduce((a, b) => (buy ? Math.max(a, b) : Math.min(a, b))) : null;
+  };
+  const sl = pick(candidates);
+  if (!zoned) return { sl, tp, band };
+  const slT = pick(typedCandidates);
+  return { sl: slT, tp: typedTp, band, ...(slT !== sl ? { sl_zone: true } : {}), ...(typedTp !== tp ? { tp_zone: true } : {}) };
 }
 
 // The TP ladder (owner 2026-11-18, relayed by the orchestrator and confirmed in the session: "a, langsung live,
@@ -642,6 +743,10 @@ export function withCommandedStop(p, stops = {}) {
  * break-even, the 5m trail, the ladder's lock) until the position's gate is open; at the gate the first lock is
  * break-even plus the spread plus 0.1 x ATR(M5) (gateBreakEven), and each lock records the MFE it was made at (mfe_r,
  * mfe_atr). Without `gates` (direct calls, profit_lock_gate "legacy"), no gate: today's locks.
+ * Z3a (zone_mgmt not "off", docs/RFC_DEMAND_SUPPLY_ZONES.md §8): SL+ and the trailing TP read the key levels' demand and
+ * supply words (keyLevelPlan's `zone`, the cap from `positionMeta`'s mode and r_dist); an intent whose price the typing
+ * changed carries level_source "zone". While a 1m fast action of the position is within ZONE_MGMT_RATE_MS its
+ * management stays untyped. "off": today's intents byte for byte.
  */
 export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {}, loosenedFrom = {}, gates = undefined } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -653,6 +758,16 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
   const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
   const levels = brokerKeyLevels(signal);
+  // Z3a (zone_mgmt not "off"): the same levels with their demand and supply words, for SL+ and the trailing TP only
+  // (keyLevelPlan's `zone`); null when off or untyped (a missing or mismatched key_level_types), so today's plan.
+  const typedLv = zoneMgmtOn(S) ? brokerKeyLevels(signal, { typed: true }) : null;
+  const zoneLevels = typedLv && typedLv.some((z) => typeof z.type === "string") ? typedLv : null;
+  // One modify per position per ZONE_MGMT_RATE_MS across the 1m fast layer and the typing: a fast action of the position
+  // (pm1:<ticket>:<bar minute>, decided at the bar's close) in the window leaves its management untyped (today's).
+  const fastRecent = (ticket) => [...recent].some((rid) => {
+    const m = /^(?:d:)?pm1:(\d+):(\d+)(?::\d+)?$/.exec(String(rid));
+    return m != null && m[1] === String(ticket) && now - (Number(m[2]) + 1) * 60_000 < ZONE_MGMT_RATE_MS;
+  });
   for (const p0 of positions) {
     if (p0?.ticket == null || skip.has(p0.ticket) || (p0.side !== "BUY" && p0.side !== "SELL") || !isOmegaOwned(p0)) continue;
     const p = withCommandedStop(p0, stops);
@@ -686,16 +801,18 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     let movedSl = false;
     // Key-level management: SL+, trailing TP, and the close when the power turned against a winner.
     if (levels) {
-      const k = keyLevelPlan({ position: p, sym, signal, levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}) });
+      // Z3a: typed with the position's giveback cap (its mode and R at entry), unless a fast action is in the window.
+      const zone = zoneLevels && !fastRecent(p.ticket) ? { cap: zoneGiveback(positionMeta?.[p.intent_id] ?? null) } : null;
+      const k = keyLevelPlan({ position: p, sym, signal, levels: zone ? zoneLevels : levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone ? { zone } : {}) });
       if (k.close) {
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
       }
       if (k.sl != null && !held(k.sl) && !gateShut(k.sl)) {
-        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}` });
+        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}`, ...(k.sl_zone ? { level_source: "zone" } : {}) });
         movedSl = true;
       }
-      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level" });
+      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level", ...(k.tp_zone ? { level_source: "zone" } : {}) });
     }
     if (gate && !movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
       // SLG1: the break-even waits for the gate and then goes to the gate's first lock, with the broker's stop distance.
