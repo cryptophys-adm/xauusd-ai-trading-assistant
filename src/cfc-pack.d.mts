@@ -44,6 +44,7 @@ export function excursionsSection(trades: Array<Record<string, any>>): Record<st
 export function entryActionsSection(topicTrades: Array<Record<string, any>>, allTrades: Array<Record<string, any>>): Record<string, any>;
 export function setupSections(rows: Array<Record<string, any>>, topic: Record<string, any>): Record<string, any>;
 export function recordSection(state: unknown, topic: Record<string, any>, statuses: Record<string, string>): Record<string, any>;
+export function correctionItems(rows: Array<Record<string, any>>, options?: { keep?: (record: Record<string, any>) => boolean }): Array<Record<string, any>>;
 export function releasesNear(trades: Array<Record<string, any>>, releases: Array<Record<string, any>>): Record<string, any>;
 export function usageBySource(rows: Array<Record<string, any>>): Array<Record<string, any>>;
 export function weekOverWeek(perDay: Array<Record<string, any>>, now: number): Array<Record<string, any>>;
