@@ -13,7 +13,7 @@
 // over every "cfc:*" meter. Never throws from a step; a failed step aborts the session with its reason.
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf } from "./ai-usage.mjs";
-import { buildEvidencePack, parseTopicKey } from "./cfc-pack.mjs";
+import { buildEvidencePack, parseTopicKey, evRef } from "./cfc-pack.mjs";
 import { cfcMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
@@ -353,7 +353,8 @@ export async function retryProposalHandoffs(env, { now = Date.now(), publish = p
 export async function listProposals(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT id, session_id, option_id, kind, title, knob, from_value, value, spec, state, note, report_id, accepted_by, accepted_ms, updated_ms FROM council_proposals ORDER BY accepted_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
-  return { proposals: rows.map((r) => ({ ...r, accepted_at: new Date(Number(r.accepted_ms)).toISOString() })) };
+  // H3f-refs: ev_ref is the ref the owner's correction cites (POST /omega/api/correction target.ref).
+  return { proposals: rows.map((r) => ({ ...r, accepted_at: new Date(Number(r.accepted_ms)).toISOString(), ev_ref: evRef("council_proposals", r.id) })) };
 }
 
 /** One step of a session (the queue consumer). */
@@ -461,7 +462,7 @@ export async function listSessions(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms, COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) AS pack_refs FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
   const now = Date.now();
-  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString(), pack_stale: Number(r.pack_refs) === 0 || now - Number(r.created_ms) > PACK_STALE_MS })) };
+  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString(), pack_stale: Number(r.pack_refs) === 0 || now - Number(r.created_ms) > PACK_STALE_MS, ev_ref: evRef("council_sessions", r.id) })) };
 }
 export async function readSession(env, id) {
   await ensureSessionSchema(env.DB);
@@ -469,7 +470,13 @@ export async function readSession(env, id) {
   if (!s) return null;
   const names = roster();
   const msgs = (await env.DB.prepare("SELECT id, round, seat, stance, opinion, proposal, reply_to, refs, ms FROM council_messages WHERE session_id = ? ORDER BY id").bind(id).all()).results ?? [];
+  // H3f-refs: the refs the owner's correction cites (POST /omega/api/correction target.ref), built on read.
+  const options = parse(s.options, null);
+  const withRefs = options && typeof options === "object" && Array.isArray(options.options)
+    ? { ...options, options: options.options.map((o) => (o && typeof o === "object" ? { ...o, ev_ref: evRef("council_sessions", s.id, { field: `options.${o.option_id}` }) } : o)) }
+    : options;
   return { ...s, pack_stale: Number(s.pack_refs) === 0 || Date.now() - Number(s.created_ms) > PACK_STALE_MS, terminal: TERMINAL_STATES.includes(s.state),
-    participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: parse(s.options, null),
-    messages: msgs.map((m) => ({ ...m, name: m.seat === "owner" ? "Owner" : names[m.seat]?.name ?? m.seat, reply_to: parse(m.reply_to, []), refs: parse(m.refs, []), at: new Date(Number(m.ms)).toISOString() })) };
+    participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: withRefs,
+    messages: msgs.map((m) => ({ ...m, name: m.seat === "owner" ? "Owner" : names[m.seat]?.name ?? m.seat, reply_to: parse(m.reply_to, []), refs: parse(m.refs, []), at: new Date(Number(m.ms)).toISOString(), ev_ref: evRef("council_messages", m.id) })),
+    ev_ref: evRef("council_sessions", s.id) };
 }

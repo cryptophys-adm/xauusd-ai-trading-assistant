@@ -632,7 +632,13 @@ export async function readTimeframeThread(db, chart, { candleKey = null, env = n
     : (await db.prepare("SELECT MAX(run_id) AS r FROM agent_thread_messages WHERE thread_id = ?").bind(threadId).first())?.r);
   if (!run) return null;
   // ADR-0015 P2b reader 5: the decision cards pass the run (runId) and its rows rebuilt from its document.
-  const rows = (docRows?.length ? docRows : ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, run).all()).results || [])).map(rowToThreadMessage);
+  // H3f-refs: each message keeps its row's integer id (from the row itself, so a body key never replaces it).
+  const rowId = new Map();
+  const rows = (docRows?.length ? docRows : ((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ? ORDER BY id").bind(threadId, run).all()).results || [])).map((r) => { const m = rowToThreadMessage(r); rowId.set(m, r.id ?? null); return m; });
+  // H3f-refs: the ref the owner's correction cites (POST /omega/api/correction target.ref); null for a row without an
+  // id. Imported here, not at the top: cfc-pack.mjs reaches this module through agent-inventory.mjs (an import cycle).
+  const { evRef } = await import("./cfc-pack.mjs");
+  const refOf = (m) => (rowId.get(m) != null ? evRef("agent_thread_messages", rowId.get(m)) : null);
   const brief = rows.find((m) => m.step === "brief");
   const order = new Map((brief?.roster || []).map((id, i) => [id, i]));
   const byRoster = (a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99);
@@ -642,7 +648,7 @@ export async function readTimeframeThread(db, chart, { candleKey = null, env = n
     if (c.total_lines == null) return c.label ?? null;
     return calibrationNote(c);
   };
-  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), conceded: m.conceded === true, metrics: m.metrics ?? [], calibration: note(m.agent) });
+  const pick = (m) => ({ id: m.agent, name: tfAgentName(m.agent), status: m.status, stance: m.stance, bias: m.bias ?? null, confidence: m.confidence, ts: m.ts, claim: m.claim ?? null, argument: m.argument ?? null, rebuts: m.rebuts ?? [], rebuts_names: (m.rebuts || []).map(tfAgentName), conceded: m.conceded === true, metrics: m.metrics ?? [], calibration: note(m.agent), ev_ref: refOf(m) });
   const openings = rows.filter((m) => m.step.startsWith("open:")).map(pick).sort(byRoster);
   const debate = rows.filter((m) => m.step.startsWith("debate:")).map(pick).sort(byRoster);
   const c = rows.find((m) => m.step === "conclusion");
@@ -659,7 +665,7 @@ export async function readTimeframeThread(db, chart, { candleKey = null, env = n
     phase: c?.status === "ok" ? "closed" : debate.length ? "debate" : "opening",
     confirmations: brief?.confirmations ?? null, hud_snapshot: brief?.hud_snapshot ?? null, context: brief?.context ?? null,
     roster: (brief?.roster || []).map((id) => ({ id, name: tfAgentName(id), calibration: note(id) })),
-    conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}) } : null,
+    conclusion: c ? { status: c.status, stance: c.stance, bias: c.bias ?? null, majority_bias: c.majority_bias ?? null, confidence: c.confidence, summary: c.summary ?? null, reasons: c.reasons ?? [], dissent: (c.dissent || []).map((id) => ({ id, name: tfAgentName(id) })), majority: c.majority ?? null, model: c.model ?? null, fallback_used: c.fallback_used === true, ...(c.status !== "ok" ? { errors: c.errors ?? [], primary_error: c.primary_error ?? null, raw: String(c.insight ?? "").slice(0, 300) } : {}), ev_ref: refOf(c) } : null,
     openings,
     debate
   };
