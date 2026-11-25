@@ -200,7 +200,7 @@ import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_L
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
-import { readStrategy, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
+import { readStrategy, readStrategyWithCharts, loadStrategyInputs, buildStrategy, ownTimeframePlan, loadOwnTimeframePlanInputs } from "./strategy-engine.mjs";
 import { captureStrategyInputs, scoreStrategyCaptures, strategyInputsStatus } from "./strategy-inputs.mjs";
 import { replayStrategyCaptures, readStrategyReplay } from "./strategy-replay.mjs";
 import { runSignalLedger, readLedger, ingestStrategy, ingestDecision, ensureLedgerSchema, readExecutionReport, LEDGER_CRON, activeSetups } from "./signal-ledger.mjs";
@@ -1796,11 +1796,13 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
   /**
    * The real-time public analysis (owner 2026-11-14: "Real-time, hanya analisa"): the Key Level Agent's zones,
    * the H1/H4/D1 chart patterns and the structure, with no decision, plan or account data (src/public-analysis.mjs).
+   * KM1 (owner 2026-11-25): plus each chart's own key-level map (zones_by_chart) and its latest bar close (closed), from
+   * the same inputs readStrategy reads (readStrategyWithCharts): no read beyond readStrategy's and readLatestDecision's.
    */
   async analysis(): Promise<JsonObject> {
     await this.fs();
-    const [strategy, latest] = await Promise.all([readStrategy(this.env).catch(() => null), readLatestDecision(this.env).catch(() => null)]);
-    return publicAnalysis((strategy as any)?.key_levels ?? null, { structure: (latest as any)?.structure ?? null }) as unknown as JsonObject;
+    const [read, latest] = await Promise.all([readStrategyWithCharts(this.env).catch(() => null), readLatestDecision(this.env).catch(() => null)]);
+    return publicAnalysis((read as any)?.strategy?.key_levels ?? null, { structure: (latest as any)?.structure ?? null, charts: (read as any)?.charts ?? null }) as unknown as JsonObject;
   }
   /**
    * The latest War Room reading of one source (owner 2026-11-18, confirmed: "Real-time analysis"): "15m", "1h", "4h",

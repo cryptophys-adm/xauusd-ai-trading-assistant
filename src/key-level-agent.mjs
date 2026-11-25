@@ -207,6 +207,21 @@ export function chartPatterns(bars = {}, { events = [] } = {}) {
 }
 
 /**
+ * Pure: the agent's tolerance (0.3 x the 1H ATR, at least 1 dollar), the chart patterns of each chart's closed bars
+ * and every raw level, as buildKeyLevels and keyLevelsByChart both read them.
+ */
+function keyLevelRaw({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
+  const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
+  const found = patterns === "off" ? {} : chartPatterns(bars, { events });
+  // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
+  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
+  return { tolerance, found, raw };
+}
+
+/** The zones near price: within four 1H ranges of it (every zone without a price or an ATR). */
+const nearZones = (zones, price, atrH1) => (isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones);
+
+/**
  * The Key Level Agent's reading: every zone near price, the candidates first among equals. `patterns`
  * "off" leaves the chart patterns out (CHART_PATTERNS_MODE); `events` are the released figures for the
  * event patterns ([{ time, gold_direction, title }]). `zoneTypes` "off" leaves the zones untyped (Z0,
@@ -214,12 +229,8 @@ export function chartPatterns(bars = {}, { events = [] } = {}) {
  * `zoneSourcesOff` (Z1a, ZONE_SOURCES_OFF) leaves those evidence sources out of the typing.
  */
 export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [] } = {}) {
-  const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
-  const found = patterns === "off" ? {} : chartPatterns(bars, { events });
-  // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
-  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
-  const zones = clusterLevels(raw, tolerance, price);
-  const near = isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones;
+  const { tolerance, found, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration });
+  const near = nearZones(clusterLevels(raw, tolerance, price), price, atrH1);
   limitCandidates(near, price);
   // Z0: demand/supply type, strength and freshness of each zone (z.ds); nothing else of a zone changes.
   if (zoneTypes !== "off") typeZones(near, dsEvidence({ snapshots, bars15: bars.M15, atrH1, sourcesOff: zoneSourcesOff }));
@@ -240,4 +251,42 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
     // The Projection Agent's chart patterns, by chart (their levels are among the zones' members).
     patterns: Object.entries(found).flatMap(([tf, list]) => list.map((p) => ({ tf, chart: TF_NAME[tf], ...p })))
   };
+}
+
+// KM1 (owner 2026-11-25: "Agent harus punya kemampuan scheduling misal pull keymap dari xauusd per 1h dan 4h dan 1D …
+// Jika waktunya sama berarti digabung"): one key-level map per chart, for the public analysis's zones_by_chart.
+/** The charts of the per-chart key-level map. */
+export const KEY_LEVEL_CHARTS = Object.freeze(["H1", "H4", "D1"]);
+/** A level's timeframe -> its chart. The daily and weekly levels belong to no intraday chart: they go with D1. */
+const CHART_OF_TF = Object.freeze({ "60": "H1", "240": "H4", D: "D1", "1D": "D1", W: "D1" });
+
+/**
+ * The chart a raw level belongs to, or null (a 15m level belongs to none of the three).
+ *   H1  every level with the 1H timeframe: the 1H Camarilla set, value area, order blocks, Supertrend line, swings,
+ *       chart-plane levels (bands, liquidity, projection) and chart patterns.
+ *   H4  the same families on the 4H timeframe.
+ *   D1  the same families on the daily chart, and the shared levels: the daily and weekly pivot and CPR, the daily and
+ *       weekly Camarilla sets, the previous day high, low and close, the previous week high and low, the session
+ *       levels (the true opens, the trading day and week opens, the session profile; daily timeframe in the reader)
+ *       and the round numbers (filed under 15m by rawLevels, only for their weight of 1).
+ */
+export function chartOfLevel(level) {
+  if (level?.kind === "round") return "D1";
+  return CHART_OF_TF[String(level?.tf)] ?? null;
+}
+
+/**
+ * Pure: the Key Level Agent's zones of each chart alone ({ H1, H4, D1 }): the same raw levels as buildKeyLevels, then
+ * the agent's own clustering over only that chart's levels (chartOfLevel): the same tolerance, score, strength,
+ * family independence, candidate rule (3+ families, at least medium) and cap per side (limitCandidates), and the same
+ * window around price. Nothing buildKeyLevels returns changes: this is a second, separate reading of the same inputs.
+ */
+export function keyLevelsByChart({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
+  const { tolerance, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration });
+  const out = {};
+  for (const chart of KEY_LEVEL_CHARTS) {
+    const near = nearZones(clusterLevels(raw.filter((l) => chartOfLevel(l) === chart), tolerance, price), price, atrH1);
+    out[chart] = limitCandidates(near, price);
+  }
+  return out;
 }

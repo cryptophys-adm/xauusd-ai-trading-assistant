@@ -12,6 +12,9 @@ export function liveM5Inputs(env: any, options?: { now?: number; context?: any }
 export function loadStrategyInputs(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
 export function strategyMode(env: any): Promise<string>;
 export function readStrategy(env: any, options?: { now?: number; m5Context?: any }): Promise<Record<string, any>>;
+export function readStrategyWithCharts(env: any, options?: { now?: number; m5Context?: any }): Promise<{ strategy: Record<string, any>; charts: { zones: Record<string, Array<Record<string, any>>>; closed: Record<string, string | null> } | null }>;
+export function strategyPrice(input?: Record<string, any>): number | null;
+export function keyLevelChartsOf(input?: Record<string, any>): { zones: Record<string, Array<Record<string, any>>>; closed: Record<string, string | null> };
 export function planForDirection(strategy: any, dir: number, options?: { scalp?: boolean }): Record<string, any> | null;
 export const SCALP_TARGET: Readonly<{ targetGapAtr: number; qualified: boolean }>;
 export function ownTimeframePlan(inputs: { snapshot?: unknown; bars?: unknown[] }, dir: number): Record<string, any> | null;

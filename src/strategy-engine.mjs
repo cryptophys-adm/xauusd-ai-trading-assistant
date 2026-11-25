@@ -21,7 +21,7 @@ import { readTimeframeThread } from "./timeframe-threads.mjs";
 import { readWarRoom } from "./war-room.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
-import { buildKeyLevels } from "./key-level-agent.mjs";
+import { buildKeyLevels, keyLevelsByChart } from "./key-level-agent.mjs";
 import { chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
@@ -384,6 +384,51 @@ export function triggerOf(dir, { confirmations, m15Snapshot }) {
   return { fired: false, source: null, note: `waiting for a verified 5m (or 15m) Prophet ${dir > 0 ? "buy" : "sell"} confirmation` };
 }
 
+/** The strategy's price: the latest closed 5m close when the engine runs at a 5m close (owner decision 2026-11-08), else the 15m close. */
+export function strategyPrice({ m5Price = null, m15Bars = [], m15Snapshot = null, h1Snapshot = null } = {}) {
+  return [m5Price, m15Bars.at(-1)?.close, m15Snapshot?.huds?.interstellar_eyes?.fields?.close, h1Snapshot?.huds?.interstellar_eyes?.fields?.close].find(isNum) ?? null;
+}
+
+/** Pure: the Key Level Agent's arguments from the strategy's inputs (buildStrategy's reading and KM1's per-chart one). */
+function keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1 }) {
+  return {
+    snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
+    bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1,
+    // The Projection Agent's chart patterns (owner 2026-11-12); the released figures feed the event patterns.
+    // CHART_PATTERNS_MODE travels in the inputs (loadStrategyInputs), not in env: buildStrategy is called
+    // without env by the decision engine, the Global Conclusion and the capture, so "off" never reached it.
+    patterns: modes?.chartPatterns === "off" ? "off" : chartPatternsMode(env), events: releases,
+    // Their measured record on gold scales their weights (src/pattern-calibration.mjs, hourly).
+    calibration: patternCalibration,
+    // Z0: demand/supply types on the zones (recorded only); KEY_LEVEL_ZONE_TYPES travels in the inputs as modes.zoneTypes.
+    zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env),
+    // Z1a: ZONE_SOURCES_OFF travels in the inputs as modes.zoneSourcesOff (present only when a source is off).
+    zoneSourcesOff: zoneSourcesList([...zoneSourcesList(modes?.zoneSourcesOff), ...zoneSourcesOffMode(env)])
+  };
+}
+
+/** The bar-close time (ISO) of the latest closed bar of a series, or null. */
+function lastClose(bars, now) {
+  let best = null;
+  for (const b of Array.isArray(bars) ? bars : []) {
+    const t = Date.parse(String(b?.close_time ?? ""));
+    if (Number.isFinite(t) && t <= now && (best == null || t > best)) best = t;
+  }
+  return best == null ? null : new Date(best).toISOString();
+}
+
+/**
+ * Pure, KM1 (owner 2026-11-25: "pull keymap dari xauusd per 1h dan 4h dan 1D … Jika waktunya sama berarti digabung"):
+ * the Key Level Agent's zones of each chart alone (keyLevelsByChart) from the same inputs and arguments as
+ * buildStrategy's reading, and per chart the bar-close time of the latest closed bar of its own series (H1 the 1H
+ * bars, H4 the 4H bars, D1 the daily bars). Nothing of the strategy or its key_levels changes.
+ */
+export function keyLevelChartsOf({ env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], releases = [], patternCalibration = null, modes = null, m5Price = null, now = Date.now() } = {}) {
+  const price = strategyPrice({ m5Price, m15Bars, m15Snapshot, h1Snapshot });
+  const zones = keyLevelsByChart(keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1: atr(h1Bars) }));
+  return { zones, closed: { H1: lastClose(h1Bars, now), H4: lastClose(h4Bars, now), D1: lastClose(d1Bars, now) } };
+}
+
 /**
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
@@ -413,23 +458,9 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   const alignment = dir && aw ? as / aw : 0;
 
   const atrH1 = atr(h1Bars);
-  // The latest closed 5m close when the engine runs at a 5m close (owner decision 2026-11-08), else the 15m close.
-  const price = [m5Price, m15Bars.at(-1)?.close, m15Snapshot?.huds?.interstellar_eyes?.fields?.close, h1Snapshot?.huds?.interstellar_eyes?.fields?.close].find(isNum) ?? null;
+  const price = strategyPrice({ m5Price, m15Bars, m15Snapshot, h1Snapshot });
   // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
-  const keyLevelReading = buildKeyLevels({
-    snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot },
-    bars: { M15: m15Bars, H1: h1Bars, H4: h4Bars, D1: d1Bars, W1: w1Bars }, price, atrH1,
-    // The Projection Agent's chart patterns (owner 2026-11-12); the released figures feed the event patterns.
-    // CHART_PATTERNS_MODE travels in the inputs (loadStrategyInputs), not in env: buildStrategy is called
-    // without env by the decision engine, the Global Conclusion and the capture, so "off" never reached it.
-    patterns: modes?.chartPatterns === "off" ? "off" : chartPatternsMode(env), events: releases,
-    // Their measured record on gold scales their weights (src/pattern-calibration.mjs, hourly).
-    calibration: patternCalibration,
-    // Z0: demand/supply types on the zones (recorded only); KEY_LEVEL_ZONE_TYPES travels in the inputs as modes.zoneTypes.
-    zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env),
-    // Z1a: ZONE_SOURCES_OFF travels in the inputs as modes.zoneSourcesOff (present only when a source is off).
-    zoneSourcesOff: zoneSourcesList([...zoneSourcesList(modes?.zoneSourcesOff), ...zoneSourcesOffMode(env)])
-  });
+  const keyLevelReading = buildKeyLevels(keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1 }));
   const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
@@ -580,4 +611,17 @@ export async function strategyMode(env) {
 export async function readStrategy(env, { now = Date.now(), m5Context = null } = {}) {
   const mode = await strategyMode(env);
   return buildStrategy(await loadStrategyInputs(env, { now, m5Context }), { mode });
+}
+
+/**
+ * readStrategy with KM1's per-chart key levels from the same inputs (PublicProjection.analysis()): the same reads as
+ * readStrategy, no other. `charts` is null when the per-chart reading fails; the strategy is readStrategy's.
+ */
+export async function readStrategyWithCharts(env, { now = Date.now(), m5Context = null } = {}) {
+  const mode = await strategyMode(env);
+  const inputs = await loadStrategyInputs(env, { now, m5Context });
+  const strategy = buildStrategy(inputs, { mode });
+  let charts = null;
+  try { charts = keyLevelChartsOf(inputs); } catch { charts = null; }
+  return { strategy, charts };
 }
