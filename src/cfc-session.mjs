@@ -14,6 +14,7 @@
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf } from "./ai-usage.mjs";
 import { buildEvidencePack, parseTopicKey, evRef } from "./cfc-pack.mjs";
+import { parseRef, refCarriesPrice } from "./owner-corrections.mjs";
 import { cfcMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
@@ -458,6 +459,18 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
 }
 
 /** The sessions for the page (newest first) and one session with its messages. */
+/**
+ * An option's ref (H3f-refs), or null when POST /omega/api/correction would refuse it: option_id is model-written, so
+ * a field the route cannot parse (a "-" or ":"), one ending in a price word (tighten_stop) or one carrying a 3+ digit
+ * number gets no ref rather than one the control cannot send. The session's own ref still covers the verdict.
+ */
+export function optionRef(sessionId, optionId) {
+  if (/\d{3,}/.test(String(optionId ?? ""))) return null;
+  const ref = evRef("council_sessions", sessionId, { field: `options.${optionId}` });
+  const parsed = parseRef(ref);
+  return parsed && !refCarriesPrice(parsed) ? ref : null;
+}
+
 export async function listSessions(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms, COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) AS pack_refs FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
@@ -473,7 +486,7 @@ export async function readSession(env, id) {
   // H3f-refs: the refs the owner's correction cites (POST /omega/api/correction target.ref), built on read.
   const options = parse(s.options, null);
   const withRefs = options && typeof options === "object" && Array.isArray(options.options)
-    ? { ...options, options: options.options.map((o) => (o && typeof o === "object" ? { ...o, ev_ref: evRef("council_sessions", s.id, { field: `options.${o.option_id}` }) } : o)) }
+    ? { ...options, options: options.options.map((o) => (o && typeof o === "object" ? { ...o, ev_ref: optionRef(s.id, o.option_id) } : o)) }
     : options;
   return { ...s, pack_stale: Number(s.pack_refs) === 0 || Date.now() - Number(s.created_ms) > PACK_STALE_MS, terminal: TERMINAL_STATES.includes(s.state),
     participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: withRefs,

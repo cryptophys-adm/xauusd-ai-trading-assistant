@@ -238,3 +238,9 @@ test("H3F-R6. strategy council: each verdict carries its strategy_council_runs r
   assert.equal(await readCouncilVerdicts({}), undefined, "no KV: as before");
 });
 
+
+test("H3F-R7. an option ref the correction route would refuse is null; the others are kept", async () => {
+  const { optionRef } = await import("../src/cfc-session.mjs");
+  assert.equal(optionRef("cfc_mi0abc_x1y2z3", "no_change"), "ev:xauusd/council_sessions/cfc_mi0abc_x1y2z3#options.no_change");
+  for (const bad of ["a-b", "x:y", "tighten_stop", "move_tp", "raise_entry", "level_2650", "keep_100"]) assert.equal(optionRef("cfc_mi0abc_x1y2z3", bad), null, bad);
+});
