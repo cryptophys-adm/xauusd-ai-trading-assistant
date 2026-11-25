@@ -250,6 +250,10 @@ in the bridge sync from the KV baseline.
   New York opens (`SESSIONS`, New York hours 19, 3 and 8).
 - Note: the rollover quarantine is fixed in UTC while the daily break moves with US daylight time. Both are excluded.
 
+**In the rooms** (Track B, B16, merged; as built in §15): the 15m and 1H risk desks and moderators read these facts as
+one plain-words line of conditions (spread against its norm, depth, the session's liquidity, where price sits against
+the levels as counts), never a sweep clause and never a price. The 4H and 1D rooms never do.
+
 ### 4.4 Key levels
 
 - Sweep extremes, pool edges and high-volume nodes join `brokerKeyLevels` (`src/omega-engine.mjs`). They are already on
@@ -259,6 +263,21 @@ in the bridge sync from the KV baseline.
   ignores unknown fields, as it does `key_levels`.
 - Every reader of `brokerKeyLevels` sees both: the Position Manager's TP2 and A8 reasons, the limit council's moves, and
   `manageIntents`.
+  - **As built (checked 2026-11-25).** The readers of `brokerKeyLevels` (`src/omega-engine.mjs:373`) are
+    `manageIntents` (:645), the ladder's TP2 wait (:1487), the limit council's moves of a resting limit
+    (`src/limit-council.mjs:421`) and the Nexus view's management set (`src/liquidity-view.mjs:189`). The Position
+    Council's facts (TP2, `ladder_hold`, A8's `key_level_outside`) read `brokerLevels` (`src/position-manager.mjs:606`,
+    :718), the Key Level Agent's zones only, so lens B does not reach them yet. Today `brokerKeyLevels` appends lens B
+    whenever the signal's `liquidity_on` holds, without checking `feed_basis_known` (:383).
+  - **The limit council's path stays** (Track B ruling, orchestrator 2026-11-22, errata E0). A resting limit may move to
+    a lens B level, as above. The planned fix B1, which would have kept lens B out of the limit council's moves, is
+    dropped (§16 item 14). No new entry path is added: lens B never sets a new entry's price (§5).
+  - **Planned: one management level set (Track B, B17).** `brokerKeyLevels` gains a management mode that adds lens B
+    only when `liquidity_on` and `feed_basis_known` both hold; a level within two spreads of a zone merges into it.
+    `manageIntents`, the ladder's TP2 wait and the Position Manager read it. The Position Council still sees no lens B
+    price: its evidence (`positionFacts`' `tp2`, :131; `positionCouncilMessages`' position block and `key_levels`,
+    :518-521) keeps the Key Level Agent's levels, and lens B reaches it only as `liquidity_levels`
+    [{ kind, side, distance_atr }]. Its line is `liquidity@1` behind the Position Manager line breaker (B5).
 - **On the feed's scale** (the ledger's replays; anything that reads OANDA prices): `feed = broker − feed_basis`
   (`feedBasis`, `src/feed-basis.mjs` since B8, re-exported by `src/ea-signal.mjs`). Without a known basis (`feed_basis_known` false) liquidity levels are left out on
   the feed's scale.
@@ -293,6 +312,16 @@ in the bridge sync from the KV baseline.
    - `liquidity_sweep_against` → `skip`.
 4. All three count only while `liquidity.council_weight_<mode>` is above its floor. At the floor the gate is off and the
    reasons do not hold.
+5. **Where lens B levels never go** (Track B rule 3, amended by errata E0, 2026-11-22). Plan entries and targets, the
+   reward guardrail, the `KEY_LEVELS` witness and `decision.key_levels` never read lens B. They reach only
+   `manageIntents`, the ladder's TP2 wait, the limit council's moves (§4.4), and, once built, the Position Manager's
+   management set (B17) and the squeeze guard. Every use is gated on lens B on and above its floor
+   (`lensKnobs("liquidity").active`), a fresh state (`LIQUIDITY_STATE_FRESH_MS`) and, from B17, `feed_basis_known`.
+   - **Planned: the squeeze guard (Track B, B18).** The Key Level Agent may list lens B members as management
+     candidates (`key_levels.management`), read only by `brokerKeyLevels`' management mode. A lens B block is recorded
+     as its own guardrail check, `room_liquidity`, computed with those candidates beside the Key Level zones, so it can
+     only add a block; its detail is in ATR, never a price. `decision.squeeze` and the room check stay as today, and
+     public output equals the same decision without lens B.
 
 ## 6. Lens B in the Position Manager: measured reasons, by council only
 
@@ -681,4 +710,12 @@ replays without lens B's gate and deferral, and `omegaParity` treats a v4-only t
     not list it.
 13. **Source tag.** Only liquidity zones carry `source: "liquidity"`; the Key Level Agent's zones keep their shape (no
     `source` key), so every reader and the fixtures stay byte for byte when lens B is off.
+14. **The limit council keeps lens B levels** (Track B ruling, orchestrator 2026-11-22, errata E0). Track B first
+    planned B1, a rule fix so that a resting limit is never placed at or moved to a level only lens B supports. E0 drops
+    it, because §4.4 already lets the limit council move a resting limit to a lens B level (the owner-approved text),
+    and that behaviour stays as it is today. Lens B still sets no new entry's price and adds no entry path (§5 item 5).
+15. **The Position Council reads the Key Level Agent's levels only** (found 2026-11-25). §4.4 names the Position
+    Manager's TP2 and A8 reasons among `brokerKeyLevels`' readers, but `runPositionManager` reads `brokerLevels`, so
+    lens B reaches the Position Manager only as the measured sweep reason of §6. B17 (planned) brings lens B into its
+    management set without showing the council a lens B price.
 
