@@ -1,0 +1,32 @@
+{
+  "version": "cryptophys.strategy-council.v1",
+  "day": "2026-11-25",
+  "computed_at": "2026-11-25T00:20:00.000Z",
+  "acting": "propose",
+  "ceiling": "propose",
+  "auto": false,
+  "max_armed": 2,
+  "rules": {},
+  "verdicts": {
+    "zone_pullback": {
+      "walk_forward": {
+        "status": "pass",
+        "n": 41,
+        "mean_r": 0.12,
+        "low": 0.02,
+        "holdout_n": 10,
+        "holdout_mean_r": 0.08
+      },
+      "live_mean_r": 0.1,
+      "proposal": "keep",
+      "reason": "the walk-forward holds",
+      "source": "council",
+      "allowed": [
+        "keep",
+        "disarm"
+      ],
+      "pinned": false,
+      "ev_ref": "ev:xauusd/strategy_council_runs/2026-11-25/zone_pullback#proposal"
+    }
+  }
+}

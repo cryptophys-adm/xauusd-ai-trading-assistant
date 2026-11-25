@@ -1,0 +1,243 @@
+{
+  "disabled": {
+    "status": 409,
+    "body": {
+      "ok": false,
+      "error": "disabled"
+    }
+  },
+  "rated": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_a1acb7c2cdd8e3ee",
+      "redactions": [],
+      "deduplicated": false
+    }
+  },
+  "deduplicated": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_a1acb7c2cdd8e3ee",
+      "redactions": [],
+      "deduplicated": true
+    }
+  },
+  "corrected": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_ebf6010c17222d38",
+      "redactions": [],
+      "deduplicated": false
+    }
+  },
+  "price": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_101b26313c47525d",
+      "redactions": [
+        "price"
+      ],
+      "deduplicated": false
+    }
+  },
+  "secret": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_35404b56616c7782",
+      "redactions": [
+        "secret"
+      ],
+      "deduplicated": false
+    }
+  },
+  "secret_price": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "correction_id": "cor_5a65707b86919ca7",
+      "redactions": [
+        "secret",
+        "price"
+      ],
+      "deduplicated": false
+    }
+  },
+  "unknown_field": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "unknown_field"
+    }
+  },
+  "invalid_source": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_source"
+    }
+  },
+  "invalid_label": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_label"
+    }
+  },
+  "rating_required": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "rating_required"
+    }
+  },
+  "invalid_rating": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_rating"
+    }
+  },
+  "invalid_category": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_category"
+    }
+  },
+  "invalid_target": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_target"
+    }
+  },
+  "invalid_subject": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_subject"
+    }
+  },
+  "invalid_as_of": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_as_of"
+    }
+  },
+  "invalid_text": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_text"
+    }
+  },
+  "text_too_long": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "text_too_long"
+    }
+  },
+  "invalid_evidence_refs": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "invalid_evidence_refs"
+    }
+  },
+  "too_many_refs": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "too_many_refs"
+    }
+  },
+  "category_or_text_required": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "category_or_text_required"
+    }
+  },
+  "empty": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "empty"
+    }
+  },
+  "invalid_json": {
+    "status": 400,
+    "body": {
+      "error": "invalid_json"
+    }
+  },
+  "not_an_object": {
+    "status": 400,
+    "body": {
+      "error": "body must be a JSON object"
+    }
+  },
+  "owner_only": {
+    "status": 403,
+    "body": {
+      "error": "owner_only"
+    }
+  },
+  "forbidden": {
+    "status": 403,
+    "body": {
+      "error": "forbidden",
+      "hint": "a person makes this change, never a service token"
+    }
+  },
+  "cross_origin_refused": {
+    "status": 403,
+    "body": {
+      "error": "cross_origin_refused"
+    }
+  },
+  "same_origin_only": {
+    "status": 403,
+    "body": {
+      "error": "same_origin_only"
+    }
+  },
+  "body_too_large": {
+    "status": 413,
+    "body": {
+      "error": "body_too_large"
+    }
+  },
+  "content_type_must_be_json": {
+    "status": 415,
+    "body": {
+      "error": "content_type_must_be_json"
+    }
+  },
+  "rate_limited": {
+    "status": 429,
+    "body": {
+      "ok": false,
+      "error": "rate_limited"
+    }
+  },
+  "correction_failed": {
+    "status": 502,
+    "body": {
+      "error": "correction_failed"
+    }
+  },
+  "correction_unavailable": {
+    "status": 503,
+    "body": {
+      "error": "correction_unavailable"
+    }
+  }
+}

@@ -49,7 +49,8 @@ export function TrackRecord({ r }: { r?: Reputation | null }) {
 }
 
 /** One message of a room: an opening on the bus or an answer in the Consensus Discussion. */
-export function Post({ m, text, calibration, reputation, extra }: { m: RoomMessage; text?: string | null; calibration?: string | null; reputation?: Reputation | null; extra?: ReactNode }) {
+/** `correction`: H3f, the owner's Rate / correct (components/Correction.tsx), in one row with the text (no extra height). */
+export function Post({ m, text, calibration, reputation, extra, correction }: { m: RoomMessage; text?: string | null; calibration?: string | null; reputation?: Reputation | null; extra?: ReactNode; correction?: ReactNode }) {
   if (m.status !== "ok") {
     return (
       <div className="glass-inner px-3 py-2 text-[12px] text-muted">
@@ -70,7 +71,10 @@ export function Post({ m, text, calibration, reputation, extra }: { m: RoomMessa
         {!!m.rebuts_names?.length && <span className="text-violet-300/80">→ {m.rebuts_names.join(", ")}</span>}
         {m.ts && <span className="ml-auto text-[11px] text-muted">{ago(m.ts)}</span>}
       </div>
-      <p className="text-[12.5px] leading-relaxed text-slate-300">{text}</p>
+      <div className="flex flex-wrap items-end gap-x-[12px] gap-y-[8px]">
+        <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-slate-300">{text}</p>
+        {correction}
+      </div>
       {extra}
     </div>
   );

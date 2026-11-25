@@ -11,6 +11,8 @@ import { EntryZoneCell, OmegaLimitNote, PlanLadder, tradePlan } from "./PlanLadd
 import { bandSource, gmt7ClockOf } from "../lib/entryZone";
 import { localNow, planMark } from "../lib/pollState";
 import { TEXT, directionGlyph, edgeTone, type Tone } from "../lib/tokens";
+import { CorrectionControl } from "./Correction";
+import { engineTarget } from "../lib/corrections";
 
 /** The strategy's state as a status: ok, late (needs attention), fault, off. */
 const STATE_TEXT: Record<string, { label: string; tone: Tone }> = {
@@ -425,6 +427,8 @@ export default function GlobalDecision() {
             {e?.strategy && st && <><span className="eyebrow">Strategy</span><Badge tone={st.tone}>{st.label}</Badge></>}
             {g?.h1_decision && <><span className="eyebrow">{e ? "1H room" : "H1 chain"}</span><Stance value={g.h1_decision.decision} /><span className="mono">{pct(g.h1_decision.confidence)}</span>{g.h1_decision.candle_key && <span>· {candleWhen(g.h1_decision.candle_key)}</span>}</>}
             {cf && <span>· R38 H1 {cf.h1_prophet_r38?.buy_confirmed ? "buy" : cf.h1_prophet_r38?.sell_confirmed ? "sell" : "none"} · 5m {cf.m5_prophet_r38?.buy_confirmed ? "buy" : cf.m5_prophet_r38?.sell_confirmed ? "sell" : "none"}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</span>}
+            {/* H3f: the owner's Rate / correct at the end of the last footer row (ev:xauusd/engine_decisions/<decision_key>). */}
+            <CorrectionControl target={engineTarget(e)} />
           </div>
         </>
       )}

@@ -10,6 +10,8 @@ import { useWarRoom } from "../lib/warroom";
 import { NEWS_PATH, threadPath, useMarket } from "../lib/market";
 import { TABS, useTab, tabLabel, type Tab } from "../lib/tab";
 import { ago, candleWhen, pct, utc } from "../lib/format";
+import { CorrectionControl, ROW } from "./Correction";
+import { roomConclusionTarget, roomMessageTarget } from "../lib/corrections";
 
 // The decision word sits in a fixed column beside the summary: long words (BEARISH, BULLISH,
 // NEUTRAL in the News TLDR) get a smaller size so they never run into the paragraph.
@@ -24,7 +26,7 @@ const side = (x: any) => (x?.buy_confirmed ? "buy confirmed" : x?.sell_confirmed
  * different things), the summary in its own box, reasons and dissent, then two boxes with what
  * binds it (the higher-timeframe constraint and the entry confirmation).
  */
-function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }: { c: any; title: string; waiting: string; badges?: ReactNode; constraint?: ReactNode; confirmation?: ReactNode }) {
+export function ConclusionHero({ c, title, waiting, badges, constraint, confirmation, correction }: { c: any; title: string; waiting: string; badges?: ReactNode; constraint?: ReactNode; confirmation?: ReactNode; correction?: ReactNode }) {
   const ok = c && c.status === "ok";
   return (
     <section className="glass-inner border-cyan-400/20 p-4" aria-label={`${title} conclusion`}>
@@ -62,6 +64,7 @@ function ConclusionHero({ c, title, waiting, badges, constraint, confirmation }:
           {confirmation && <div className="glass-inner px-3 py-2">{confirmation}</div>}
         </div>
       )}
+      {correction}
     </section>
   );
 }
@@ -93,9 +96,11 @@ function Discussion({ room }: { room: any }) {
         </div>
       )}
       <div className="space-y-1.5">{opens.map((m: any) => <Post key={m.id} m={m} text={m.claim} calibration={calibrationText(m.calibration ?? cal[m.id])} reputation={room.reputation?.[m.id]}
+        correction={<CorrectionControl target={roomMessageTarget(m, room)} />}
         extra={chips ? <MetricChips m={ms?.openings?.[m.id]} live={m.stance} /> : null} />)}</div>
       {!!debate.length && <div className="eyebrow pt-1">Consensus Discussion</div>}
       <div className="space-y-1.5">{debate.map((m: any) => <Post key={m.id} m={m} text={m.argument} reputation={room.reputation?.[m.id]}
+        correction={<CorrectionControl target={roomMessageTarget(m, room)} />}
         extra={chips ? <RebuttalChips r={ms?.rebuttals?.[m.id]} live={m.stance} names={names} /> : null} />)}</div>
     </div>
   );
@@ -149,6 +154,7 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
   return (
     <div className="space-y-3">
       <ConclusionHero c={room.conclusion} title={`${label} War Room`} badges={badges} constraint={constraint} confirmation={confirmation}
+        correction={<CorrectionControl target={roomConclusionTarget(room, tab)} className={`mt-[12px] ${ROW}`} />}
         waiting={room.phase === "closed" ? "No conclusion this round." : `In session · ${phaseText(room)}`} />
       {room.crowd && <CrowdLine crowd={room.crowd} conclusionBias={room.conclusion?.status === "ok" ? room.conclusion.bias : null} />}
       <Discussion room={room} />

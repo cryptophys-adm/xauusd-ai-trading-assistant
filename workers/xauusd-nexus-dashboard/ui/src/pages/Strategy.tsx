@@ -6,6 +6,8 @@ import { Stance } from "../components/Stance";
 import { get } from "../lib/api";
 import { ago } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
+import { CorrectionControl, ROW } from "../components/Correction";
+import { strategyVerdictTarget } from "../lib/corrections";
 
 // Strategy agents (owner 2026-11-13: "kita perlu agent yang bisa dibongkar pasang menyesuaikan strategy yang
 // tepat yang dipilih oleh council"). Read-only, from the AI Worker:
@@ -84,14 +86,20 @@ const ownerPost = async (path: string, body: unknown) => {
   return d;
 };
 /** The strategy council's daily verdict (walk-forward and proposal), deterministic gate, read-only. */
-function VerdictLine({ v }: { v: any }) {
+export function VerdictLine({ v, id }: { v: any; id: string }) {
   if (!v) return null;
   const wf = v.walk_forward ?? {};
+  // A verdict without its walk-forward (the render check's null paths) says n/a, never "undefined".
+  const na = (x: unknown) => (x == null ? "n/a" : String(x));
   const tone: "ok" | "fault" | "plain" = wf.status === "pass" ? "ok" : wf.status === "fail" ? "fault" : "plain";
   return (
-    <div className="mt-1 text-[10.5px] text-slate-400" title={`walk-forward: ${wf.n} setups, mean ${wf.mean_r}R, bootstrap low ${wf.low}, latest ${wf.holdout_n}: ${wf.holdout_mean_r}R${v.live_mean_r != null ? ` · live last 10: ${v.live_mean_r}R` : ""}`}>
+    <>
+    <div className="mt-1 text-[10.5px] text-slate-400" title={`walk-forward: ${na(wf.n)} setups, mean ${na(wf.mean_r)}R, bootstrap low ${na(wf.low)}, latest ${na(wf.holdout_n)}: ${na(wf.holdout_mean_r)}R${v.live_mean_r != null ? ` · live last 10: ${v.live_mean_r}R` : ""}`}>
       <Badge tone={tone}>walk-forward {wf.status}</Badge> <span>Council: <span className="text-slate-200">{v.proposal}</span>{v.reason ? ` · ${v.reason}` : ""}{v.applied ? ` · ${v.applied}` : ""}</span>
     </div>
+    {/* H3f: the owner's Rate / correct at the end of the verdict (its ev_ref, the strategy agent as the subject). */}
+    <CorrectionControl target={strategyVerdictTarget(v, id)} className={`mt-[6px] ${ROW}`} />
+    </>
   );
 }
 /** A strategy the owner armed or disarmed by hand is pinned against the council until the owner unpins it. */
@@ -152,7 +160,7 @@ function Registry({ agents, chosen, arm, reload }: { agents: any[]; chosen: stri
               </div>
             ) : <div className="mt-3 text-[11px] text-muted">No resolved setup yet.</div>}
             <RecoLine card={a.card} />
-            <VerdictLine v={a.verdicts} />
+            <VerdictLine v={a.verdicts} id={a.id} />
             <ArmButton id={a.id} arm={arm} onDone={reload} />
             <PinLine id={a.id} arm={arm} onDone={reload} />
           </div>
