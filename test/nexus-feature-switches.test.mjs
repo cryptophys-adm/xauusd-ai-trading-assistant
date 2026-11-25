@@ -63,9 +63,9 @@ test("FSU1 NAV: Settings › Feature switches is the last group, at /#/switches,
   assert.doesNotMatch(src("pages/Omega.tsx"), /feature-switches|featureSwitches|Switches/);
 });
 
-test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the real registry: 25 switches, groups, flags", async () => {
+test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the real registry: every switch, groups, flags", async () => {
   const seed = await seedFs1();
-  assert.deepEqual(OWNER, seed.owner, "feature-switches.json: regenerate it from test/support/nexus-fs1-seed.mjs");
+  assert.deepEqual(OWNER, seed.owner, "feature-switches.json: regenerate with `node test/support/nexus-fs1-seed.mjs --write` after a registry change");
   assert.deepEqual(VIEWER, seed.viewer);
   assert.deepEqual(REVERT, seed.revert);
   assert.deepEqual(REPLIES, seed.replies);
@@ -74,7 +74,7 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
   assert.deepEqual(Object.keys(OWNER), ["version", "at", "viewer", "groups", "switches"]);
   assert.deepEqual([OWNER.viewer.can_control, VIEWER.viewer.can_control], [true, false]);
   assert.deepEqual(OWNER.groups, FEATURE_SWITCH_GROUPS.map((g) => ({ id: g.id, label: g.label })));
-  assert.equal(OWNER.switches.length, 25);
+  assert.equal(OWNER.switches.length, FEATURE_SWITCHES.length);
   assert.deepEqual(OWNER.switches.map((r) => r.key), FEATURE_SWITCH_KEYS);
   for (const e of FEATURE_SWITCHES) {
     const r = row(e.key);
@@ -129,9 +129,9 @@ test("FSU4 the pure view over the fixture: groups in the payload's order, one co
   for (const t of ["Feature switches", "Settings · owner", "3 overrides", "as of 03:40 UTC · 10:40 GMT+7"]) assert.ok(html.includes(t), t);
   for (const r of OWNER.switches) assert.ok(html.includes(r.key) && html.includes(r.label.replace(/'/g, "&#x27;")), r.key);
   assert.ok(!html.includes("sample") && !html.includes("provisional"), "the mockup's sample chip labelled invented data");
-  assert.equal(count(html, /role="tooltip"/g), 25, "every row has its tooltip");
-  assert.equal(count(html, /aria-describedby="fs-tip-/g), 25, "each ⓘ button describes the row");
-  assert.equal(count(html, /aria-expanded="false"/g), 25, "closed by default");
+  assert.equal(count(html, /role="tooltip"/g), FEATURE_SWITCHES.length, "every row has its tooltip");
+  assert.equal(count(html, /aria-describedby="fs-tip-/g), FEATURE_SWITCHES.length, "each ⓘ button describes the row");
+  assert.equal(count(html, /aria-expanded="false"/g), FEATURE_SWITCHES.length, "closed by default");
   assert.equal(count(await page(OWNER, { open: "CFC_MODE" }), /aria-expanded="true"/g), 1, "one open tooltip");
 });
 
