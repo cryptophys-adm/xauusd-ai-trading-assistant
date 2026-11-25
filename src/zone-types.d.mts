@@ -32,7 +32,9 @@ export function zoneSourcesModes(env: unknown): { zoneSourcesOff?: ZoneSource[] 
 export function zoneSourcesList(list: unknown): ZoneSource[];
 export function zoneNeed(risk: number, atrH1: number): number;
 export function dsEvidence(input?: { snapshots?: Record<string, any>; bars15?: unknown[]; atrH1?: number | null; sourcesOff?: unknown }): { boxes: DsBox[]; bars: Array<Record<string, any>>; atr_h1: number | null };
-export function boxTypes(box: DsBox, zone: { low: number; high: number; role?: string | null }): boolean;
+/** ZF1: a box edge (or a point) this close to one of a zone's member prices types the zone (the box made the cluster). */
+export const BOX_EDGE_TOL: number;
+export function boxTypes(box: DsBox, zone: { low: number; high: number; role?: string | null; members?: Array<{ price?: number }> }): boolean;
 export function zoneTouches(low: number, high: number, bars: unknown[], band: number | null): number | null;
 export function freshnessOf(touches: number | null): ZoneFreshness;
 export function zoneTypes<T extends Record<string, any>>(zones: T[], evidence: { boxes?: DsBox[]; bars?: unknown[]; atr_h1?: number | null }): T[];

@@ -500,8 +500,11 @@ test("Z1a-7 on: guardrails, council, EA signal, management fields, public output
   assert.deepEqual(on.record.key_levels.map(({ low, high }) => ({ low, high })), z0.record.key_levels.map(({ low, high }) => ({ low, high })));
   assert.equal(on.record.trade.opposing_ahead.o_freshness, "worn");
   assert.equal(z0.record.trade.opposing_ahead.o_freshness, "fresh");
-  // Z1a adds no recorded key: the typed fields sit where Z0's do.
-  assert.deepEqual(z0Keys(on.record), z0Keys(z0.record));
+  // Z1a adds no recorded key: the typed fields sit where Z0's do, except on the two levels Z0 types from its 1H best
+  // block's own edge (ZF1: [3992.5, 3995] and [4023, 4025]), which Z1a's 1H boxes (other edges) leave untyped.
+  const zf1Own = new Set([".key_levels[2].ds_sources", ".key_levels[7].ds_sources"]);
+  assert.deepEqual(z0Keys(on.record), z0Keys(z0.record).filter((k) => !zf1Own.has(k)));
+  assert.deepEqual([2, 7].map((i) => z0.record.key_levels[i].ds_sources), [["prophet_best@1H"], ["prophet_best@1H"]]);
   // zoneAhead still replays from the record alone.
   const t = on.record.trade;
   assert.deepEqual(zoneAhead({ entry: t.entry, stop: t.stop }, on.record.key_levels, { dir: 1, atrH1: on.record.strategy.atr_h1, trend: t.opposing_ahead.trend_lean }), t.opposing_ahead);
@@ -643,9 +646,10 @@ test("Z1b-5 ZONE_SOURCES_OFF=gmi_ob deep-equals Z1a's typing on planes that carr
   const on = se.buildStrategy(rich);
   assert.equal(JSON.stringify(strip(on)), JSON.stringify(strip(z1a)), "the overlay only: every zone, candidate and price is Z1a's");
   const at = (s, low) => s.key_levels.zones.find((z) => z.low === low).ds;
-  // The 15m zone at price: gmi_ob@15m replaces gmi_flag@15m (0.8 for 0.7).
-  assert.deepEqual([at(z1a, 3998.6).sources, at(on, 3998.6).sources], [["gmi_flag@15m", "whale@15m"], ["gmi_ob@15m", "whale@15m"]]);
-  assert.deepEqual([at(z1a, 3998.6).score, at(on, 3998.6).score], [1.6, 1.7]);
+  // The 15m zone at price: gmi_ob@15m replaces gmi_flag@15m (0.8 for 0.7); ZF1: the 1H demand box whose top (3998.6) is
+  // the zone's low types it too.
+  assert.deepEqual([at(z1a, 3998.6).sources, at(on, 3998.6).sources], [["gmi_flag@15m", "prophet_zone@1H", "whale@15m"], ["gmi_ob@15m", "prophet_zone@1H", "whale@15m"]]);
+  assert.deepEqual([at(z1a, 3998.6).score, at(on, 3998.6).score], [2.95, 3.05], "1.6 and 1.7 before ZF1, plus the 1H box (1.35)");
   // A zone Z1a left untyped: supply/medium, tested from its 1H box.
   assert.deepEqual([at(z1a, 4023).type, at(on, 4023).type, at(on, 4023).strength, at(on, 4023).freshness], ["none", "supply", "medium", "tested"]);
   // The block both cores found (same edges): it counts once, medium as in Z1a, with gmi_ob as provenance only.

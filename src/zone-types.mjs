@@ -21,8 +21,9 @@
 //                 (chart_plane.zones.aegis, the 4 nearest per side; local-engines/producer/src/adopt/gmi-zone.mjs):
 //                 bull demand, bear supply, 0.8. On a chart that has them, gmi_flag is dropped (its order-block flag is
 //                 price inside one of them); a chart without them keeps it. Their touches age a zone as prophet_zone's.
-// each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5). A box types a zone on a strict overlap; a
-// point must lie inside the zone. Per side, a (source, timeframe) adds only its heaviest box, so two overlapping 15m
+// each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5). A box types a zone on a strict overlap, or when
+// one of its edges is one of the zone's member prices (ZF1: the box made the cluster); a point must lie inside the zone
+// or on a member. Per side, a (source, timeframe) adds only its heaviest box, so two overlapping 15m
 // whales count once. Type: demand when demand_w > 0 and demand_w >= 2 x supply_w, supply in the mirror case, mixed when
 // both are > 0, else none. Strength on the type's score: strong >= 2.0, medium >= 1.0, else weak. A lone 1H-or-higher
 // box is medium; a lone 15m RBS or SBR point (1.0 x 1) is medium too, so decisive; a lone 15m whale (0.9) stays weak.
@@ -161,11 +162,21 @@ export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null, sourcesO
   return { boxes, bars, atr_h1: isNum(atrH1) && atrH1 > 0 ? atrH1 : null };
 }
 
-/** Pure: does a box type a zone ({ low, high, role })? A strict overlap; a point inside; a flag only at price. */
+/**
+ * ZF1 (owner 2026-11-25: "ZF1 tepi kotak"): a box types the cluster its own edge made. A cluster's edges are written to
+ * two decimals (key-level-agent.mjs clusterLevels, r2) while its members keep their prices, so a box whose edge is a
+ * member could fall just outside the rounded band (the 15m whale demand bottom 3433.454 against its cluster's top
+ * 3433.45) and miss it. A box edge (or a point) within BOX_EDGE_TOL of one of the zone's member prices types the zone.
+ * Every other box still needs a strict overlap: a box that only touches a cluster it did not make still does not type it.
+ */
+export const BOX_EDGE_TOL = 0.001;
+const edgeIsMember = (z, edge) => isNum(edge) && Array.isArray(z.members) && z.members.some((m) => isNum(m?.price) && Math.abs(m.price - edge) <= BOX_EDGE_TOL);
+
+/** Pure: does a box type a zone ({ low, high, role, members? })? A strict overlap or an own edge (ZF1); a point inside or a member; a flag only at price. */
 export function boxTypes(box, z) {
   if (box.at_price) return z.role === "at price";
-  if (box.point) return box.bottom >= z.low && box.bottom <= z.high;
-  return box.bottom < z.high && box.top > z.low;
+  if (box.point) return (box.bottom >= z.low && box.bottom <= z.high) || edgeIsMember(z, box.bottom);
+  return (box.bottom < z.high && box.top > z.low) || edgeIsMember(z, box.bottom) || edgeIsMember(z, box.top);
 }
 
 /**

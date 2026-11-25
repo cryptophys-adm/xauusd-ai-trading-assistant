@@ -27,7 +27,7 @@ Boxes from the 15m, 1H, 4H and D1 HUD snapshots. Each weight is the reader's own
 
 ### 2.2 Typing (`zoneTypes`)
 **Which boxes count:**
-- A box types a zone on a strict overlap (an edge that only touches does not count).
+- A box types a zone on a strict overlap (an edge that only touches does not count). ZF1 (2026-11-25, owner "ZF1 tepi kotak"): except a box edge, or a point, within 0.001 of one of the zone's member prices. The box made that cluster, whose edges are rounded to two decimals, so it types it.
 - A point must lie inside the zone.
 - Per side, each (source, timeframe) adds only its heaviest box, so two overlapping 15m whales count once.
 
