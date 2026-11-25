@@ -199,6 +199,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     description: "The metric rebuttal shadow arm: anything but off counts as on, and it also needs METRIC_SHADOW. Retired by the owner on 2026-11-19 (every arm stopped), so shown here for information only.",
     values: ["on", "off"], default_value: "on", config_value: "off", read: onUnlessOff
   }),
+  entry({
+    key: "OWNER_CORRECTIONS", label: "Owner corrections to the platform (H3f)", group: "knowledge",
+    description: "HAIC H3f: the owner's ratings and corrections of Nexus outputs (POST /omega/api/correction) stored here with prices masked and sent to the platform as nexus-teacher; off records and sends nothing. Never changes a parameter, a weight or a gate.",
+    values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
+  }),
   // ---- Omega engine, the owner's settings (D1 omega_settings; the Omega settings page's write path)
   // zone_mgmt joins these when Z3a lands (its OMEGA_DEFAULTS key, its settingsFrom check and its ERA_SWITCHES entry).
   entry({

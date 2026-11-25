@@ -564,6 +564,28 @@
       "write": "feature-switch"
     },
     {
+      "key": "OWNER_CORRECTIONS",
+      "label": "Owner corrections to the platform (H3f)",
+      "description": "HAIC H3f: the owner's ratings and corrections of Nexus outputs (POST /omega/api/correction) stored here with prices masked and sent to the platform as nexus-teacher; off records and sends nothing. Never changes a parameter, a weight or a gate.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "profit_lock_gate",
       "label": "Profit-lock gate",
       "description": "SLG1: no stop moves into profit until the position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; legacy: the earlier locks.",

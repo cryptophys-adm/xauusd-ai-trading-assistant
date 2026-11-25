@@ -108,6 +108,52 @@ export function controlRequest(body) {
   return { mode, reason };
 }
 
+// HAIC H3f (owner "2. yes", 2026-11-25): the owner's rating or correction of a Nexus output. The shape of the correction.v1
+// input the AI Worker's buildCorrection takes (src/owner-corrections.mjs; test/owner-corrections-route-h3f.test.mjs pins
+// these lists against it), restricted to what Nexus sends: a nexus_* source, the owner's two labels, a known category.
+export const CORRECTION_ROUTE_SOURCES = Object.freeze(["nexus_card", "nexus_room", "nexus_engine", "nexus_council"]);
+export const CORRECTION_ROUTE_LABELS = Object.freeze(["owner_rating", "owner_correction"]);
+export const CORRECTION_ROUTE_RATINGS = Object.freeze(["up", "down"]);
+export const CORRECTION_ROUTE_CATEGORIES = Object.freeze([
+  "reading_wrong", "invalidation_too_tight", "invalidation_too_loose", "evidence_wrong", "evidence_missing",
+  "overconfident", "underconfident", "rule_broken", "good_call", "other"
+]);
+const CORRECTION_FIELDS = new Set(["source", "label", "rating", "category", "target", "text", "evidence_refs"]);
+const CORRECTION_TARGET_FIELDS = new Set(["ref", "subject", "as_of"]);
+const CORRECTION_SUBJECT = /^(agent|model|seat):[A-Za-z0-9_.:-]{1,100}$/;
+const CORRECTION_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const isRef = (v) => typeof v === "string" && v.startsWith("ev:") && v.length <= 300 && !/\s/.test(v);
+
+/** Pure: the shape of a correction from Nexus; { input } to pass on, or { error } (HTTP 400). The AI Worker builds and masks it. */
+export function correctionRequest(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "invalid_request" };
+  const extra = Object.keys(body).find((k) => !CORRECTION_FIELDS.has(k));
+  if (extra) return { error: "unknown_field" };
+  if (!CORRECTION_ROUTE_SOURCES.includes(body.source)) return { error: "invalid_source" };
+  if (!CORRECTION_ROUTE_LABELS.includes(body.label)) return { error: "invalid_label" };
+  const rating = body.rating ?? null;
+  if (rating !== null && !CORRECTION_ROUTE_RATINGS.includes(rating)) return { error: "invalid_rating" };
+  if (body.label === "owner_rating" && rating === null) return { error: "rating_required" };
+  const category = body.category ?? null;
+  if (category !== null && !CORRECTION_ROUTE_CATEGORIES.includes(category)) return { error: "invalid_category" };
+  const t = body.target;
+  if (!t || typeof t !== "object" || Array.isArray(t) || Object.keys(t).some((k) => !CORRECTION_TARGET_FIELDS.has(k))) return { error: "invalid_target" };
+  if (!isRef(t.ref)) return { error: "invalid_target" };
+  if (typeof t.subject !== "string" || !CORRECTION_SUBJECT.test(t.subject)) return { error: "invalid_subject" };
+  const asOf = t.as_of ?? null;
+  if (asOf !== null && !(typeof asOf === "string" && CORRECTION_ISO.test(asOf))) return { error: "invalid_as_of" };
+  const text = body.text ?? null;
+  if (text !== null && typeof text !== "string") return { error: "invalid_text" };
+  if (typeof text === "string" && text.length > 500) return { error: "text_too_long" };
+  const refs = body.evidence_refs ?? [];
+  if (!Array.isArray(refs) || !refs.every(isRef)) return { error: "invalid_evidence_refs" };
+  if (refs.length > 10) return { error: "too_many_refs" };
+  if (body.label === "owner_correction" && category === null && !(typeof text === "string" && text.trim())) return { error: "category_or_text_required" };
+  return { input: { source: body.source, label: body.label, rating, category, target: { ref: t.ref, subject: t.subject, as_of: asOf }, text, evidence_refs: [...refs] } };
+}
+/** The AI Worker's answer to a correction as HTTP: rate_limited 429, owner_only 403, disabled 409, any other refusal 400. */
+const CORRECTION_STATUS = Object.freeze({ rate_limited: 429, owner_only: 403, disabled: 409 });
+
 /** Nexus forwards nexus.cryptophys.work/omega/* here unchanged (OMEGA_PAGE binding); "/omega" alone is redirected. */
 export const PATH_PREFIX = "/omega";
 
@@ -417,6 +463,24 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.unpinStrategy !== "function") return json({ error: "strategy_council_unavailable" }, 503);
       return rpc(() => env.OMEGA.unpinStrategy({ strategy_id: id, actor_sub: identity.sub ?? null }), "strategy_unpin_failed");
     }
+    // HAIC H3f (owner "2. yes", 2026-11-25: "harus dibuat jalurnya untuk feedback loop"): the owner's rating or correction of
+    // a Nexus output (a card, a room output, an engine decision, a council outcome). The owner's alone, a person, same
+    // origin, JSON, like the feature-switch panel; the shape checked here, the owner again and the masking in the AI Worker
+    // (OmegaGateway.recordCorrection). Off unless the owner turns OWNER_CORRECTIONS on in FS1 (disabled).
+    if (route === "POST /api/correction") {
+      const r = await personJson(request, url, identity, 4096);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      const req = correctionRequest(r.body);
+      if (req.error) return json({ ok: false, error: req.error }, 400);
+      if (typeof env.OMEGA.recordCorrection !== "function") return json({ error: "correction_unavailable" }, 503);
+      const res = await rpc(() => env.OMEGA.recordCorrection({ input: req.input, actor: identity.subject, actor_sub: identity.sub ?? null }), "correction_failed");
+      if (res.status !== 400) return res;
+      const body = await res.json();
+      return json(body, CORRECTION_STATUS[body?.error] ?? 400);
+    }
     // FS1 (owner 2026-11-25: "panel khusus pengaturan on off untuk semua fitur ini"): the owner's feature-switch panel. The
     // read is open to anyone signed in (viewer.can_control: the owner gate below and the AI Worker's own check); a change is
     // the owner's alone, a person, same origin, JSON, like the council toggle; the AI Worker checks the owner again.
@@ -476,7 +540,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/position/modify", "/api/position/delegate", "/api/delegate-mode", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation", "/api/feature-switches"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/position/modify", "/api/position/delegate", "/api/delegate-mode", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation", "/api/feature-switches", "/api/correction"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 
