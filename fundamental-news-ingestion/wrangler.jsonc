@@ -23,6 +23,26 @@
   // Operational verification: require one fresh scheduled ingestion result after deployment.
   // Verify the next scheduled pull after deploying safe upstream diagnostics.
   // Verify the latest sanitized upstream error diagnostics in production health output.
+  // Workers Builds branch previews (`wrangler preview`, newer wrangler requires this block; WB1, 2026-11-25).
+  // Preview-safe only: placeholder OAuth values so a preview can never act as the production TradingView client
+  // (no token is ever stored there, so the preview's pulls fail closed), and the existing preview-only KV
+  // namespace xauusd-preview-signal-cache for OAUTH_STORE (never the production xauusd-fundamental-news-oauth).
+  // No secrets here. The production deploy (deploy-fundamental-news-ingestion.yml) does not read this block.
+  "previews": {
+    "vars": {
+      "TV_MCP_CLIENT_ID": "preview-placeholder",
+      "TV_MCP_METADATA_URL": "https://www.tradingview.com/.well-known/oauth-authorization-server",
+      "TV_MCP_REDIRECT_URI": "https://preview.invalid/oauth/callback",
+      "TV_MCP_SCOPE": "mcp:read mcp:tools",
+      "TV_MCP_TOKEN_AUTH_METHOD": "none"
+    },
+    "kv_namespaces": [
+      {
+        "binding": "OAUTH_STORE",
+        "id": "0cbd6ecc0fbc4dc99342960456ca71e5"
+      }
+    ]
+  },
   "triggers": {
     // :04 (owner 2026-11-14, the TradingView quota): two minutes before the AI Worker's hourly news
     // analysis (:06), so its pull reads this pull's shared copy instead of calling the provider again.
