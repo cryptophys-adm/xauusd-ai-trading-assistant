@@ -24,7 +24,9 @@ const DIRECTION_FILES = [
   // Track C2: the Liquidity page and the Intelligence pages' chart.
   "pages/Liquidity.tsx", "components/IntelChart.tsx",
   // Track C3: the Chart patterns page.
-  "pages/Patterns.tsx"
+  "pages/Patterns.tsx",
+  // FS1: the Feature switches page (no direction colour at all: on is the ok cyan).
+  "pages/Switches.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

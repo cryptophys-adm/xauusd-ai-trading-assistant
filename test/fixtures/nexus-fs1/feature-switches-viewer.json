@@ -1,0 +1,649 @@
+{
+  "version": "cryptophys.feature-switches.v1",
+  "at": "2026-11-25T03:40:00.000Z",
+  "viewer": {
+    "can_control": false
+  },
+  "groups": [
+    {
+      "id": "zones",
+      "label": "Demand and supply zones"
+    },
+    {
+      "id": "plans",
+      "label": "Plans, entries and targets"
+    },
+    {
+      "id": "agents",
+      "label": "Strategy agents and councils"
+    },
+    {
+      "id": "modes",
+      "label": "Trading-mode evidence"
+    },
+    {
+      "id": "lens",
+      "label": "Liquidity lens and calendar"
+    },
+    {
+      "id": "knowledge",
+      "label": "Knowledge and shadow arms"
+    },
+    {
+      "id": "omega",
+      "label": "Omega engine (owner settings)"
+    }
+  ],
+  "switches": [
+    {
+      "key": "ZONE_PRIORITY",
+      "label": "Zone priority",
+      "description": "Z2: the guardrails' zone_ahead check and the zone aims, all under this switch; off behaves as before Z2 (no zone rule anywhere).",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ZONE_AHEAD_MODE",
+      "label": "Zone-ahead check",
+      "description": "Z2: no trade into a decisive opposing zone inside max(1R, 0.75 ATR(1H)); trend exempts a with-trend plan, all exempts none (owner-set only, one warning line per decision). record and off are config-only.",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "trend",
+        "all"
+      ],
+      "value": "trend",
+      "source": "config",
+      "config_value": "trend",
+      "default_value": "trend",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "KEY_LEVEL_ZONE_TYPES",
+      "label": "Typed key-level zones",
+      "description": "Z0: demand/supply type, strength and freshness on the Key Level Agent's zones; off removes every typed field, and every zone rule then behaves as before.",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ZONE_AIM_OFF",
+      "label": "Zone aims",
+      "description": "Z2b: the execution plans aimed by zone type; the tokens listed are the rules ON (tp: TP2 at the next decisive opposing zone; stop: the stop past a decisive opposing zone; factor: pickStrategy's zone factor). Note: stop on with tp off, the reward gate holds stop_skip back more often (the stop widens, the target stays); ZONE_AIM_TP only matters while tp is on.",
+      "group": "zones",
+      "worker": "ai",
+      "values": {
+        "type": "tokens",
+        "tokens": [
+          "tp",
+          "stop",
+          "factor"
+        ],
+        "on": []
+      },
+      "value": [],
+      "source": "config",
+      "config_value": [],
+      "default_value": [
+        "tp",
+        "stop",
+        "factor"
+      ],
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ZONE_SOURCES_OFF",
+      "label": "Zone typing sources",
+      "description": "Z1a: the evidence sources the zone typing reads; the tokens listed are the sources ON (prophet_zone, prophet_best, whale, gabfx, gmi_flag). Taking prophet_zone off restores Z0's typing. Not set in the config: every source on.",
+      "group": "zones",
+      "worker": "ai",
+      "values": {
+        "type": "tokens",
+        "tokens": [
+          "prophet_zone",
+          "prophet_best",
+          "whale",
+          "gabfx",
+          "gmi_flag"
+        ],
+        "on": [
+          "prophet_zone",
+          "prophet_best",
+          "whale",
+          "gabfx",
+          "gmi_flag"
+        ]
+      },
+      "value": [
+        "prophet_zone",
+        "prophet_best",
+        "whale",
+        "gabfx",
+        "gmi_flag"
+      ],
+      "source": "default",
+      "config_value": null,
+      "default_value": [
+        "prophet_zone",
+        "prophet_best",
+        "whale",
+        "gabfx",
+        "gmi_flag"
+      ],
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ZONE_AIM_TP",
+      "label": "Zone aim: TP1",
+      "description": "Z2b: label keeps TP1's price (its words only); qualified moves TP1 to a nearer decisive opposing qualified zone at or beyond ZONE_NEED, owner-set only and only after the owner's TP1-KZ amendment (tp1_kz@2). Matters only while the tp aim is on.",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "label",
+        "qualified"
+      ],
+      "value": "label",
+      "source": "config",
+      "config_value": "label",
+      "default_value": "label",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ENTRY_ZONE_MODE",
+      "label": "Entry zone",
+      "description": "EZ1: the band beside the plan's entry where Omega may rest its limit; edge also uses the zone's near edge when the plan's level is out of the placement band, on is EZ1 alone, off sends no zone.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "edge",
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "override",
+      "config_value": "edge",
+      "default_value": "edge",
+      "set_by": "owner",
+      "set_at": "2026-11-25T02:14:00.000Z",
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "TP1_KEY_ZONE_MODE",
+      "label": "TP1 at the nearest key zone",
+      "description": "TP1-KZ: TP1 at the nearest key zone at least 1R away; off restores the earlier targets and gates.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "CHART_PATTERNS_MODE",
+      "label": "Chart patterns",
+      "description": "The Projection Agent's chart patterns in its reading and in the strategy; off leaves them out.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "GRID_ADAPT_MODE",
+      "label": "Grid adaptation",
+      "description": "The grid's automatic entry and stop per strategy and regime, chosen once a UTC day; off keeps every plan's own entry and stop.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "live",
+        "off"
+      ],
+      "value": "live",
+      "source": "config",
+      "config_value": "live",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "AGENT_VETO_RULE",
+      "label": "Strategy-agent veto rule",
+      "description": "SV1b: two_sided lets an agent that speaks on both sides no longer count against the side it also speaks for (A6, A7); it goes back to classic by itself for 7 days when its softened trades lose. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
+      "group": "agents",
+      "worker": "ai",
+      "values": [
+        "two_sided",
+        "classic"
+      ],
+      "value": "two_sided",
+      "source": "config",
+      "config_value": "two_sided",
+      "default_value": "classic",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch",
+      "auto_revert": null
+    },
+    {
+      "key": "CFC_MODE",
+      "label": "Call for Councils",
+      "description": "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page); off runs nothing.",
+      "group": "agents",
+      "worker": "ai",
+      "values": [
+        "off",
+        "suggest",
+        "on"
+      ],
+      "value": "suggest",
+      "source": "override",
+      "config_value": "on",
+      "default_value": "suggest",
+      "set_by": "owner",
+      "set_at": "2026-11-24T22:05:00.000Z",
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "MODE_SHADOW_EVIDENCE",
+      "label": "Shadow per-mode evidence",
+      "description": "MS2: each mode not in force is decided deterministically at every 15m decision, for the mode selector's evidence only; off writes no shadow row and the selector reads live setups alone.",
+      "group": "modes",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "MODE_PROBATION",
+      "label": "Mode probation",
+      "description": "MS2: a switch to a mode with fewer than 31 live setups trades at half the risk on Omega's new orders of that mode until it passes or fails; off: full risk.",
+      "group": "modes",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "LIQUIDITY_WITNESS",
+      "label": "Liquidity card for the council",
+      "description": "B15: lens B's LIQUIDITY card beside the witnesses, for the council only (never the quorum, the guardrails or the weights); off: no card and the council's prompt as before.",
+      "group": "lens",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "LENS_ROOM_LINE",
+      "label": "Liquidity conditions in the rooms",
+      "description": "B16: conditions lets the risk desk and the moderator read lens B's liquidity conditions (plain words, no price); brief keeps the brief's line only. No model call is added either way.",
+      "group": "lens",
+      "worker": "ai",
+      "values": [
+        "conditions",
+        "brief"
+      ],
+      "value": "conditions",
+      "source": "config",
+      "config_value": "conditions",
+      "default_value": "conditions",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "CALENDAR_CONTRARIAN",
+      "label": "Calendar contrarian drift",
+      "description": "The Calendar Agent: a release kind whose gold drifted against the consensus significantly leans the other way; off holds it at 0.",
+      "group": "lens",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "SHADOW_KNOWLEDGE_ENABLED",
+      "label": "Learned-note shadow arm",
+      "description": "Aether's learned notes tested in shadow (an extra opening call per agent, capped per hour), never in a live prompt; off stops the arm at once. Shown as on/off; the variable holds true/false.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "KNOWLEDGE_VERDICT_POSTS",
+      "label": "Knowledge verdicts to the platform",
+      "description": "KA2: the arm's verdicts posted to the platform for Aether's curator; needs the learned-note shadow arm on.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "METRIC_REBUTTAL",
+      "label": "Metric rebuttals",
+      "description": "The metric rebuttal shadow arm: anything but off counts as on, and it also needs METRIC_SHADOW. Retired by the owner on 2026-11-19 (every arm stopped), so shown here for information only.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "config",
+      "config_value": "off",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": true,
+      "write": "feature-switch"
+    },
+    {
+      "key": "profit_lock_gate",
+      "label": "Profit-lock gate",
+      "description": "SLG1: no stop moves into profit until the position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; legacy: the earlier locks.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "legacy"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    {
+      "key": "change_thresholds",
+      "label": "Change thresholds",
+      "description": "CH1: a confluence or confidence change acts only past its threshold, per trigger (conf, tpw, limit, skip, stance); a trigger left off uses the earlier rule.",
+      "group": "omega",
+      "worker": "omega",
+      "values": {
+        "type": "tokens",
+        "tokens": [
+          "conf",
+          "tpw",
+          "limit",
+          "skip",
+          "stance"
+        ],
+        "on": [
+          "conf",
+          "tpw",
+          "limit",
+          "skip"
+        ]
+      },
+      "value": [
+        "conf",
+        "tpw",
+        "limit",
+        "skip"
+      ],
+      "source": "override",
+      "config_value": null,
+      "default_value": [
+        "conf",
+        "tpw",
+        "limit",
+        "skip",
+        "stance"
+      ],
+      "set_by": "owner",
+      "set_at": "2026-11-24T14:30:00.000Z",
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    {
+      "key": "pm_fast_1m",
+      "label": "1m fast-protect layer",
+      "description": "PM-1M: the fast TP anticipation and loss reduction on closed broker M1 bars; off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    {
+      "key": "reentry_1m",
+      "label": "1m re-entry after a lock stop",
+      "description": "RE1: one re-entry of a setup a break-even or lock stop closed, when a closed broker 1m bar closes back beyond the lock; off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    {
+      "key": "limit_supersede",
+      "label": "Newer signal supersedes a resting limit",
+      "description": "SS1: a newer same-side signal deletes Omega's older resting, unfilled limit, then goes through every gate; off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    }
+  ]
+}
