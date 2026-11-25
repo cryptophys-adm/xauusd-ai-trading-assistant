@@ -64,6 +64,8 @@ import * as reentry1m from "./reentry-1m.mjs";
 import * as limitSupersede from "./limit-supersede.mjs";
 import * as cdGateModule from "./cd-gate.mjs";
 import { cdGateOn, gateAt, readCdGateHistory } from "./cd-gate.mjs";
+import * as pmLineBreaker from "./pm-line-breaker.mjs";
+import { linesOffAt, readPmLineHistory } from "./pm-line-breaker.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -230,7 +232,7 @@ export function replayOmega4({
   bars = [], decisions = [], from = null, to = Infinity, settings = OMEGA_DEFAULTS, state = null,
   profileAt = () => null, balanceAt = null, councils = {}, control = [], blackouts = [], grid = null, arms = null,
   eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity, entry = null, version = OMEGA4_VERSION,
-  cdGate = null
+  cdGate = null, pmLines = null
 } = {}) {
   // v4 is the market replay (the taker): the live entry_order ("limit" or "council", docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)
   // never reaches it; the maker side is the limit policy's (`entry`, src/ledger-omega-limit.mjs).
@@ -253,6 +255,10 @@ export function replayOmega4({
   // (`cdGate.history`, [{ at_ms, pass }]), while cd_gate is "on"; a minute before the history's first entry has no gate
   // (the rule before CDG). Off, or no history: planIntents never gets a gate, today's replay byte for byte.
   const cdHistory = cdGateOn(S) && Array.isArray(cdGate?.history) && cdGate.history.length ? cdGate.history : null;
+  // B5 (src/pm-line-breaker.mjs): the Position Manager lines off at each minute, from the omega_events history
+  // (`pmLines.history`, [{ at_ms, off }]); no history or none off: every line acts, today's replay byte for byte.
+  const lineHistory = Array.isArray(pmLines?.history) && pmLines.history.length ? pmLines.history : null;
+  const linesOff = (t) => { const off = lineHistory ? linesOffAt(lineHistory, t) : []; return off.length ? off : null; };
   const start = finite(from) ? from : (m1.length ? m1[0].t + OMEGA4_SIM.warmup_ms : Infinity);
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
@@ -455,7 +461,8 @@ export function replayOmega4({
           const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
           const council = parseCouncil(text);
           const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}) });
-          const a = positionAction(f, council);
+          const offNow = linesOff(now);
+          const a = offNow ? positionAction(f, council, { off: offNow }) : positionAction(f, council);
           pmCalls += 1;
           const t = tradeOf(p);
           t.pm_council[council ? "recorded" : "fallback"] += 1;
@@ -478,7 +485,8 @@ export function replayOmega4({
           const pmHere = p.pm_bar === pmBar5 || pmActions.some((a) => a.ticket === p.ticket);
           if (zoneOn) p.zone_moves = (Array.isArray(p.zone_moves) ? p.zone_moves : []).filter((h) => h.bar_ms > now - PM_FAST_1M.intraday.rate_ms - 2 * M1);
           const history = zoneOn && p.zone_moves.length ? [...p.fast, ...p.zone_moves] : p.fast;
-          const f = fastProtect({ position: execPos(p), meta: fastMeta(p.open_intent), bars: recentBars, now, sym, gate: gates ? gates[String(p.ticket)] ?? null : undefined, spike: false, history, pmBar: pmHere, atrSource: "feed_m1" });
+          const offNow = linesOff(now);
+          const f = fastProtect({ position: execPos(p), meta: fastMeta(p.open_intent), bars: recentBars, now, sym, gate: gates ? gates[String(p.ticket)] ?? null : undefined, spike: false, history, pmBar: pmHere, atrSource: "feed_m1", ...(offNow ? { off: offNow } : {}) });
           if (f.status !== "act") continue;
           const id = fastId(p.ticket, f.bar_ms);
           fastActs.push({ id, ticket: p.ticket, branch: f.branch, bar_ms: f.bar_ms });
@@ -700,6 +708,8 @@ export const ENGINE_CODE = Object.freeze({
   "profit-lock-gate": [profitLockGate, ["profitLockGateOn", "gateMode", "gateAtrM5", "gateBreakEven", "stopInProfit", "gateFacts", "gatesFor", "gateReadSince", "gateText", "PROFIT_LOCK_GATE", "PROFIT_LOCK_GATE_MODES", "GATE_BE_ATR_M5", "GATE_LOOKBACK_MIN", "GATE_UNMEASURED"]],
   // PM-1M (2026-11-23): the 1m fast-protect layer (its table, noise rules, triggers and the live step).
   "pm-fast": [pmFast, ["pmFastOn", "fastMode", "fastId", "isFastId", "fastBars", "atr1m", "fastNoise", "fastProtect", "fastMeta", "spikeHolds", "runFastProtect", "PM_FAST_1M", "PM_FAST_RULES", "PM_FAST_MODES", "PM_FAST_READ_MIN", "PM_FAST_RETRY_MS", "zoneBarMs"]],
+  // B5 (2026-11-25): the Position Manager lines and their breaker (the registry, the off set in force, the verdict).
+  "pm-line-breaker": [pmLineBreaker, ["PM_LINES", "PM_FAST_LINE_IDS", "PM_LINE_RULE", "PM_LINE_EVENTS", "lineBreakerVerdict", "pmLinesOffEnv", "normalizeDoc", "breakerOff", "offLinesOf", "readPmLinesLive", "linesOffAt", "isPmLine", "lineTag", "pmLineBreakerTick", "setPmLine"]],
   "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
 });
 
@@ -728,7 +738,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "38daf894293032698abb8dcd0d993f5be9088e16af9e496a5530f03177b7b7de";
+export const ENGINE_CODE_HASH = "68e6e3f823a55494d04f03ee98f9bda8be2b7095665d296305cd5e84fc9eac01";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -1141,7 +1151,9 @@ export async function loadOmega4Context(env, { sinceMs, now = Date.now() }) {
   const arms = strategyArmMode(env) === "live" ? await safe(() => readArmState(env), null) : null;
   // CDG: the gate's history (KV), only while cd_gate is "on".
   const cdGate = cdGateOn(settings) ? { history: await safe(() => readCdGateHistory(env), []) } : null;
-  return { settings, profileAt: profileTimeline(changes, current), balanceAt, councils, control, blackouts, grid, arms, eaGate: eaVersionGateOn(env), live_account: Boolean(ref), profile_source: changes.length ? "history" : current ? "current" : "none", cdGate };
+  // B5: the Position Manager lines' off sets in force over time (omega_events), only when there is one.
+  const lineHistory = await safe(() => readPmLineHistory(db), []);
+  return { settings, profileAt: profileTimeline(changes, current), balanceAt, councils, control, blackouts, grid, arms, eaGate: eaVersionGateOn(env), live_account: Boolean(ref), profile_source: changes.length ? "history" : current ? "current" : "none", cdGate, ...(lineHistory.length ? { pmLines: { history: lineHistory } } : {}) };
 }
 
 // The feed's 1m bars kept in D1 (ledger_bars_1m), so the replay stays reproducible once the KV 1m series (about two

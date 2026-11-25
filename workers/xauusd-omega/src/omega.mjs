@@ -154,6 +154,14 @@ export function correctionRequest(body) {
 /** The AI Worker's answer to a correction as HTTP: rate_limited 429, owner_only 403, disabled 409, any other refusal 400. */
 const CORRECTION_STATUS = Object.freeze({ rate_limited: 429, owner_only: 403, disabled: 409 });
 
+/**
+ * B5: the Position Manager lines the owner may turn back on (POST /api/pm-lines), the AI Worker's PM_LINES ids
+ * (src/pm-line-breaker.mjs; test/pm-line-breaker.test.mjs holds the two lists equal). The AI Worker checks again.
+ */
+export const PM_LINE_IDS = Object.freeze(["take_profit_weakening", "lock_tp1", "breakeven", "tp2_target", "tp2_breakeven", "cut_loss",
+  "loosen_atr_expansion", "loosen_key_level_outside", "loosen_high_impact_release", "tp_nearer_momentum_fading", "tp_nearer_key_level_before",
+  "tp_nearer_confidence_drop", "tp_further_atr_expansion_trend", "tp_further_key_level_beyond", "liquidity", "pm_fast_tp", "pm_fast_cut"]);
+
 /** Nexus forwards nexus.cryptophys.work/omega/* here unchanged (OMEGA_PAGE binding); "/omega" alone is redirected. */
 export const PATH_PREFIX = "/omega";
 
@@ -350,6 +358,19 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (typeof env.OMEGA.setProbation !== "function") return json({ error: "probation_unavailable" }, 503);
       return rpc(() => env.OMEGA.setProbation({ enabled: r.body.enabled, actor: identity.subject }), "probation_failed");
     }
+    // B5, the Position Manager lines (src/pm-line-breaker.mjs): the owner turns a line back on, the only action (a line
+    // goes off by its breaker or PM_LINES_OFF, never here). /api/probation's owner, origin and body checks.
+    if (route === "POST /api/pm-lines") {
+      const r = await personJson(request, url, identity, 256);
+      if (r.response) return r.response;
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      if (typeof r.body.line !== "string" || !PM_LINE_IDS.includes(r.body.line)) return json({ ok: false, error: "unknown_line" }, 400);
+      if (r.body.enabled !== true) return json({ ok: false, error: "enabled must be true (turning a line on is the only action)" }, 400);
+      if (typeof env.OMEGA.setPmLine !== "function") return json({ ok: false, error: "pm_lines_unavailable" }, 503);
+      return rpc(() => env.OMEGA.setPmLine({ line: r.body.line, enabled: true, actor: identity.subject }), "pm_lines_failed");
+    }
     if (route === "POST /api/connection") {
       const r = await personJson(request, url, identity, 16384);
       if (r.response) return r.response;
@@ -540,7 +561,7 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");
     }
-    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/position/modify", "/api/position/delegate", "/api/delegate-mode", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation", "/api/feature-switches", "/api/correction"].includes(path)) return json({ error: "method_not_allowed" }, 405);
+    if (["/api/control", "/api/settings", "/api/connection", "/api/bridge/key", "/api/overview", "/api/stream", "/api/deals", "/api/whoami", "/api/position/close", "/api/position/modify", "/api/position/delegate", "/api/delegate-mode", "/api/feed-fallback", "/api/trading-mode", "/api/strategy-arm", "/api/strategy-council", "/api/strategy-arm/unpin", "/api/council", "/api/shadow-mode", "/api/push", "/api/status", "/api/account-profile", "/api/probation", "/api/pm-lines", "/api/feature-switches", "/api/correction"].includes(path)) return json({ error: "method_not_allowed" }, 405);
     return json({ error: "not_found" }, 404);
   }
 

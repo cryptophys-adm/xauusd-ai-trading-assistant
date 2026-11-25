@@ -110,7 +110,7 @@ Nov), with new agents last.
 | B11 | Adopt records: the producer publishes `gmi_adopt` and `prophet_adopt` | 1-6 | planned |
 | B20, B21, B22, B24 | HUD lines: stage 1; stage 2 scalp; stage 3 levels; stage 4 order flow and structure | 1-4 | planned |
 | B23 | Key Level Agent families (Asian range, daily R/S, 5m Camarilla, Fibonacci ratios, R37 extremes) | 3 | planned |
-| B5 | Position Manager lines, each behind a breaker | 2, 4, 6 | planned |
+| B5 | Position Manager lines, each behind a breaker | 2, 4, 6 | built (this PR): the PM's broker-action rules are lines; the inputs of later stages join as lines when their PRs land |
 | B25, B28 | Position Council lines; the indicators' plans and the Mizan projection as evidence | 2, 4, 6 | planned |
 | B26 | The Probe's local port (15m) | 5 | planned |
 | PF1, B27 | The platform registration of `hud-mizan-oracle`; the Mizan Oracle agent | 5 | planned (`hud-mizan-oracle` is declared idle in `organism.json` since DNA-1, #529) |
@@ -171,16 +171,40 @@ Nov), with new agents last.
   B3), so the CTA War Room keeps its figures and gets no new one.
 - Off: `HUD_AGENTS_OFF=mizan_oracle` (B6), or its neuron cap.
 
-### The Position Manager line breaker (planned: B5)
+### The Position Manager line breaker (B5, built)
 
-- The Position Manager closes live positions by itself, so each new input it reads is a **line** with an id and a
-  version (`PM_LINES` in a new `src/pm-line-breaker.mjs`): `liquidity@1` (B17), `setup` (A13), `prophet_momentum` and
-  `order_flow` (B25), `gmi_plan`, `prophet_plan` and `mizan_projection` (B28).
-- `position_actions` gains `lines_json` ({ present, cause }). A close counts for a line when the line caused it or caused
-  the last applied stop or target change. R = the deal's net / `risk_usd`.
+Track B is "live, no shadow" (owner 2026-11-22: "tidak perlu shadow, langsung integrasikan …", words (a) above). As
+built under erratum E7, `src/pm-line-breaker.mjs`; docs/SSOT.md (Omega broker engine) has the full rules.
+
+- The Position Manager closes live positions by itself, so each rule of it that sends a broker action (a close, a stop,
+  a target) is a **line** with an id (its `position_actions.rule`) and an int version (`PM_LINES`):
+  - the fixed rules `take_profit_weakening`, `lock_tp1`, `breakeven`, `tp2_target`, `tp2_breakeven`, `cut_loss`;
+  - A8's `loosen_*` (three) and `tp_nearer_*` / `tp_further_*` (five) rules, which write `position_actions` too;
+  - `liquidity@1`: lens B's management actions exist on main (cut_loss's `liquidity_sweep_against` reason and A8's
+    `tp_nearer_liquidity_sweep_against`), so the line is registered now and is the cause whenever lens B's reading set
+    the action; B17 adds lens B's levels to it;
+  - PM-1M's `pm_fast_tp` and `pm_fast_cut`.
+  - Not lines: RE1's `pm_reentry` (it opens a new position and manages none) and every hold, wait or diagnostic outcome.
+  - Still to come, each registered by its own PR: `setup` (A13), `prophet_momentum` and `order_flow` (B25), `gmi_plan`,
+    `prophet_plan` and `mizan_projection` (B28).
+- `position_actions` gains `lines_json` ({ present, cause }, tags `id@version`). A close counts for one line: the line
+  that sent it, else the line of the position's last applied stop or target change before it. R = the deals' net /
+  `risk_usd` (the open's own, else the stop's money as the live parity counts it). `r_vs_hold` (R minus holding to the
+  plan's SL/TP on `broker_bars_1m`) is recorded beside it.
 - A line goes off by itself when its last 15 closes average below 0R (KV `pm:line-breaker:v1`, an `omega_events`
-  `pm_line_off` row and one Telegram line). It comes back only by a version bump or the owner (`POST /api/pm-lines` on
-  the Omega Worker, with `/api/probation`'s owner, origin and body checks). `PM_LINES_OFF` switches a line off by hand.
+  `pm_line_off` row and one Telegram line, once per trip). An off line's rule is skipped as if it did not fire. It comes
+  back only by a version bump or the owner (`POST /api/pm-lines` on the Omega Worker, with `/api/probation`'s owner,
+  origin and body checks; turning a line on is the only action). `PM_LINES_OFF` switches a line off by hand.
+- **Version.** Only a code change bumps a line's version: a change to the rule itself, its thresholds or the inputs it
+  reads (for example B17 adding lens B's levels to `liquidity`). A bump turns the line back on and resets it: `closes`
+  goes to 0 and the last-15 window counts only closes of actions taken at the new version. The owner's turn-on resets the
+  window the same way at the same version.
+- **What a close is.** For a stop line (`breakeven`, `lock_tp1`, `loosen_*`, `pm_fast_cut`'s tightening, `pm_fast_tp`'s
+  lock) and a target line (`tp2_*`, `tp_nearer_*`, `tp_further_*`, `pm_fast_tp`'s nearer target): the final close of a
+  position whose last applied SL/TP change was that line's, whoever closed it. For a close line (`cut_loss`,
+  `take_profit_weakening`, `pm_fast_cut`'s early close): the close the line itself sent.
+- **v4.** Each change of the set of off lines is an `omega_events` row with the whole set; v4 replays the set in force
+  at each minute from them.
 - This replaces the Position Manager shadow arm once planned here (stage 0b).
 
 ### The daily neuron cap (planned: B6)

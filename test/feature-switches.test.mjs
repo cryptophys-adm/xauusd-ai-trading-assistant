@@ -28,6 +28,7 @@ import { cfcMode, CFC_MODES } from "../src/cfc-triggers.mjs";
 import { modeShadowEvidence, modeProbationMode } from "../src/mode-shadow.mjs";
 import { liquidityWitnessEnabled } from "../src/decision-engine.mjs";
 import { lensRoomLine, LENS_ROOM_LINES } from "../src/lens-steps.mjs";
+import { pmLinesOffEnv, PM_LINE_IDS } from "../src/pm-line-breaker.mjs";
 import { calendarContrarianMode } from "../src/econ-releases.mjs";
 import { shadowKnowledgeEnabled } from "../src/shadow-knowledge.mjs";
 import { knowledgeVerdictPostsEnabled } from "../src/knowledge-verdicts.mjs";
@@ -149,6 +150,7 @@ const ACCESSOR = {
   TP1_KEY_ZONE_MODE: (env) => tp1KeyZoneMode(env),
   CHART_PATTERNS_MODE: (env) => chartPatternsMode(env),
   GRID_ADAPT_MODE: (env) => gridAdaptMode(env),
+  PM_LINES_OFF: (env) => PM_LINE_IDS.filter((t) => !pmLinesOffEnv(env).includes(t)),
   ROOM_BREAKOUT_WAIVE: (env) => roomBreakoutWaiveOf(env),
   AGENT_VETO_RULE: (env) => agentVetoRuleOf(env),
   CFC_MODE: (env) => cfcMode(env),
@@ -166,7 +168,7 @@ const ACCESSOR = {
 test("FS-2 each reader is its accessor's rule: every raw value reads as the code reads it, and every panel value's env form reads back", () => {
   assert.deepEqual(Object.keys(ACCESSOR).sort(), AI_ROWS.map((e) => e.key).sort(), "an accessor per AI row");
   const raws = [undefined, null, "", " ", "on", "off", " ON ", "Off", "true", "false", "TRUE", "trend", "all", "record", "bogus", "live", "edge", "qualified", "label",
-    "two_sided", " Two_Sided ", "classic", "suggest", "brief", "conditions", "tp", "tp,stop", "stop factor", "tp,stop,factor", "TP, bogus", "prophet_zone", "whale,gabfx gmi_flag"];
+    "two_sided", " Two_Sided ", "classic", "suggest", "brief", "conditions", "tp", "tp,stop", "stop factor", "tp,stop,factor", "TP, bogus", "prophet_zone", "whale,gabfx gmi_flag", "cut_loss", "cut_loss, PM_FAST_TP liquidity", "breakeven,bogus"];
   for (const e of AI_ROWS) {
     for (const raw of raws) {
       const env = raw === undefined ? {} : { [e.key]: raw };
@@ -282,7 +284,7 @@ test("FS-5 no override: decisions, council messages, the EA signal and plans byt
   await store.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify({ ZONE_PRIORITY: { value: "off", actor: "owner", at: "2026-11-25T09:00:00.000Z" } }));
   assert.equal(await hashOf(strip(await withFeatureSwitches(env))), await hashOf({ ...CONFIG_ENV, ZONE_PRIORITY: "off" }));
   // The engine's hashes do not move (V13/V14 recompute them).
-  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "38daf894");
+  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "68e6e3f8");
   assert.equal(ENGINE_BEHAVIOUR_HASH.slice(0, 8), "ecfe3f90");
 });
 

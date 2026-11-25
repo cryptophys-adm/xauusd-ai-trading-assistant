@@ -18,6 +18,8 @@
 // override is copied onto env as any other, and the copy names the keys it overrode (FEATURE_SWITCH_OVERRIDDEN), so the
 // order owner override > auto-revert > env is decided from the resolved env alone.
 
+import { PM_LINE_IDS } from "./pm-line-breaker.mjs";
+
 export const FEATURE_SWITCHES_VERSION = "cryptophys.feature-switches.v1";
 /** The owner's overrides: { KEY: { value, actor, at } } (actor a role word). Written only by the AI Worker's owner POST. */
 export const FEATURE_SWITCH_OVERRIDE_KEY = "feature-switch:override:v1";
@@ -142,6 +144,15 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "ROOM_BREAKOUT_WAIVE", label: "Room waiver on a with-trend breakout", group: "plans", hold: "room-waive",
     description: "RM1b: the room check passes when it alone holds a side back, the 15m close is beyond the facing edge of a corridor recorded in the last hour, and the trend is with the side; it goes off by itself for 7 days when its waived trades lose. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
     values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn
+  }),
+  entry({
+    // B5 (src/pm-line-breaker.mjs): the hand switch of the Position Manager lines; each line also has its own breaker.
+    key: "PM_LINES_OFF", label: "Position Manager lines", group: "plans",
+    description: "B5: the Position Manager's rules that send a close, a stop or a target, one line each; the tokens listed are the lines ON. A line also goes off by itself when its last 15 closes average below 0R, and comes back only with a new version or the owner's turn-on (POST /omega/api/pm-lines). An off line's rule acts as if it did not fire. Not set in the config: every line on.",
+    values: { tokens: PM_LINE_IDS }, default_value: [...PM_LINE_IDS], config_value: null,
+    // The env holds the lines left OFF (src/pm-line-breaker.mjs pmLinesOffEnv); the panel shows the lines ON.
+    read: (raw) => { const off = tokensGiven(raw); return PM_LINE_IDS.filter((t) => !off.has(t)); },
+    toEnv: (on) => PM_LINE_IDS.filter((t) => !on.includes(t)).join(",")
   }),
   // ---- Strategy agents and councils
   entry({

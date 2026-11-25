@@ -15,6 +15,9 @@ let ready = null;
 export async function ensurePositionSchema(db) {
   if (ready === db) return;
   for (const q of SCHEMA_SQL) await db.prepare(q).run();
+  // B5 (src/pm-line-breaker.mjs): the lines present and the line that caused the action ({ present, cause }, JSON).
+  // Rows stored before the column have none (never counted by the breaker).
+  try { await db.prepare("ALTER TABLE position_actions ADD COLUMN lines_json TEXT").run(); } catch { /* already there */ }
   ready = db;
 }
 export function resetPositionSchemaCacheForTests() { ready = null; }
