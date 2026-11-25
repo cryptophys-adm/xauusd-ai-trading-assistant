@@ -128,6 +128,12 @@ backoff).
 - The server marks an intent `sent` the first time it returns it and keeps returning it until a result
   arrives. It marks it `expired` after 2 minutes without a result; a late result still lands. An open is
   never retried; a close or kill that is still needed gets a new attempt id.
+- A result line the server never received is reconciled from the terminal's own report, once: an open from the
+  open position carrying its id, a stop or target change from the position showing it, and (since 2026-11-25, CA1)
+  a `close` from the ticket's closing deal (reason `expert`, at most 5 s after the intent, the whole position, one
+  deal one intent; `docs/SSOT.md`, Omega broker engine, Intents). Such a result has `reconciled: true`; a close's also
+  `reconciled_from: "ea_deals"` and `deal_ticket`. A done intent is final: a result that arrives later changes
+  nothing. Nothing in the bridge or the EA changes.
 
 ## The credentials envelope
 

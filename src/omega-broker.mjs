@@ -22,6 +22,7 @@ import { OMEGA_DEFAULTS, STOP_COMMAND_MS, commandedStops, loosenRecords, planInt
 import { requestEntryCouncil, readEntryCouncil, pendingLimitActions, markLimitActions, placeLimitRows, ensureLimitCouncilSchema } from "./limit-council.mjs";
 import { pendingPositionActions, markPositionActions, positionActionRows, expireStalePositionActions, actionIdOfIntent, actionMessage, ACTION_TTL_MS } from "./position-actions.mjs";
 import { announceExits } from "./position-exit.mjs";
+import { reconcileLostCloses } from "./close-reconcile.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
 import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
 import { fallbackSinceMs } from "./feed.mjs";
@@ -1201,8 +1202,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   // A Position Manager intent the terminal never answered is said as not applied (the expiry below).
   // The intents about to expire, read once: a Position Manager one is said as not applied; a limit one the EA never
   // answered is the limit fault (fail closed).
-  const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR id LIKE 'pm1:%' OR id LIKE 'd:pm1:%' OR kind IN ('place_limit', 'modify_order', 'delete_order')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
-  const pmExpiring = expiring.filter((r) => /^(d:)?pm1?:/.test(String(r.id))).map((r) => r.id);
+  // CA1: a close about to expire is read too, so its lost ack is reconciled from its deal before the expiry below.
+  const expiring = (await db.prepare("SELECT id, kind, created_ms FROM omega_intents WHERE status IN ('pending', 'sent') AND created_ms < ? AND (id LIKE 'pm:%' OR id LIKE 'd:pm:%' OR id LIKE 'pm1:%' OR id LIKE 'd:pm1:%' OR kind IN ('place_limit', 'modify_order', 'delete_order', 'close')) LIMIT 100").bind(now - INTENT_TTL_MS).all()).results ?? [];
+  // CA1 (src/close-reconcile.mjs): a close the EA executed whose result line never arrived is recorded done from the
+  // ticket's closing deal ("expert", within 5 s of the intent, the whole position, one deal one intent), when a deal
+  // lands in this sync or a close is about to expire. Never an EA acknowledgement: the result says reconciled_from.
+  let closesReconciled = new Set();
+  if (executor && Array.isArray(executor.positions) && (newDeals.length > 0 || expiring.some((r) => r.kind === "close"))) {
+    const rec = await reconcileLostCloses(db, { now, openTickets: new Set(executor.positions.map((p) => Number(p?.ticket)).filter((t) => Number.isInteger(t) && t > 0)),
+      log: (action, detail) => event(db, now, "engine", action, detail) });
+    closesReconciled = new Set(rec.ids ?? []);
+  }
+  // A reconciled Position Manager close was applied: no "not applied" line for it.
+  const pmExpiring = expiring.filter((r) => /^(d:)?pm1?:/.test(String(r.id)) && !closesReconciled.has(r.id)).map((r) => r.id);
   const limitExpiring = expiring.find((r) => LIMIT_FAULT_KINDS.includes(r.kind));
   // ea_silent: the EA's own state was stale too (a VPS restart, the terminal down), so its heartbeat coming back lifts the
   // stop; an EA alive that did not answer needs a real answer or the owner's save.
