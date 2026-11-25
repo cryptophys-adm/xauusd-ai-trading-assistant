@@ -52,6 +52,7 @@ import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-con
 import { activeWitnessTuning } from "./witness-tuning.mjs";
 import { collectNexusAnalytics } from "./nexus-analytics.mjs";
 import { marketStructure } from "./market-structure.mjs";
+import { pineAtr } from "./prophet-r37-oscillator.mjs";
 import { learnedBlock, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
@@ -1479,6 +1480,27 @@ export function zoneBlockedOf(guards, d = null) {
 /** The model advice the council was given (kept on the decision record), or null. */
 const modelAdviceOf = (council) => (council?.model_advice && typeof council.model_advice === "object" ? council.model_advice : null);
 
+/** The closed 15m bars the ratio's range covers (CDG measurement, orchestrator 2026-11-25). */
+export const ATR_RANGE_BARS = 16;
+/**
+ * Pure, a measurement only (CDG, orchestrator ruling 2026-11-25; nothing reads it for a decision): ATR(14) of the closed
+ * 15m bars (pineAtr, the Pine RMA, over the decision's own 15m feed series) divided by the high - low of the last
+ * ATR_RANGE_BARS (16) closed 15m bars, 3 places. A bar is closed when its close_time is at or before the decision's
+ * bar close. Null with fewer than 16 closed bars, no ATR or no range. A ratio, never a price.
+ */
+export function atrRangeRatio(bars, barClose) {
+  const closeMs = Date.parse(String(barClose ?? ""));
+  const ok = (b) => isNum(b?.high) && isNum(b?.low) && isNum(b?.close) && b.high >= b.low;
+  const closed = (Array.isArray(bars) ? bars : []).filter((b) => ok(b) && (!Number.isFinite(closeMs) || !(Date.parse(String(b.close_time ?? "")) > closeMs)));
+  if (closed.length < ATR_RANGE_BARS) return null;
+  let atrNow = null;
+  try { atrNow = pineAtr(closed, 14).at(-1); } catch { atrNow = null; }
+  const last = closed.slice(-ATR_RANGE_BARS);
+  const range = Math.max(...last.map((b) => b.high)) - Math.min(...last.map((b) => b.low));
+  if (!isNum(atrNow) || !(range > 0)) return null;
+  return Math.round((atrNow / range) * 1000) / 1000;
+}
+
 export function buildDecisionRecord({ key, barClose, loaded, assessment = null, council = null, previous = null, now = Date.now(), decidedAt = new Date(now).toISOString(), env = null, analytics = null }) {
   const { inputs = {}, strategy = null } = loaded || {};
   const { mode: MODE, quorum_min: MODE_QUORUM_MIN, min_rrr: MODE_MIN_RRR, lean: MODE_LEAN } = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
@@ -1548,6 +1570,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The swing structure of the 4H, 1H and 15m bars (src/market-structure.mjs): labels only, shown beside
     // the decision; not a witness, not read by the council.
     structure: marketStructure({ h4Bars: inputs.h4Bars ?? [], h1Bars: inputs.h1Bars ?? [], m15Bars: inputs.m15Bars ?? [] }),
+    // CDG measurement (orchestrator 2026-11-25): ATR(14) over the 16-bar 15m range (atrRangeRatio), a number only;
+    // nothing reads it for a decision. Absent when it cannot be measured (fewer than 16 closed 15m bars).
+    ...(atrRangeRatio(inputs.m15Bars, barClose) != null ? { atr_range_ratio: atrRangeRatio(inputs.m15Bars, barClose) } : {}),
     // The price feed the decision stood on: TradingView, or the broker's bars (MT5 fallback).
     feed: inputs?.m5Feed === "mt5_fallback" ? "mt5_fallback" : "tradingview",
     // EZ1b: the entry zone's switch at this decision ("edge": Omega may rest a limit at the zone's near edge), only
