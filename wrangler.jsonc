@@ -170,6 +170,17 @@
     // Owner decision 2026-11-25 (relayed by the orchestrator): "Turn on, 'trend' mode".
     "ZONE_PRIORITY": "on",
     "ZONE_AHEAD_MODE": "trend",
+    // Z2b (2026-11-25, src/zone-types.mjs zoneAim; docs/RFC_DEMAND_SUPPLY_ZONES.md §6): the execution plans aimed by zone
+    // type, on copies after the agents' consensus and the quorum, all under ZONE_PRIORITY. ZONE_AIM_OFF: the rules left
+    // off, comma tokens "tp" (TP2 at the next decisive opposing key zone, TP1's words), "stop" (the stop past a decisive
+    // opposing-type zone), "factor" (pickStrategy's zone factor); "" = every rule on. ZONE_AIM_TP "label" (TP1's price
+    // never moves) | "qualified" (owner-set only, after TP1-KZ becomes tp1_kz@2: a decisive opposing qualified zone at
+    // or beyond ZONE_NEED, nearer than TP1, becomes TP1).
+    // Inert at ship (orchestrator ruling 2026-11-25): every rule off, so plans, signals and rule_version are Z2's. The
+    // owner turns each rule on separately (remove "tp", "stop" or "factor" from the list); stop_skip and the factor wait
+    // for their evidence.
+    "ZONE_AIM_OFF": "tp,stop,factor",
+    "ZONE_AIM_TP": "label",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.

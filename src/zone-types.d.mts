@@ -48,3 +48,21 @@ export function zoneAheadFails(oa: OpposingAhead | null | undefined, mode: unkno
 export function zonePlanPasses(plan: { opposing_ahead?: OpposingAhead | null } | null | undefined, g: { zone_ahead?: ZoneAheadMode } | null | undefined): boolean;
 export function zoneAheadCheck(plan: { opposing_ahead?: OpposingAhead | null } | null | undefined, mode: ZoneAheadMode, dir: number): { pass: boolean; detail: string };
 export function zoneRuleToken(env: unknown): string | null;
+// Z2b: execution plans aimed by zone type.
+export type ZoneAimToken = "tp" | "stop" | "factor";
+export type ZoneAimTpMode = "label" | "qualified";
+export interface ZoneAim { tp: ZoneAimTpMode | null; stop: boolean; factor: boolean }
+export interface ZoneRule { rule: "tp_typed" | "stop_skip"; base_tp1_r?: number | null; base_stop_atr?: number | null; held?: "rrr" }
+export const ZONE_AIM_RULE: string;
+export const ZONE_AIM_TOKENS: readonly ZoneAimToken[];
+export const ZONE_AIM_TP_MODES: readonly ZoneAimTpMode[];
+export const ZONE_AIM: Readonly<{ tp2_gap_atr: number; tp2_min_r: number; stop_gap_atr: number; stop_pad_atr: number; stop_cap_atr: number; stop_fallback_atr: number; factor_own: number; factor_opposite: number }>;
+export function zoneAimOffMode(env: unknown): ZoneAimToken[];
+export function zoneAimTpMode(env: unknown): ZoneAimTpMode;
+export function zoneAimMode(env: unknown, modes?: { zoneTypes?: string } | null): ZoneAim | null;
+export function zoneAimRuleToken(env: unknown): string | null;
+export function zoneFactorOf(plan: { zone_types?: Record<string, ZoneWords | null> | null } | null | undefined, dir: number): number | null;
+export interface ZoneAimContext { dir: number; atrH1: number | null; trend?: number | null; aim: ZoneAim | null; keyZone?: boolean; typedTargets?: boolean; stopFromZones?: boolean; levels?: Array<Record<string, any>> }
+export function zoneAim<T extends Record<string, any> | null>(plan: T, around: AroundZone[] | null | undefined, ctx: ZoneAimContext): T;
+export function zoneAimHeld<T extends Record<string, any> | null>(plan: T, around: AroundZone[] | null | undefined, ctx: ZoneAimContext, passes?: (plan: Record<string, any>) => boolean): T;
+export function zoneAimBase(plan: { entry?: number; zone_rules?: ZoneRule[] } | null | undefined, atrH1: number | null | undefined, dir: number): { entry: number; stop: number; tp1: number } | null;

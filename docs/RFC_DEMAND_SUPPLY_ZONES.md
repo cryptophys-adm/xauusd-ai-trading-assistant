@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side; Z2b, Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on; Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -221,7 +221,42 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 - **The frozen 2026-11-20 22:00 capture** (test Z2-16): in a SELL-trend hour (lean -0.78) the counter-trend long meets a strong worn supply zone 0.33 ATR (0.4R) ahead and fails; the with-trend short has no decisive demand zone within reach and passes.
 - **Risk.** Nearly inert in 'trend' in a SELL-heavy regime: the priority shows mainly in the record and in the council's words until the regime turns. It is regime-sensitive (one bearish fortnight of evidence); Z5's cohort and breaker watch it. The council sentence may tilt the stance toward WAIT; Z5 compares the stance shares before and after.
 
-## 6. Risks
+## 6. Z2b: execution plans aimed by zone type (decision side only)
+**Why.** The targets ignored the zone type (`tradeLevels`: the next major zones), the stop sat beyond the first zone of any kind, and `pickStrategy` had no zone term. Replay evidence (n 25): stops beyond an opposite-type zone gave -0.037R as they are and +0.337R when moved past it; an own-type entry zone gave +0.150R against -0.003R. TP1-KZ (approved) puts TP1 at the nearest key zone at or beyond 1R, so the default changes no TP1 price ('label'); 'qualified' stays off until the owner amends TP1-KZ.
+
+### 6.1 Where it runs (`zoneAim`, `zoneAimHeld`)
+- **On execution copies, after the consensus and the quorum.** After TP1-KZ, `agentPlanPasses` decides which agents speak; moving a stop or a target in `planForDirection` or the agents' `basePlan` would move the STRATEGY_AGENTS witness and the quorum. So `assess` makes the plans, `agentsConsensus`, the witness cards and the quorum read them as they are, and only then are the copies made: the guardrails' plan inside `guardrailsFor` (before its levels, reward and zone_ahead checks), and each `g.plans[id].plan` where `assess` attaches them. `agentConfidences` reads the base plans too. `planForDirection`, `basePlan`, `buildStrategy` and `ownTimeframePlan` are unchanged (test ZA-3 pins the order).
+- **The reward gate.** A copy that fails the gate its base passed keeps the base with `zone_rules` `[{ rule, held: "rrr" }]`: for the agents the consensus' own `agentPlanPasses` (TP1-KZ's 1R included), for the guardrails' plan its reward check. A base the gate refuses is not aimed, so no rule rescues a plan.
+- **Inputs.** The recorded set (`aroundSet`, as `decision.key_levels` keeps it) for the targets and `zoneAhead`; every Key Level Agent zone (`zoneLevels`) for the stop's search, as `tradeLevels`; the strategy's 1H ATR and trend.
+- **zoneAhead last.** Every aimed copy gets a fresh `opposing_ahead` on its final entry and stop, so Z2's `zone_ahead` check and filter read room_r, need_r and would_block after the stop moved.
+
+### 6.2 The rules
+| rule | applies to | what moves |
+|---|---|---|
+| `tp_typed` 'label' (default) | plans whose targets come from the key levels (zone_pullback, sweep_reversal, breakout_retest: `KEY_TARGET_AGENTS`), TP1-KZ on | TP1's price never; a decisive opposing TP1 adds its words to `tp1_note` ("(supply, fresh)"). TP2 = the next decisive opposing key zone at least 0.5 ATR beyond TP1 and at least 1.5R, else today's TP2. |
+| `tp_typed` 'qualified' (owner-set only, after TP1-KZ becomes tp1_kz@2) | the same | a decisive opposing qualified zone at or beyond `ZONE_NEED`, nearer than TP1, becomes TP1; TP2 as above |
+| `stop_skip` | the zone_pullback geometry (the guardrails' plan and zone_pullback's) | the stop sits beyond the first zone at least 0.5 ATR beyond the entry that is not a decisive opposing-type zone (supply under a long, demand over a short), padded 0.2 ATR; over 2.5 ATR, 1.5 ATR. Only when today's stop is that zone's: a fallback or a structural stop is kept. The entry zone's stop side is re-clipped to half the new risk. |
+| `factor` | `pickStrategy` | score = r2(confidence x confluence x zone_factor): 1.2 decisive own-type entry zone, fresh or tested; 0.85 decisive opposite-type; else 1 (`zoneFactorOf`), carried as `zone_factor` on a typed candidate; eligibility and the WAIT unchanged |
+
+- **One zone is never both a TP1 and a block.** The typed-TP floor is `ZONE_NEED` = max(1R, 0.75 ATR(1H)), Z2's need: a risk of 0.5 ATR with an opposing zone at 1.2R (0.6 ATR) is not a typed TP1, and Z2's would_block is true (ZA-7).
+- **The factor's size.** 1.2 / 0.85 is a 1.41 ratio, below the at-level confluence gap (about 0.90 against 0.55-0.61): an opposite-type at-level plan still outranks an own-type pullback at equal confidence (ZA-11). There is no B13 `PICK_LOCATION` switch in this tree to combine with.
+- **Agents with their own targets** (range_fade, the pattern agents, pattern_inside) keep their targets; their structural stops, and the sweep's and the breakout's, are unchanged.
+
+### 6.3 The record and the replay
+- **`zone_rules`** = `[{ rule: "tp_typed" | "stop_skip", base_tp1_r, base_stop_atr }]` on the trade (`tradeFor`) and on `strategy_plans` when a rule moved a price; `[{ rule, held: "rrr" }]` on a kept base; absent otherwise (a label alone is no rule). Distances from the entry, never a price: Z5 and MS2's base arm rebuild the base's stop and TP1 from the entry (`zoneAimBase`). Record only: never in the council's evidence, a card, a room, the EA signal or public output. The relabelled `tp1_note` is the only word the council sees change.
+- **`rule_version`** (`ruleVersionOf`) stays `tp1_kz:on+zone_ahead@1` while Z2b is inert (the shipped switches; ZA-19). With a rule on it becomes `tp1_kz:on+zone_ahead@1+zone_aim@1` (`:qualified` in that TP mode, `:no_<token>` per rule left off): the rules move stops and targets in every mode, so the mode selector's evidence restarts at Z2b's deploy, as at TP1-KZ's and Z2's.
+- **MS2.** The shadow modes run the same `assess`, so their plans are aimed the same way; `mode_shadow_plans.plans_json` keeps `zone_rules` as recorded, so the plan learner's shadow setups are the aimed plans and the base arm comes from the record.
+- **Untouched.** `managementFields`, the EA's keys, Omega, the Position Manager, `publicAnalysis`, `publicRecap`, the hashed local engines; ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…) and ERA_SWITCHES; no era moves (v4 replays the stored plans as they are).
+
+### 6.4 The switches
+- `ZONE_PRIORITY` "off" (or unset) disables all of Z2b: byte for byte main 3958d7c's output (ZA-15: the scenario with and without Prophet zones, the zone-held SELL, MS2's shadow rows and the frozen capture's guardrails). Untyped zones (`KEY_LEVEL_ZONE_TYPES` "off") disable it too.
+- `ZONE_AIM_OFF` = comma tokens `tp`, `stop`, `factor`, the rules left off ("" = every rule on). **Shipped "tp,stop,factor"** (orchestrator ruling 2026-11-25): all three off is Z2's output, and under the live wrangler.jsonc vars the council's messages, the plans, the trade, `strategy_plans`, the record, the EA signal, `managementFields` and MS2's rows are main 6135237's byte for byte (ZA-18). The owner turns each rule on separately; stop_skip and the factor wait for their evidence.
+- `ZONE_AIM_TP` = "label" (default) | "qualified" (owner-set only).
+
+### 6.5 Evidence on the fixtures
+On the frozen 2026-11-20 22:00 capture (scalp, intraday and swing, both sides, the guardrails' plan and every agent plan: 17 plans), Z2b moves no price: no decisive opposing zone sits under a long's or over a short's stop, no decisive opposing key zone qualifies as a typed TP2, and every entry zone is mixed (factor 1, no reordering). `tp_typed` relabels 3 TP1 notes (the scalp long's guardrail plan and breakout_retest's long in intraday and swing). The zone_ahead verdicts are Z2's (ZA-16).
+
+## 7. Risks
 - **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
 - **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.
