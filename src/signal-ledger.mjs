@@ -28,6 +28,7 @@ import { keyLevelPlan, isProtected, strategyExits, OMEGA_DEFAULTS } from "./omeg
 import { flatConfidences } from "./agent-confidence.mjs";
 import { limitKnobs } from "./omega-limit-knobs.mjs";
 import { limitSupersedeOn } from "./limit-supersede.mjs";
+import { roomWaivedTagOf } from "./room-waive.mjs";
 
 export const LEDGER_VERSION = "cryptophys.signal-ledger.v1";
 /** The ledger's own schedule (owner 2026-11-12): every 5 minutes, 2 minutes past each 5m close. */
@@ -559,12 +560,14 @@ const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status T
   "omega4_status TEXT", "omega4_exit TEXT", "r_omega4 REAL", "omega4_size REAL", "omega4_filled_at TEXT", "omega4_closed_at TEXT", "omega4_json TEXT"];
 /** SV1b (src/agent-veto.mjs): a decision that traded only because A6 or A7 lifted a veto keeps its tag ({ rule, old_detail }, JSON). */
 export const VETO_SOFTENED_COLUMN = "veto_softened TEXT";
+/** RM1b (src/room-waive.mjs): a decision that traded on a side whose room check was waived keeps its tag ({ corridor, broke_at, trend }, JSON). */
+export const ROOM_WAIVED_COLUMN = "room_waived TEXT";
 let schemaReady = false;
 export function resetLedgerSchemaCacheForTests() { schemaReady = false; }
 export async function ensureLedgerSchema(db) {
   if (schemaReady) return;
   for (const sql of LEDGER_SCHEMA_SQL) await db.prepare(sql).run();
-  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS, VETO_SOFTENED_COLUMN]) {
+  for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS, VETO_SOFTENED_COLUMN, ROOM_WAIVED_COLUMN]) {
     try { await db.prepare(`ALTER TABLE signal_ledger ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   for (const col of LIMIT_COLUMNS) {
@@ -729,6 +732,11 @@ export async function ingestDecision(env, d, { now = Date.now(), maxAgeMs = OMEG
   // SV1b: the decision's veto_softened (only a decision that has one; every other row as before).
   if (added && (d.veto_softened?.rule === "A6" || d.veto_softened?.rule === "A7")) {
     try { await env.DB.prepare("UPDATE signal_ledger SET veto_softened = ? WHERE id = ?").bind(JSON.stringify({ rule: d.veto_softened.rule, old_detail: String(d.veto_softened.old_detail ?? "").slice(0, 200) }), `decision:${d.decision_key}`).run(); } catch { /* the row stands */ }
+  }
+  // RM1b: the decision's room_waived (only a decision that has one; every other row as before).
+  const waived = added ? roomWaivedTagOf(d.room_waived ?? null) : null;
+  if (waived) {
+    try { await env.DB.prepare("UPDATE signal_ledger SET room_waived = ? WHERE id = ?").bind(JSON.stringify(waived), `decision:${d.decision_key}`).run(); } catch { /* the row stands */ }
   }
   return added;
 }

@@ -279,6 +279,7 @@ import { relayProfileChanges } from "./profile-agent.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
+import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
@@ -2794,7 +2795,9 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   if (url.pathname === "/api/weighting/room") {
     // The room guardrail per trading mode (src/room-tuning.mjs, owner 2026-11-19): the value in force per mode, the
     // replay of the values next to it (discovery with Holm, holdout), the reverse shadow, the fidelity and the history.
-    try { return dashboardJson({ status: "ok", ...(await readRoomTuning(env)) }); }
+    // RM1b: `breakout_waive`, the room breakout waiver's state (src/room-waive.mjs roomWaiveStatus: the value in force and
+    // its source, the hold, the waived ledger rows, the closed waived trades counted since the last hold and their mean R).
+    try { return dashboardJson({ status: "ok", ...(await readRoomTuning(env)), breakout_waive: await roomWaiveStatus(env).catch(() => null) }); }
     catch (error) { console.error("room_tuning_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/weighting/engine") {
@@ -3025,6 +3028,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // 7 days once its latest 15 closed softened trades average below 0R; once a UTC day, beside the grid's check.
   const veto = await runAgentVetoRevert(env, { send: (text: string) => sendTelegram(env, text) });
   if (veto.status === "reverted" || veto.status === "failed") console.log("agent_veto", JSON.stringify(veto));
+  // RM1b (src/room-waive.mjs, owner 2026-11-25: "Turn variant (d) on now"): the room breakout waiver off for 7 days once its
+  // latest 15 closed waived trades average below 0R; once a UTC day, beside SV1b's check (the same rule, no cron of its own).
+  const roomWaive = await runRoomWaiveRevert(env, { send: (text: string) => sendTelegram(env, text) });
+  if (roomWaive.status === "reverted" || roomWaive.status === "failed") console.log("room_waive", JSON.stringify(roomWaive));
   // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
   // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
   const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });
