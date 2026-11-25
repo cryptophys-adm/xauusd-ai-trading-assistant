@@ -25,6 +25,19 @@ const ROLE = Object.freeze({ support: "demand", resistance: "supply", "at price"
  * Never a price (a round number is "round number"), never trade words (a pattern's "measured target" is its
  * "measured projection"; any other name with one is left out); at most `max`, unique.
  */
+// A Fibonacci ratio (one integer digit, three or more decimals: 0.618, 0.705, 1.272) is a ratio, never a price: it is
+// written to two decimals (0.62, 0.71, 1.27) before the price strip, which would otherwise take its decimal run and
+// leave "Fibonacci 0.". Two decimals never make a run of three or more digits, so no price-shaped number survives.
+const FIB_RATIO = /(?<![\d.])\d\.\d{3,}(?![\d.])/g;
+/** At most `max` characters, cut at a word boundary (never mid-word), without a dangling ":", "-", "(" or ",". */
+export function cutAtWord(s, max) {
+  const t = String(s ?? "");
+  if (t.length <= max) return t;
+  const head = t.slice(0, max + 1);
+  const at = head.lastIndexOf(" ");
+  return (at > 0 ? head.slice(0, at) : t.slice(0, max)).replace(/[\s:;,(\-–—/]+$/, "");
+}
+
 export function zoneMetrics(zone, { max = 3 } = {}) {
   const names = [];
   for (const m of Array.isArray(zone?.members) ? zone.members : []) {
@@ -32,7 +45,9 @@ export function zoneMetrics(zone, { max = 3 } = {}) {
     if (!n) continue;
     n = n.replace(/^round\s+\d+(\.\d+)?$/i, "round number")
       .replace(/\bmeasured target\b/gi, "measured projection")
-      .replace(/\$?\b\d{3,5}(\.\d+)?\b/g, "").replace(/\s{2,}/g, " ").trim().slice(0, 60);
+      .replace(FIB_RATIO, (r) => (Math.round(Number(r) * 100 + 1e-9) / 100).toFixed(2))
+      .replace(/\$?\b\d{3,5}(\.\d+)?\b/g, "").replace(/\s{2,}/g, " ").trim();
+    n = cutAtWord(n, 60);
     if (/\b(entry|stop|take[- ]?profit|target|sl|tp\d?)\b/i.test(n)) continue; // a trade word: the name is left out
     if (n && !names.includes(n)) names.push(n);
     if (names.length >= max) break;
