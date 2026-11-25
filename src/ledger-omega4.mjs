@@ -17,7 +17,8 @@
 //               cron runs about 2.5 minutes past), with the council's recorded verdict for that position and bar where
 //               the live account had one (D1 position_actions.council), else none: the mechanical fallback;
 //   PM-1M       fastProtect (src/pm-fast.mjs) at every minute with a position, after the Position Manager, on these 1m
-//               bars (the live sync evaluates each closed broker minute), while pm_fast_1m is "on";
+//               bars (the live sync evaluates each closed broker minute), while pm_fast_1m is "on"; with zone_mgmt not
+//               "off" (Z3a) the zone-driven moves v4 planned (level_source "zone") hold it 3 minutes, as live;
 //   RE1         reentryCheck (src/reentry-1m.mjs) at every minute after a profit-lock stop's exit, on these 1m bars (the
 //               live sync evaluates each closed broker minute), while reentry_1m is "on": a trigger is planIntents'
 //               reentry1m, its open a trade of its own (key "re:<the setup's decision key>");
@@ -27,7 +28,7 @@
 // realised P/L over the risk at the open (|entry − stop| × volume at the open); partials count their share.
 // The parity check (omegaParity) compares it with Omega's real trades on the live USD account.
 
-import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS } from "./omega-engine.mjs";
+import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS, zoneMgmtOn } from "./omega-engine.mjs";
 import { eaSignalFromDecision, managementFields, applyArmGate, blackoutWindow } from "./ea-signal.mjs";
 import { positionFacts, positionAction, brokerLevels, positionReport, PIP } from "./position-manager.mjs";
 import { lastClosedCandle } from "./omega-broker.mjs";
@@ -56,7 +57,7 @@ import * as liquidityLens from "./liquidity-lens.mjs";
 import * as profitLockGate from "./profit-lock-gate.mjs";
 import * as changeThresholds from "./change-thresholds.mjs";
 import { decisionHistory, changeTokens, CHANGE_TOKENS, heldTag } from "./change-thresholds.mjs";
-import { fastProtect, fastMeta, fastId, pmFastOn, PM_FAST_1M } from "./pm-fast.mjs";
+import { fastProtect, fastMeta, fastId, pmFastOn, zoneBarMs, PM_FAST_1M } from "./pm-fast.mjs";
 import * as pmFast from "./pm-fast.mjs";
 import { reentryOn, reentrySetup, reentryCheck, isReentryId, REENTRY_1M } from "./reentry-1m.mjs";
 import * as reentry1m from "./reentry-1m.mjs";
@@ -244,6 +245,8 @@ export function replayOmega4({
   const changes = changeTokens(S);
   // PM-1M (2026-11-23, src/pm-fast.mjs): the 1m fast layer, at every minute with a position, on these 1m bars.
   const fastOn = pmFastOn(S);
+  // Z3a: with zone_mgmt not "off", the zone-driven moves v4 planned count for the fast layer's 3-minute rate, as live.
+  const zoneOn = zoneMgmtOn(S);
   // RE1 (2026-11-23, src/reentry-1m.mjs): the latest exit's re-entry setup, checked at every minute on these 1m bars.
   const reOn = reentryOn(S);
   // CDG (2026-11-25, src/cd-gate.mjs): the learned confidence-drop gate in force at each minute, from its history
@@ -473,7 +476,9 @@ export function replayOmega4({
         for (const p of positions) {
           p.fast = (Array.isArray(p.fast) ? p.fast : []).filter((h) => h.bar_ms > now - PM_FAST_1M.intraday.hysteresis_ms - 2 * M1);
           const pmHere = p.pm_bar === pmBar5 || pmActions.some((a) => a.ticket === p.ticket);
-          const f = fastProtect({ position: execPos(p), meta: fastMeta(p.open_intent), bars: recentBars, now, sym, gate: gates ? gates[String(p.ticket)] ?? null : undefined, spike: false, history: p.fast, pmBar: pmHere, atrSource: "feed_m1" });
+          if (zoneOn) p.zone_moves = (Array.isArray(p.zone_moves) ? p.zone_moves : []).filter((h) => h.bar_ms > now - PM_FAST_1M.intraday.rate_ms - 2 * M1);
+          const history = zoneOn && p.zone_moves.length ? [...p.fast, ...p.zone_moves] : p.fast;
+          const f = fastProtect({ position: execPos(p), meta: fastMeta(p.open_intent), bars: recentBars, now, sym, gate: gates ? gates[String(p.ticket)] ?? null : undefined, spike: false, history, pmBar: pmHere, atrSource: "feed_m1" });
           if (f.status !== "act") continue;
           const id = fastId(p.ticket, f.bar_ms);
           fastActs.push({ id, ticket: p.ticket, branch: f.branch, bar_ms: f.bar_ms });
@@ -511,6 +516,14 @@ export function replayOmega4({
         if (!out.intents.some((it) => it.id === fa.id)) continue;
         const q = positions.find((x) => x.ticket === fa.ticket);
         if (q) q.fast = [...(q.fast ?? []), { bar_ms: fa.bar_ms, branch: fa.branch }];
+      }
+      // Z3a: a zone-driven stop or target move (level_source "zone") holds the fast layer for 3 minutes, as live.
+      if (zoneOn) {
+        for (const it of out.intents) {
+          if (it.level_source !== "zone" || (it.kind !== "modify_sl" && it.kind !== "modify_tp")) continue;
+          const q = positions.find((x) => x.ticket === it.ticket);
+          if (q) q.zone_moves = [...(q.zone_moves ?? []), { bar_ms: zoneBarMs(now), branch: "zone" }];
+        }
       }
 
       let opened = false;
@@ -647,7 +660,9 @@ export const ENGINE_CODE = Object.freeze({
     // SLG1 (2026-11-23): the MFE each lock records.
     "stampGate",
     // PM-1M (2026-11-23): Omega's check of the 1m layer's actions.
-    "fastIntent"]],
+    "fastIntent",
+    // Z3a (2026-11-25): typed zones in SL+ and the trailing TP behind zone_mgmt (the words, the cap, the 3-minute rate).
+    "typedLevels", "typedDecisive", "zoneGiveback", "zoneMgmtOn", "ZONE_MGMT_MODES", "ZONE_GIVEBACK_R", "ZONE_MGMT_RATE_MS"]],
   // RE1 (2026-11-23): the 1m re-entry after a profit-lock stop (its table, the setup, the check, the live step).
   "reentry-1m": [reentry1m, ["reentryOn", "reentryId", "isReentryId", "isEntryIntentId", "reentrySetup", "reentryCheck", "liveSetup", "runReentry", "recordReentry", "isLockRule", "REENTRY_1M", "REENTRY_LOCK_PATTERN", "REENTRY_RULE", "REENTRY_MODES", "REENTRY_READ_MIN", "REENTRY_RETRY_MS"]],
   // SS1 (2026-11-23): a newer same-side signal supersedes a resting limit (the switch, the orders it ends, the deletes read back).
@@ -684,7 +699,7 @@ export const ENGINE_CODE = Object.freeze({
   // SLG1 (2026-11-23): the one profit-lock gate (its rules per mode, its facts, the first lock at it).
   "profit-lock-gate": [profitLockGate, ["profitLockGateOn", "gateMode", "gateAtrM5", "gateBreakEven", "stopInProfit", "gateFacts", "gatesFor", "gateReadSince", "gateText", "PROFIT_LOCK_GATE", "PROFIT_LOCK_GATE_MODES", "GATE_BE_ATR_M5", "GATE_LOOKBACK_MIN", "GATE_UNMEASURED"]],
   // PM-1M (2026-11-23): the 1m fast-protect layer (its table, noise rules, triggers and the live step).
-  "pm-fast": [pmFast, ["pmFastOn", "fastMode", "fastId", "isFastId", "fastBars", "atr1m", "fastNoise", "fastProtect", "fastMeta", "spikeHolds", "runFastProtect", "PM_FAST_1M", "PM_FAST_RULES", "PM_FAST_MODES", "PM_FAST_READ_MIN", "PM_FAST_RETRY_MS"]],
+  "pm-fast": [pmFast, ["pmFastOn", "fastMode", "fastId", "isFastId", "fastBars", "atr1m", "fastNoise", "fastProtect", "fastMeta", "spikeHolds", "runFastProtect", "PM_FAST_1M", "PM_FAST_RULES", "PM_FAST_MODES", "PM_FAST_READ_MIN", "PM_FAST_RETRY_MS", "zoneBarMs"]],
   "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
 });
 
@@ -713,7 +728,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162";
+export const ENGINE_CODE_HASH = "38daf894293032698abb8dcd0d993f5be9088e16af9e496a5530f03177b7b7de";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -781,7 +796,10 @@ export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941
 // the same behaviour hash, nextEra), and v4 replays the gate in force at each bar from its history, so live and v4 stay
 // comparable inside it; the owner (or its automatic revert) setting it to "off" writes "cd_gate=off" and starts a new
 // era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate"]);
+// zone_mgmt (Z3a, owner-set) is "off" by default: at the merge the era is carried (a new code hash, the same behaviour
+// hash, nextEra); the owner's flip to "omega" writes "zone_mgmt=omega" and starts a new era at the settings' updated_ms.
+// It is the owner's switch only: no automatic rule (Z5's breaker included) ever writes it.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the

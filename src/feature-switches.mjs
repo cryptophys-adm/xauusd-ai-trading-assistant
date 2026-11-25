@@ -205,7 +205,6 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
   }),
   // ---- Omega engine, the owner's settings (D1 omega_settings; the Omega settings page's write path)
-  // zone_mgmt joins these when Z3a lands (its OMEGA_DEFAULTS key, its settingsFrom check and its ERA_SWITCHES entry).
   entry({
     key: "profit_lock_gate", label: "Profit-lock gate", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
     description: "SLG1: no stop moves into profit until the position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; legacy: the earlier locks.",
@@ -238,6 +237,13 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "cd_gate", label: "Confidence-drop gate (CDG)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
     description: "CDG: a confidence drop closes a winner only where the learned gate passes for the agent, side and drop bucket (lift >= 0.10 over n >= 30); every other drop is held. Reverts itself to off once if its first 15 outcomes average worse than the earlier rule; off: the engine as before.",
     values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
+  }),
+  entry({
+    // Z3a (owner-set only; Aether's policy, its rollback and Z5's breaker never write it): OMEGA_DEFAULTS.zone_mgmt,
+    // settingsFrom's check and ERA_SWITCHES' entry. Z3b adds omega_pm and Z4 full.
+    key: "zone_mgmt", label: "Zone-typed management (Z3a)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
+    description: "Z3a: omega moves SL+ behind the position's own decisive demand or supply zone (at most 0.15-0.30R looser than today's, never below the lock) and the trailing TP to a decisive opposing zone at most one zone further; one modify per position per 3 minutes across this and the 1m fast layer. off: the engine as before (the documented rollback). The owner's switch only.",
+    values: ["off", "omega"], default_value: "off", config_value: null, read: (raw) => raw
   })
 ]);
 

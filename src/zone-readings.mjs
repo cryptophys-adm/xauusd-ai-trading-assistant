@@ -19,12 +19,15 @@
 //                   Position Manager state, the EA signal or managementFields; it only holds, never turns a rule on.
 //   alarms          one line a day each, no action.
 //   attribution     Omega's zone-attributed trades (omega_intents, position_actions) joined to ea_deals R; SELECT only.
+//   typing flag     (Z3a) one line per change of the decision-side typing switches (KEY_LEVEL_ZONE_TYPES,
+//                   ZONE_SOURCES_OFF) while the Omega setting zone_mgmt is not "off": Omega's SL+ and trailing TP read
+//                   those words through the signal, with no era move. zone_mgmt is read (SELECT only), never written.
 //
 // Switch: ZONE_READINGS = "on" (default) | "off" (FS1 registry, group zones): off writes nothing, the breaker is idle
 // (no hold reaches a decision) and GET /api/zones answers 404. ZONE_PRIORITY = "off" still overrides every Z rule.
 
 import { setupsFrom, setupOutcome, setupFromRow, zoneColumns, PLAN_RULES, PLAN_LEARNING_VERSION, ZONE_SETUP_COLUMNS, CONTROL_ARM } from "./plan-learning.mjs";
-import { zoneAimBase, zoneAheadMode, zoneAheadChecks, zoneAimMode, zoneAimOffMode, ZONE_AIM_TOKENS } from "./zone-types.mjs";
+import { zoneAimBase, zoneAheadMode, zoneAheadChecks, zoneAimMode, zoneAimOffMode, keyLevelZoneTypesMode, zoneSourcesOffMode, ZONE_AIM_TOKENS } from "./zone-types.mjs";
 import { ruleVersionOf } from "./mode-shadow.mjs";
 import { ledgerSeries, decisionCloseMs, toMs } from "./signal-ledger.mjs";
 
@@ -613,8 +616,8 @@ async function wantedRows(db) {
  * level_source 'zone' (omega_intents) and by the Position Manager's zone rules (position_actions, pm_zone_*), each
  * joined to its closed ea_deals in R (src/ledger-omega4.mjs liveTradesFrom). Words and R only: no ticket, price, money
  * or account leaves. { closes, mean_r, by: [{ source, n, mean_r }], advisory }.
- * TODO(Z3a): while zone_mgmt is not off, add the flag for the decision-side typing toggles here (zone_mgmt is an Omega
- * setting Z3a adds; this attribution never reads or writes it).
+ * Z3a's flag for the decision-side typing toggles while zone_mgmt is not off is typingFlagLine (in runZoneBreaker's
+ * tick); this attribution never reads or writes zone_mgmt.
  */
 export async function omegaZoneAttribution(db, { now = Date.now() } = {}) {
   const since = now - ZONE_ALARMS.omega_days * DAY;
@@ -658,6 +661,32 @@ export function alarmLines({ share = null, mode = "trend", omega = null } = {}) 
   return out;
 }
 
+/** Z3a: the decision-side typing switches Omega's zone management reads through the signal's key_level_types. */
+export function typingSignature(env) {
+  return { types: keyLevelZoneTypesMode(env), sources_off: zoneSourcesOffMode(env) };
+}
+/** The Omega setting zone_mgmt as stored (omega_settings id 1; SELECT only): "off" when unset or unreadable. */
+export async function storedZoneMgmt(db) {
+  try {
+    const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first();
+    const v = parse(row?.settings, {})?.zone_mgmt;
+    return typeof v === "string" && v ? v : "off";
+  } catch { return "off"; }
+}
+/**
+ * Pure (Z3a): the flag line when the typing switches changed (`before` the last tick's signature, `after` now) while
+ * zone_mgmt is not "off"; null otherwise (no change, no earlier signature, or zone_mgmt off). Words only.
+ */
+export function typingFlagLine(before, after, zoneMgmt) {
+  if (!before || !after || zoneMgmt === "off" || typeof zoneMgmt !== "string") return null;
+  const list = (v) => (Array.isArray(v) && v.length ? v.join(", ") : "none");
+  const parts = [];
+  if (before.types !== after.types) parts.push(`KEY_LEVEL_ZONE_TYPES ${before.types} → ${after.types}`);
+  if (list(before.sources_off) !== list(after.sources_off)) parts.push(`ZONE_SOURCES_OFF ${list(before.sources_off)} → ${list(after.sources_off)}`);
+  if (!parts.length) return null;
+  return `XAUUSD ZONES: the decision-side zone typing changed (${parts.join("; ")}) while zone_mgmt is ${zoneMgmt}: Omega's SL+ and trailing TP read these words through the signal, with no new parity era. The documented rollback is zone_mgmt off (the owner's setting). No action taken.`;
+}
+
 /**
  * The hourly tick, beside the strategy agents' breaker: the holds from the evidence of the rule version in force, one
  * 'XAUUSD ZONES' line per change (sent first, then kept: a failed send is told again at the next tick), and the alarms,
@@ -695,8 +724,16 @@ export async function runZoneBreaker(env, { now = Date.now(), send = null, force
       if (alarms[kind] === day) continue;
       if (await tell(text)) { alarms[kind] = day; alarmed += 1; }
     }
+    // Z3a: one line per typing toggle while zone_mgmt is not "off" (sent first, then kept: a failed send is told again).
+    const typing = typingSignature(env);
+    let typingKept = typing;
+    const prevTyping = stored?.typing && typeof stored.typing === "object" ? stored.typing : null;
+    if (prevTyping && JSON.stringify(prevTyping) !== JSON.stringify(typing)) {
+      const flag = typingFlagLine(prevTyping, typing, await storedZoneMgmt(db));
+      if (flag) { if (await tell(flag)) alarmed += 1; else typingKept = prevTyping; }
+    }
     const ordered = Object.fromEntries(ZONE_HOLDABLE.filter((r) => keep[r]).map((r) => [r, keep[r]]));
-    const state = { version: ZONE_READINGS_VERSION, rule_version: ruleVersion, checked_at: iso(now), held: ordered, checks, alarms };
+    const state = { version: ZONE_READINGS_VERSION, rule_version: ruleVersion, checked_at: iso(now), held: ordered, checks, alarms, typing: typingKept };
     await kv.put(ZONE_BREAKER_KEY, JSON.stringify(state));
     const changed = JSON.stringify(Object.keys(ordered)) !== JSON.stringify(ZONE_HOLDABLE.filter((r) => before[r]));
     if (error) return { status: "failed", error, held: Object.keys(ordered), told, alarmed };

@@ -29,7 +29,9 @@
 //   - the liquidity lens's spread-spike deferral (docs/RFC_POSITIONING_LIQUIDITY.md §6): while Omega would defer a
 //     modification (a live spike, up to 10 minutes from its start) a fast trigger is held, its close included;
 //   - at most one fast action per position per 3 minutes, and hysteresis: no fast action of the other trigger within
-//     10 minutes of one (a held trigger is recorded, with the reason);
+//     10 minutes of one (a held trigger is recorded, with the reason); Z3a: with the Omega setting zone_mgmt not "off",
+//     one modify per position per 3 minutes across this layer and zone management (a zone-driven stop or target move,
+//     level_source "zone", holds a fast action for 3 minutes, and Omega's typing waits 3 minutes after a fast action);
 //   - one manager per 5-minute bar: once the 5-minute Position Manager sent an action for a position in a 5m bar, the
 //     fast layer holds that position for the rest of that bar (v4 evaluates both at the same minute).
 // Identity: the stream is pinned by account_ref, source (server and symbol) and digits, as the liquidity lens's baseline
@@ -146,7 +148,9 @@ function swing5m(bars, endMs, n, dir) {
  *   sym       { point, digits, spread_points } (the live spread when a bar has none);
  *   gate      the SLG1 profit-lock gate facts (undefined: the gate is "legacy", no gate);
  *   spike     the spread-spike deferral holds modifications now;
- *   history   the position's fast actions sent in the last 10 minutes ([{ bar_ms, branch }]);
+ *   history   the position's fast actions sent in the last 10 minutes ([{ bar_ms, branch }]); Z3a: with zone_mgmt not
+ *             "off" also its zone-driven moves (branch "zone", bar_ms the minute before the move's minute), which count
+ *             for the 3-minute rate only, never for the hysteresis;
  *   pmBar     the 5-minute Position Manager sent an action for it in this 5m bar;
  *   atrSource "broker_m1" live, "feed_m1" in v4.
  * Returns { status: "inert", code, why } (no evaluation, no record), { status: "none" } (no trigger), or a record:
@@ -184,8 +188,9 @@ export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}
     if (pmBar) return "the 5-minute Position Manager acted on this position in this 5m bar";
     const recent = (Array.isArray(history) ? history : []).filter((h) => finite(h?.bar_ms) && h.bar_ms <= barMs);
     const rate = recent.find((h) => barMs - h.bar_ms < K.rate_ms);
-    if (rate) return `a fast action went out at ${hhmm(rate.bar_ms)} UTC: at most one per ${K.rate_ms / 60_000} minutes`;
-    const flip = recent.find((h) => h.branch !== branch && barMs - h.bar_ms < K.hysteresis_ms);
+    // Z3a: a zone-driven stop or target move (history branch "zone", zone_mgmt not "off") counts for the rate only.
+    if (rate) return rate.branch === "zone" ? `a zone-driven stop or target move went out at ${hhmm(rate.bar_ms + M1)} UTC: at most one modify per ${K.rate_ms / 60_000} minutes across the fast layer and zone management` : `a fast action went out at ${hhmm(rate.bar_ms)} UTC: at most one per ${K.rate_ms / 60_000} minutes`;
+    const flip = recent.find((h) => h.branch !== branch && h.branch !== "zone" && barMs - h.bar_ms < K.hysteresis_ms);
     if (flip) return `hysteresis: the other fast trigger acted at ${hhmm(flip.bar_ms)} UTC, within ${K.hysteresis_ms / 60_000} minutes`;
     return null;
   };
@@ -253,7 +258,7 @@ export const PM_FAST_RETRY_MS = 5_000;
  * (null while the gate is "legacy"); `spike` the spread-spike deferral holds modifications now. Writes each trigger's
  * record (pending for an action, noted for a held one) into position_actions. Never throws.
  */
-export async function runFastProtect(env, { executor, openIntents = null, gates = null, spike = false, now = Date.now() } = {}) {
+export async function runFastProtect(env, { executor, openIntents = null, gates = null, spike = false, now = Date.now(), zoneMgmt = false } = {}) {
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
   const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => Number(p?.ticket) > 0 && (p.side === "BUY" || p.side === "SELL") && typeof p.intent_id === "string" && (p.intent_id.startsWith("open:") || /^re:\d+:\d+(:\d+)?$/.test(p.intent_id)));
@@ -284,6 +289,9 @@ export async function runFastProtect(env, { executor, openIntents = null, gates 
     const tickets = positions.map((p) => Number(p.ticket));
     const marks = tickets.map(() => "?").join(", ");
     const sent = (await db.prepare(`SELECT ticket, bar, rule FROM position_actions WHERE id LIKE 'pm1:%' AND ticket IN (${marks}) AND at_ms > ? AND action IN ('close', 'sl', 'tp') AND status IN ('pending', 'applied')`).bind(...tickets, now - PM_FAST_1M.intraday.hysteresis_ms - M1).all()).results ?? [];
+    // Z3a (zone_mgmt not "off"): Omega's zone-driven stop and target moves of the last 3 minutes (level_source "zone"),
+    // one modify per position per 3 minutes across both. Off: not read.
+    const zoneRows = zoneMgmt ? (await db.prepare("SELECT json_extract(payload, '$.ticket') AS ticket, created_ms FROM omega_intents WHERE kind IN ('modify_sl', 'modify_tp') AND json_extract(payload, '$.level_source') = 'zone' AND status IN ('pending', 'sent', 'done') AND created_ms > ?").bind(now - PM_FAST_1M.intraday.rate_ms - M1).all()).results ?? [] : [];
     const pmBar = Math.floor(now / M5);
     const pmRows = (await db.prepare(`SELECT ticket FROM position_actions WHERE id LIKE 'pm:%' AND ticket IN (${marks}) AND bar = ? AND action IN ('close', 'sl', 'tp') AND status IN ('pending', 'applied')`).bind(...tickets, pmBar).all()).results ?? [];
     const pmTickets = new Set(pmRows.map((r) => Number(r.ticket)));
@@ -291,7 +299,8 @@ export async function runFastProtect(env, { executor, openIntents = null, gates 
     for (const p of positions) {
       const it = intents[p.intent_id] ?? {};
       const meta = fastMeta(it);
-      const history = sent.filter((r) => Number(r.ticket) === Number(p.ticket)).map((r) => ({ bar_ms: Number(r.bar) * M1, branch: r.rule === PM_FAST_RULES.cut ? "cut" : "tp" }));
+      const history0 = sent.filter((r) => Number(r.ticket) === Number(p.ticket)).map((r) => ({ bar_ms: Number(r.bar) * M1, branch: r.rule === PM_FAST_RULES.cut ? "cut" : "tp" }));
+      const history = zoneRows.length ? [...history0, ...zoneRows.filter((r) => Number(r.ticket) === Number(p.ticket)).map((r) => ({ bar_ms: zoneBarMs(Number(r.created_ms)), branch: "zone" }))] : history0;
       // SLG1: a position without gate facts reads as closed while the gate is on; "legacy" (gates null): no gate.
       const gate = gates == null ? undefined : gates[String(p.ticket)] ?? GATE_UNMEASURED;
       const f = fastProtect({ position: p, meta, bars, now, sym: executor.symbol ?? {}, gate, spike, history, pmBar: pmTickets.has(Number(p.ticket)), atrSource: "broker_m1" });
@@ -308,6 +317,9 @@ export async function runFastProtect(env, { executor, openIntents = null, gates 
     return { status: "failed", error: String(error?.message ?? error).slice(0, 160) };
   }
 }
+
+/** Pure (Z3a): a zone-driven move's place in the fast layer's history: the minute before its own (the bar the layer reads then). */
+export const zoneBarMs = (ms) => Math.floor(ms / M1) * M1 - M1;
 
 /** Pure: the layer's facts of an open intent's payload: its mode, the stop at entry and its distance, the plan's TP1. */
 export function fastMeta(it = {}) {

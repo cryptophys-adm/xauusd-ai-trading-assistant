@@ -7,8 +7,10 @@ import { createHash } from "node:crypto";
 // On a tree without the field (main 6135237) this is the identity.
 // Stored rows hold the record as JSON text, so a string that parses as an object or array is stripped inside too.
 // CDG (2026-11-25) adds atr_range_ratio (a measurement, a number only) to the decision record: stripped the same way.
+// Z3a (2026-11-25) adds key_level_types (the key levels' zone words) to the management fields of a typed decision: the
+// same (test/omega-zone-mgmt.test.mjs pins the field itself and the untyped signal byte for byte).
 export const withoutDsSources = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
-  if (k === "ds_sources" || k === "atr_range_ratio") return undefined;
+  if (k === "ds_sources" || k === "atr_range_ratio" || k === "key_level_types") return undefined;
   if (typeof x === "string" && /^[[{]/.test(x)) { try { return JSON.stringify(withoutDsSources(JSON.parse(x))); } catch { return x; } }
   return x;
 }));
@@ -67,7 +69,7 @@ export async function inertOutputs({ se, de, ea, gunzipJson }, fx, env) {
       messages: sha(de.councilMessages(evidence)),
       guards: sha({ long: side(a.guards.long), short: side(a.guards.short) }),
       trade: sha(record.trade), strategy_plans: sha(record.strategy_plans), record: sha(withoutDsSources(record)),
-      signal: sha(ea.eaSignalFromDecision({ decision: record, now: NOW })), management: sha(ea.managementFields(record)),
+      signal: sha(ea.eaSignalFromDecision({ decision: record, now: NOW })), management: sha(withoutDsSources(ea.managementFields(record))),
       shadow: sha(de.shadowModeDecisions({ loaded: c.loaded, assessment: a, council: c.council, env, now: NOW })),
       stance: record.stance
     };
