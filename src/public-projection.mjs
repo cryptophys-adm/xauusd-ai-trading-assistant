@@ -1,9 +1,11 @@
 // The public projection, content roadmap P1 (docs/RFC_CONTENT_AGENT.md §2.1; owner 2026-11-14: "lanjutkan
 // semua"). A read-only view of past Decision Engine decisions that a future content agent may read, and the
 // only one: no account data, no Omega state, no entry, stop, target, plan, zone, lot or price level, and only
-// decisions older than the delay (PUBLIC_DELAY_HOURS, default 24), so a decision appears in public only once
-// it has passed, as a recap. Nothing is published from here: there is no content agent yet, and the route is
-// behind the same Cloudflare Access as the rest of /api.
+// decisions older than the delay (PUBLIC_DELAY_HOURS). Realtime since 2026-11-25 (owner: "harus realtime", then
+// "Semua sekarang"): production sets the delay to 0, so the newest 15m decision is public at once, its side,
+// confidence and reasons included, while a position on it may still be running; never a price, entry, stop or
+// target (PUBLIC_FORBIDDEN_KEYS, recapLeaks). Unset, null, empty or invalid keeps the default, 24 hours. The
+// GET /api/public-projection route is behind the same Cloudflare Access as the rest of /api.
 //
 // What a recap holds: the bar's time and session, the stance and bias, the quorum's shares, the chart patterns
 // by name and status (never their bounds or targets), the reasons and risks in plain words with every sentence
@@ -25,9 +27,12 @@ export const PRICE_LIKE = /\$?\b(?:\d{1,2},\d{3}|\d{3,5})(?:\.\d+)?\b/;
 /** Order and plan wording: a recap is a commentary, never an instruction. */
 export const ORDER_WORDING = /\b(entry|entries|enter|stop[- ]?loss|stop|take[- ]?profit|target|targets|limit order|market order|order|buy now|sell now|lot|lots|position size|reward[- ]to[- ]risk|risk[- ]to[- ]reward|r:r|rrr|plan)\b/i;
 
+/** The public delay in hours: PUBLIC_DELAY_HOURS, 0 (realtime) to 14 days; unset, null, empty or invalid: 24. */
 export function publicDelayHours(env) {
-  const n = Number(env?.PUBLIC_DELAY_HOURS ?? DEFAULT_PUBLIC_DELAY_HOURS);
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 24 * 14) : DEFAULT_PUBLIC_DELAY_HOURS;
+  const raw = env?.PUBLIC_DELAY_HOURS;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return DEFAULT_PUBLIC_DELAY_HOURS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 24 * 14) : DEFAULT_PUBLIC_DELAY_HOURS;
 }
 
 const parse = (v, d) => { if (v && typeof v === "object") return v; try { return JSON.parse(v); } catch { return d; } };

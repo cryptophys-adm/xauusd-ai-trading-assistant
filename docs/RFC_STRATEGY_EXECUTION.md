@@ -77,6 +77,7 @@ Omega applies these rules to the system's positions only, in this order. Each pr
    - Trigger: the position is in profit and its agent's confidence on its side dropped at this 15m evaluation.
    - Effect: the position is closed.
    - The agent comes from the position's open intent. A position opened before this change, or with no agent recorded, is judged by the default agent's confidence.
+   - Since CDG (owner 2026-11-25, relayed by the orchestrator: "Learned gate, hold otherwise (Recommended)"; `src/cd-gate.mjs`, docs/SSOT.md "The confidence-drop gate (CDG)"), with the Omega setting `cd_gate` "on" (the default) the close is emitted only when the learned gate passes for the agent × side × drop bucket (drop 0.15-0.25 or ≥ 0.25; a cell passes with n ≥ 30 and an adverse rate 1 hour after the decision at least 0.10 above the side's base rate over the last 30 days). Every other drop, and every drop below 0.15, is held: no close, no stop move; the position follows its plan, SLG1 and the Position Manager. Each held or gated drop is logged (D1 `omega_cd_holds`), and the gate reverts itself to "off" once if its first 15 outcomes average worse than the closes this rule would have made. `cd_gate` "off" is the rule above byte for byte.
 3. **Hold or extend only when the confidence is stable or rising:**
    - The trailing TP (moving the target to the next key level) and the extended TP run only when the agent's confidence is stable or rising.
    - With a drop, or an unknown change, the target stays where it is and is taken.

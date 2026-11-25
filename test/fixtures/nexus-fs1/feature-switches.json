@@ -717,6 +717,28 @@
       "emergency_stop": false,
       "read_only": false,
       "write": "omega-settings"
+    },
+    {
+      "key": "cd_gate",
+      "label": "Confidence-drop gate (CDG)",
+      "description": "CDG: a confidence drop closes a winner only where the learned gate passes for the agent, side and drop bucket (lift >= 0.10 over n >= 30); every other drop is held. Reverts itself to off once if its first 15 outcomes average worse than the earlier rule; off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
     }
   ]
 }
