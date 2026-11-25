@@ -27,6 +27,7 @@ import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol,
 import { fallbackSinceMs } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { vetoSoftenedTag } from "./agent-veto.mjs";
+import { roomWaivedTag } from "./room-waive.mjs";
 import { roleWord } from "./feature-switches.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
@@ -1376,7 +1377,11 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     // decision's veto_softened, so its Omega R is tracked per trade (the automatic revert's evidence). Others unchanged.
     const softened = await vetoSoftenedTag(db, attempt);
     const it = softened ? { ...attempt, veto_softened: softened } : attempt;
-    await db.prepare("INSERT OR IGNORE INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, ?, ?, 'pending', ?, ?)").bind(it.id, it.kind, JSON.stringify(it), now, now).run();
+    // RM1b (src/room-waive.mjs): an entry of a decision that traded on a side whose room check was waived carries the
+    // decision's room_waived the same way (the waiver's automatic revert counts these). Others unchanged.
+    const waived = await roomWaivedTag(db, it);
+    const row = waived ? { ...it, room_waived: waived } : it;
+    await db.prepare("INSERT OR IGNORE INTO omega_intents (id, kind, payload, status, created_ms, updated_ms) VALUES (?, ?, ?, 'pending', ?, ?)").bind(row.id, row.kind, JSON.stringify(row), now, now).run();
   }
   const notesKey = plan.notes.map((x) => x.code).join(",");
   const lastNotes = await db.prepare("SELECT detail FROM omega_events WHERE action = 'plan' ORDER BY id DESC LIMIT 1").first();

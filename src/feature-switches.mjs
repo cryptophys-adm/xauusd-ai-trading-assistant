@@ -14,6 +14,9 @@
 //
 // AGENT_VETO_RULE (SV1b) is a "feature-switch" row whose override is the owner's force (src/agent-veto.mjs): it is not
 // copied onto env; resolveAgentVetoRule reads it before the automatic revert and the env value, as the force did.
+// ROOM_BREAKOUT_WAIVE (RM1b, src/room-waive.mjs) is an ordinary env row with its own automatic revert (`hold`): the
+// override is copied onto env as any other, and the copy names the keys it overrode (FEATURE_SWITCH_OVERRIDDEN), so the
+// order owner override > auto-revert > env is decided from the resolved env alone.
 
 export const FEATURE_SWITCHES_VERSION = "cryptophys.feature-switches.v1";
 /** The owner's overrides: { KEY: { value, actor, at } } (actor a role word). Written only by the AI Worker's owner POST. */
@@ -22,6 +25,17 @@ export const FEATURE_SWITCH_OVERRIDE_KEY = "feature-switch:override:v1";
 export const FEATURE_SWITCH_VETO_MIGRATION_KEY = "feature-switch:migrated:agent-veto-owner:v1";
 /** A run's env copy is re-read from KV at most this often per isolate (KV itself takes up to about a minute to spread). */
 export const FEATURE_SWITCH_MEMO_MS = 30_000;
+/**
+ * RM1b: the keys whose value on a resolved env copy is the owner's override (an enumerable symbol, so it rides along when
+ * a run spreads the copy into its own; never in JSON). A switch with an automatic revert (ROOM_BREAKOUT_WAIVE) reads it
+ * for the order owner override > auto-revert > env without reading the store a second time.
+ */
+export const FEATURE_SWITCH_OVERRIDDEN = Symbol.for("cryptophys.feature-switches.overridden");
+/** Pure: the keys the owner's override set on this env copy ([] for env itself or a copy without one). */
+export function overriddenKeys(env) {
+  const v = env && typeof env === "object" ? env[FEATURE_SWITCH_OVERRIDDEN] : null;
+  return Array.isArray(v) ? v : [];
+}
 
 export const FEATURE_SWITCH_GROUPS = Object.freeze([
   Object.freeze({ id: "zones", label: "Demand and supply zones" }),
@@ -46,7 +60,7 @@ const CHANGE_TOKENS = Object.freeze(["conf", "tpw", "limit", "skip", "stance"]);
 const tokensGiven = (raw) => new Set(String(raw ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean));
 
 const entry = (e) => Object.freeze({
-  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [],
+  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [], hold: null,
   ...e,
   values: Array.isArray(e.values) ? Object.freeze([...e.values]) : Object.freeze({ type: "tokens", tokens: Object.freeze([...e.values.tokens]) })
 });
@@ -55,7 +69,7 @@ const entry = (e) => Object.freeze({
  * The registry, one entry per switch. Internal fields (not in the GET payload): `read` (raw value → panel value, the
  * accessor's rule), `toEnv` (panel value → the env form; the identity when absent), `config_only` (values the code reads
  * but the panel never sets), `resolve` ("env": copied onto the run's env; "agent-veto": the owner's force of SV1b;
- * "omega-settings": D1 omega_settings).
+ * "omega-settings": D1 omega_settings), `hold` ("room-waive": an env row with its own automatic revert, RM1b; null).
  */
 export const FEATURE_SWITCHES = Object.freeze([
   // ---- Demand and supply zones (Z0, Z2, Z2b; src/zone-types.mjs)
@@ -116,6 +130,13 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "GRID_ADAPT_MODE", label: "Grid adaptation", group: "plans",
     description: "The grid's automatic entry and stop per strategy and regime, chosen once a UTC day; off keeps every plan's own entry and stop.",
     values: ["live", "off"], default_value: "off", config_value: "live", read: (raw) => (s(raw) === "live" ? "live" : "off")
+  }),
+  entry({
+    // RM1b (owner 2026-11-25, relayed: "Turn variant (d) on now"; src/room-waive.mjs). Its own automatic revert
+    // (`hold`): the GET row carries auto_revert as AGENT_VETO_RULE's does; the owner's override wins over the hold.
+    key: "ROOM_BREAKOUT_WAIVE", label: "Room waiver on a with-trend breakout", group: "plans", hold: "room-waive",
+    description: "RM1b: the room check passes when it alone holds a side back, the 15m close is beyond the facing edge of a corridor recorded in the last hour, and the trend is with the side; it goes off by itself for 7 days when its waived trades lose. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
+    values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn
   }),
   // ---- Strategy agents and councils
   entry({
