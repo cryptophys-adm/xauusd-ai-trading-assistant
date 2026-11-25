@@ -160,7 +160,8 @@ export function tradeLevels({ dir, price, levels, atrH1, inZone = false, zoneNot
 /**
  * EZ1, the entry zone (owner 2026-11-23: "decision & signal harusnya memberi nilai zone bukan exact, sehingga omega tidak
  * akan info limit through price"): beside the plan's `entry` (unchanged), the band Omega may place its limit in, on the
- * feed's scale. Switch ENTRY_ZONE_MODE "on" (default) | "off" (no zone anywhere: today's plans, signals and limits).
+ * feed's scale. Switch ENTRY_ZONE_MODE "edge" (default, EZ1b) | "on" (EZ1 alone) | "off" (no zone anywhere: today's plans,
+ * signals and limits).
  *   band_max_atr    a key zone's band is clipped to at most this x ATR(1H) wide, centred on the entry;
  *   structural_atr  a structural plan (sweep, breakout retest, patterns) takes the entry +/- this x ATR(1H);
  *   stop_share      the edge on the stop's side lies at most this share of the way from the entry to the stop.

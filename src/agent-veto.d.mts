@@ -15,3 +15,5 @@ export function setAgentVetoForce(env: unknown, input?: { rule?: string; actor?:
 export function agentVetoStatus(env: unknown, opts?: { now?: number }): Promise<Record<string, any>>;
 export function resetVetoTagMemoForTests(): void;
 export function vetoSoftenedTag(db: unknown, intent: unknown): Promise<{ rule: "A6" | "A7"; old_detail: string } | null>;
+export function readOwnerForceDoc(kv: unknown): Promise<{ rule: "two_sided" | "classic"; actor: string | null; at: string | null } | null>;
+export function migrateAgentVetoOwner(env: unknown, opts?: { now?: number }): Promise<{ status: string; moved?: string | null; reason?: string }>;
