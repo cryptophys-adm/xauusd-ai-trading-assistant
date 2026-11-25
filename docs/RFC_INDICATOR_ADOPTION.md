@@ -106,7 +106,7 @@ Nov), with new agents last.
 | Item | What | Stage | Status |
 |---|---|---|---|
 | B7 | Parity field groups | all | **merged** (#572), inert until B11 |
-| B10 | GMI and Prophet `*.hud.v2` and the Cryptophys Mizan Probe v1 (Pine candidates) | 1-6 | planned; Pine files ready for the owner's install by 2026-12-08 |
+| B10 | GMI and Prophet `*.hud.v2` and the Cryptophys Mizan Probe v1 (Pine candidates) | 1-6 | built (this PR): files in `pinescript/candidates`, sources registered, groups declared and inert until B11; the owner installs by 2026-12-08 |
 | B11 | Adopt records: the producer publishes `gmi_adopt` and `prophet_adopt` | 1-6 | planned |
 | B20, B21, B22, B24 | HUD lines: stage 1; stage 2 scalp; stage 3 levels; stage 4 order flow and structure | 1-4 | planned |
 | B23 | Key Level Agent families (Asian range, daily R/S, 5m Camarilla, Fibonacci ratios, R37 extremes) | 3 | planned |
@@ -124,10 +124,16 @@ Nov), with new agents last.
   requireFinite })` in `src/parity-registry.mjs`; docs/SSOT.md §3 "Field groups"). Each group has its own 24-candle
   window, approval and revocation. No group id starts with `mizan`. Unknown HUD ids are dropped from a snapshot, not
   rejected.
-- Today `PARITY_GROUPS` holds one group, `probe_mizan_witness` (MZ1's, inert). B10 adds, as planned:
-  - `gmi_adopt`: gmi_hud, gmi_flow, gmi_kin, gmi_zone, gmi_zone_levels, gmi_burst, gmi_order, gmi_levels, gmi_plan;
-  - `prophet_adopt`: prophet_hud, prophet_core, prophet_ob, prophet_scalp, prophet_plan;
-  - `probe_mizan`: core, mtf, decision, state.
+- `PARITY_GROUPS` holds `probe_mizan_witness` (MZ1's, inert) and, since B10, these groups (ids prefixed with their engine,
+  because B7 rejects a group id equal to an engine name such as `gmi_hud`; field lists in `src/parity-registry.mjs`):
+  - engine `gmi_adopt` (source `gmi_v12_70_adopt_hud`): gmi_adopt_hud, gmi_adopt_flow, gmi_adopt_kin, gmi_adopt_zone,
+    gmi_adopt_zone_levels, gmi_adopt_burst, gmi_adopt_order, gmi_adopt_levels, gmi_adopt_plan;
+  - engine `prophet_adopt` (source `prophet_r38_adopt_hud`): prophet_adopt_hud, prophet_adopt_core, prophet_adopt_ob,
+    prophet_adopt_scalp, prophet_adopt_plan;
+  - engine `probe_mizan` (source `probe_mizan_hud`): probe_mizan_core, probe_mizan_mtf, probe_mizan_decision,
+    probe_mizan_state.
+  They stay inert until B11: the three engines are neither ingested nor base engines, so a local record is refused and
+  the groups have no identity; an early alert is stored for parity only and trusts nothing.
 - A line is verified only through its group's trusted copy. Every other line reads "unverified" (engine state) or
   "derived" (bar formulas).
 

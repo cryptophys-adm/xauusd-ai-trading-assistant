@@ -74,7 +74,7 @@ async function seriesCandles(env, key) {
  * source on that chart, while that chart's alerts still arrive (the newest within 2 bars and 10 minutes).
  */
 const WEBHOOK_TF_MS = Object.freeze({ "5": 5 * 60_000, "15": 15 * 60_000, "60": HOUR, "240": 4 * HOUR });
-const SOURCE_NAMES = Object.freeze({ prophet_r38: "Prophet R38", prophet_r38_hud: "Prophet R38 HUD", prophet_r37_ssot: "Prophet R37", gmi_v12_70: "GMI v12.70", gmi_v12_70_hud: "GMI v12.70 HUD" });
+const SOURCE_NAMES = Object.freeze({ prophet_r38: "Prophet R38", prophet_r38_hud: "Prophet R38 HUD", prophet_r37_ssot: "Prophet R37", gmi_v12_70: "GMI v12.70", gmi_v12_70_hud: "GMI v12.70 HUD", gmi_v12_70_adopt_hud: "GMI v12.70 Adoption HUD", prophet_r38_adopt_hud: "Prophet R38 Adoption HUD", probe_mizan_hud: "Cryptophys Mizan Probe" });
 const TF_NAMES = Object.freeze({ "5": "5m", "15": "15m", "60": "1H", "240": "4H" });
 const utcMs = (s) => Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(String(s)) ? String(s) : String(s).replace(" ", "T") + "Z");
 export function silentWebhookSources(lastSeen, now = Date.now()) {

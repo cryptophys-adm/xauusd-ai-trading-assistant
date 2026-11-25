@@ -1,0 +1,354 @@
+//@version=6
+// CRYPTOPHYS MIZAN PROBE v1 (B10, RFC_INDICATOR_ADOPTION stage 5)
+// A reference for parity only: it calls CryptophysMizanLib/4 and sends the Mizan statistical
+// stack in one alert JSON per closed 15m bar (source probe_mizan_hud). It draws one diagnostic
+// line and places no order. The Bayesian action label is never sent; action_code carries it.
+// Configure one TradingView alert on OANDA:XAUUSD 15m: "Any alert() function call", webhook
+// URL of the AI Worker. The webhook secret is the last input and has no default.
+// Higher timeframes are read from their last CLOSED bar (expr[1] with lookahead_on), except the
+// 5m tuple, which is the last 5m bar inside the 15m bar (it closes with it). No repaint.
+indicator("Cryptophys Mizan Probe v1", "Mizan Probe", overlay=false, max_bars_back=500)
+
+import cryptophys/CryptophysMizanLib/4 as lib
+
+// =============================================================================
+// INPUTS (order fixed by B10)
+// =============================================================================
+kww_len        = input.int(50, "KWW Z-Score Length", minval=10)
+hurst_len      = input.int(100, "Hurst Length", minval=20)
+entropy_len    = input.int(50, "Entropy Length", minval=10)
+phi_len        = input.int(55, "Phi Wave Length", minval=10)
+er_len         = input.int(14, "Efficiency Ratio Length", minval=2)
+rsi_fast_len   = input.int(7, "Psi RSI Fast Length", minval=2)
+rsi_mid_len    = input.int(14, "Psi RSI Mid Length", minval=2)
+rsi_slow_len   = input.int(21, "Psi RSI Slow Length", minval=2)
+psi_htf        = input.timeframe("240", "Psi / MTF Higher Timeframe")
+vol_len        = input.int(20, "Volume Anomaly Length", minval=2)
+mml_len        = input.int(20, "MML Liquidity Length", minval=2)
+markov_len     = input.int(20, "Markov EMA Length", minval=2)
+bos_len        = input.int(20, "BOS Length", minval=2)
+sweep_len      = input.int(20, "Sweep Length", minval=2)
+pivot_len      = input.int(10, "Structure Pivot Length", minval=2)
+grav_sym_oil   = input.symbol("TVC:USOIL", "Gravity Asset 1 (weight 0.618, chart timeframe)")
+grav_sym_dxy   = input.symbol("TVC:DXY", "Gravity Asset 2 (weight 0.382, 4H) and Macro DXY")
+macro_usdt_sym = input.symbol("CRYPTOCAP:USDT", "Macro USDT Dominance (4H)")
+roc_len        = input.int(14, "Macro ROC Length", minval=1)
+probe_enabled  = input.bool(false, "Enable Probe Webhook")
+probe_secret   = input.string("", "Probe Webhook Secret", confirm=true)
+
+float atr14 = ta.atr(14)
+
+// =============================================================================
+// HIGHER TIMEFRAMES (seven request.security calls)
+// =============================================================================
+f_probe_mtf() =>
+    [lib.kww_zscore(close, kww_len), lib.hurst_rs(close, hurst_len)]
+
+f_probe_mtf_closed() =>
+    float z = lib.kww_zscore(close, kww_len)
+    float h = lib.hurst_rs(close, hurst_len)
+    [z[1], h[1]]
+
+f_probe_htf_closed() =>
+    float z = lib.kww_zscore(close, kww_len)
+    float h = lib.hurst_rs(close, hurst_len)
+    float r = ta.rsi(close, rsi_mid_len)
+    [z[1], h[1], r[1]]
+
+f_probe_rsi_roc_closed() =>
+    float r = ta.rsi(close, 14)
+    float c = ta.roc(close, roc_len)
+    [r[1], c[1]]
+
+f_probe_daily_extremes() =>
+    [p_low, t_low, p_high, t_high] = lib.extremes_52w_advanced(high, low, time)
+    [p_low[1], t_low[1], p_high[1], t_high[1]]
+
+// 1. 5m (last 5m bar of this chart bar)  2. 1H  3. HTF (default 4H, also RSI for psi_d)
+[z_5m, h_5m] = request.security(syminfo.tickerid, "5", f_probe_mtf())
+[z_1h, h_1h] = request.security(syminfo.tickerid, "60", f_probe_mtf_closed(), lookahead=barmerge.lookahead_on)
+[z_htf, h_htf, rsi_htf] = request.security(syminfo.tickerid, psi_htf, f_probe_htf_closed(), lookahead=barmerge.lookahead_on)
+// 4. USOIL RSI14 at the chart timeframe  5. DXY 4H RSI14 and ROC  6. USDT dominance 4H ROC
+float rsi_oil = request.security(grav_sym_oil, timeframe.period, ta.rsi(close, 14), ignore_invalid_symbol=true)
+[rsi_dxy, roc_dxy] = request.security(grav_sym_dxy, "240", f_probe_rsi_roc_closed(), lookahead=barmerge.lookahead_on, ignore_invalid_symbol=true)
+float roc_usdt = request.security(macro_usdt_sym, "240", ta.roc(close, roc_len)[1], lookahead=barmerge.lookahead_on, ignore_invalid_symbol=true)
+// 7. Daily 52-week extremes (s25), for the macro trendline (s16)
+[d52_low, d52_low_t, d52_high, d52_high_t] = request.security(syminfo.tickerid, "D", f_probe_daily_extremes(), lookahead=barmerge.lookahead_on)
+
+// =============================================================================
+// MIZAN STATISTICAL STACK (chart timeframe)
+// =============================================================================
+// s3 phi wave and regime
+float z_kww = lib.kww_zscore(close, kww_len)
+float hurst = lib.hurst_rs(close, hurst_len)
+float entropy = lib.entropy_calc(close, entropy_len)
+float phi_wave = lib.phi_wave_calc(close, phi_len)
+float regime = lib.regime_score_calc(hurst)
+// s4 oracle signals
+[oracle_buy, oracle_sell] = lib.oracle_signals(phi_wave, z_kww, regime)
+// s5 MTF tensor (weights s1-2 inside the library)
+float mtf_h = lib.mtf_hurst_score(h_5m, hurst, h_1h, h_htf)
+float mtf_z = lib.mtf_zscore(z_5m, z_kww, z_1h, z_htf)
+[true_phi, phi_tensor] = lib.phi_confluence_tensor(entropy, mtf_h, mtf_z, regime)
+// s8 risk
+float risk = lib.risk_score_calc(entropy, z_kww, regime)
+// s11 psi engine: RSI 7/14/21 and the HTF RSI14
+float psi_f = lib.psi_field(ta.rsi(close, rsi_fast_len))
+float psi_m = lib.psi_field(ta.rsi(close, rsi_mid_len))
+float psi_s = lib.psi_field(ta.rsi(close, rsi_slow_len))
+float psi_d = lib.psi_field(rsi_htf)
+float gamma_f = lib.gamma_dilation(psi_f, psi_f[1])
+float gamma_m = lib.gamma_dilation(psi_m, psi_m[1])
+float gamma_s = lib.gamma_dilation(psi_s, psi_s[1])
+float gamma_d = lib.gamma_dilation(psi_d, psi_d[1])
+float er = lib.efficiency_ratio(close, er_len)
+float psi_ad = lib.psi_adaptive(psi_f, psi_m, psi_s, psi_d, gamma_f, gamma_m, gamma_s, gamma_d, er)
+float rho = lib.rho_phase(psi_f, psi_m, psi_s)
+// s12 asset gravity proxy: USOIL (0.618) and DXY (0.382)
+float gravity = lib.asset_gravity(rsi_oil, rsi_dxy)
+// s13 entropy and liquidity tensors
+float mml = lib.mml_liquidity(volume, close, mml_len)
+float ent_dyn = lib.entropy_tensor_calc(psi_f, psi_m, psi_s, mml)
+float vol_t = lib.vol_anomaly_tensor(volume, vol_len)
+float noise = lib.noise_level(er, ent_dyn)
+// s14 confidence matrix and zone metric
+float conf = lib.confidence_matrix(rho, ent_dyn, psi_ad, mml)
+int zone = lib.zone_index(lib.zone_metric(rho, ent_dyn, psi_ad, mml))
+// s15 structure
+int bos = lib.bos_detect(high, low, close, bos_len)
+int sweep = lib.sweep_detect(high, low, open, close, sweep_len, atr14)
+// s16 365-bar extremes on this chart, as bar offsets; macro trendline through the daily 52-week extremes
+[ext_lo, ext_hi] = lib.extremes_52w()
+float tl_slope = na(d52_low_t) or na(d52_high_t) or d52_high_t == d52_low_t ? na : (d52_high - d52_low) / (d52_high_t - d52_low_t)
+float macro_tl = lib.macro_trendline_y(tl_slope, d52_low, d52_low_t)
+
+// FVG mass, SMR reservoir and Q-gravity (s9, s8 smri_calc, s10), the GMI way: targets are the
+// unfilled gaps' far edges; a filled bull gap pays its mass in, a filled bear gap out.
+[fvg_bull, fvg_bear] = lib.fvg_detect(high, low, open, close)
+float fvg_vol_anom = lib.vol_anomaly(volume, vol_len)
+var float[] bull_tgt = array.new_float()
+var float[] bull_mass = array.new_float()
+var float[] bear_tgt = array.new_float()
+var float[] bear_mass = array.new_float()
+if fvg_bull and fvg_vol_anom >= 0.8
+    array.push(bull_tgt, high[2])
+    array.push(bull_mass, lib.fvg_mass_bull(fvg_vol_anom, high[2], low, atr14, 1.0))
+    if array.size(bull_tgt) > 20
+        array.shift(bull_tgt)
+        array.shift(bull_mass)
+if fvg_bear and fvg_vol_anom >= 0.8
+    array.push(bear_tgt, low[2])
+    array.push(bear_mass, lib.fvg_mass_bear(fvg_vol_anom, low[2], high, atr14, 1.0))
+    if array.size(bear_tgt) > 20
+        array.shift(bear_tgt)
+        array.shift(bear_mass)
+float fvg_in = 0.0
+float fvg_out = 0.0
+if array.size(bull_tgt) > 0
+    for i = array.size(bull_tgt) - 1 to 0
+        if low <= array.get(bull_tgt, i)
+            fvg_in += array.get(bull_mass, i)
+            array.remove(bull_tgt, i)
+            array.remove(bull_mass, i)
+        else
+            float decayed = array.get(bull_mass, i) * 0.995
+            if decayed < 0.05
+                array.remove(bull_tgt, i)
+                array.remove(bull_mass, i)
+            else
+                array.set(bull_mass, i, decayed)
+if array.size(bear_tgt) > 0
+    for i = array.size(bear_tgt) - 1 to 0
+        if high >= array.get(bear_tgt, i)
+            fvg_out += array.get(bear_mass, i)
+            array.remove(bear_tgt, i)
+            array.remove(bear_mass, i)
+        else
+            float decayed = array.get(bear_mass, i) * 0.995
+            if decayed < 0.05
+                array.remove(bear_tgt, i)
+                array.remove(bear_mass, i)
+            else
+                array.set(bear_mass, i, decayed)
+float smri = lib.smri_calc(fvg_in, fvg_out, 0.995)
+[q_up, q_dn, q_net, q_up_pct, q_dn_pct, g_scale] = lib.q_gravity(bear_tgt, bear_mass, bull_tgt, bull_mass, atr14)
+
+// FVG state: the newest gap's direction while it is unfilled (1 bull, -1 bear, 0 none or filled).
+var int fvg_state = 0
+var float fvg_edge = na
+if fvg_bull
+    fvg_state := 1
+    fvg_edge := high[2]
+else if fvg_bear
+    fvg_state := -1
+    fvg_edge := low[2]
+else if (fvg_state == 1 and low <= fvg_edge) or (fvg_state == -1 and high >= fvg_edge)
+    fvg_state := 0
+    fvg_edge := na
+// s21 trap detection
+[bull_trap, bear_trap] = lib.trap_detect(fvg_state, fvg_state != 0 ? "ACTIVE" : "NONE", smri)
+
+// s18 divergence: the shared Prophet tensor and structure core (as GMI computes them)
+float pro_vr = lib.prophet_volume_ratio(volume, 20)
+float pro_raw = (lib.f_vol_cycle(close, high, low, 13, pro_vr) * 0.5) + (lib.f_vol_cycle(close, high, low, 34, pro_vr) * 0.35) + (lib.f_vol_cycle(close, high, low, 55, pro_vr) * 0.15)
+[pro_fast, pro_slow, pro_core] = lib.calculate_prophet_tensor(pro_raw, er, 6)
+bool has_volume = nz(ta.cum(nz(volume)), 0.0) > 0.0
+[d_enc, b_enc, st_bar, bull_ev_bar, bear_ev_bar, st_subtype, osc_ph, osc_pl, bear_div, bull_div, bear_div_o_bar, bear_div_o_val, bull_div_o_bar, bull_div_o_val, last_price_ph, last_price_pl] = lib.prophet_structure_core(pro_fast, high, low, open, close, pro_vr, has_volume, atr14, false, 50, 5, 2, 0.10, 1.5)
+int since_bull_div = ta.barssince(bull_div)
+int since_bear_div = ta.barssince(bear_div)
+float div_b = lib.div_bonus(nz(since_bull_div, 1000), nz(since_bear_div, 1000))
+
+// s22 Markov win rates of the oracle states
+[mk_bull, mk_bear] = lib.markov_win_rate(oracle_buy, oracle_sell, markov_len)
+
+// s20 Bayesian net decision
+float macro_pen = lib.macro_penalty(roc_dxy > 0, roc_usdt > 0)
+float oracle_side = (oracle_buy ? 1.0 : 0.0) - (oracle_sell ? 1.0 : 0.0)
+float prior_edge = math.max(-1.0, math.min(1.0, 0.5 * psi_ad + 0.5 * oracle_side * phi_tensor))
+float markov_mult = prior_edge > 0 ? mk_bull : prior_edge < 0 ? mk_bear : 0.5
+
+// s19 state energy and the pivot projections
+float gamma_res = (gamma_f + gamma_m + gamma_s + gamma_d) / 4.0 - 1.0
+[energy, dyn_range] = lib.state_energy(psi_ad, rho, mml, ent_dyn, gamma_res)
+[piv_low, piv_low_t, piv_high, piv_high_t] = lib.recent_pivots(high, low, pivot_len, pivot_len, time)
+float proj_tp = lib.project_tp(piv_high, piv_low, markov_mult, atr14, ent_dyn)
+float proj_sl = lib.project_sl(piv_low, ent_dyn)
+
+// The TDM value area (GMI's defaults: 300 bars, 40 rows) for the POC bonus
+[tdm_min, tdm_max, tdm_step, tdm_bins, tdm_smooth, tdm_ent, tdm_cnt, tdm_vah, tdm_val, tdm_poc, tdm_lvn_b1, tdm_lvn_b2, tdm_lvn_s1, tdm_lvn_s2, tdm_hvn_b, tdm_hvn_s, tdm_g_up, tdm_g_dn, tdm_g_net] = lib.tdm_profile(high, low, volume, hlc3, entropy, close, atr14, 300, 40)
+
+float reward_mult = 0.5 + math.min(energy, 1.0)
+float break_bias = 0.05 * bos + 0.10 * sweep
+float grav_bonus = 0.15 * q_net
+float poc_bonus = close < tdm_val ? 0.05 : close > tdm_vah ? -0.05 : 0.0
+float fvg_bonus = 0.10 * fvg_state
+float sing_bonus = phi_tensor >= 0.618 ? 0.10 * math.sign(phi_wave) : 0.0
+float smr_bias = smri >= 85.0 ? 0.10 : smri <= 15.0 ? -0.10 : 0.0
+float net_raw = lib.bayesian_net_tick(prior_edge, markov_mult, macro_pen, reward_mult, break_bias, grav_bonus, poc_bonus, fvg_bonus, sing_bonus, smr_bias, div_b)
+// net_core: the same tick with the gravity, FVG and SMR inputs at 0
+float net_core = lib.bayesian_net_tick(prior_edge, markov_mult, macro_pen, reward_mult, break_bias, 0.0, poc_bonus, 0.0, sing_bonus, 0.0, div_b)
+
+// s17 guardrails: safe mode, gravity veto and the sniper override give net_final
+float delta_phi = math.abs(phi_tensor - nz(phi_tensor[1], phi_tensor))
+bool in_safe = lib.safe_mode(ent_dyn, delta_phi, rho, conf, noise)
+[veto_buy, veto_sell] = lib.gravity_veto(q_dn_pct, q_up_pct)
+float net_final = lib.sniper_override(net_raw, z_kww, veto_buy, veto_sell, in_safe)
+
+// action_code: lib.action_label as a code (3 premium discount, 2 entry, 1 open, -1 sell open,
+// -2 sell exit, -3 sell max, 0 hold / observe). The label itself is never sent.
+f_probe_action_code(string label) =>
+    label == "BUY (Premium Disc.)" ? 3 : label == "BUY (Entry)" ? 2 : label == "BUY (Open)" ? 1 : label == "SELL (Max)" ? -3 : label == "SELL (Exit)" ? -2 : label == "SELL (Open)" ? -1 : 0
+int action_code = f_probe_action_code(lib.action_label(net_final))
+int oracle_code = oracle_buy and oracle_sell ? 2 : oracle_buy ? 1 : oracle_sell ? -1 : 0
+int veto_code = veto_buy and veto_sell ? 2 : veto_buy ? 1 : veto_sell ? -1 : 0
+int trap_code = bull_trap ? 1 : bear_trap ? -1 : 0
+
+plot(net_final, "Mizan net_final", color=color.new(#00e5ff, 0), linewidth=2)
+hline(0.0, "Zero", color=color.new(color.gray, 60))
+
+// =============================================================================
+// ALERT (15m only; one per closed realtime bar)
+// Groups (src/parity-registry.mjs PARITY_GROUPS, engine probe_mizan):
+//   probe_mizan_core ..... z, hurst, entropy, phi_wave, regime, oracle, er, psi_ad, rho, ent_dyn,
+//                          mml, noise, vol_t, conf, zone, risk
+//   probe_mizan_mtf ...... mtf_h, mtf_z, true_phi, phi_t, psi_d, gravity, roc_dxy, roc_usdt, macro
+//   probe_mizan_decision . prior_edge, markov, reward, break_bias, grav_bonus, poc_bonus, fvg_bonus,
+//                          sing_bonus, smr_bias, div_bonus, net_raw, net_core, net_final, action_code,
+//                          safe, veto
+//   probe_mizan_state .... bos, sweep, trap, fvg, smri, q_net, energy, ext_lo, ext_hi, tp, sl, macro_tl
+// prior_edge is also the probe_mizan_witness field (MZ1). Codes: oracle and veto 1 buy, -1 sell,
+// 2 both, 0 none; trap 1 bull trap, -1 bear trap, 0 none; bos ±2, sweep ±1; ext_lo / ext_hi the
+// bars back to the 365-bar low / high. Numbers are rounded to 6 decimals; na is written as NaN.
+// =============================================================================
+f_probe_json_escape(string value) =>
+    string escaped = str.replace_all(value, "\\", "\\\\")
+    escaped := str.replace_all(escaped, "\"", "\\\"")
+    escaped := str.replace_all(escaped, "\n", "\\n")
+    escaped := str.replace_all(escaped, "\r", "\\r")
+    escaped := str.replace_all(escaped, "\t", "\\t")
+    escaped
+
+string probe_secret_json = f_probe_json_escape(probe_secret)
+
+f_probe_score(float x) => str.tostring(x, "#.######")
+f_probe_price(float x) => str.tostring(x, "#.######")
+f_probe_volume(float x) => str.tostring(x, "#.######")
+f_probe_code(int x) => str.tostring(x)
+f_probe_bars(int x) => str.tostring(x)
+f_probe_flag(bool b) => b ? "1" : "0"
+
+f_probe_payload() =>
+    array<string> p = array.new_string()
+    array.push(p, "\"v\":1")
+    array.push(p, "\"source\":\"probe_mizan_hud\"")
+    array.push(p, "\"ticker\":\"" + syminfo.tickerid + "\"")
+    array.push(p, "\"timeframe\":\"" + timeframe.period + "\"")
+    array.push(p, "\"candle_time\":\"" + str.tostring(time) + "\"")
+    array.push(p, "\"t\":" + str.tostring(time))
+    array.push(p, "\"o\":" + f_probe_price(open))
+    array.push(p, "\"h\":" + f_probe_price(high))
+    array.push(p, "\"l\":" + f_probe_price(low))
+    array.push(p, "\"c\":" + f_probe_price(close))
+    array.push(p, "\"volume\":" + f_probe_volume(nz(volume, 0)))
+    // probe_mizan_core
+    array.push(p, "\"z\":" + f_probe_score(z_kww))
+    array.push(p, "\"hurst\":" + f_probe_score(hurst))
+    array.push(p, "\"entropy\":" + f_probe_score(entropy))
+    array.push(p, "\"phi_wave\":" + f_probe_score(phi_wave))
+    array.push(p, "\"regime\":" + f_probe_score(regime))
+    array.push(p, "\"oracle\":" + f_probe_code(oracle_code))
+    array.push(p, "\"er\":" + f_probe_score(er))
+    array.push(p, "\"psi_ad\":" + f_probe_score(psi_ad))
+    array.push(p, "\"rho\":" + f_probe_score(rho))
+    array.push(p, "\"ent_dyn\":" + f_probe_score(ent_dyn))
+    array.push(p, "\"mml\":" + f_probe_score(mml))
+    array.push(p, "\"noise\":" + f_probe_score(noise))
+    array.push(p, "\"vol_t\":" + f_probe_score(vol_t))
+    array.push(p, "\"conf\":" + f_probe_score(conf))
+    array.push(p, "\"zone\":" + f_probe_code(zone))
+    array.push(p, "\"risk\":" + f_probe_score(risk))
+    // probe_mizan_mtf
+    array.push(p, "\"mtf_h\":" + f_probe_score(mtf_h))
+    array.push(p, "\"mtf_z\":" + f_probe_score(mtf_z))
+    array.push(p, "\"true_phi\":" + f_probe_score(true_phi))
+    array.push(p, "\"phi_t\":" + f_probe_score(phi_tensor))
+    array.push(p, "\"psi_d\":" + f_probe_score(psi_d))
+    array.push(p, "\"gravity\":" + f_probe_score(gravity))
+    array.push(p, "\"roc_dxy\":" + f_probe_score(roc_dxy))
+    array.push(p, "\"roc_usdt\":" + f_probe_score(roc_usdt))
+    array.push(p, "\"macro\":" + f_probe_score(macro_pen))
+    // probe_mizan_decision
+    array.push(p, "\"prior_edge\":" + f_probe_score(prior_edge))
+    array.push(p, "\"markov\":" + f_probe_score(markov_mult))
+    array.push(p, "\"reward\":" + f_probe_score(reward_mult))
+    array.push(p, "\"break_bias\":" + f_probe_score(break_bias))
+    array.push(p, "\"grav_bonus\":" + f_probe_score(grav_bonus))
+    array.push(p, "\"poc_bonus\":" + f_probe_score(poc_bonus))
+    array.push(p, "\"fvg_bonus\":" + f_probe_score(fvg_bonus))
+    array.push(p, "\"sing_bonus\":" + f_probe_score(sing_bonus))
+    array.push(p, "\"smr_bias\":" + f_probe_score(smr_bias))
+    array.push(p, "\"div_bonus\":" + f_probe_score(div_b))
+    array.push(p, "\"net_raw\":" + f_probe_score(net_raw))
+    array.push(p, "\"net_core\":" + f_probe_score(net_core))
+    array.push(p, "\"net_final\":" + f_probe_score(net_final))
+    array.push(p, "\"action_code\":" + f_probe_code(action_code))
+    array.push(p, "\"safe\":" + f_probe_flag(in_safe))
+    array.push(p, "\"veto\":" + f_probe_code(veto_code))
+    // probe_mizan_state
+    array.push(p, "\"bos\":" + f_probe_code(bos))
+    array.push(p, "\"sweep\":" + f_probe_code(sweep))
+    array.push(p, "\"trap\":" + f_probe_code(trap_code))
+    array.push(p, "\"fvg\":" + f_probe_code(fvg_state))
+    array.push(p, "\"smri\":" + f_probe_score(smri))
+    array.push(p, "\"q_net\":" + f_probe_score(q_net))
+    array.push(p, "\"energy\":" + f_probe_score(energy))
+    array.push(p, "\"ext_lo\":" + f_probe_bars(ext_lo))
+    array.push(p, "\"ext_hi\":" + f_probe_bars(ext_hi))
+    array.push(p, "\"tp\":" + f_probe_price(proj_tp))
+    array.push(p, "\"sl\":" + f_probe_price(proj_sl))
+    array.push(p, "\"macro_tl\":" + f_probe_price(macro_tl))
+    array.push(p, "\"secret\":\"" + probe_secret_json + "\"")
+    "{" + array.join(p, ",") + "}"
+
+if probe_enabled and timeframe.period == "15" and barstate.isrealtime and barstate.isconfirmed
+    alert(f_probe_payload(), alert.freq_once_per_bar_close)
