@@ -22,6 +22,7 @@ import { ensureAiUsageSchema, neuronsOf, USD_PER_1K_NEURONS } from "./ai-usage.m
 import { CONTROL_ARM, ensurePlanLearningSchema } from "./plan-learning.mjs";
 import { ensureStrategyArmSchema, readArmsFromDb, setStrategyArm, ARM_MAX } from "./strategy-arm.mjs";
 import { bootstrapLow } from "./grid-adapt.mjs";
+import { evRef } from "./cfc-pack.mjs";
 
 export const COUNCIL_METER = "strategy_council";
 export const COUNCIL_DAILY_USD = 1;
@@ -211,6 +212,18 @@ export async function runStrategyCouncil(env, { now = Date.now(), call = callBus
   }
 }
 
+/**
+ * The latest council document. H3f-refs: each verdict carries `ev_ref`, the ref the owner's correction cites
+ * (POST /omega/api/correction target.ref): its strategy_council_runs row (day, strategy_id), built on read (the KV
+ * document is not rewritten); null without the document's day.
+ */
 export async function readCouncilVerdicts(env) {
-  try { return parse(await env?.SIGNAL_CACHE?.get?.(COUNCIL_KEY)); } catch { return null; }
+  let doc;
+  try { doc = parse(await env?.SIGNAL_CACHE?.get?.(COUNCIL_KEY)); } catch { return null; }
+  if (!doc || typeof doc !== "object" || !doc.verdicts || typeof doc.verdicts !== "object") return doc;
+  const day = typeof doc.day === "string" && doc.day ? doc.day : null;
+  const verdicts = Object.fromEntries(Object.entries(doc.verdicts).map(([id, v]) => [id, v && typeof v === "object" && !Array.isArray(v)
+    ? { ...v, ev_ref: day ? evRef("strategy_council_runs", `${day}/${id}`, { field: "proposal" }) : null }
+    : v]));
+  return { ...doc, verdicts };
 }
