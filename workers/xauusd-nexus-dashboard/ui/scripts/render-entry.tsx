@@ -42,6 +42,20 @@ import { ConfirmDialog } from "../src/components/ConfirmDialog";
 import { POST_ERRORS, confirmText, rowOf, type Change } from "../src/lib/featureSwitches";
 import { PollError } from "../src/components/ui";
 import type { Poll } from "../src/lib/usePoll";
+import h3fOff from "../../../../test/fixtures/nexus-h3f/feature-switches-off.json";
+import h3fOn from "../../../../test/fixtures/nexus-h3f/feature-switches-on.json";
+import h3fViewer from "../../../../test/fixtures/nexus-h3f/feature-switches-viewer.json";
+import h3fReplies from "../../../../test/fixtures/nexus-h3f/correction-replies.json";
+import h3fSession from "../../../../test/fixtures/nexus-h3f/council-session.json";
+import h3fWar from "../../../../test/fixtures/nexus-h3f/war-room.json";
+import h3fH1 from "../../../../test/fixtures/nexus-h3f/thread-h1.json";
+import h3fVerdicts from "../../../../test/fixtures/nexus-h3f/strategy-verdicts.json";
+import { ConclusionHero } from "../src/components/ThreadsPanel";
+import { Post } from "../src/components/Post";
+import { VerdictLine } from "../src/pages/Strategy";
+import { CorrectionControl, CorrectionFooter, CorrectionPanel, GateOverride, ROW, type Phase } from "../src/components/Correction";
+import { OpinionCard } from "../src/pages/Councils";
+import { councilOpinionTarget, councilOptionsTarget, emptyDraft, engineTarget, errorOf, gateOf, replyOf, roomConclusionTarget, roomMessageTarget, strategyVerdictTarget, type Draft, type Target } from "../src/lib/corrections";
 
 export type Entry = {
   /** The view's name, as the check prints it. */
@@ -246,6 +260,81 @@ const zonesStale: Poll = { data: ZH, error: "/api/zones 500 zones_unavailable", 
 const HELD_SPAN = ["since", "11-24 07:22 UTC · 14:22 GMT+7", "until", "12-01 07:22 UTC · 14:22 GMT+7"];
 const ZONES_PANELS = ["Zone breaker", "Readings", "Held back", "Rule arms", "Stances", "Omega attribution"];
 
+
+/**
+ * H3f, the owner's correction control (test/fixtures/nexus-h3f/*.json, the seed's answers of the real Omega route and AI
+ * Worker: test/support/nexus-h3f-seed.mjs). The footer slot over each feature-switch read (owner on, owner off, a
+ * viewer), the chips after each 200, the popover in every state (Rate, Correct, sending, every error code, the 409 off
+ * message, over 500 characters, the phone sheet), and the Call for Councils opinion cards with and without a cited ref.
+ */
+type H3fReply = { status: number; body: any };
+const H3F_REPLIES = h3fReplies as unknown as Record<string, H3fReply>;
+export const H3F_ENGINE = engineTarget((ez1Global as any).engine) as Target;
+const H3F_ERRORS = Object.entries(H3F_REPLIES).filter(([, r]) => r.status !== 200 && r.status !== 409);
+const replyView = (r: any) => replyOf(typeof r?.status === "number" ? r.status : 0, r?.body);
+const panelOf = (draft: Draft, phase: Phase, extra: { sheet?: boolean; reply?: any } = {}) => ({ d }: { d: any }) => {
+  const r = extra.reply !== undefined ? replyView(d) : null;
+  const error = r?.kind === "error" ? errorOf(r.status, r.code) : null;
+  return <CorrectionPanel target={H3F_ENGINE} draft={draft} phase={r?.kind === "off" ? "off" : error ? "error" : phase} error={error} sheet={extra.sheet} />;
+};
+const RATED: Draft = { ...emptyDraft("rate"), rating: "up" };
+const CORRECTING: Draft = { tab: "correct", rating: null, category: "invalidation_too_tight", text: "The stop sat inside the noise; it belongs under the sweep low." };
+const LONG: Draft = { ...CORRECTING, text: "The stop sat inside the noise of the last swing; it should sit under the sweep low, not above it. ".repeat(6).slice(0, 512) };
+/** A host's footer row with the slot at its end (the render check needs markup even when the slot is empty). */
+const footer = (gateBody: any, sent: any = null) => (
+  <div className="flex flex-wrap items-center gap-2"><span className="eyebrow">1H room</span>
+    <CorrectionFooter gate={gateOf(gateBody)} target={H3F_ENGINE} sent={sent} /></div>
+);
+const opinionView = (gateBody: any, i: number) => ({ d }: { d: any }) => (
+  <GateOverride.Provider value={gateOf(gateBody)}><OpinionCard m={d?.messages?.[i] ?? {}} /></GateOverride.Provider>
+);
+export const H3F_VIEWS: Entry[] = [
+  { name: "H3fFooterOwner", View: ({ d }) => footer(d), fixture: h3fOn, shows: ['aria-label="Rate / correct"', 'title="Rate / correct"', 'aria-expanded="false"', "M21 15a2 2 0 0 1-2 2H7l-4 4V5"], hides: ["Sent to the platform"] },
+  { name: "H3fFooterOff", View: ({ d }) => footer(d), fixture: h3fOff, shows: ["1H room"], hides: ["Rate / correct"] },
+  { name: "H3fFooterViewer", View: ({ d }) => footer(d), fixture: h3fViewer, shows: ["1H room"], hides: ["Rate / correct"] },
+  { name: "H3fControlOwner", View: ({ d }) => <GateOverride.Provider value={gateOf(d)}><CorrectionControl target={H3F_ENGINE} /></GateOverride.Provider>, fixture: h3fOn, shows: ['aria-label="Rate / correct"'], hides: ['role="dialog"'] },
+  { name: "H3fControlNoTarget", View: ({ d }) => <div>host<GateOverride.Provider value={gateOf(d)}><CorrectionControl target={null} /></GateOverride.Provider></div>, fixture: h3fOn, hides: ["Rate / correct"] },
+  ...(["rated", "deduplicated", "price", "secret", "secret_price"] as const).map((k) => ({
+    name: `H3fChips_${k}`, View: ({ d }: { d: any }) => { const r = replyView(d); return footer(h3fOn, r.kind === "sent" ? r.sent : null); }, fixture: H3F_REPLIES[k],
+    shows: [k === "deduplicated" ? "Already recorded" : "Sent to the platform&#x27;s teaching record", ...(k === "price" || k === "secret_price" ? ["prices masked"] : []), ...(k === "secret" || k === "secret_price" ? ["secret removed"] : []), `title="${H3F_REPLIES[k].body.correction_id}"`],
+    hides: [...(k === "deduplicated" ? ["Sent to the platform"] : ["Already recorded"]), ...(k === "rated" || k === "deduplicated" ? ["prices masked", "secret removed"] : [])]
+  })),
+  { name: "H3fPanelRate", View: panelOf(emptyDraft("rate"), "idle"), fixture: H3F_ENGINE, shows: ["Rate or correct this output", "nexus_engine", "ev:xauusd/engine_decisions/OANDA:XAUUSD:15:1795096800000", "agent:council", "2026-11-19 14:00 UTC · 21:00 GMT+7", "Category, optional", "Send rating", 'disabled=""'], hides: ["What was wrong", 'role="alert"'] },
+  { name: "H3fPanelRateUp", View: panelOf(RATED, "idle"), fixture: H3F_ENGINE, shows: ['aria-pressed="true"', "border-ok-fill/50 bg-ok-fill/14 text-ok", "Send rating"], hides: ["bull", "green"] },
+  { name: "H3fPanelRateDown", View: panelOf({ ...RATED, rating: "down" }, "idle"), fixture: H3F_ENGINE, shows: ["border-off-fill/55 bg-off-fill/16"], hides: ["bear", "red-"] },
+  { name: "H3fPanelCorrect", View: panelOf(CORRECTING, "idle"), fixture: H3F_ENGINE, shows: ["What was wrong", "Prices are masked as [level].", "62/500", "Rating, optional", "Send correction", "Describe the level, do not type it", "Invalidation too tight"], hides: ["Over 500 characters"] },
+  { name: "H3fPanelSending", View: panelOf(RATED, "sending"), fixture: H3F_ENGINE, shows: ["Sending…", 'disabled=""'] },
+  { name: "H3fPanelOver500", View: panelOf(LONG, "idle"), fixture: H3F_ENGINE, shows: ["512/500", "Over 500 characters: shorten to send.", "text-fault", 'aria-invalid="true"'] },
+  { name: "H3fPanelSheet", View: panelOf({ ...CORRECTING, category: "evidence_missing", text: "" }, "idle", { sheet: true }), fixture: H3F_ENGINE, shows: ["rounded-t-[16px]", "h-[44px]", "flex-1", "Send correction"] },
+  { name: "H3fPanelSheetRate", View: panelOf(RATED, "idle", { sheet: true }), fixture: H3F_ENGINE, shows: ["rounded-t-[16px]", "Send rating"] },
+  { name: "H3fPanelOff", View: panelOf(emptyDraft("rate"), "idle", { reply: true }), fixture: H3F_REPLIES.disabled, shows: ["409 disabled", "Owner corrections are off. Turn them on in", 'href="/#/switches"', "Settings › Feature switches"], hides: ["Send rating"] },
+  ...H3F_ERRORS.map(([k, r]) => ({
+    name: `H3fError_${k}`, View: panelOf(k.includes("category") || k === "empty" || k.includes("text") || k === "body_too_large" ? CORRECTING : RATED, "idle", { reply: true }), fixture: r,
+    shows: ['role="alert"', `${r.status} ${String(r.body.error).replace(/'/g, "&#x27;")}`, errorOf(r.status, r.body.error).words.replace(/'/g, "&#x27;"), ...(r.status === 429 ? ["border-late-fill/35"] : ["border-fault-fill/35"])]
+  })),
+  { name: "H3fCouncilOwnerCited", View: opinionView(h3fOn, 0), fixture: h3fSession, shows: ["Risk Manager", "evidence (2)", 'aria-label="Rate / correct"'] },
+  { name: "H3fCouncilOwnerOwnRef", View: opinionView(h3fOn, 1), fixture: h3fSession, shows: ["Technical Analyst", "evidence (1)", 'aria-label="Rate / correct"'] },
+  { name: "H3fCouncilOwnerNoCited", View: opinionView(h3fOn, 2), fixture: h3fSession, shows: ["Projection Agent", 'aria-label="Rate / correct"'], hides: ["evidence ("] },
+  { name: "H3fCouncilOwnerMessage", View: opinionView(h3fOn, 3), fixture: h3fSession, shows: ["You", "Which setups were stopped"], hides: ["Rate / correct"] },
+  { name: "H3fCouncilViewer", View: opinionView(h3fViewer, 0), fixture: h3fSession, shows: ["Risk Manager", "evidence (2)"], hides: ["Rate / correct"] },
+  { name: "H3fCouncilOff", View: opinionView(h3fOff, 0), fixture: h3fSession, shows: ["Risk Manager"], hides: ["Rate / correct"] },
+  { name: "H3fCouncilOptions", View: ({ d }) => <div>options<CorrectionFooter gate={gateOf(h3fOn)} target={councilOptionsTarget(d)} sent={null} className={ROW} /></div>, fixture: h3fSession, shows: ['aria-label="Rate / correct"', "justify-end"] },
+  ...([["On", h3fOn, true], ["Viewer", h3fViewer, false], ["Off", h3fOff, false]] as const).flatMap(([k, gate, shown]) => [
+    { name: `H3fRoomConclusion${k}`, View: ({ d }: { d: any }) => (
+      <GateOverride.Provider value={gateOf(gate)}><ConclusionHero c={d?.room?.conclusion} title="15m War Room" waiting="No conclusion this round."
+        correction={<CorrectionControl target={roomConclusionTarget(d?.room, "M15")} className={`mt-[12px] ${ROW}`} />} /></GateOverride.Provider>), fixture: h3fWar,
+      shows: ["The room leans short", ...(shown ? ['aria-label="Rate / correct"'] : [])], hides: shown ? [] : ["Rate / correct"] },
+    { name: `H3fRoomPosts${k}`, View: ({ d }: { d: any }) => (
+      <GateOverride.Provider value={gateOf(gate)}>{[...(d?.room?.openings ?? []), ...(d?.room?.debate ?? [])].filter(Boolean).map((m: any, i: number) => (
+        <Post key={i} m={m} text={m?.claim ?? m?.argument} correction={<CorrectionControl target={roomMessageTarget(m, d?.room)} />} />))}</GateOverride.Provider>), fixture: h3fWar,
+      shows: ["lower high under the session open", ...(shown ? ['aria-label="Rate / correct"'] : [])], hides: shown ? [] : ["Rate / correct"] },
+    { name: `H3fVerdict${k}`, View: ({ d }: { d: any }) => <GateOverride.Provider value={gateOf(gate)}><VerdictLine v={d?.verdicts?.zone_pullback} id="zone_pullback" /></GateOverride.Provider>, fixture: h3fVerdicts,
+      shows: ["walk-forward pass", ...(shown ? ['aria-label="Rate / correct"'] : [])], hides: shown ? [] : ["Rate / correct"] }
+  ]),
+  { name: "H3fRoomH1Conclusion", View: ({ d }) => <GateOverride.Provider value={gateOf(h3fOn)}><ConclusionHero c={d?.thread?.conclusion} title="1H War Room" waiting="No conclusion this round."
+    correction={<CorrectionControl target={roomConclusionTarget(d?.thread, "H1")} className={`mt-[12px] ${ROW}`} />} /></GateOverride.Provider>, fixture: h3fH1, shows: ['aria-label="Rate / correct"'] }
+];
+
 export const VIEWS: Entry[] = [
   {
     name: "ZonesHeld", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: zonesHeld,
@@ -284,7 +373,7 @@ export const VIEWS: Entry[] = [
     shows: [...FS1_GROUPS, "Feature switches", "Settings · owner", "3 overrides", "as of 03:40 UTC · 10:40 GMT+7", "omega_settings", "role=\"switch\"", "aria-pressed=\"true\"",
       "Reset to config: ENTRY_ZONE_MODE", "Reset to config: CFC_MODE", "Reset to default: change_thresholds", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN",
       "aria-label=\"Emergency stop\"", ">era<", ">ev<", "2026-11-25 02:14 UTC · 09:14 GMT+7", "deploy (wrangler.jsonc)", "OMEGA_DEFAULTS"],
-    hides: ["read only", "sample", "provisional", "owner@", ".com", "Reset to config: METRIC_REBUTTAL", "Reset to config: ZONE_PRIORITY", "bull", "zone_mgmt"]
+    hides: ["read only", "sample", "provisional", "owner@", ".com", "Reset to config: METRIC_REBUTTAL", "Reset to config: ZONE_PRIORITY", "bull"]
   },
   {
     name: "FS1Viewer", View: SwitchesView, fixture: fs1Viewer,
@@ -412,7 +501,8 @@ export const VIEWS: Entry[] = [
   { name: "PatternsViewSeat", View: ({ d }) => <PatternsView d={chartPatterns} agents={strategyAgents} alloc={d} now={PATTERNS_NOW} />, fixture: neuronAllocation, shows: ["shadow", "n 4 / 60"] },
   { name: "PatternsUnread500", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { status: "error", error: "chart_patterns_unavailable" }, shows: ["/api/chart-patterns 500 chart_patterns_unavailable"] },
   { name: "PatternsUnread404", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/chart-patterns 404 Not found"] },
-  { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] }
+  { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] },
+  ...H3F_VIEWS
 ];
 
 /**

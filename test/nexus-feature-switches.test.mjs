@@ -326,6 +326,10 @@ test("FSU12 one write path: POST /omega/api/feature-switches from the controls o
   assert.deepEqual(hits.filter((f) => !omegaRoute.includes(f)).sort(), ["lib/intel.ts", "lib/zones.ts", "pages/Zones.tsx"]);
   assert.match(src("lib/intel.ts"), /switches: \{ path: "\/api\/feature-switches", everyMs: 120_000, chart: false \}/);
   assert.ok(pg.split("\n").filter((l) => l.includes("feature-switches")).every((l) => /^\s*\/\//.test(l)), "the page names the route in comments only");
+  // H3f: the owner's correction control reads this route's GET (viewer.can_control, OWNER_CORRECTIONS) through FS_PATH, once, never a POST.
+  const rc = src("components/Correction.tsx");
+  assert.equal(count(rc, /get\(FS_PATH\)/g), 1);
+  assert.doesNotMatch(rc, /postSwitch|method:|"POST"/);
 });
 
 test("FSU14 the coordinator's final details: config-only values, resolve, ZONE_AIM_OFF's two notes, the propagation note", { skip: NO_UI_DEPS }, async () => {
