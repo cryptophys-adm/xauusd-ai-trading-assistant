@@ -18,17 +18,17 @@ import { ENGINE_CODE_HASH, ENGINE_BEHAVIOUR_HASH, engineCodeSource, sha256Hex } 
 import {
   dsEvidence, zoneTypes, zoneTouches, freshnessOf, decisive, aroundSet, zoneAhead, withZoneAhead, zoneNeed, keyLevelZoneTypesMode,
   ZONE_TF_WEIGHT, ZONE_TREND_LEAN, ZONE_NEED, ZONE_RULES, ZONE_SOURCE_WEIGHT,
-  ZONE_SOURCES, ZONE_PROPHET_WEIGHT, zoneSourcesOffMode, zoneSourcesList, zoneSourcesModes
+  ZONE_SOURCES, ZONE_PROPHET_WEIGHT, zoneSourcesOffMode, zoneSourcesList, zoneSourcesModes, ZONE_GMI_OB_WEIGHT, ZONE_SAME_BLOCK_TOL, ZONE_SOURCE_LABELS_MAX, dsSourceLabels
 } from "../src/zone-types.mjs";
-import { readPlane, prophetZoneBoxes } from "../src/level-readers.mjs";
+import { readPlane, prophetZoneBoxes, aegisZoneBoxes } from "../src/level-readers.mjs";
 import { projectionReading } from "../src/projection-agent.mjs";
-import { zoneScenario, zoneInputs, PROPHET_ZONES, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
+import { zoneScenario, zoneInputs, PROPHET_ZONES, AEGIS_ZONES, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
 
 const M15 = 15 * 60_000;
 const sha = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 const mods = { se, de, ea, pp, pa, pl };
-const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank"]);
+const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank", "ds_sources"]);
 /** A value without Z0's keys, at any depth. */
 const strip = (v) => (Array.isArray(v) ? v.map(strip) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !Z0_KEYS.has(k)).map(([k, x]) => [k, strip(x)])) : v);
 /** Every Z0 key path in a value. */
@@ -357,7 +357,7 @@ const pchart = (tf, prophet, extra = {}) => { const c = chart(tf, extra); c.char
 const pz = (side, bottom, top, { high_volume = false, touches = 0, age_bars = 5 } = {}) => ({ side, top, bottom, age_bars, high_volume, touches });
 
 test("Z1a-1 the constants and ZONE_SOURCES_OFF: the tokens, their order, unknown tokens ignored; modes carry it only when a source is off", () => {
-  assert.deepEqual([...ZONE_SOURCES], ["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag"]);
+  assert.deepEqual([...ZONE_SOURCES], ["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag", "gmi_ob"], "Z1b appends gmi_ob");
   assert.deepEqual({ ...ZONE_PROPHET_WEIGHT }, { active: 0.7, high_volume: 0.9 });
   assert.deepEqual(zoneSourcesOffMode({}), []);
   assert.deepEqual(zoneSourcesOffMode({ ZONE_SOURCES_OFF: " Whale, prophet_zone  x gmi_flag,whale" }), ["prophet_zone", "whale", "gmi_flag"]);
@@ -509,4 +509,204 @@ test("Z1a-9 no hashed engine function changes: ENGINE_CODE_HASH and the behaviou
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+});
+
+// ---------------------------------------------------------------- Z1b: GMI's Aegis validated order blocks (gmi_ob)
+// (docs/RFC_DEMAND_SUPPLY_ZONES.md §4b). The producer adds chart_plane.zones.aegis (local-engines/producer/src/adopt/
+// gmi-zone.mjs); the typing reads it as gmi_ob, 0.8 x TF_WEIGHT, and drops gmi_flag on a chart that has the boxes.
+const achart = (tf, aegisBoxes, extra = {}) => { const c = chart(tf, extra); c.chart_plane.zones = { aegis: aegisBoxes }; return c; };
+const az = (side, bottom, top, { touches = 0, age_bars = 5 } = {}) => ({ side, top, bottom, age_bars, touches });
+const r2 = (v) => Math.round(v * 100) / 100;
+const FLAG_BULL = { in_bull_order_block: true, in_bear_order_block: false, in_bull_mitigation: false, in_bear_mitigation: false };
+
+test("Z1b-1 the constants and the token: gmi_ob at 0.8, last in ZONE_SOURCES; aegisZoneBoxes keeps the well-formed boxes only", () => {
+  assert.equal(ZONE_GMI_OB_WEIGHT, 0.8);
+  assert.equal(ZONE_SOURCES.at(-1), "gmi_ob");
+  assert.deepEqual(zoneSourcesOffMode({ ZONE_SOURCES_OFF: "gmi_ob" }), ["gmi_ob"]);
+  assert.deepEqual(zoneSourcesOffMode({ ZONE_SOURCES_OFF: "GMI_OB, prophet_zone" }), ["prophet_zone", "gmi_ob"]);
+  assert.deepEqual(zoneSourcesModes({ ZONE_SOURCES_OFF: "gmi_ob" }), { zoneSourcesOff: ["gmi_ob"] });
+  assert.deepEqual(aegisZoneBoxes({ zones: { aegis: [az("demand", 3998, 3996), { ...az("demand", 1, 2), side: "bull" }, az("supply", null, 4)] } }), []);
+  assert.deepEqual(aegisZoneBoxes({ zones: { aegis: [az("supply", 4019, 4021, { touches: 2, age_bars: 9 })] } }), [{ side: "supply", bottom: 4019, top: 4021, touches: 2, age_bars: 9 }]);
+  assert.deepEqual([aegisZoneBoxes(null), aegisZoneBoxes({}), aegisZoneBoxes({ zones: { prophet: [az("demand", 1, 2)] } })], [[], [], []]);
+});
+
+test("Z1b-2 typing: a gmi_ob box is 0.8 x TF_WEIGHT, labelled gmi_ob@<timeframe>; one per (source, timeframe); a strict overlap", () => {
+  const z = zone(3995, 3999);
+  for (const [tf, word, score, strength] of [["15", "15m", 0.8, "weak"], ["60", "1H", 1.2, "medium"], ["240", "4H", 1.6, "medium"], ["1D", "daily", 2, "strong"]]) {
+    const ds = typed(z, { [tf]: achart(tf, [az("demand", 3996, 3998)]) });
+    assert.deepEqual([ds.type, ds.strength, ds.score, ds.sources], ["demand", strength, score, [`gmi_ob@${word}`]], tf);
+    assert.equal(r2(ZONE_GMI_OB_WEIGHT * ZONE_TF_WEIGHT[tf]), score);
+  }
+  const two = typed(z, { "60": achart("60", [az("demand", 3996, 3998), az("demand", 3995.5, 3997)]) });
+  assert.deepEqual([two.score, two.sources], [1.2, ["gmi_ob@1H"]], "two overlapping 1H boxes count once");
+  const supply = typed(zone(4018, 4022, "resistance"), { "240": achart("240", [az("supply", 4019, 4021)]) });
+  assert.deepEqual([supply.type, supply.strength, supply.score], ["supply", "medium", 1.6]);
+  assert.equal(typed(z, { "60": achart("60", [az("demand", 3993, 3995)]) }).type, "none", "an edge that only touches does not type");
+  // One block counts once (RFC §4b): a gmi_ob box with both edges within ZONE_SAME_BLOCK_TOL (0.001, absolute price)
+  // of a prophet_zone box on the same chart and side adds no weight, only provenance (ds.also).
+  const withProphet = (gmi, prophet, side = "demand") => { const c = achart("60", [az(side, ...gmi)]); c.chart_plane.zones.prophet = [pz(side, ...prophet)]; return { "60": c }; };
+  assert.equal(ZONE_SAME_BLOCK_TOL, 0.001);
+  const prophetOnly = typed(z, { "60": (() => { const c = achart("60", []); c.chart_plane.zones.prophet = [pz("demand", 3996, 3998)]; return c; })() });
+  for (const [gmi, label] of [[[3996, 3998], "exact"], [[3996.001, 3997.999], "at the tolerance"]]) {
+    const same = typed(z, withProphet(gmi, [3996, 3998]));
+    assert.deepEqual([same.type, same.strength, same.score, same.sources, same.also], ["demand", "medium", 1.05, ["prophet_zone@1H"], ["gmi_ob@1H"]], label);
+    assert.deepEqual({ ...same, also: undefined }, { ...prophetOnly, also: undefined }, `${label}: Z1a's typing`);
+  }
+  assert.equal(prophetOnly.also, undefined, "no also without a matching gmi_ob box");
+  // Just over the tolerance on one edge: two blocks, both count.
+  for (const gmi of [[3996.0011, 3998], [3996, 3998.0011]]) {
+    const two = typed(z, withProphet(gmi, [3996, 3998]));
+    assert.deepEqual([two.strength, two.score, two.sources, two.also], ["strong", 2.25, ["gmi_ob@1H", "prophet_zone@1H"], undefined], String(gmi));
+  }
+  // Another chart or the other side is not the same block.
+  const other = achart("240", [az("demand", 3996, 3998)]);
+  const c60 = achart("60", []); c60.chart_plane.zones.prophet = [pz("demand", 3996, 3998)];
+  assert.deepEqual(typed(z, { "60": c60, "240": other }).sources, ["gmi_ob@4H", "prophet_zone@1H"]);
+  const sides = typed(zone(3995, 3999, "resistance"), withProphet([3996, 3998], [3996, 3998], "supply"));
+  assert.deepEqual([sides.sources, sides.also], [["prophet_zone@1H"], ["gmi_ob@1H"]]);
+  const mixed = achart("60", [az("supply", 3996, 3998)]); mixed.chart_plane.zones.prophet = [pz("demand", 3996, 3998)];
+  assert.deepEqual(typed(z, { "60": mixed }).sources, ["gmi_ob@1H", "prophet_zone@1H"], "opposite sides: two boxes");
+  // ZONE_SOURCES_OFF=prophet_zone: every gmi_ob box counts in full.
+  const pOff = zoneTypes([zone(3995, 3999)], dsEvidence({ snapshots: withProphet([3996, 3998], [3996, 3998]), atrH1: 10, sourcesOff: ["prophet_zone"] }))[0].ds;
+  assert.deepEqual([pOff.type, pOff.strength, pOff.score, pOff.sources, pOff.also], ["demand", "medium", 1.2, ["gmi_ob@1H"], undefined]);
+});
+
+test("Z1b-3 gmi_ob replaces gmi_flag on a chart with boxes; gmi_flag stays on a chart without them (no list, an empty list) and with gmi_ob off", () => {
+  const at = zone(3998, 4001, "at price");
+  // 15m boxes away from price: the flag is gone, and the boxes type nothing at price.
+  const replaced = typed(at, { "15": achart("15", [az("demand", 3980, 3982)], { aegis: FLAG_BULL }) });
+  assert.deepEqual([replaced.type, replaced.sources], ["none", []]);
+  // A box at price types it as gmi_ob, not gmi_flag.
+  const atBox = typed(at, { "15": achart("15", [az("demand", 3998.5, 3999.5)], { aegis: FLAG_BULL }) });
+  assert.deepEqual([atBox.type, atBox.score, atBox.sources], ["demand", 0.8, ["gmi_ob@15m"]]);
+  // No boxes on the chart: gmi_flag as before.
+  for (const snaps of [{ "15": chart("15", { aegis: FLAG_BULL }) }, { "15": achart("15", [], { aegis: FLAG_BULL }) }]) {
+    assert.deepEqual(typed(at, snaps).sources, ["gmi_flag@15m"]);
+  }
+  // Boxes on the 1H only: the 15m flag stays (the replacement is per chart).
+  const other = typed(at, { "15": chart("15", { aegis: FLAG_BULL }), "60": achart("60", [az("supply", 4030, 4032)]) });
+  assert.deepEqual(other.sources, ["gmi_flag@15m"]);
+  // gmi_ob off: the boxes are not read, so the flag stays.
+  const off = zoneTypes([zone(3998, 4001, "at price")], dsEvidence({ snapshots: { "15": achart("15", [az("demand", 3998.5, 3999.5)], { aegis: FLAG_BULL }) }, atrH1: 10, sourcesOff: ["gmi_ob"] }))[0].ds;
+  assert.deepEqual([off.type, off.score, off.sources], ["demand", 0.7, ["gmi_flag@15m"]]);
+  // Before/after on a 15m whose only block both cores report: Z1a counted it with the flag (prophet_zone + gmi_flag,
+  // 1.4 medium); Z1b counts the block once (prophet_zone, 0.7 weak) and gmi_ob is provenance.
+  const dup = () => { const c = achart("15", [az("demand", 3998.5, 3999.5)], { aegis: FLAG_BULL }); c.chart_plane.zones.prophet = [pz("demand", 3998.5, 3999.5)]; return { "15": c }; };
+  const z1aDup = zoneTypes([zone(3998, 4001, "at price")], dsEvidence({ snapshots: dup(), atrH1: 10, sourcesOff: ["gmi_ob"] }))[0].ds;
+  const z1bDup = typed(zone(3998, 4001, "at price"), dup());
+  assert.deepEqual([z1aDup.strength, z1aDup.score, z1aDup.sources, z1aDup.also], ["medium", 1.4, ["gmi_flag@15m", "prophet_zone@15m"], undefined]);
+  assert.deepEqual([z1bDup.strength, z1bDup.score, z1bDup.sources, z1bDup.also], ["weak", 0.7, ["prophet_zone@15m"], ["gmi_ob@15m"]]);
+});
+
+test("Z1b-4 freshness: max(the zone's own touches, its gmi_ob and prophet_zone boxes'), capped at 3; gmi_ob off: without the gmi_ob boxes", () => {
+  const z = () => zone(3990, 3992);
+  const box = (touches, extra = {}) => ({ "60": achart("60", [az("demand", 3990.5, 3991.5, { touches })], extra) });
+  assert.deepEqual([typed(z(), box(2), { bars15: touchBars([]) }).freshness, typed(z(), box(2), { bars15: touchBars([]) }).touches], ["tested", 2]);
+  assert.deepEqual([typed(z(), box(7), { bars15: touchBars([]) }).freshness, typed(z(), box(7), { bars15: touchBars([]) }).touches], ["worn", 3]);
+  assert.deepEqual(typed(z(), box(0), { bars15: touchBars([5, 15, 25]) }).freshness, "worn", "the zone's own 3 touches dominate a fresh box");
+  assert.equal(typed(z(), box(1), { bars15: [] }).freshness, "tested", "no 15m bars: the box's count");
+  // Both box sources: the most of all.
+  const both = achart("60", [az("demand", 3990.5, 3991.5, { touches: 1 })]);
+  both.chart_plane.zones.prophet = [pz("demand", 3990.5, 3991.5, { touches: 2 })];
+  assert.equal(typed(z(), { "60": both }, { bars15: touchBars([]) }).touches, 2);
+  // A box that does not type the zone does not age it.
+  assert.equal(typed(z(), { "60": achart("60", [az("demand", 3995, 3996, { touches: 3 })]) }, { bars15: touchBars([]) }).freshness, "fresh");
+  const ev = dsEvidence({ snapshots: box(3), bars15: touchBars([]), atrH1: 10, sourcesOff: ["gmi_ob"] });
+  assert.equal(zoneTypes([z()], ev)[0].ds.freshness, "fresh");
+});
+
+test("Z1b-5 ZONE_SOURCES_OFF=gmi_ob deep-equals Z1a's typing on planes that carry aegis boxes; zones and candidates never change; every token switches its source off", () => {
+  const z1a = se.buildStrategy(zoneInputs(undefined, { prophet: true }));
+  const rich = zoneInputs(undefined, { aegis: true });
+  assert.deepEqual(rich.m15Snapshot.chart_plane.zones, { prophet: [], aegis: AEGIS_ZONES["15"] }, "the fixture's planes carry both");
+  const off = se.buildStrategy({ ...rich, modes: { zoneSourcesOff: ["gmi_ob"] } });
+  assert.equal(JSON.stringify(off), JSON.stringify(z1a), "modes: Z1a's strategy byte for byte");
+  assert.equal(JSON.stringify(se.buildStrategy({ ...rich, env: { ZONE_SOURCES_OFF: "gmi_ob" } })), JSON.stringify(z1a), "env too");
+  const on = se.buildStrategy(rich);
+  assert.equal(JSON.stringify(strip(on)), JSON.stringify(strip(z1a)), "the overlay only: every zone, candidate and price is Z1a's");
+  const at = (s, low) => s.key_levels.zones.find((z) => z.low === low).ds;
+  // The 15m zone at price: gmi_ob@15m replaces gmi_flag@15m (0.8 for 0.7).
+  assert.deepEqual([at(z1a, 3998.6).sources, at(on, 3998.6).sources], [["gmi_flag@15m", "whale@15m"], ["gmi_ob@15m", "whale@15m"]]);
+  assert.deepEqual([at(z1a, 3998.6).score, at(on, 3998.6).score], [1.6, 1.7]);
+  // A zone Z1a left untyped: supply/medium, tested from its 1H box.
+  assert.deepEqual([at(z1a, 4023).type, at(on, 4023).type, at(on, 4023).strength, at(on, 4023).freshness], ["none", "supply", "medium", "tested"]);
+  // The block both cores found (same edges): it counts once, medium as in Z1a, with gmi_ob as provenance only.
+  assert.deepEqual([at(z1a, 3985).strength, at(on, 3985).strength, at(on, 3985).sources, at(on, 3985).also], ["medium", "medium", ["prophet_zone@1H"], ["gmi_ob@1H"]]);
+  assert.equal(at(on, 3985).score, at(z1a, 3985).score);
+  assert.ok(!on.key_levels.zones.some((z) => z.ds.sources.includes("gmi_flag@15m")), "no gmi_flag on the 15m, which has boxes");
+  for (const token of ZONE_SOURCES) {
+    const s = se.buildStrategy({ ...rich, modes: { zoneSourcesOff: [token] } });
+    assert.ok(!s.key_levels.zones.some((z) => z.ds.sources.some((l) => l.startsWith(`${token}@`))), token);
+    assert.equal(JSON.stringify(strip(s)), JSON.stringify(strip(z1a)), `${token}: zones unchanged`);
+  }
+  // Both box sources off: Z0's typing.
+  assert.equal(JSON.stringify(se.buildStrategy({ ...rich, modes: { zoneSourcesOff: ["prophet_zone", "gmi_ob"] } })), JSON.stringify(se.buildStrategy(zoneInputs())));
+  // The capture keeps the planes' aegis boxes, so a replay sees the live source set.
+  assert.deepEqual(slimInputs(rich).m15Snapshot.chart_plane.zones.aegis, AEGIS_ZONES["15"]);
+});
+
+test("Z1b-6 the scenario: gmi_ob off is Z1a's record and everything downstream; types off is Z0-9's pin; on, the guardrails (ZONE_PRIORITY off), council, EA signal, management and public output equal off", async () => {
+  const z1a = await zoneScenario(mods, { db: d1, kv, prophet: true });
+  const again = await zoneScenario(mods, { db: d1, kv, aegis: true, modes: { zoneSourcesOff: ["gmi_ob"] } });
+  for (const k of ["strategy", "record", "stored", "evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(again[k]), JSON.stringify(z1a[k]), `gmi_ob off: ${k}`);
+  for (const side of ["long", "short"]) assert.equal(JSON.stringify(again.guards[side]), JSON.stringify(z1a.guards[side]), `gmi_ob off: ${side} guards`);
+  const typesOff = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" }, aegis: true });
+  const { run, ...rest } = typesOff;
+  assert.equal(sha(rest), "a830079cae93d842555b61cbb3a799bfce47fd94266a48308d6d468189d630d5", "KEY_LEVEL_ZONE_TYPES off: main's output");
+  const on = await zoneScenario(mods, { db: d1, kv, aegis: true });
+  assert.deepEqual(strip(on.record), typesOff.record);
+  for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(typesOff.guards[side].checks), `${side} checks`);
+  for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(typesOff[k]), k);
+  // Z1b's only new recorded key is ds_sources (orchestrator ruling): on a level Z1a left untyped, now typed by gmi_ob.
+  const noSrc = (keys) => keys.filter((k) => !k.endsWith(".ds_sources"));
+  assert.deepEqual(noSrc(z0Keys(on.record)), noSrc(z0Keys(z1a.record)), "Z1b adds no other recorded key");
+  assert.ok(on.record.key_levels.every((z) => !("ds_sources" in z) || (Array.isArray(z.ds_sources) && z.ds_sources.length >= 1 && z.ds_sources.length <= ZONE_SOURCE_LABELS_MAX)));
+  assert.notEqual(JSON.stringify(on.record.key_levels), JSON.stringify(z1a.record.key_levels), "the recorded words move with the new source");
+  const labels = on.strategy.key_levels.zones.flatMap((z) => z.ds.sources);
+  assert.ok(labels.includes("gmi_ob@15m") && labels.includes("gmi_ob@1H"));
+  for (const l of labels) assert.match(l, /^(prophet_zone|whale|prophet_best|gabfx|gmi_flag|gmi_ob)@(15m|1H|4H|daily)$/);
+  for (const tf of ["15m", "1H", "4H", "daily"]) assert.doesNotMatch(`gmi_ob@${tf}`, pp.PRICE_LIKE);
+  for (const s of [...z0Leaves(on.record), ...z0Leaves(on.strategy)]) assert.doesNotMatch(s, pp.PRICE_LIKE, s);
+});
+
+test("Z1b-7 the readers: readPlane and the Projection Agent read a plane with aegis boxes as before; the hashes are Z0's", async () => {
+  const rich = zoneInputs(undefined, { aegis: true }), plain = zoneInputs();
+  for (const k of ["m15Snapshot", "h1Snapshot", "h4Snapshot", "d1Snapshot"]) {
+    const tf = rich[k].timeframe;
+    assert.deepEqual(readPlane(rich[k].chart_plane, tf), readPlane(plain[k].chart_plane, tf), `${k}: no level from the zones`);
+    assert.equal(JSON.stringify(projectionReading({ bars: rich.m15Bars, plane: rich[k].chart_plane, timeframe: "15 minutes" })), JSON.stringify(projectionReading({ bars: plain.m15Bars, plane: plain[k].chart_plane, timeframe: "15 minutes" })), k);
+  }
+  assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
+  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+});
+
+test("Z1b-8 ds_sources: the recorded set's source labels (words only, weighted sources then '(dup)' provenance, bounded); absent from the public analysis, the EA signal and managementFields", async () => {
+  assert.deepEqual(dsSourceLabels({ sources: ["whale@15m", "prophet_zone@1H"], also: ["gmi_ob@1H"] }), ["prophet_zone@1H", "whale@15m", "gmi_ob@1H(dup)"]);
+  assert.equal(dsSourceLabels({ sources: [], also: [] }), null);
+  assert.equal(dsSourceLabels(null), null);
+  // Words only: anything not <source>@<15m|1H|4H|daily> is dropped; at most ZONE_SOURCE_LABELS_MAX.
+  assert.deepEqual(dsSourceLabels({ sources: ["prophet_zone@1H", "x y@1H", "a@5m", 7, "<b>@1H", "z".repeat(40) + "@1H"] }), ["prophet_zone@1H"]);
+  // Every timeframe word of ZONE_TF_NAME is kept, weekly included.
+  assert.deepEqual(dsSourceLabels({ sources: ["whale@weekly", "prophet_zone@daily"], also: ["gmi_ob@weekly"] }), ["prophet_zone@daily", "whale@weekly", "gmi_ob@weekly(dup)"]);
+  // A snapshot whose timeframe is "W" types as weekly, and the label reaches the recorded set.
+  const wSnap = achart("1D", [az("demand", 3990.5, 3991.5)]); wSnap.timeframe = "W";
+  const wZone = zoneTypes([{ low: 3990, high: 3992, candidate: true }], dsEvidence({ snapshots: { "1D": wSnap }, atrH1: 10 }));
+  assert.deepEqual(aroundSet(wZone, 4000)[0].ds_sources, ["gmi_ob@weekly"]);
+  const many = ZONE_SOURCES.flatMap((s) => ["15m", "1H", "4H", "daily", "weekly"].map((tf) => `${s}@${tf}`));
+  assert.equal(dsSourceLabels({ sources: many, also: many }).length, ZONE_SOURCE_LABELS_MAX);
+  // In the recorded set: present on a typed level with sources, absent on one without.
+  const set = aroundSet([
+    { low: 3990, high: 3992, candidate: true, ds: { type: "demand", strength: "medium", freshness: "fresh", sources: ["prophet_zone@1H"], also: ["gmi_ob@1H"] } },
+    { low: 4010, high: 4012, candidate: true, ds: { type: "none", strength: null, freshness: "fresh", sources: [] } },
+    { low: 4020, high: 4022, candidate: true }
+  ], 4000);
+  assert.deepEqual(set.map((z) => z.ds_sources), [["prophet_zone@1H", "gmi_ob@1H(dup)"], undefined, undefined]);
+  // The scenario: the record carries labels; the public analysis, the EA signal and managementFields never do.
+  const on = await zoneScenario(mods, { db: d1, kv, aegis: true });
+  assert.ok(on.record.key_levels.some((z) => Array.isArray(z.ds_sources)), "the record carries ds_sources");
+  for (const k of ["analysis", "signal", "management"]) {
+    const text = JSON.stringify(on[k]);
+    assert.ok(!/ds_sources|\(dup\)|prophet_zone@|gmi_ob@/.test(text), `${k}: no source label`);
+  }
 });

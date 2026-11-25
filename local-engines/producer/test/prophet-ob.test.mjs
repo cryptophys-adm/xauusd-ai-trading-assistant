@@ -168,7 +168,9 @@ test("Z1a-P5 the snapshot: chart_plane.zones.prophet; HUD sections and the plane
     const t2 = performance.now();
     const again = prophetZones(o.order_blocks, chartBars, { perSide: 4, atr: o.sensors.atr14 });
     const adoptMs = performance.now() - t2;
-    assert.deepEqual(zones, { prophet: again });
+    // Z1b adds zones.aegis beside it (local-engines/producer/test/gmi-zone.test.mjs); prophet is unchanged.
+    const { aegis: _aegis, ...z1a } = zones;
+    assert.deepEqual(z1a, { prophet: again });
     assert.equal(again.length, o.order_blocks.active_order_block_zones.length, "the fixture holds at most 4 a side");
     // The adapter's cost against the whole snapshot: far inside +15% (the core is already run once by the snapshot).
     assert.ok(adoptMs <= 0.15 * snapMs, `adapter ${adoptMs.toFixed(2)} ms vs snapshot ${snapMs.toFixed(0)} ms (core ${coreMs.toFixed(0)} ms)`);

@@ -69,8 +69,33 @@ export function withProphetZones(inputs) {
   return { ...inputs, h1Snapshot: add(inputs.h1Snapshot), m15Snapshot: add(inputs.m15Snapshot), h4Snapshot: add(inputs.h4Snapshot), d1Snapshot: add(inputs.d1Snapshot) };
 }
 
-/** The strategy engine's inputs (loadStrategyInputs' shape); `modes` as given; `prophet` adds Z1a's PROPHET_ZONES. */
-export function zoneInputs(modes = undefined, { prophet = false } = {}) {
+/**
+ * Z1b: GMI's active Aegis validated order blocks of a chart (chart_plane.zones.aegis, local-engines/producer/src/adopt/
+ * gmi-zone.mjs's shape), the 4 nearest per side. The 15m holds a demand block at price (where Z0's 15m GMI flag typed
+ * the zone), the 1H a demand block with the edges of Prophet's second 1H block (the same block, as the two cores find: it counts once) and a
+ * supply block where Z1a had no type, tested twice; the 4H has an empty list; the daily plane has no `aegis` (a chart
+ * GMI did not run on).
+ */
+export const AEGIS_ZONES = Object.freeze({
+  "15": [{ side: "demand", top: 3999.6, bottom: 3998.9, age_bars: 6, touches: 1 }],
+  "60": [
+    { side: "demand", top: 3986.4, bottom: 3984.1, age_bars: 40, touches: 0 },
+    { side: "supply", top: 4024.6, bottom: 4023.4, age_bars: 9, touches: 2 }
+  ],
+  "240": []
+});
+/** The inputs with AEGIS_ZONES beside the planes' Prophet zones (Z1b). */
+export function withAegisZones(inputs) {
+  const add = (s) => (s?.chart_plane && AEGIS_ZONES[s.timeframe] ? { ...s, chart_plane: { ...s.chart_plane, zones: { ...(s.chart_plane.zones || {}), aegis: AEGIS_ZONES[s.timeframe].map((z) => ({ ...z })) } } } : s);
+  return { ...inputs, h1Snapshot: add(inputs.h1Snapshot), m15Snapshot: add(inputs.m15Snapshot), h4Snapshot: add(inputs.h4Snapshot), d1Snapshot: add(inputs.d1Snapshot) };
+}
+
+/**
+ * The strategy engine's inputs (loadStrategyInputs' shape); `modes` as given; `prophet` adds Z1a's PROPHET_ZONES;
+ * `aegis` adds Z1b's AEGIS_ZONES (with PROPHET_ZONES: Z1b's planes carry both).
+ */
+export function zoneInputs(modes = undefined, { prophet = false, aegis = false } = {}) {
+  if (aegis) return withAegisZones(zoneInputs(modes, { prophet: true }));
   if (prophet) return withProphetZones(zoneInputs(modes));
   return {
     rooms: { D1: room(bull, "2026-11-19T22:00:00.000Z"), H4: room(bull, "2026-11-20T12:00:00.000Z"), H1: room(bull, CLOSE), M15: { ...room(bull, null), bar_time: CLOSE } },
@@ -90,11 +115,11 @@ export const PLAN_COLUMNS = "setup_key, decision_key, agent, pattern, opened_at,
 /**
  * The scenario. `mods`: { se, de, ea, pp, pa, pl } (strategy-engine, decision-engine, ea-signal, public-projection,
  * public-analysis, plan-learning); `db` and `kv` make a D1 and a KV; `modes` the strategy's modes; `extraColumns` more
- * plan_setups columns to read; `prophet` adds Z1a's PROPHET_ZONES to the charts' planes.
+ * plan_setups columns to read; `prophet` adds Z1a's PROPHET_ZONES to the charts' planes, `aegis` Z1b's AEGIS_ZONES too.
  */
-export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes = undefined, env: extraEnv = {}, extraColumns = "", prophet = false } = {}) {
+export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes = undefined, env: extraEnv = {}, extraColumns = "", prophet = false, aegis = false } = {}) {
   const env = { ...ZONE_ENV, ...extraEnv };
-  const inputs = zoneInputs(modes, { prophet });
+  const inputs = zoneInputs(modes, { prophet, aegis });
   const strategy = se.buildStrategy(inputs);
   const loaded = { inputs, strategy, global: global(), correlations: null, regime: "normal-trending" };
   const assessment = de.assess(loaded, { now: NOW, env });

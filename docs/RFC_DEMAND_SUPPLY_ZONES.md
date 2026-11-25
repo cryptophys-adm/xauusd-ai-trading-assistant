@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them; Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them. Z1b (GMI's Aegis validated order blocks as a source, §4b) is built, not live until its PR merges; Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -172,6 +172,44 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 
 **The typing replay and ZONE_NEED.** Not re-run in this PR: the stored captures predate the export (no `zones.prophet`), and D1 holds only about four days of 1m bars, short of the 1000 bars per chart (with the feed's volume) the core needs to rebuild the blocks. The captures keep the chart plane, so from Z1a's deploy on they carry the boxes; the replay with the new source and the ZONE_NEED re-check run on them before Z2 turns the gate on.
 
+## 4b. Z1b: GMI's Aegis validated order blocks as a source
+
+**Status:** built, not live until merge. It lands after Z5 (the brake) and before management (Z3a onward), so the Omega era starts on the full source set.
+
+**Why.** GMI v12.70 computes validated order blocks (`local-engines/gmi/src/gmi-core.mjs`, "Aegis validated order blocks") but they leave the core only as the last bar's `in_ob_bull` / `in_ob_bear` flags, which Z0 reads as `gmi_flag` on the 15m zone at price only. The core is hashed (provenance), so the only path is a duplicate outside it.
+
+### 4b.1 The export (producer)
+- **The duplicate.** `local-engines/producer/src/adopt/gmi-zone.mjs` (new; B20 extends it and never re-creates it). `aegisBoxes(bars, { mintick, perSide: 4 })` repeats the core's loop line for line:
+  - `obProgressiveUpdate` from `mizan.mjs`, and `pivot`, `highest`, `lowest` (with `isNum`, `nz`, `gt`, `lt`) from `pine.mjs`, imported unedited; `pineAtr` from `src/prophet-r37-oscillator.mjs`, as the core;
+  - the cfg is `GMI_DEFAULTS` itself (imported, not retyped) with the caller's overrides: ob_pivot_len 5, max_nodes_ob 60, ob_max_age 120, max_ob_per_direction 30, ob_close_only false, mitig_buffer 0.25, max_wick_atr 3.0;
+  - it returns the active blocks at the last bar `{ side, top, bottom, age_bars, touches }` (3 dp, the 4 nearest to the close per side, demand first, nearest first, at most 8 a chart) and the per-bar `in_ob_bull` / `in_ob_bear` flags.
+- **One core on every chart.** hud-snapshot runs `computeGmiOnChart` (gmi-core-tf.mjs: 15m, 1H) or `computeGmiOnHtfChart` (gmi-core-htf.mjs: 4H, 1D). Since B4 both are one-line re-exports of gmi-core.mjs's `computeGmiOnChart` (the same function object), so the loop, its inputs (ATR(14) and `max(ATR, mintick)`, the volume pivots, mintick) and the cfg are identical on every chart. One duplicate serves all four.
+- **Fields.**
+  - bull (the core's `bot`, direction 1) = demand; bear (`top`, direction -1) = supply;
+  - `top` and `bottom` as the loop holds them at the last bar, after its progressive mitigation;
+  - `age_bars` = the last bar's index - the block's activation bar (where its volume pivot confirmed, from which `ob_max_age` counts), on the snapshot's 1000-bar window;
+  - `touches` = obProgressiveUpdate's own `touched` events that left the block valid: each bar after activation whose range met the block's edges as they stood then. Each such bar trims the block, so consecutive bars count one each. The source bar and the bars before activation never count. Not capped here (the typing caps at 3). Chosen over Z1a's rule because Z1a's 40-bar window would count a young block's own source bar.
+- **Where it lands.** `hud-snapshot.mjs` sets `chart_plane.zones.aegis` beside `zones.prophet`, on the bars and mintick the GMI run used (the chart's last 1000 bars), on every chart where GMI ran (15m, 1H, 4H, 1D). A chart where GMI failed has no `aegis`; a failure of the duplicate leaves the plane without `aegis`, and `prophet` as it was. No HUD field and no hud-reading line: with `aegis` stripped, the snapshot is Z1a's byte for byte (pins taken on b779c07).
+- **Size and cost.** About 75 bytes a box (at most about 0.6 KB a chart); the fixture snapshots are 7.1-7.6 KB. The duplicate costs 0.3-0.9 ms against a 0.4-4.3 s snapshot (under 0.1%).
+
+### 4b.2 The source (`zone-types.mjs`)
+- **`gmi_ob`.** Labels `gmi_ob@15m`, `@1H`, `@4H`, `@daily`. Weight 0.8 (`ZONE_GMI_OB_WEIGHT`) x `TF_WEIGHT`. Z0's typing rule: strict overlap, the heaviest box per (source, timeframe), 2x dominance, the same strength floors. The reader is `src/level-readers.mjs` `aegisZoneBoxes(plane)`; `readPlane` does not read it, so levels, zones and candidates never change.
+- **It replaces `gmi_flag` on a chart that has `gmi_ob` boxes** (the flag says price is inside one of the blocks). Only the 15m ever used `gmi_flag`, and every chart GMI runs on now carries boxes, so in practice the 15m flag is dropped whenever the 15m plane holds a block; it stays on a 15m chart with no block (an empty list), on an older snapshot without `aegis`, and while `gmi_ob` is off. The flag also carried GMI's whale mitigation; those zones still type the zone through `whale` (chart_plane.liquidity.whale_zones).
+- **Freshness.** A zone typed by a `gmi_ob` or `prophet_zone` box reads MAX(its own Z0 count, those boxes' touches), capped at 3.
+- **Overlap with `prophet_zone`: one block counts once** (orchestrator ruling (a), 2026-11-25). Prophet R38's order-block engine is the same Aegis algorithm (the same pivot length, wick cap, mitigation and age), so the two cores return the same block: on the producer's snapshot fixtures every `gmi_ob` box had the same edges and age as a `prophet_zone` box (the touches differ by definition). Counted twice it would read 0.7 + 0.8 = 1.5 x TF_WEIGHT (a 1H block: medium to strong) with nothing new behind it. So a `gmi_ob` box on the same chart and side as a `prophet_zone` box with both edges within `ZONE_SAME_BLOCK_TOL` = 0.001 (absolute, price units; on XAUUSD about 0.0000025 of price; the edges are 3 dp) adds no box: it is provenance only, `also: ["gmi_ob"]` on that prophet_zone box and `ds.also` (`gmi_ob@<tf>`) on a zone it types, for Z5 to measure later. Edges a step further apart are two blocks and both count. With `ZONE_SOURCES_OFF=prophet_zone` every `gmi_ob` box counts in full. `gmi_flag` is still dropped on a 15m chart with boxes, duplicates or not: the flag is price inside the same block, which counts once (a 15m zone at price typed by prophet_zone@15m plus gmi_flag@15m, 1.4 medium in Z1a, reads 0.7 weak). The recorded set carries the sources from Z1b on: `ds_sources` on each typed level (`prophet_zone@1H`, `gmi_ob@1H(dup)` for a duplicate; the form in SSOT), so Z5's `zone_readings.ds_sources` measures by source, and tells a duplicate from an independent source, from the merge on. Rows before it stay NULL (no backfill), so the per-source held rates start at zero.
+
+### 4b.3 The switch
+- `ZONE_SOURCES_OFF` gains the token `gmi_ob` (last in ZONE_SOURCES, in src/zone-types.mjs and src/feature-switches.mjs; the FS1 description and fixtures updated). `ZONE_SOURCES_OFF=gmi_ob` restores Z1a's typing byte for byte on planes that carry the boxes (test/zone-types.test.mjs Z1b-5, Z1b-6: the strategy, the decision record and everything downstream). `KEY_LEVEL_ZONE_TYPES=off` still gives Z0-9's pinned main output.
+
+### 4b.4 What reads it, and what Z1b does not touch
+- **Decision paths that read the new source** (through the zone words only): Z2's `zone_ahead` guardrail and `zonePlanPasses` plan filter (ZONE_PRIORITY "on", ZONE_AHEAD_MODE "trend": live), `pickStrategy`'s zone_ahead eligibility, the council's zone words (`zone_types`, `opposing_zone_ahead_atr`), `decision.zone_blocked` and `decision.key_levels`; Z2b's aims (inert while `ZONE_AIM_OFF` is "tp,stop,factor"); Z5's readings and breaker, which attribute by type. Management (Z3a onward) does not read types yet.
+- **Untouched.** The EA signal, `managementFields`, Omega, the Position Manager, public output and plan_setups' columns (Z1b-6 with ZONE_PRIORITY off). No ENGINE_CODE function changes: ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…), V13, V14 and ERA_SWITCHES unchanged; no era moves. gmi-core*.mjs, mizan.mjs and pine.mjs keep their provenance hashes; `adopt/` and `hud-snapshot.mjs` are in no provenance record. No EA or cron change.
+
+### 4b.5 Tests
+- `local-engines/producer/test/gmi-zone.test.mjs` (new): the duplicate's `in_ob_bull` / `in_ob_bear` equal the core's on every bar of the GMI fixture (gmi.test.mjs's 1000 H1 bars). The core evaluates only its last bar, so each bar is one core run on the growing prefix (1000 runs, about 12 s); prefixes under 320 bars lower only `vp_lookback` (the TDM volume profile's depth, which the loop never reads), since the core refuses shorter history. Also the last 40 bars of a 15m and a 4H chart, the re-export identity, the loop's text against the core's, hand-counted touches, the 4-per-side cut, the snapshot pins, hud-reading, size, the CPU bound and provenance.
+- `test/zone-types.test.mjs` Z1b-1 to Z1b-7 (test/support/zone-types-fixture.mjs gains an optional `aegis` layer).
+- **Drift.** If gmi-core.mjs's loop changes, the equality and loop-text tests fail; the duplicate is then updated in the same PR.
+
 ## 5. Z2: the zone_ahead check (decision side only)
 **Why.** Until Z2 nothing kept a long out of supply: the only zone gates were scalp's 'reward' (a real level as the target) and `zone_pullback`'s own location rule. The design replay (426 at-level plans): an opposing typed zone under 0.5 ATR ahead -0.268R against +0.512R with none ahead; the counter-trend plans it would block -0.379R (n 121), the with-trend plans +0.135R (n 54), hence the trend exemption. A contrary-entry veto would have removed +0.055R with-trend plans, so a contrary entry zone stays a record.
 
@@ -312,6 +350,7 @@ plan_setups is read by 14 queries in 8 modules. A cohort column there would leak
 ## 8. Risks
 - **Overlapping readings (Z5).** Readings of consecutive decisions overlap; the dedupe limits it.
 - **Recorded plans (Z5).** The counterfactual uses the recorded would-be plan; a limit that never fills scores 0R, as plan learning does.
+- **Typing shifts while Z2 is live (Z1b).** gmi_ob adds 0.8 x TF only for blocks Prophet does not hold (a same block counts once), so some untyped zones become decisive, and a 15m zone at price loses gmi_flag where the 15m has boxes; Z5 attributes by source, and `ZONE_SOURCES_OFF=gmi_ob` reverts it. The duplicate can drift from gmi-core; the equality test fails on drift.
 - **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
 - **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.

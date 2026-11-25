@@ -19,7 +19,8 @@ unchanged, so the v2 alerts deliver everything the v1 alerts delivered.
 1. Open TradingView with the chart `OANDA:XAUUSD`.
 2. On each of the **5m, 15m, 1H, 4H and 1D** charts, replace the v1 indicators with the v2 files:
    1. Add `Global-Multiverse-Interceptor-v12.70.hud.v2.txt` and `The-Prophet-v7.02-R38.hud.v2.txt` as new indicators
-      (Pine Editor, paste, save, add to chart).
+      (Pine Editor, paste, save, add to chart). If the compile fails, send the compiler message verbatim (line number
+      and text) to the session; do not edit the script.
    2. In each one's settings, keep every default. Turn on **Enable CTA Webhook** and enter the webhook secret in the
       input **CTA Webhook Secret** (the last input). Never put the secret anywhere else.
    3. Delete that chart's v1 alerts, then remove the v1 indicators.
