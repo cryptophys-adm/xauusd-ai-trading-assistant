@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { publicRecap, recapLeaks, publicSentences, readPublicProjection, DEFAULT_PUBLIC_DELAY_HOURS } from "../src/public-projection.mjs";
+import { publicRecap, recapLeaks, publicSentences, readPublicProjection, publicDelayHours, DEFAULT_PUBLIC_DELAY_HOURS, PUBLIC_FORBIDDEN_KEYS } from "../src/public-projection.mjs";
 import { checkContentDraft, CONTENT_CHECKS } from "../src/content-guardian.mjs";
 
 // A decision shaped like production's (2026-11-13): prices in the summary, the reasons, the guardrail details,
@@ -69,11 +69,48 @@ test("the projection shows only decisions older than the delay, newest first, ea
   assert.deepEqual(out.recaps.map((r) => r.bar_close), ["2026-11-13T10:00:00.000Z", "2026-11-13T09:45:00.000Z"]);
   assert.equal(out.recaps[0].outcome, "hit", "a quiet WAIT is a hit");
   assert.deepEqual(out.recaps.flatMap((r) => recapLeaks(r)), []);
-  const shorter = await readPublicProjection({ DB: db, SIGNAL_CACHE: kv, PUBLIC_DELAY_HOURS: "0.5" }, { now });
-  assert.equal(shorter.delay_hours, DEFAULT_PUBLIC_DELAY_HOURS, "the delay is at least an hour; a bad value keeps the default");
+  const bad = await readPublicProjection({ DB: db, SIGNAL_CACHE: kv, PUBLIC_DELAY_HOURS: "soon" }, { now });
+  assert.equal(bad.delay_hours, DEFAULT_PUBLIC_DELAY_HOURS, "a bad value keeps the default");
   const two = await readPublicProjection({ DB: db, SIGNAL_CACHE: kv, PUBLIC_DELAY_HOURS: "2" }, { now });
   assert.equal(two.recaps[0].bar_close, "2026-11-13T10:00:00.000Z");
   assert.ok(!two.recaps.some((r) => r.bar_close === "2026-11-14T11:00:00.000Z"));
+});
+
+// RT1 (owner 2026-11-25: "harus realtime", then "Semua sekarang"): the delay may be 0; the leak filter stays in force.
+test("RT1 publicDelayHours: 0 is realtime; unset, null, empty, negative or invalid is 24; at most 14 days", () => {
+  assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: "0" }), 0);
+  assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: 0 }), 0);
+  assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: "0.5" }), 0.5);
+  assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: "24" }), 24, "the rollback");
+  for (const v of [undefined, null, "", "  ", "soon", "-1", NaN]) assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: v }), 24, String(v));
+  assert.equal(publicDelayHours({}), 24);
+  assert.equal(publicDelayHours(null), 24);
+  assert.equal(publicDelayHours({ PUBLIC_DELAY_HOURS: "9999" }), 24 * 14);
+});
+
+test("RT1 with delay 0 the recaps include the newest decision, still pending, with no price, entry, SL, TP or forbidden key", async () => {
+  const db = d1();
+  const now = Date.parse("2026-11-14T12:00:00Z");
+  const put = (iso, stance) => { const d = decision(iso, stance); db.raw.prepare("INSERT INTO engine_decisions VALUES (?, ?, ?, ?, ?, ?, ?)").run(iso, d.bar_close, iso, d.stance, d.confidence, "council", d.decision_json); };
+  put("2026-11-14T11:45:00.000Z", "SELL"); // the newest 15m decision, its horizon still open
+  put("2026-11-14T11:30:00.000Z", "WAIT");
+  put("2026-11-13T10:00:00.000Z", "BUY");
+  const close = Date.parse("2026-11-14T11:45:00.000Z");
+  const candles = [];
+  for (let i = -20; i <= 0; i++) candles.push({ open: 4000, high: 4001, low: 3999, close: 4000, open_time: new Date(close + (i - 1) * 900_000).toISOString(), close_time: new Date(close + i * 900_000).toISOString() });
+  const kv = { async get() { return JSON.stringify({ candles }); } };
+  const out = await readPublicProjection({ DB: db, SIGNAL_CACHE: kv, PUBLIC_DELAY_HOURS: "0" }, { now });
+  assert.equal(out.delay_hours, 0);
+  assert.equal(out.until, new Date(now).toISOString());
+  assert.equal(out.dropped, 0);
+  assert.deepEqual(out.recaps.map((r) => r.bar_close), ["2026-11-14T11:45:00.000Z", "2026-11-14T11:30:00.000Z", "2026-11-13T10:00:00.000Z"], "the owner's intent: the newest decision is public at once");
+  const newest = out.recaps[0];
+  assert.deepEqual([newest.stance, newest.confidence, newest.outcome], ["SELL", 0.62, "pending"]);
+  assert.ok(newest.reasons.length > 0, "its reasons, in plain words");
+  assert.deepEqual(out.recaps.flatMap((r) => recapLeaks(r)), []);
+  const json = JSON.stringify(out.recaps);
+  for (const word of ["3870", "3872", "3875", "3880", "3850", "3,864", "3864", "entry", "stop", "tp1", "take_profit", "strategy_plans", "key_levels", "trade", "upper", "lower", "target", "worker_version"]) assert.ok(!json.includes(word), word);
+  for (const key of PUBLIC_FORBIDDEN_KEYS) assert.ok(!json.includes(`"${key}":`), key);
 });
 
 test("the guardian passes an education recap with its disclaimer and TradingView's attribution", () => {
