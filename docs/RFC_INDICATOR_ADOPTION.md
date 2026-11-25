@@ -1,12 +1,15 @@
 # RFC: Adopting the unported GMI, Prophet and Mizan modules
 
-Status: **accepted** (owner 2026-11-19, relayed by the orchestrator: "adopsi semuanya"; then directly, 19 Nov: the order of
-stages 1 to 6 as proposed, one Pine update of the GMI and Prophet alerts with the Mizan Probe installed in the same
-sitting, and one new agent for stage 5). Each stage is still built as its own PR, shadow first, and promoted by the owner. The four agents dismantled on
-2026-11-11 (R37 Funnel, GABFX Price Action, Playbook Execution, Grid Bot Protocol) stay dismantled.
+Status: **accepted, and live without shadow** (owner 2026-11-19, relayed by the orchestrator: "adopsi semuanya"; then
+directly, 19 Nov: the order of stages 1 to 6 as proposed, one Pine update of the GMI and Prophet alerts with the Mizan
+Probe installed in the same sitting, and one new agent for stage 5; then 2026-11-22, the owner's words (a) to (c) below:
+no shadow, built to this design). Each stage is still its own PR, reviewed by the orchestrator, and goes live on merge
+behind its own switch and breakers. There is no shadow arm and no separate promotion PR. **As of 2026-11-25** only the
+B7 field groups are merged (inert until B11); every stage below is planned. The four agents dismantled on 2026-11-11
+(R37 Funnel, GABFX Price Action, Playbook Execution, Grid Bot Protocol) stay dismantled.
 
-"Adopt" means: computed locally from closed bars and read by an agent, by the Decision Engine as a witness, or by the
-Position Manager as evidence. It never means a second decision or a second trade plan.
+"Adopt" means: computed locally from closed bars and read by an agent, by the Key Level Agent as a candidate zone, or by
+the Position Manager as evidence. It never means a second decision, a second trade plan or a new Decision Engine witness.
 
 ## What the canon requires of every stage
 
@@ -16,15 +19,71 @@ Position Manager as evidence. It never means a second decision or a second trade
   - An engine-state value (an oscillator, a latch, a score) is *verified* only after 24 consecutive candles match the
     same field in a TradingView alert (`DEFAULT_POLICY.promoteAfter`).
   - Until then the line is shown as unverified. Nothing is marked verified by hand.
-- **Promotion (promotion_by_owner).** A new line in an agent's prompt is a new prompt input. It runs first in the
-  existing shadow arm (`shadow:war_room_opening`, `shadow:tf_room_opening`), is scored by outcome scoring with the
-  sign test, and goes live only on the owner's approval.
+- **Promotion (promotion_by_owner).** A new line in an agent's prompt is a new prompt input, and only the owner promotes
+  one. The owner's words (a) to (c) of 2026-11-22 (below) are the `promotion_by_owner` act for every stage of this RFC,
+  with no shadow arm. The precedent is the Positioning & Liquidity analyst's breakglass ("the owner's word is the
+  `promotion_by_owner` act", docs/SSOT.md:1098). Every PR of this RFC quotes (a) to (c) in its body.
+  - What stands in for the shadow test: parity (a line stays unverified until its 24 candles), a switch per line or
+    agent, the Position Manager line breaker, and the Mizan Oracle's daily neuron cap (all under "This design").
 - **One decision, one plan (fail_closed_wait).**
   - Mizan s17 (safe_mode, gravity_veto, sniper_override), s20 (the Bayesian verdict and action_label) and the SL, TP
     and position boxes of GMI and Prophet are evidence an agent argues from, never an authority.
   - Prices still come only from the Key Level Agent's plan.
   - Nothing bypasses `tick_value_mismatch`, `volume_below_min` or the profile caps.
 - **Public filter.** No new field reaches a public page with a decision, confidence, price or order wording.
+
+## Provenance: the owner's words of 2026-11-22 (verbatim)
+
+(a) "tidak perlu shadow, langsung integrasikan kamu tentukan designnya yang cocok untuk memperkuat council dan kontribusi
+lainnya decision, strategi, key level, position dan lainnya seperti agen lainnya"
+
+(b) "integrasi juga tanpa shadow terkait chart pattern dan liquidity, ketiganya dibuat panel visualisasi sendiri
+terpisah dalam Intelligence"
+
+(c) "tidak perlu shadow, langsung dipasang sesuai desainmu juga" (this RFC's stages 1 to 6 and the Mizan Oracle)
+
+In English: (a) no shadow; integrate directly, with the design Claude finds right, to strengthen the council and the
+other contributions (decision, strategy, key levels, position) like the other agents; (b) chart patterns and liquidity
+are integrated without shadow too, each with its own visual panel in Intelligence; (c) no shadow; install it directly to
+this design.
+
+## Binding rules (Track B rules 2 to 6, as amended by the orchestrator's errata E0)
+
+2. **Lens B and the other binding limits.**
+   - Lens B never opens, sizes or prices an entry. Its switch, floor and staleness gates and every breaker stay.
+   - No new price in the rooms, the decision cards, the Position Council (its pinned fields stay), Aether reports or
+     public pages. Of Track B's new routes only the Nexus views (`GET /api/liquidity`, `GET /api/chart-patterns`, the
+     planned `GET /api/orb`; Cloudflare Access) carry prices.
+   - `pinescript/ssot` is untouched. No EA change. The LIVE and strategy arms stay the owner's.
+   - Mizan s17/s20 and the indicators' own plans are evidence only.
+   - Engine-state fields need 24-candle TradingView parity, else they read "unverified"; bar formulas are "derived".
+3. **Where lens B levels go** (E0: the limit council's path stays).
+   - They reach `manageIntents`, the ladder's TP2 wait, the limit council's moves of a resting limit (as
+     docs/RFC_POSITIONING_LIQUIDITY.md §4.4 already allows), and, once B17 and B18 are built, the Position Manager's
+     management level set and the squeeze guard's own `room_liquidity` check, which can only add a block.
+   - They are gated on `lensKnobs("liquidity").active` (on and above its floor), `LIQUIDITY_STATE_FRESH_MS` and
+     `feed_basis_known`. The signal's `liquidity_on` already holds the first two (`liquidityFields`,
+     `src/liquidity-lens.mjs:609-614`; `active`, `src/lens-policy.mjs:127`). Today `brokerKeyLevels` appends lens B
+     without checking `feed_basis_known` (`src/omega-engine.mjs:373-386`); B17 adds that gate.
+   - They never reach plan entries or targets, the reward guardrail, the `KEY_LEVELS` witness or `decision.key_levels`.
+     No new entry path is added.
+   - LIQUIDITY is a council-only card outside `quorumOf` and outside `WITNESS_PRIORS` (B15, merged); no canon change.
+4. **V14 holds.** `ENGINE_CODE_HASH` is refreshed only by the PRs that touch hashed engine code (A5, A13, B5, B17, B18,
+   B19, B25 and B28 as briefed), and is recomputed on rebase. `ENGINE_BEHAVIOUR_HASH` must not move.
+5. **Switches reach `buildStrategy` and `buildKeyLevels` only through `modes`** (`loadStrategyInputs` and
+   `ownTimeframePlan`'s loader). Each is tested.
+6. **The Mizan Oracle is a HUD agent of the 15m room only.**
+   - The Probe runs on 15m, so its 1H, 4H and 1D identities could never verify. Its lean reaches the decision only
+     through the M15 room witness, like every other 15m seat.
+   - It is **not** a Decision Engine witness. These stay unchanged: `WITNESS_KEYS` and `WITNESS_PRIORS` in
+     `src/witness-weighting.mjs` (:21, :26), `WITNESS_KEYS` in `src/witness-tuning.mjs` (:38,
+     `Object.keys(WITNESS_PRIORS)`), and Aether's canon rule `decision_engine_ssot` (cryptophys-aether
+     `canon/doctrine.json`).
+   - Only the council's own `weighed` list (`src/decision-engine.mjs:748`, filtered at :875) gained a key, LIQUIDITY
+     (B15).
+   - A separate Mizan witness needs a canon amendment and the owner's explicit OK. The owner approved one on
+     2026-11-23 as its own item (MZ1, with the Aether amendment AE2, after B15, B26 and B27). B7 declares its parity
+     group `probe_mizan_witness` (`net_witness`, `prior_edge`; inert). Nothing in this RFC builds that witness.
 
 ## Stages
 
@@ -33,87 +92,186 @@ Nov), with new agents last.
 
 | Stage | What | Read by | New agent | Parity route |
 |---|---|---|---|---|
-| 1 | **Computed but unread** (list B). GMI: Aegis buy/sell volume, bar delta, CVD 14, volume surge, validated OB bounds and nearest OB stop, Spacetime Warp, TVA adaptive period, previous-session profile and whale zones, the reversal-bar and JMA projection values. Prophet: early confirmation, divergence events with origin, OB rank/retests/high-volume, risk-gate numbers, pro_core. Mizan: ob_high_volume, vol_anomaly. | Existing HUD agents: Aegis, Kinetic, Fabio, Order Blocks, Prophet, Trade Management | No | Pure bar formulas are derived. Engine fields are added to the GMI and Prophet alert JSON in `pinescript/ssot`; the owner reinstalls the alerts, then the 24-candle parity applies. |
-| 2 | **Scalp signals.** Decision Matrix Scalp Burst Index (5 points). Prophet: momentum strengthening/weakening suffix, ±0.35 threshold crossings and bands, CSHI score and the MARKET row, counter-trend reversal watch, momentum projection. | Decision Matrix and Prophet (rooms); Position Manager as evidence | No | Engine fields in the alert JSON (as stage 1). |
+| 1 | **Computed but unread** (list B). GMI: Aegis buy/sell volume, bar delta, CVD 14, volume surge, validated OB bounds and nearest OB stop, Spacetime Warp, TVA adaptive period, previous-session profile and whale zones, the reversal-bar and JMA projection values. Prophet: early confirmation, divergence events with origin, OB rank/retests/high-volume, risk-gate numbers, pro_core. Mizan: ob_high_volume, vol_anomaly. | Existing HUD agents: Aegis, Kinetic, Fabio, Order Blocks, Prophet, Trade Management | No | Pure bar formulas are derived. Engine fields go into the GMI and Prophet `*.hud.v2` candidates in `pinescript/candidates` (B10; `pinescript/ssot` untouched); the owner installs them, then the 24-candle parity applies per field group. |
+| 2 | **Scalp signals.** Decision Matrix Scalp Burst Index (5 points). Prophet: momentum strengthening/weakening suffix, ±0.35 threshold crossings and bands, CSHI score and the MARKET row, counter-trend reversal watch, momentum projection. | Decision Matrix and Prophet (rooms); Position Manager as evidence | No | Engine fields in the `*.hud.v2` alerts (as stage 1). |
 | 3 | **Level families.** Chronos: Asian range, daily R1-R3/S1-S3, CPR width class against the 20-day mean, wick reject, CPR × GMI confluence. Interstellar Eyes 5m Camarilla column, the 10 unused Fibonacci ratios, the TDM histogram blocks. Prophet R37 rolling 20/50/100-bar extremes. | Chronos and Interstellar (rooms); the Key Level Agent as candidate zones | No | Derived (pure bar formulas). |
-| 4 | **Order flow and structure.** Aegis WAI, ACC/DIST diamonds and life CVD; Kinetic Anomaly Jerk and phase label; Tactical VPT; Fabio Active SMR and MML liquidity. Mizan s15 bos_detect and sweep_detect, s21 trap_detect, s16/s25 52-week extremes and macro trendline, s14 zone metrics. | Aegis, Kinetic, Tactical, Fabio, Order Blocks; Position Manager as evidence | No | GMI fields in the alert JSON. The Mizan structure functions are derived where they are pure bar formulas; the rest go through the stage 5 probe. |
-| 5 | **The Mizan statistical stack.** s1-2 weights; s3 phi_wave and regime_score; s4 oracle_signals; s5 mtf_hurst, mtf_zscore, phi_confluence; s8 risk_score; s11 psi_field, gamma_dilation, psi_adaptive, rho_phase; s12 asset_gravity; s13 entropy_tensor, vol_anomaly_tensor, noise_level; s14 confidence_matrix; s17 safe_mode, gravity_veto, sniper_override; s18 div_bonus; s19 state_energy; s20 bayesian_net_tick and action_label; s22 markov_win_rate. | **A new agent, "Mizan Oracle"** (rooms; a witness of the Decision Engine only after promotion) | **Yes** | No installed indicator calls these functions, so TradingView has no reference. Proposal: a small **Cryptophys Mizan Probe** indicator in `pinescript/ssot` that calls the library and sends the values in one alert JSON on 15m. The owner installs it on TradingView; the usual 24-candle parity then applies. |
-| 6 | **Second trade plans, as evidence only.** GMI Fabio progressive SL, SMC zones, position box and % CAP sizing; Prophet latched entry reference, manual position management and its exit reasons, TARGET KEY latch and HIT; Mizan s19 project_tp/project_sl. | Position Manager, as "what the indicator's own plan says" beside Omega's plan | No | Engine fields in the alert JSON. They are never used as a price for an order. |
+| 4 | **Order flow and structure.** Aegis WAI, ACC/DIST diamonds and life CVD; Kinetic Anomaly Jerk and phase label; Tactical VPT; Fabio Active SMR and MML liquidity. Mizan s15 bos_detect and sweep_detect, s21 trap_detect, s16/s25 52-week extremes and macro trendline, s14 zone metrics. | Aegis, Kinetic, Tactical, Fabio, Order Blocks; Position Manager as evidence | No | GMI fields in the `*.hud.v2` alert. The Mizan structure functions are derived where they are pure bar formulas; the rest go through the stage 5 Probe. |
+| 5 | **The Mizan statistical stack.** s1-2 weights; s3 phi_wave and regime_score; s4 oracle_signals; s5 mtf_hurst, mtf_zscore, phi_confluence; s8 risk_score; s11 psi_field, gamma_dilation, psi_adaptive, rho_phase; s12 asset_gravity; s13 entropy_tensor, vol_anomaly_tensor, noise_level; s14 confidence_matrix; s17 safe_mode, gravity_veto, sniper_override; s18 div_bonus; s19 state_energy; s20 bayesian_net_tick and action_label; s22 markov_win_rate. | **A new agent, "Mizan Oracle"**, a seat of the 15m room only; never a Decision Engine witness (rule 6) | **Yes** | No installed indicator calls these functions, so TradingView has no reference. A small **Cryptophys Mizan Probe** indicator, `pinescript/candidates/Cryptophys-Mizan-Probe.v1.txt` (B10), calls the library and sends the values in one alert JSON on 15m. The owner installs it on TradingView; the usual 24-candle parity then applies per group. |
+| 6 | **Second trade plans, as evidence only.** GMI Fabio progressive SL, SMC zones, position box and % CAP sizing; Prophet latched entry reference, manual position management and its exit reasons, TARGET KEY latch and HIT; Mizan s19 project_tp/project_sl. | Position Manager, as "what the indicator's own plan says" beside Omega's plan, in R and ATR only, each a line behind the breaker | No | Engine fields in the `*.hud.v2` alerts. They are never used as a price for an order. |
+
+## This design (owner 2026-11-22: "kamu tentukan designnya")
+
+### Build items and status (2026-11-25)
+
+| Item | What | Stage | Status |
+|---|---|---|---|
+| B7 | Parity field groups | all | **merged** (#572), inert until B11 |
+| B10 | GMI and Prophet `*.hud.v2` and the Cryptophys Mizan Probe v1 (Pine candidates) | 1-6 | planned; Pine files ready for the owner's install by 2026-12-08 |
+| B11 | Adopt records: the producer publishes `gmi_adopt` and `prophet_adopt` | 1-6 | planned |
+| B20, B21, B22, B24 | HUD lines: stage 1; stage 2 scalp; stage 3 levels; stage 4 order flow and structure | 1-4 | planned |
+| B23 | Key Level Agent families (Asian range, daily R/S, 5m Camarilla, Fibonacci ratios, R37 extremes) | 3 | planned |
+| B5 | Position Manager lines, each behind a breaker | 2, 4, 6 | planned |
+| B25, B28 | Position Council lines; the indicators' plans and the Mizan projection as evidence | 2, 4, 6 | planned |
+| B26 | The Probe's local port (15m) | 5 | planned |
+| PF1, B27 | The platform registration of `hud-mizan-oracle`; the Mizan Oracle agent | 5 | planned (`hud-mizan-oracle` is declared idle in `organism.json` since DNA-1, #529) |
+| B3, AE1, CTA1 | Mizan verdict words never public, never instructions; the Aether and CTA mirrors | 5 | planned |
+| B6 | A per-agent off list and the daily neuron cap | 5 | planned |
+
+### The field groups (B7, merged)
+
+- Parity is trusted per group of fields instead of per whole engine, so one bad field revokes only its group
+  (`PARITY_GROUPS`, `groupIdentityOf`, `compareWithWebhooks(record, webhooks, policy, { fieldMap, nullEqual,
+  requireFinite })` in `src/parity-registry.mjs`; docs/SSOT.md §3 "Field groups"). Each group has its own 24-candle
+  window, approval and revocation. No group id starts with `mizan`. Unknown HUD ids are dropped from a snapshot, not
+  rejected.
+- Today `PARITY_GROUPS` holds one group, `probe_mizan_witness` (MZ1's, inert). B10 adds, as planned:
+  - `gmi_adopt`: gmi_hud, gmi_flow, gmi_kin, gmi_zone, gmi_zone_levels, gmi_burst, gmi_order, gmi_levels, gmi_plan;
+  - `prophet_adopt`: prophet_hud, prophet_core, prophet_ob, prophet_scalp, prophet_plan;
+  - `probe_mizan`: core, mtf, decision, state.
+- A line is verified only through its group's trusted copy. Every other line reads "unverified" (engine state) or
+  "derived" (bar formulas).
+
+### B10's wiring (planned)
+
+- **Files.** New `pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v2.txt`,
+  `The-Prophet-v7.02-R38.hud.v2.txt` and `Cryptophys-Mizan-Probe.v1.txt`. `pinescript/ssot` is untouched (AGENTS.md
+  rule 6). Each v2 file is its v1 plus one block: only the titles change ("· R12 ADOPTION HUD", "· R38 ADOPTION HUD"),
+  the inputs are unchanged with the secret last, and the five existing payloads stay byte for byte.
+- **Alerts.** One `alert()` per confirmed bar on 15, 60, 240 and 1D. Every field is computed on every bar; only the
+  payload assembly is gated by `barstate.isrealtime` and `barstate.isconfirmed`. Codes and numbers, never rendered
+  strings, no `bar_index`.
+- **The Probe** (Pine v6, `overlay=false`, `CryptophysMizanLib/4`) alerts only on 15m. It uses seven
+  `request.security` calls (at most 8); the v2 files add none (the GMI v1 already has 25). Its outputs are `net_raw`,
+  `net_core`, `net_final`, `action_code` −3..+3 (the label is never emitted), bos, sweep, trap and the 365-bar extremes
+  as bar offsets.
+- **Registration.** `SOURCE_ALIASES` and the accepted sources in `src/index.ts` (:140) gain `gmi_v12_70_adopt_hud`,
+  `prophet_r38_adopt_hud` and `probe_mizan_hud`; `SOURCE_NAMES` in `src/health-alerts.mjs` (:77) names them;
+  docs/HUD_CANDIDATE_INSTALL.md gets the install steps.
+- **Tests.** v2 minus the block equals v1; the `request.security` counts; payloads within 5,000 characters (2,000 for
+  the Probe); the Pine validator passes (validation only).
+- **Install** (the owner, by 2026-12-08). On `OANDA:XAUUSD` 5m, 15m, 1H, 4H and 1D the v2 files replace v1, with one
+  "Any alert() function call" alert each to the AI Worker's webhook; the Probe goes on 15m only, for 11 alerts in all.
+  No session touches TradingView. Off: the owner pauses an alert.
+
+### The Mizan Oracle (planned: B26, PF1, B27)
+
+- A HUD agent of the 15m room only (rule 6): `indicator-manifests.mjs` `mizan_oracle` with `rooms ["M15"]` and HUD
+  identity `probe_mizan_core`. No 1H, 4H or 1D seat. Confidence capped at 0.4 until its group is verified.
+- It states the measured inputs and scores in plain words, never the action label, `sniper`, `override`, `veto`,
+  `safe mode` or a price (B3's room check, below).
+- It reports to the platform as `hud-mizan-oracle` only after `AGENTS.whoami` returns "enabled" (B27's first-publish
+  gate; PF1 registers it).
+- **No CTA figure.** The public War Room scene leaves it out (`publicRoomScene`, `src/public-warroom.mjs:125`, after
+  B3), so the CTA War Room keeps its figures and gets no new one.
+- Off: `HUD_AGENTS_OFF=mizan_oracle` (B6), or its neuron cap.
+
+### The Position Manager line breaker (planned: B5)
+
+- The Position Manager closes live positions by itself, so each new input it reads is a **line** with an id and a
+  version (`PM_LINES` in a new `src/pm-line-breaker.mjs`): `liquidity@1` (B17), `setup` (A13), `prophet_momentum` and
+  `order_flow` (B25), `gmi_plan`, `prophet_plan` and `mizan_projection` (B28).
+- `position_actions` gains `lines_json` ({ present, cause }). A close counts for a line when the line caused it or caused
+  the last applied stop or target change. R = the deal's net / `risk_usd`.
+- A line goes off by itself when its last 15 closes average below 0R (KV `pm:line-breaker:v1`, an `omega_events`
+  `pm_line_off` row and one Telegram line). It comes back only by a version bump or the owner (`POST /api/pm-lines` on
+  the Omega Worker, with `/api/probation`'s owner, origin and body checks). `PM_LINES_OFF` switches a line off by hand.
+- This replaces the Position Manager shadow arm once planned here (stage 0b).
+
+### The daily neuron cap (planned: B6)
+
+- `AGENT_NEURON_CAPS` (new `src/agent-caps.mjs`): `mizan_oracle` capped at **20,000 neurons a UTC day**
+  (`MIZAN_ORACLE_NEURONS_PER_DAY_MAX`, default 20000; "0" means no cap), checked hourly beside `checkShadowBudget`
+  (`src/index.ts:3424`) from the meter the usage pages already read.
+- When it is crossed: KV `agent-neuron-cap:v1`, one Telegram line ("XAUUSD SYSTEM · Mizan Oracle paused until 00:00 UTC:
+  its room calls reached N neurons today (cap 20,000)"), and the rosters drop the agent until midnight UTC.
 
 ## Settled before building (orchestrator review of this RFC)
 
-1. **The Position Manager gets no new line until it has its own shadow.**
-   - The Position Manager closes live positions by itself; both Omega trades of 19 Nov were closed by it (`pm_take_profit_weakening` and `pm_cut_loss`). A new line in its prompt therefore changes exits on real money.
-   - Stages 2, 4 and 6 add nothing to its prompt until a Position Manager shadow arm exists. That arm runs the same snapshot with and without the new lines; the live action stays the control's.
-   - **Paired outcome.** For each position-management decision where the arms differ (close versus hold, or a different stop), the score is the R the position would have made. For a close, that is the R at the close. For a hold, it is the R at the position's actual later exit, or at the stop or target, whichever the bars reach first.
-   - It uses the same sign test with Holm, discovery and holdout. The owner promotes.
-   - Building that arm is a stage of its own (stage 0b), before any Position Manager line.
-2. **The unit of promotion is one agent in one stage.**
-   - Each agent that gets new lines in a stage has one shadow arm carrying all of that agent's new lines for the stage.
-   - Holm runs across the arms of the stage. If an arm fails, the agent and the stage it belongs to are known; the lines inside it are tested again only if the owner asks.
-   - **Duration, stated honestly.** The 15m room runs about 92 decisions a weekday. Each arm needs 200 discovery and 100 holdout paired decisions where it differs from the control, and only a share of decisions differ. That puts one stage at **2 to 4 weeks**.
-   - Run one after the other, the six stages take **3 to 5 months**. Arms on different agents can run at the same time, so overlapping stages 1-4, which touch mostly different agents, brings this to about **6 to 10 weeks**. Stage 5 starts only once the Mizan Probe has 24 matching candles.
+Settled 1 (a Position Manager shadow arm before any Position Manager line) and settled 2 (one shadow arm per agent and
+stage) are **dropped**: the owner's words (a) and (c) of 2026-11-22 remove the shadow stage. The Position Manager's new
+inputs go behind the line breaker instead, and the other agents' lines behind their switches and parity.
+
 3. **One Pine update and one reinstall for every stage.**
-   - Emitting a field costs nothing until an agent reads it, and the 24-candle parity count can start for every field at once. So one update of the GMI and Prophet alert JSON in `pinescript/ssot` carries every field of every stage. The owner reinstalls the two alerts once, and installs the Mizan Probe in the same sitting.
-   - **Size.** TradingView allows 40,960 characters in a message built by Pine's `alert()` or `alert_message` (4,000 in the alert dialog's Message field). Both alerts are "Any alert() function call", so the larger limit applies.
-   - Before the update is designed, each payload is measured against that limit. A payload close to it is split into a second `alert()` call on the same bar.
+   - Emitting a field costs nothing until an agent reads it, and the 24-candle parity count can start for every field at
+     once. So one Pine update (B10) carries every field of every stage: the GMI and Prophet `*.hud.v2` candidates and
+     the Cryptophys Mizan Probe v1, all in `pinescript/candidates`. `pinescript/ssot` is not edited. The owner installs
+     them once, in one sitting.
+   - **Size.** TradingView allows 40,960 characters in a message built by Pine's `alert()` or `alert_message` (4,000 in
+     the alert dialog's Message field). The alerts are "Any alert() function call", so the larger limit applies; B10's
+     tests hold each payload to 5,000 characters (2,000 for the Probe).
+   - A payload close to its limit is split into a second `alert()` call on the same bar.
    - Inbound webhooks do not count against the 500-a-day budget, which is the pull adapter's outbound calls.
 4. **Path-dependent values.** Life CVD, the SMR reservoir, whale-zone HP and age, the Markov win rate and other cumulative values depend on where the history starts. The chart's start depends on how much history TradingView loads, which the local replay cannot match.
    - These values are compared by their **per-bar change**, the increment of the closed bar, which does not depend on the start. Their level is shown only as unverified context.
    - A value that is not cumulative but has a long warm-up (for example a 52-week extreme) is compared only after the local series covers its whole window.
 5. **What the Mizan agent may say.**
    - Mizan s17 (`safe_mode`, `gravity_veto`, `sniper_override`) and s20 (`action_label`, the Bayesian verdict) would be verdicts in everything but name. The agent states the measured inputs and the score, for example "the Bayesian posterior for a long is 0.62". It never states the label as an instruction.
-   - The words `sniper`, `override`, `veto`, `safe mode` and the action labels are added to the public filter as decision words. They never reach a public page.
-   - The council reads the agent like any other witness: as evidence, not an authority.
+   - The words `sniper`, `override`, `veto`, `safe mode` and the action labels are added to the public filter as decision words. They never reach a public page (B3, planned; CTA1 mirrors it).
+   - The council does not read the agent as a witness. The agent is a seat of the 15m room, so its lean reaches the
+     decision only through the M15 room witness, as evidence, never as an authority (rule 6).
 
 ## Cost
 
-**Baseline** (D1 `ai_usage_daily`, weekdays 16-18 Nov): about 4,200 model calls and 6.1 million prompt tokens a day.
-The largest sources are:
+**Baseline** (D1 `ai_usage_daily`, 2026-11-20): **3,289 model calls, 4.79 million tokens and 101.4k neurons** in the
+day. An earlier sample (weekdays 16-18 Nov) gave about 4,200 calls and 6.1 million prompt tokens a day; its largest
+sources were:
 - the decision council (105 calls, about 10,000 tokens each);
 - the War Room openings (641 calls, about 830 tokens each) and rebuttals (618 calls, about 1,700 tokens each);
 - the timeframe rooms;
-- the shadow arms, which roughly double the openings.
+- the shadow arms, which roughly doubled the openings.
 
-**Per stage.** A new HUD line costs about 25-40 tokens. It is paid in the agent's own opening, again in the rebuttals
-that quote openings, and again in the shadow arm while it is being tested. The estimates are for the time in shadow;
-after promotion the shadow copy goes away.
+**Caps in force today** (checked against the code on 2026-11-25):
+- Among the room calls, only `shadow:*` rows have a daily breaker: `checkShadowBudget` (`src/shadow-switch.mjs:129`,
+  run hourly from `src/index.ts:3424`) switches shadow mode off when today's shadow calls pass
+  `SHADOW_NEURONS_PER_DAY_MAX` (default 25,000).
+- These have their own daily caps:
+  - the Position Council and the Entry Council share `POSITION_COUNCIL_DAILY_USD` (`src/position-manager.mjs:91`,
+    default 5; `wrangler.jsonc` "5"; the limit council's spend is counted against it, `src/limit-council.mjs:17`);
+  - the mode council: `MODE_COUNCIL_DAILY_USD` 0.25 (`src/mode-selector.mjs:36`);
+  - Call for Councils sessions: `CFC_NEURONS_PER_DAY_MAX` 8,000 (`src/cfc-session.mjs:189`, default
+    `SESSION_LIMITS.neurons_per_day` at :26).
+- The room agents (the War Room and the timeframe rooms' live seats) have **no daily cap** until B6 adds one per agent,
+  starting with the Mizan Oracle's 20,000 neurons.
 
-| Stage | Extra prompt tokens a day | Share of today | KV / D1 |
+**Per stage.** A new HUD line costs about 25-40 tokens. It is paid in the agent's own opening and again in the rebuttals
+that quote openings. The estimates below were made with a shadow copy included; without a shadow arm that copy is never
+paid, so they are upper bounds.
+
+| Stage | Extra prompt tokens a day | Share of the 16-18 Nov sample | KV / D1 |
 |---|---|---|---|
 | 1 | +150k to +200k | about +3% | No new KV writes: the fields ride on the existing HUD snapshot write (a slightly larger value). |
 | 2 | +100k to +150k | about +2% | None new |
 | 3 | +50k (room lines); the Key Level Agent is deterministic | about +1% | None new |
 | 4 | +100k to +150k | about +2% | None new |
-| 5 | +300k to +450k: a new opening in every room, plus its rebuttals and its shadow arm | about +5 to +7% | About +10% room message rows in D1. One more TradingView alert: about 96 inbound webhooks a weekday. These are not counted in the 500-a-day budget (`tv-budget`), which counts only the pull adapter's outbound calls. |
+| 5 | +300k to +450k: a new opening in the 15m room, plus its rebuttals | about +5 to +7% | About +10% room message rows in D1. One more TradingView alert: about 96 inbound webhooks a weekday. These are not counted in the 500-a-day budget (`tv-budget`), which counts only the pull adapter's outbound calls. |
 | 6 | +50k (Position Manager prompt) | about +1% | None new |
 
-All stages together come to about +15 to +20% prompt tokens while in shadow. The existing guards stay in place: the
-shadow kill switch, the daily neuron breaker and the room memo.
+All stages together come to at most about +15 to +20% prompt tokens. The guards are the room memo, the shadow breaker for
+`shadow:*` rows, the caps above, and B6's per-agent cap.
 
 ## Knock-on effects
 
 - **Stages 1-4 and 6** add lines to existing agents only. The roster does not change: the platform registry and DNA,
-  the kernel's 32 registered agents, and the CTA War Room's 49 figures.
+  the kernel's registered agents, and the CTA War Room's figures.
 - **Stage 5** adds one agent:
   - a manifest;
-  - a platform agent id with its registration and DNA;
-  - the kernel count goes to 33;
-  - a CTA War Room figure with a one-word name and an icon;
-  - the public filter for its lines;
+  - a platform agent id, `hud-mizan-oracle`, with its registration (PF1) and DNA (declared idle since DNA-1);
+  - the public filter for its lines (B3);
   - a reputation and scorecard entry.
 
-  As a Decision Engine witness it would also need a weight, starting at a prior inside the doctrine's 0.02-0.28.
-  The witness-weight auto-tuning then moves it.
+  It adds no CTA War Room figure, and no Decision Engine weight: it is not a witness (rule 6).
 - **Docs.** `docs/HUD_AGENTS_ASSESSMENT.md` is stale. It says Camarilla is not ported and that s_jerk is computed
   locally; both are wrong on main. Stage 1 corrects it.
 
 ## Questions for the owner (answered 2026-11-19)
 
 1. **The order.** Is stage 1 → 2 → 3 → 4 → 5 → 6 the right sequence, or should something come first? **Yes, as proposed.**
-2. **Parity for the engine fields.** Agree to extend the GMI and Prophet alert JSON in `pinescript/ssot`, and to
-   reinstall the two alerts on TradingView when a stage is ready? **Yes, once, with every field of every stage.**
+2. **Parity for the engine fields.** Agree to extend the GMI and Prophet alert JSON and to reinstall the two alerts on
+   TradingView when a stage is ready? **Yes, once, with every field of every stage.** As built (2026-11-22 design): the
+   fields go into new `*.hud.v2` candidates in `pinescript/candidates`, never into `pinescript/ssot`, which stays
+   untouched (AGENTS.md rule 6).
 3. **Parity for Mizan.** Agree to install a **Cryptophys Mizan Probe** indicator with one 15m alert? Without a
    reference, the Mizan values can only be shown as unverified. **Yes, in the same sitting.**
-4. **Stage 5 agent.** One new "Mizan Oracle" agent in the rooms, read as evidence and becoming a witness only after
-   promotion? Or spread the values over the existing agents, with no new agent? **One new agent.**
+4. **Stage 5 agent.** One new "Mizan Oracle" agent in the rooms, or spread the values over the existing agents, with no
+   new agent? **One new agent.** It is a HUD agent of the 15m room only and is not a Decision Engine witness; a Mizan
+   witness is a separate item (MZ1) with its own canon amendment.

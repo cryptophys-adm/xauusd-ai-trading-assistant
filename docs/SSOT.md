@@ -803,6 +803,7 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - HUD data must be verified through a Pine candidate comparator;
   - the candidate ships first (C1).
 - The Phase C order (C1–C7) is in `docs/BRIEF_HUD_AGENTS.md`.
+- **Indicator adoption** (stages 1-6 and the Mizan Oracle; owner 2026-11-19, then 2026-11-22 "tidak perlu shadow, langsung dipasang sesuai desainmu juga": live without shadow, the owner's word is the `promotion_by_owner` act): `docs/RFC_INDICATOR_ADOPTION.md` holds the owner's words, the binding rules and the design. Only the B7 field groups are merged (inert until B11); the rest is planned. The Pine fields go only into `pinescript/candidates` (`*.hud.v2` and `Cryptophys-Mizan-Probe.v1`); `pinescript/ssot` stays untouched. The Mizan Oracle will be a HUD agent of the 15m room only, never a Decision Engine witness.
 - **Live War Room 15m** (`src/war-room.mjs`, behind `WAR_ROOM_ENABLED`, on in production; owner decision 2026-11-05). At every 15m close, every agent discusses in one room, in three phases:
   1. **Communication bus.** Each agent posts one opening claim from its own data only. The agents (owner decision 2026-11-06: the 15m room has no H1 Desk):
      - **15m Desk:** the parity-approved 15m Prophet R38, R37 and GMI records of the candle, in plain sentences. It speaks at 0.4 or lower when they are not approved.
