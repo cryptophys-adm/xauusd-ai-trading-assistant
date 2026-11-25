@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   PM_LINES, PM_LINE_IDS, PM_FAST_LINE_IDS, PM_LINE_BREAKER_KEY, PM_LINE_RULE, lineBreakerVerdict, pmLinesOffEnv, readPmLinesLive, clearPmLineMemo,
-  pmLineBreakerTick, setPmLine, normalizeDoc, linesOffAt, readPmLineHistory, closeCause, riskUsdOf, holdR, lineTag, pmLinesView, offLinesOf, unackedCloseBefore, PM_LINE_DEFER_MS
+  pmLineBreakerTick, setPmLine, normalizeDoc, linesOffAt, readPmLineHistory, closeCause, riskUsdOf, holdR, lineTag, pmLinesView, offLinesOf, unackedCloseBefore, PM_LINE_DEFER_MS, PM_LINE_SKIP_EVENT, PM_LINE_EVENTS
 } from "../src/pm-line-breaker.mjs";
 import { positionFacts, positionAction, pmLinesJson, runPositionManager, readPositionManager, heldExitPrice, positionReport } from "../src/position-manager.mjs";
 import { ensurePositionSchema, resetPositionSchemaCacheForTests } from "../src/position-actions.mjs";
@@ -147,7 +147,7 @@ test("B5-4 what counts as a close: one the line sent, else the last applied stop
   assert.equal(riskUsdOf({}), null);
 });
 
-test("B5-15 a lost-ack close (expired or pending, not failed) right before the deal: no credit to the last stop/target change and the ticket stays unseen; once the intent reads done (CA1), the close's own line is credited; 30 min after the close it falls back", async () => {
+test("B5-15 a lost-ack close (expired or pending, not failed) right before the deal: no credit to the last stop/target change and the ticket stays unseen; once the intent reads done (CA1), the close's own line is credited; still unacked 30 min after the close: seen, no line credited, one pm_line_skip", async () => {
   assert.equal(unackedCloseBefore([{ kind: "close", status: "expired", created_ms: 9_000 }], 10_000), true);
   assert.equal(unackedCloseBefore([{ kind: "close", status: "pending", created_ms: 9_000 }], 10_000), true);
   assert.equal(unackedCloseBefore([{ kind: "close", status: "failed", created_ms: 9_000 }], 10_000), false, "a failed close closed nothing");
@@ -177,11 +177,18 @@ test("B5-15 a lost-ack close (expired or pending, not failed) right before the d
   env.DB.raw.prepare("UPDATE omega_intents SET status = 'done' WHERE id = ?").run(`pm:${ticket}:c:${clBar}`);
   r = await pmLineBreakerTick(env, { now: NOW + 300_000 });
   assert.deepEqual(r.counted.map((c) => [c.line, c.ticket]), [["cut_loss", ticket]]);
-  // Never reconciled: 30 minutes after the close the ticket is credited from the done intents as before.
+  // Never reconciled: 30 minutes after the close the ticket is seen and credited to no line (breakeven unchanged), one
+  // pm_line_skip event; a later tick neither credits nor logs it again.
   const late = await build();
   r = await pmLineBreakerTick(late.env, { now: late.closeMs + PM_LINE_DEFER_MS + M1 });
-  assert.deepEqual(r.counted.map((c) => [c.line, c.ticket]), [["breakeven", late.ticket]]);
-  assert.ok(Number(state(late.env).seen[String(late.ticket)]) > 0);
+  assert.deepEqual(r.counted ?? [], [], "no line credited");
+  assert.ok(Number(state(late.env).seen[String(late.ticket)]) > 0, "seen");
+  assert.equal(state(late.env).lines.breakeven?.closes ?? 0, 0, "breakeven's count unchanged");
+  assert.deepEqual(events(late.env, PM_LINE_SKIP_EVENT).map((e) => e.detail), [{ ticket: late.ticket, why: "unacked_close" }]);
+  r = await pmLineBreakerTick(late.env, { now: late.closeMs + PM_LINE_DEFER_MS + 6 * M1 });
+  assert.deepEqual(r.counted ?? [], []);
+  assert.equal(events(late.env, PM_LINE_SKIP_EVENT).length, 1, "logged once per ticket");
+  assert.ok(!PM_LINE_EVENTS.includes(PM_LINE_SKIP_EVENT), "not an off-set event for v4");
 });
 
 test("B5-5 r_vs_hold: R minus holding to the plan's SL/TP on the broker's 1m bars (the report's first-touch rule), settled once touched or after 24 h", () => {

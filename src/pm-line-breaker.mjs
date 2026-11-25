@@ -34,6 +34,9 @@ export const PM_LINE_BREAKER_VERSION = "cryptophys.pm-line-breaker.v1";
 export const PM_LINE_RULE = Object.freeze({ n: 15, floor: 0 });
 /** The omega_events actions that change the set of off lines (each detail carries the whole set, `off`). */
 export const PM_LINE_EVENTS = Object.freeze(["pm_line_off", "pm_line_on", "pm_lines_env"]);
+/** A closed ticket no line was credited with because its close's ack stayed lost past PM_LINE_DEFER_MS (not an off-set
+ * change, so not in PM_LINE_EVENTS, which v4 reads as the off history). */
+export const PM_LINE_SKIP_EVENT = "pm_line_skip";
 export const PM_LINE_ACTOR = "agent:pm-line-breaker";
 
 /**
@@ -75,7 +78,7 @@ export const PM_LINE_LOOKBACK_MS = 30 * 86_400_000;
 const TICKETS_PER_RUN = 40;
 /** A close intent not (yet) done within this window before the deal's close may be that close with its ack lost: the
  * ticket waits (no credit, not seen) until the intent is done (CA1 reconciles it from ea_deals), at most PM_LINE_DEFER_MS
- * after the close, after which it is credited from the done intents as before. */
+ * after the close; still unacked then, the ticket is seen and credited to no line (one `pm_line_skip` event). */
 export const PM_LINE_ACK_WINDOW_MS = 5_000;
 export const PM_LINE_DEFER_MS = 30 * 60_000;
 const M1 = 60_000;
@@ -303,9 +306,13 @@ export async function pmLineBreakerTick(env, { now = Date.now(), send = null } =
       const all = (await db.prepare("SELECT id, kind, status, created_ms FROM omega_intents WHERE json_extract(payload, '$.ticket') = ? AND kind IN ('close', 'modify_sl', 'modify_tp', 'modify_sltp') ORDER BY created_ms").bind(ticket).all().catch(() => ({ results: [] }))).results ?? [];
       // A close whose ack was lost (pending or expired, not failed) right before the deal: wait for it to read done rather
       // than credit the position's last stop or target change, and leave the ticket unseen so a later tick credits it.
-      if (finite(closeMs) && now - closeMs < PM_LINE_DEFER_MS && unackedCloseBefore(all, closeMs)) continue;
+      const unacked = finite(closeMs) && unackedCloseBefore(all, closeMs);
+      if (unacked && now - closeMs < PM_LINE_DEFER_MS) continue;
       doc.seen[String(ticket)] = finite(closeMs) ? closeMs : now;
       dirty = true;
+      // Still unacked after the wait: no line gets it (a missed close only shrinks a window; a mis-credited one could trip
+      // the wrong line). Logged once per ticket (it is seen from now on) for CA1 to count.
+      if (unacked) { await lineEvent(db, now, PM_LINE_ACTOR, PM_LINE_SKIP_EVENT, { ticket, why: "unacked_close" }); continue; }
       const intents = all.filter((i) => i.status === "done");
       const cause = closeCause(intents, finite(closeMs) ? closeMs : Infinity);
       const actionId = cause ? actionIdOfIntent(cause.intent_id) : null;
