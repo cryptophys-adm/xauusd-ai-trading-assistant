@@ -102,13 +102,14 @@ export function similarity(a, b) {
  * (TradingView's time - the shadow's time) over the pairs: positive means the shadow had it first.
  */
 export function compareWithTradingView(items, tv, { now = Date.now(), threshold = 0.5 } = {}) {
-  const recent = (list) => list.filter((i) => { const t = Date.parse(i.published_at ?? ""); return Number.isFinite(t) && now - t <= HOUR_MS && t <= now + 5 * 60_000; });
+  // TradingView's published_at is epoch seconds (timeMs, below); Date.parse read it as NaN, so tv_recent was always 0.
+  const recent = (list) => list.filter((i) => { const t = timeMs(i.published_at); return Number.isFinite(t) && now - t <= HOUR_MS && t <= now + 5 * 60_000; });
   const mine = recent(items), theirs = recent(tv);
   const leads = [];
   let overlap = 0;
   for (const i of mine) {
     const best = theirs.reduce((b, t) => { const s = similarity(i.title, t.title); return s > b.s ? { s, t } : b; }, { s: 0, t: null });
-    if (best.s >= threshold) { overlap++; leads.push((Date.parse(best.t.published_at) - Date.parse(i.published_at)) / 60_000); }
+    if (best.s >= threshold) { overlap++; leads.push((timeMs(best.t.published_at) - timeMs(i.published_at)) / 60_000); }
   }
   const tvMatched = theirs.filter((t) => mine.some((i) => similarity(i.title, t.title) >= threshold)).length;
   leads.sort((a, b) => a - b);

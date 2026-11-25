@@ -46,6 +46,12 @@ test("the comparison with TradingView over the last hour: overlap, each side's o
   ];
   assert.deepEqual(compareWithTradingView(mine, tv, { now: NOW }), { shadow_recent: 2, tv_recent: 2, overlap: 1, shadow_only: 1, tv_only: 1, lead_minutes: 4 });
   assert.equal(compareWithTradingView([], [], { now: NOW }).lead_minutes, null);
+  // TradingView's published_at as it is stored: epoch seconds, as a number or as digits.
+  const tvSeconds = [
+    { title: "Gold climbs as the dollar slips further", published_at: Math.floor((NOW - 8 * 60_000) / 1000) },
+    { title: "US CPI comes in hot", published_at: String(Math.floor((NOW - 20 * 60_000) / 1000)) }
+  ];
+  assert.deepEqual(compareWithTradingView(mine, tvSeconds, { now: NOW }), { shadow_recent: 2, tv_recent: 2, overlap: 1, shadow_only: 1, tv_only: 1, lead_minutes: 4 });
 });
 
 test("an hourly shadow run: relevant, de-duplicated headlines; failing sources recorded; nothing thrown; the switch", async () => {
