@@ -337,7 +337,7 @@ plan_setups is read by 14 queries in 8 modules. A cohort column there would leak
   - `readings` by type x approach x strength (n, held, broke, neither, the held rate and the held rate shrunk toward the overall rate with a prior of 20, mean MFE and MAE in ATR);
   - `zone_blocked` per side (n, mean R, fill rate);
   - `rule_arms` (n, the acted and base mean R);
-  - `breaker` (held rules and checks);
+  - `breaker` (held rules and checks). `held[]` lists only the holds of the current rule version or carrying none (`zoneHoldCurrent`, FS1's filter too); each entry is `{ rule, by, since, until, effective }` (ZN1, additive): `since` and `until` as FS1's `zone_hold` shows them (`zoneHoldTimes`, the one reader of both; null when the stored hold has none); `effective` true exactly when `applyZoneHolds` would apply the hold to a decision now, under the env with the FS1 overrides applied (`zoneHoldEffective`): ZONE_READINGS on, the hold on the owner's rule version (or carrying none), and the rule on (zone_ahead: ZONE_PRIORITY on, KEY_LEVEL_ZONE_TYPES not off, ZONE_AHEAD_MODE 'trend' or 'all'; tp, stop, factor: Z2b in force and the token not in ZONE_AIM_OFF);
   - `stances` (the 7 days' stance shares and zone_blocked counts);
   - `omega_attribution` and `omega_advisory`.
 - **Never** an account or identity key, and never a price.

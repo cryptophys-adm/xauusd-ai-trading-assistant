@@ -200,19 +200,28 @@
         "rule": "zone_ahead",
         "by": [
           "block"
-        ]
+        ],
+        "since": "2026-11-24T07:22:00.000Z",
+        "until": "2026-12-01T07:22:00.000Z",
+        "effective": true
       },
       {
         "rule": "tp",
         "by": [
           "rule:tp_typed"
-        ]
+        ],
+        "since": "2026-11-24T07:22:00.000Z",
+        "until": "2026-12-01T07:22:00.000Z",
+        "effective": false
       },
       {
         "rule": "stop",
         "by": [
           "rule:stop_skip"
-        ]
+        ],
+        "since": "2026-11-24T07:22:00.000Z",
+        "until": "2026-12-01T07:22:00.000Z",
+        "effective": false
       }
     ],
     "checks": {

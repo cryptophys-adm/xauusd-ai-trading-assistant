@@ -59,7 +59,10 @@ test("ZN2 the fixtures are the seed's answers, byte for byte: the real zonesView
   for (const [name, key] of Object.entries(FILES)) assert.deepEqual(fixture(name), seed[key], `${name}: regenerate with \`node test/support/nexus-zones-seed.mjs --write\``);
   assert.equal(HELD.schema, "cryptophys.zones-view.v1");
   assert.deepEqual(Object.keys(HELD), ["status", "schema", "generated_at", "window_days", "prior", "readings", "zone_blocked", "rule_arms", "breaker", "stances", "omega_attribution", "omega_advisory"]);
-  assert.deepEqual(HELD.breaker.held, [{ rule: "zone_ahead", by: ["block"] }, { rule: "tp", by: ["rule:tp_typed"] }, { rule: "stop", by: ["rule:stop_skip"] }], "the view's held carries rule and by only");
+  // ZN1 backend: each held entry carries since/until (FS1's values) and effective (does it change a decision now: the
+  // seed runs on wrangler.jsonc's vars, whose ZONE_AIM_OFF already has tp and stop off, so only zone_ahead acts).
+  const T = { since: "2026-11-24T07:22:00.000Z", until: "2026-12-01T07:22:00.000Z" };
+  assert.deepEqual(HELD.breaker.held, [{ rule: "zone_ahead", by: ["block"], ...T, effective: true }, { rule: "tp", by: ["rule:tp_typed"], ...T, effective: false }, { rule: "stop", by: ["rule:stop_skip"], ...T, effective: false }], "the view's held: rule, by, since, until, effective");
   assert.deepEqual(CLEAR.breaker.held, []);
   assert.equal(EMPTY.breaker, null);
   assert.equal(SW.viewer.can_control, false, "the read-only GET /api/feature-switches");

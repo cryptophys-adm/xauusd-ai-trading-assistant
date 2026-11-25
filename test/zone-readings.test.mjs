@@ -521,7 +521,7 @@ test("ZR-16 GET /api/zones: the shape on empty tables ([] everywhere, SELECT onl
   assert.deepEqual(v.readings.map((g) => [g.zone_type, g.approach, g.zone_strength, g.n, g.held_rate, g.held_rate_shrunk]), [["demand", "from_above", "medium", 1, 1, 1]]);
   assert.deepEqual(v.zone_blocked.map((g) => [g.side, g.n, g.fill_rate]), [["BUY", 1, 1]]);
   assert.deepEqual(v.rule_arms.map((g) => [g.rule, g.n]), [["tp_typed", 1]]);
-  assert.deepEqual(v.breaker.held, [{ rule: "zone_ahead", by: ["block"] }]);
+  assert.deepEqual(v.breaker.held, [{ rule: "zone_ahead", by: ["block"], since: null, until: null, effective: false }], "ZN1: since/until null on a hold stored without them; ZONE_PRIORITY off here, so not effective");
   assert.deepEqual(v.stances.map((s) => s.stance), ["BUY", "WAIT"]);
   assert.deepEqual(keysOf(v).filter((k) => KEY_RE.test(k)), []);
   assert.doesNotMatch(JSON.stringify(v), /399\d|40[0-6]\d\.|@/);
