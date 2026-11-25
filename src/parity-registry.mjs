@@ -439,6 +439,10 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
   comparison = { ...comparison, status };
 
   if (comparison.status === "match") {
+    // Placeholders in order: the promotion threshold (status), the threshold and the approval time
+    // (approved_at), the threshold (revoked_at). Until 2026-11-25 the bind passed the threshold as the
+    // approval time and the time as the revoked_at threshold, so every promotion stored approved_at
+    // "24.0" and never cleared revoked_at (repairApprovedAt fixes the stored rows once).
     await db.prepare(
       `UPDATE engine_parity_registry SET
          consecutive_matches = consecutive_matches + 1,
@@ -448,7 +452,7 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
          revoked_at = CASE WHEN status = 'approved' OR consecutive_matches + 1 >= ? THEN NULL ELSE revoked_at END,
          last_candle_key = ?, last_result = 'match', last_detail = ?, updated_at = ?
        WHERE engine = ? AND source_hash = ? AND implementation_hash = ?`
-    ).bind(policy.promoteAfter, policy.promoteAfter, policy.promoteAfter, now, candleKey, detail, now, ...key).run();
+    ).bind(policy.promoteAfter, policy.promoteAfter, now, policy.promoteAfter, candleKey, detail, now, ...key).run();
   } else if (comparison.status === "mismatch") {
     await db.prepare(
       `UPDATE engine_parity_registry SET
@@ -476,6 +480,9 @@ export async function recordComparison(db, id, candleKey, comparison, policy = D
  * `input_mismatch`; an identity revoked only by such comparisons (no indicator mismatch since its
  * approval) is restored to approved. A revocation by an indicator mismatch, or by repeated input
  * mismatches (detail.reason "repeated_input_mismatch"), is never touched.
+ * A row whose approved_at is not an ISO timestamp (the "24.0" of the old bind) has an unknown
+ * approval time, so "no mismatch since its approval" cannot be decided: it is never restored.
+ * Single-shot: the sweep runs it only through reclassifyOnce (parity-sweep.mjs).
  * Returns { reclassified, restored: [engine] }.
  */
 export async function reclassifyInputOnlyMismatches(db, now = new Date().toISOString()) {
@@ -491,7 +498,7 @@ export async function reclassifyInputOnlyMismatches(db, now = new Date().toISOSt
   }
   const revoked = (await db.prepare(
     `SELECT r.engine, r.source_hash, r.implementation_hash FROM engine_parity_registry r
-     WHERE r.status = 'revoked' AND r.approved_at IS NOT NULL
+     WHERE r.status = 'revoked' AND r.approved_at IS NOT NULL AND r.approved_at GLOB '${ISO_TIMESTAMP_GLOB}'
        AND NOT EXISTS (SELECT 1 FROM engine_parity_comparisons c WHERE c.engine = r.engine AND c.source_hash = r.source_hash
                        AND c.implementation_hash = r.implementation_hash AND c.result = 'mismatch' AND c.compared_at >= r.approved_at)`
   ).all())?.results || [];
@@ -500,6 +507,61 @@ export async function reclassifyInputOnlyMismatches(db, now = new Date().toISOSt
       .bind(now, r.engine, r.source_hash, r.implementation_hash).run();
   }
   return { reclassified: Number(updated?.meta?.changes) || 0, restored: revoked.map((r) => r.engine) };
+}
+
+/** An ISO timestamp as recordComparison writes it (new Date().toISOString()): it starts "YYYY-MM-DDT". */
+export const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T/;
+/** The same test in SQL (GLOB), for the registry queries. */
+const ISO_TIMESTAMP_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*";
+export const isIsoTimestamp = (value) => typeof value === "string" && ISO_TIMESTAMP.test(value);
+
+/** Short display id of a registry identity: engine and the first 8 characters of both hashes. */
+const identityLabel = (r) => `${r.engine}:${String(r.source_hash).slice(0, 8)}:${String(r.implementation_hash).slice(0, 8)}`;
+
+/**
+ * One-time repair (2026-11-25) of the approved_at written by the old recordComparison bind ("24.0").
+ * For each registry row whose approved_at is set but not an ISO timestamp: the approval time is the
+ * compared_at of the match that completed the streak, that is the promoteAfter-th comparison with
+ * result 'match' (by compared_at) after the identity's last 'mismatch', or from its first comparison
+ * when it has none. 'incomplete' and 'input_mismatch' neither advance nor reset the streak, so only
+ * 'match' rows are counted. When that match exists, approved_at becomes its compared_at and, for an
+ * approved row, revoked_at becomes NULL. When it does not (fewer matches after the last mismatch, as
+ * for every revoked row), the row is not written and is listed in skipped.
+ * Writes only approved_at and revoked_at: never status, a counter or updated_at, so isTrusted is
+ * unchanged. Idempotent: a repaired row is ISO, so a second run finds it no more.
+ * Returns { repaired, skipped: [identity], revoked_cleared }.
+ */
+export async function repairApprovedAt(db, policy = DEFAULT_POLICY) {
+  const rows = (await db.prepare(
+    `SELECT engine, source_hash, implementation_hash, status, approved_at, revoked_at FROM engine_parity_registry
+     WHERE approved_at IS NOT NULL AND NOT (approved_at GLOB '${ISO_TIMESTAMP_GLOB}')
+     ORDER BY engine, source_hash, implementation_hash`
+  ).all())?.results || [];
+  let repaired = 0;
+  let revokedCleared = 0;
+  const skipped = [];
+  for (const r of rows) {
+    const key = [r.engine, r.source_hash, r.implementation_hash];
+    const last = await db.prepare(
+      "SELECT MAX(compared_at) AS at FROM engine_parity_comparisons WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND result = 'mismatch'"
+    ).bind(...key).first();
+    const lastMismatch = last?.at ?? null;
+    const completing = await db.prepare(
+      `SELECT compared_at FROM engine_parity_comparisons
+       WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND result = 'match' AND (? IS NULL OR compared_at > ?)
+       ORDER BY compared_at ASC, candle_key ASC LIMIT 1 OFFSET ?`
+    ).bind(...key, lastMismatch, lastMismatch, Math.max(0, policy.promoteAfter - 1)).first();
+    if (!isIsoTimestamp(completing?.compared_at)) { skipped.push(identityLabel(r)); continue; }
+    const clear = r.status === "approved";
+    const written = await db.prepare(
+      `UPDATE engine_parity_registry SET approved_at = ?, revoked_at = CASE WHEN ? THEN NULL ELSE revoked_at END
+       WHERE engine = ? AND source_hash = ? AND implementation_hash = ? AND approved_at = ? AND status = ?`
+    ).bind(completing.compared_at, clear ? 1 : 0, ...key, r.approved_at, r.status).run();
+    if (!written?.meta?.changes) { skipped.push(identityLabel(r)); continue; }
+    repaired += 1;
+    if (clear && r.revoked_at != null) revokedCleared += 1;
+  }
+  return { repaired, skipped, revoked_cleared: revokedCleared };
 }
 
 /** True when the identity is currently trusted for the local_computation lane. */

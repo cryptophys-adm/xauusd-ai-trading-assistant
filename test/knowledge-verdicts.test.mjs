@@ -5,14 +5,14 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  KNOWLEDGE_VERDICT_AGENT_ID, KNOWLEDGE_VERDICT_CAPABILITY, KNOWLEDGE_VERDICTS, KNOWLEDGE_VERDICT_EVIDENCE_KEYS, KNOWLEDGE_VERDICT_RULES,
+  KNOWLEDGE_VERDICT_AGENT_ID, KNOWLEDGE_VERDICT_CAPABILITY, KNOWLEDGE_VERDICTS, KNOWLEDGE_VERDICT_EVIDENCE_KEYS, KNOWLEDGE_VERDICT_RULES, KNOWLEDGE_VERDICT_TIMEOUT_MS,
   knowledgeVerdictPostsEnabled, verdictPayloadProblems, subjectEvidence, untestableReason, verdictEntries, planVerdictPosts,
   postKnowledgeVerdicts, resetKnowledgeVerdictsForTests
 } from "../src/knowledge-verdicts.mjs";
 import { planShadowClosures, runShadowClosures, resetShadowKnowledgeSchemaCacheForTests, CLOSURE_VERSION } from "../src/shadow-knowledge.mjs";
 import { resetLearnedLiveForTests, LEARNED_LIVE_SCHEMA_SQL } from "../src/learned-live.mjs";
 import { pullLearnedPack, resetAetherPackSchemaCacheForTests } from "../src/aether-pack.mjs";
-import { resetPlatformBackoffForTests } from "../src/platform-reports.mjs";
+import { resetPlatformBackoffForTests, kernelSyscall, PLATFORM_CALL_TIMEOUT_MS } from "../src/platform-reports.mjs";
 import { signTestP } from "../src/shadow-versions.mjs";
 
 function d1() {
@@ -315,6 +315,48 @@ test("KV-9. a denial backs off and one whoami decides; a transport error is retr
   assert.deepEqual([chronos.status, chronos.attempts], ["failed", KNOWLEDGE_VERDICT_RULES.max_attempts]);
   assert.equal(t.calls.filter((c) => c.input.item_id === CHRONOS).length, KNOWLEDGE_VERDICT_RULES.max_attempts, "bounded");
   assert.equal(t.calls.at(-1).input.item_id, COLLECTING.map(([id]) => id).sort()[0], "then the next item");
+});
+
+test("KV-9b. a timeout is unknown: pending, no attempt, the run stops; a later deduplicated reply marks it posted; other errors still count", async () => {
+  // Every call times out (the kernel never answers within the timeout): the row stays pending with 0 attempts.
+  let mode = "slow";
+  const w = await world({ answer: (input) => (mode === "slow" ? new Promise(() => {}) : mode === "error" ? { outcome: "failed", reason: "kernel_error" } : { outcome: "succeeded", result: { verdict_id: "kv", deduplicated: input.item_id === CHRONOS } }) });
+  for (let i = 0; i < KNOWLEDGE_VERDICT_RULES.max_attempts + 2; i++) {
+    const out = await w.run(NOW + i * 2 * H, { limit: 20, timeoutMs: 5 });
+    assert.deepEqual([out.stopped, out.reason, out.failed, out.posted.length], ["transport", "timeout", 0, 0], "one call a run, then the run stops");
+  }
+  assert.equal(w.calls.length, KNOWLEDGE_VERDICT_RULES.max_attempts + 2, "more timeouts than the cap: still retried");
+  assert.ok(w.calls.every((c) => c.input.item_id === CHRONOS));
+  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 0]], "no attempt counted toward the cap");
+  assert.equal(w.env.DB.raw.prepare("SELECT reason FROM knowledge_verdict_posts").get().reason, "timeout");
+  assert.equal(w.env.DB.raw.prepare("SELECT COUNT(*) AS n FROM knowledge_verdict_strikes").get().n, 0, "no strike: the call may have landed");
+  // A non-timeout error still counts.
+  mode = "error";
+  const failed = await w.run(NOW + 20 * H, { limit: 20, timeoutMs: 5 });
+  assert.deepEqual([failed.stopped, failed.failed], ["failed", 1]);
+  assert.deepEqual(w.markers().map((m) => [m.item_id, m.status, m.attempts]), [[CHRONOS, "pending", 1]]);
+  // The platform kept the first call: the repeat answers deduplicated: true, which is posted.
+  mode = "ok";
+  const later = await w.run(NOW + 22 * H, { limit: 20, timeoutMs: 5 });
+  assert.equal(later.posted[0], `${CHRONOS}@1:not_better`);
+  const chronos = w.env.DB.raw.prepare("SELECT status, reason, attempts FROM knowledge_verdict_posts WHERE item_id = ?").get(CHRONOS);
+  assert.deepEqual({ ...chronos }, { status: "posted", reason: "deduplicated", attempts: 2 });
+});
+
+test("KV-9c. the 20 s timeout is knowledge.verdict's own; the other kernel calls keep PLATFORM_CALL_TIMEOUT_MS", async () => {
+  assert.equal(KNOWLEDGE_VERDICT_TIMEOUT_MS, 20_000);
+  assert.equal(PLATFORM_CALL_TIMEOUT_MS, 5000);
+  const delays = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const w = await world();
+  globalThis.setTimeout = (fn, ms, ...rest) => { delays.push(ms); return realSetTimeout(fn, ms, ...rest); };
+  try {
+    await w.run(NOW, { limit: 1 });
+    const verdictDelays = delays.splice(0);
+    assert.deepEqual(verdictDelays.filter((ms) => ms === KNOWLEDGE_VERDICT_TIMEOUT_MS || ms === PLATFORM_CALL_TIMEOUT_MS), [KNOWLEDGE_VERDICT_TIMEOUT_MS], "the verdict call waits 20 s");
+    await kernelSyscall({ AGENTS: { syscall: async () => ({ outcome: "succeeded" }) } }, "xauusd-reasoner", "reports.publish", {});
+    assert.deepEqual(delays, [PLATFORM_CALL_TIMEOUT_MS], "kernelSyscall's default is unchanged");
+  } finally { globalThis.setTimeout = realSetTimeout; }
 });
 
 test("KV-10. off: nothing is read, written or called; the closure result reads as before", async () => {

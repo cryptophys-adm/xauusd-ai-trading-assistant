@@ -15,7 +15,7 @@
 import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
-  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches,
+  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt,
   PARITY_GROUPS, groupsFor, groupIdentityOf, groupCompareOptions, registerIdentity
 } from "./parity-registry.mjs";
 import { readIntrabars, recheckMismatchIntrabars } from "./parity-intrabars.mjs";
@@ -235,14 +235,29 @@ function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
  */
 /** KV marker of the one-time input-mismatch reconciliation (owner approval 2026-11-06). */
 export const RECLASSIFY_MARKER = "parity:reclassify-input-only:v1";
+/** KV marker of the one-time approved_at repair (2026-11-25), in the same namespace (SIGNAL_CACHE). */
+export const APPROVED_AT_REPAIR_MARKER = "parity:repair:approved-at:v1";
 
-/** Runs reclassifyInputOnlyMismatches once per database (KV marker); never throws. */
+/** The KV namespace that holds the one-time markers, or null when it cannot both read and write. */
+const markerStore = (env) => (typeof env?.SIGNAL_CACHE?.get === "function" && typeof env?.SIGNAL_CACHE?.put === "function" ? env.SIGNAL_CACHE : null);
+
+/**
+ * Runs reclassifyInputOnlyMismatches once per database; never throws. Single-shot: a missing
+ * RECLASSIFY_MARKER is the only way it runs, and the marker is written (without a TTL, so it never
+ * expires) BEFORE the reclassification, so a run that fails part-way is not repeated either. Without
+ * a marker store (no SIGNAL_CACHE binding) it refuses, instead of running on every sweep. To run it
+ * again, delete the marker deliberately.
+ */
 export async function reclassifyOnce(env, now = Date.now()) {
   try {
-    if (await env.SIGNAL_CACHE?.get?.(RECLASSIFY_MARKER)) return { status: "done_before" };
+    const store = markerStore(env);
+    if (!store) return { status: "no_marker_store" };
+    if (await store.get(RECLASSIFY_MARKER)) return { status: "done_before" };
+    const at = new Date(now).toISOString();
+    await store.put(RECLASSIFY_MARKER, JSON.stringify({ status: "claimed", at }));
     await ensureSchema(env.DB);
-    const result = await reclassifyInputOnlyMismatches(env.DB, new Date(now).toISOString());
-    await env.SIGNAL_CACHE?.put?.(RECLASSIFY_MARKER, JSON.stringify({ ...result, at: new Date(now).toISOString() }));
+    const result = await reclassifyInputOnlyMismatches(env.DB, at);
+    await store.put(RECLASSIFY_MARKER, JSON.stringify({ ...result, at }));
     console.log("parity_reclassify_input_only", JSON.stringify(result));
     return { status: "ok", ...result };
   } catch (error) {
@@ -251,9 +266,33 @@ export async function reclassifyOnce(env, now = Date.now()) {
   }
 }
 
+/**
+ * Runs repairApprovedAt once per database (APPROVED_AT_REPAIR_MARKER, no TTL); never throws. The
+ * marker is written after the repair, so a failed run is retried by the next sweep (the repair is
+ * idempotent). One log line: parity_approved_at_repair with counts and identity ids only.
+ */
+export async function repairApprovedAtOnce(env, now = Date.now()) {
+  try {
+    const store = markerStore(env);
+    if (!store) return { status: "no_marker_store" };
+    if (await store.get(APPROVED_AT_REPAIR_MARKER)) return { status: "done_before" };
+    await ensureSchema(env.DB);
+    const result = await repairApprovedAt(env.DB, policyFromEnv(env));
+    await store.put(APPROVED_AT_REPAIR_MARKER, JSON.stringify({ ...result, at: new Date(now).toISOString() }));
+    console.log("parity_approved_at_repair", JSON.stringify({ event: "parity_approved_at_repair", repaired: result.repaired, skipped: result.skipped, revoked_cleared: result.revoked_cleared }));
+    return { status: "ok", ...result };
+  } catch (error) {
+    console.error("parity_approved_at_repair_failed", error instanceof Error ? error.message : String(error));
+    return { status: "error" };
+  }
+}
+
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
   // Before this sweep compares anything: restore identities revoked only by input-bar differences
   // under the old rule, so this same sweep places their records into the trusted lane again.
+  // The approved_at repair runs first, so the reclassification (if its marker is ever removed)
+  // reads real approval times.
+  await repairApprovedAtOnce(env, now);
   await reclassifyOnce(env, now);
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a

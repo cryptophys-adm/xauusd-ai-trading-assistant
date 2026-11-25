@@ -4215,10 +4215,10 @@
      }
     },
     "trust": {
-     "mizan": true,
+     "mizan": false,
      "prophet": true,
-     "gmi": true,
-     "gmi_hud": true
+     "gmi": false,
+     "gmi_hud": false
     }
    },
    "OANDA:XAUUSD:60:1795068000000": {
@@ -4243,10 +4243,10 @@
      }
     },
     "trust": {
-     "mizan": true,
+     "mizan": false,
      "prophet": true,
-     "gmi": true,
-     "gmi_hud": true
+     "gmi": false,
+     "gmi_hud": false
     }
    },
    "OANDA:XAUUSD:60:1795064400000": {
@@ -4271,10 +4271,10 @@
      }
     },
     "trust": {
-     "mizan": true,
+     "mizan": false,
      "prophet": true,
-     "gmi": true,
-     "gmi_hud": true
+     "gmi": false,
+     "gmi_hud": false
     }
    },
    "OANDA:XAUUSD:5:1795076100000": {
@@ -4321,7 +4321,7 @@
    "engine": "gmi",
    "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
    "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
-   "status": "approved",
+   "status": "revoked",
    "consecutive_matches": 6,
    "total_matches": 30,
    "total_mismatches": 1,
@@ -4332,15 +4332,15 @@
    "last_result": "match",
    "last_detail": "{\"compared\":10,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
+   "approved_at": "2026-11-20T00:24:23.000Z",
+   "revoked_at": "2026-11-20T00:25:24.000Z",
+   "updated_at": "2026-11-20T01:06:04.000Z"
   },
   {
    "engine": "gmi_hud",
    "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
    "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-   "status": "approved",
+   "status": "revoked",
    "consecutive_matches": 3,
    "total_matches": 29,
    "total_mismatches": 1,
@@ -4351,15 +4351,15 @@
    "last_result": "match",
    "last_detail": "{\"compared\":14,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
+   "approved_at": "2026-11-20T00:24:23.000Z",
+   "revoked_at": "2026-11-20T00:28:27.000Z",
+   "updated_at": "2026-11-20T01:06:04.000Z"
   },
   {
    "engine": "gmi_hud_m15",
    "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
    "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-   "status": "approved",
+   "status": "revoked",
    "consecutive_matches": 2,
    "total_matches": 28,
    "total_mismatches": 1,
@@ -4370,15 +4370,15 @@
    "last_result": "match",
    "last_detail": "{\"compared\":14,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
+   "approved_at": "2026-11-20T00:56:55.000Z",
+   "revoked_at": "2026-11-20T01:00:59.000Z",
+   "updated_at": "2026-11-20T01:05:03.000Z"
   },
   {
    "engine": "gmi_m15",
    "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
    "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
-   "status": "approved",
+   "status": "revoked",
    "consecutive_matches": 5,
    "total_matches": 29,
    "total_mismatches": 1,
@@ -4389,9 +4389,9 @@
    "last_result": "match",
    "last_detail": "{\"compared\":10,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
+   "approved_at": "2026-11-20T00:56:55.000Z",
+   "revoked_at": "2026-11-20T00:57:56.000Z",
+   "updated_at": "2026-11-20T01:05:03.000Z"
   },
   {
    "engine": "mizan",
@@ -4446,7 +4446,7 @@
    "last_result": "match",
    "last_detail": "{\"compared\":24,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
+   "approved_at": "2026-11-20T00:24:23.000Z",
    "revoked_at": null,
    "updated_at": "2026-11-20T01:06:04.000Z"
   },
@@ -4465,7 +4465,7 @@
    "last_result": "match",
    "last_detail": "{\"compared\":24,\"mismatches\":[],\"missing\":[]}",
    "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
+   "approved_at": "2026-11-20T00:56:55.000Z",
    "revoked_at": null,
    "updated_at": "2026-11-20T01:05:03.000Z"
   }
@@ -6141,7 +6141,7 @@
     "name": "GMI v12.70",
     "label": "GMI v12.70 15m (gmi_m15)",
     "current": true,
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 5,
     "promote_after": 24,
     "totals": {
@@ -6159,9 +6159,9 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:32:32.000Z",
-    "approved_at": "24.0",
-    "revoked_at": null,
-    "updated_at": "2026-11-19T08:20:00.000Z"
+    "approved_at": "2026-11-20T00:56:55.000Z",
+    "revoked_at": "2026-11-20T00:57:56.000Z",
+    "updated_at": "2026-11-20T01:05:03.000Z"
    },
    {
     "engine": "gmi",
@@ -6170,7 +6170,7 @@
     "name": "GMI v12.70",
     "label": "GMI v12.70 1H (gmi)",
     "current": true,
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 6,
     "promote_after": 24,
     "totals": {
@@ -6188,9 +6188,9 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:00:00.000Z",
-    "approved_at": "24.0",
-    "revoked_at": null,
-    "updated_at": "2026-11-19T08:20:00.000Z"
+    "approved_at": "2026-11-20T00:24:23.000Z",
+    "revoked_at": "2026-11-20T00:25:24.000Z",
+    "updated_at": "2026-11-20T01:06:04.000Z"
    },
    {
     "engine": "gmi_hud_m15",
@@ -6199,7 +6199,7 @@
     "name": "GMI HUD",
     "label": "GMI HUD 15m (gmi_hud_m15)",
     "current": true,
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 2,
     "promote_after": 24,
     "totals": {
@@ -6217,9 +6217,9 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:32:32.000Z",
-    "approved_at": "24.0",
-    "revoked_at": null,
-    "updated_at": "2026-11-19T08:20:00.000Z"
+    "approved_at": "2026-11-20T00:56:55.000Z",
+    "revoked_at": "2026-11-20T01:00:59.000Z",
+    "updated_at": "2026-11-20T01:05:03.000Z"
    },
    {
     "engine": "gmi_hud",
@@ -6228,7 +6228,7 @@
     "name": "GMI HUD",
     "label": "GMI HUD 1H (gmi_hud)",
     "current": true,
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 3,
     "promote_after": 24,
     "totals": {
@@ -6246,9 +6246,9 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:00:00.000Z",
-    "approved_at": "24.0",
-    "revoked_at": null,
-    "updated_at": "2026-11-19T08:20:00.000Z"
+    "approved_at": "2026-11-20T00:24:23.000Z",
+    "revoked_at": "2026-11-20T00:28:27.000Z",
+    "updated_at": "2026-11-20T01:06:04.000Z"
    },
    {
     "engine": "mizan_m15",
@@ -6325,7 +6325,7 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:32:32.000Z",
-    "approved_at": "24.0",
+    "approved_at": "2026-11-20T00:56:55.000Z",
     "revoked_at": null,
     "updated_at": "2026-11-20T01:05:03.000Z"
    },
@@ -6354,7 +6354,7 @@
      "missing": 0
     },
     "first_seen_at": "2026-11-20T00:00:00.000Z",
-    "approved_at": "24.0",
+    "approved_at": "2026-11-20T00:24:23.000Z",
     "revoked_at": null,
     "updated_at": "2026-11-20T01:06:04.000Z"
    }
@@ -6767,11 +6767,11 @@
     "base": "gmi",
     "timeframe": "1H",
     "label": "GMI v12.70 1H (gmi)",
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 6,
     "promote_after": 24,
     "mismatches_24h": 1,
-    "revoked": false,
+    "revoked": true,
     "ok": false
    },
    {
@@ -6779,11 +6779,11 @@
     "base": "gmi_hud",
     "timeframe": "1H",
     "label": "GMI HUD 1H (gmi_hud)",
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 3,
     "promote_after": 24,
     "mismatches_24h": 1,
-    "revoked": false,
+    "revoked": true,
     "ok": false
    },
    {
@@ -6791,11 +6791,11 @@
     "base": "gmi_hud",
     "timeframe": "15m",
     "label": "GMI HUD 15m (gmi_hud_m15)",
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 2,
     "promote_after": 24,
     "mismatches_24h": 2,
-    "revoked": false,
+    "revoked": true,
     "ok": false
    },
    {
@@ -6803,11 +6803,11 @@
     "base": "gmi",
     "timeframe": "15m",
     "label": "GMI v12.70 15m (gmi_m15)",
-    "status": "approved",
+    "status": "revoked",
     "consecutive_matches": 5,
     "promote_after": 24,
     "mismatches_24h": 2,
-    "revoked": false,
+    "revoked": true,
     "ok": false
    },
    {
@@ -6880,8 +6880,54 @@
     "missing": []
    },
    "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
+   "approved_at": "2026-11-20T00:24:23.000Z",
    "revoked_at": null,
+   "updated_at": "2026-11-20T01:06:04.000Z"
+  },
+  {
+   "engine": "gmi",
+   "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+   "status": "revoked",
+   "consecutive_matches": 6,
+   "total_matches": 30,
+   "total_mismatches": 1,
+   "total_incomplete": 0,
+   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+   "last_candle_key": "OANDA:XAUUSD:60:1795053600000",
+   "last_result": "match",
+   "last_detail": {
+    "compared": 10,
+    "mismatches": [],
+    "missing": []
+   },
+   "first_seen_at": "2026-11-20T00:00:00.000Z",
+   "approved_at": "2026-11-20T00:24:23.000Z",
+   "revoked_at": "2026-11-20T00:25:24.000Z",
+   "updated_at": "2026-11-20T01:06:04.000Z"
+  },
+  {
+   "engine": "gmi_hud",
+   "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+   "status": "revoked",
+   "consecutive_matches": 3,
+   "total_matches": 29,
+   "total_mismatches": 1,
+   "total_incomplete": 0,
+   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+   "last_candle_key": "OANDA:XAUUSD:60:1795053600000",
+   "last_result": "match",
+   "last_detail": {
+    "compared": 14,
+    "mismatches": [],
+    "missing": []
+   },
+   "first_seen_at": "2026-11-20T00:00:00.000Z",
+   "approved_at": "2026-11-20T00:24:23.000Z",
+   "revoked_at": "2026-11-20T00:28:27.000Z",
    "updated_at": "2026-11-20T01:06:04.000Z"
   },
   {
@@ -6903,8 +6949,54 @@
     "missing": []
    },
    "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
+   "approved_at": "2026-11-20T00:56:55.000Z",
    "revoked_at": null,
+   "updated_at": "2026-11-20T01:05:03.000Z"
+  },
+  {
+   "engine": "gmi_m15",
+   "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+   "status": "revoked",
+   "consecutive_matches": 5,
+   "total_matches": 29,
+   "total_mismatches": 1,
+   "total_incomplete": 0,
+   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+   "last_candle_key": "OANDA:XAUUSD:15:1794987900000",
+   "last_result": "match",
+   "last_detail": {
+    "compared": 10,
+    "mismatches": [],
+    "missing": []
+   },
+   "first_seen_at": "2026-11-20T00:32:32.000Z",
+   "approved_at": "2026-11-20T00:56:55.000Z",
+   "revoked_at": "2026-11-20T00:57:56.000Z",
+   "updated_at": "2026-11-20T01:05:03.000Z"
+  },
+  {
+   "engine": "gmi_hud_m15",
+   "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+   "status": "revoked",
+   "consecutive_matches": 2,
+   "total_matches": 28,
+   "total_mismatches": 1,
+   "total_incomplete": 0,
+   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+   "last_candle_key": "OANDA:XAUUSD:15:1794987900000",
+   "last_result": "match",
+   "last_detail": {
+    "compared": 14,
+    "mismatches": [],
+    "missing": []
+   },
+   "first_seen_at": "2026-11-20T00:32:32.000Z",
+   "approved_at": "2026-11-20T00:56:55.000Z",
+   "revoked_at": "2026-11-20T01:00:59.000Z",
    "updated_at": "2026-11-20T01:05:03.000Z"
   },
   {
@@ -6944,98 +7036,6 @@
    "approved_at": null,
    "revoked_at": null,
    "updated_at": "2026-11-20T00:00:00.000Z"
-  },
-  {
-   "engine": "gmi",
-   "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-   "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
-   "status": "approved",
-   "consecutive_matches": 6,
-   "total_matches": 30,
-   "total_mismatches": 1,
-   "total_incomplete": 0,
-   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
-   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
-   "last_candle_key": "OANDA:XAUUSD:60:1795053600000",
-   "last_result": "match",
-   "last_detail": {
-    "compared": 10,
-    "mismatches": [],
-    "missing": []
-   },
-   "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
-  },
-  {
-   "engine": "gmi_hud",
-   "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-   "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-   "status": "approved",
-   "consecutive_matches": 3,
-   "total_matches": 29,
-   "total_mismatches": 1,
-   "total_incomplete": 0,
-   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
-   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
-   "last_candle_key": "OANDA:XAUUSD:60:1795053600000",
-   "last_result": "match",
-   "last_detail": {
-    "compared": 14,
-    "mismatches": [],
-    "missing": []
-   },
-   "first_seen_at": "2026-11-20T00:00:00.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
-  },
-  {
-   "engine": "gmi_m15",
-   "source_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-   "implementation_hash": "1111111111111111111111111111111111111111111111111111111111111111",
-   "status": "approved",
-   "consecutive_matches": 5,
-   "total_matches": 29,
-   "total_mismatches": 1,
-   "total_incomplete": 0,
-   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
-   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
-   "last_candle_key": "OANDA:XAUUSD:15:1794987900000",
-   "last_result": "match",
-   "last_detail": {
-    "compared": 10,
-    "mismatches": [],
-    "missing": []
-   },
-   "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
-  },
-  {
-   "engine": "gmi_hud_m15",
-   "source_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-   "implementation_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-   "status": "approved",
-   "consecutive_matches": 2,
-   "total_matches": 28,
-   "total_mismatches": 1,
-   "total_incomplete": 0,
-   "mizan_source_hash": "9999999999999999999999999999999999999999999999999999999999999999",
-   "mizan_implementation_hash": "8888888888888888888888888888888888888888888888888888888888888888",
-   "last_candle_key": "OANDA:XAUUSD:15:1794987900000",
-   "last_result": "match",
-   "last_detail": {
-    "compared": 14,
-    "mismatches": [],
-    "missing": []
-   },
-   "first_seen_at": "2026-11-20T00:32:32.000Z",
-   "approved_at": "24.0",
-   "revoked_at": null,
-   "updated_at": "2026-11-19T08:20:00.000Z"
   }
  ],
  "lane": [
@@ -7136,48 +7136,12 @@
    "{\"engine\":\"prophet\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"prophet_r38\":{\"direction\":1,\"buy_confirmed\":true,\"sell_confirmed\":false,\"buy_high_quality\":false,\"sell_high_quality\":false,\"t_enc\":2,\"d_enc\":-1,\"structure_subtype\":0},\"prophet_r37_ssot\":{\"direction\":1,\"d_enc\":-1,\"b_enc\":2,\"structure_subtype\":0,\"bull_event\":true,\"bear_event\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
   ],
   [
-   "localcalc:OANDA:XAUUSD:60:1795064400000:gmi",
-   "{\"engine\":\"gmi\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"feed\":\"mt5_fallback\",\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795064400000:gmi_hud",
-   "{\"engine\":\"gmi_hud\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"implementation_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70_hud\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false,\"cshi_viability\":64,\"deploy_status\":3,\"muddy_waters\":false,\"grid_viable\":true}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"feed\":\"mt5_fallback\",\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795064400000:mizan",
-   "{\"engine\":\"mizan\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"feed\":\"mt5_fallback\",\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
    "localcalc:OANDA:XAUUSD:60:1795064400000:prophet",
    "{\"engine\":\"prophet\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"prophet_r38\":{\"direction\":1,\"buy_confirmed\":true,\"sell_confirmed\":false,\"buy_high_quality\":false,\"sell_high_quality\":false,\"t_enc\":2,\"d_enc\":-1,\"structure_subtype\":0},\"prophet_r37_ssot\":{\"direction\":1,\"d_enc\":-1,\"b_enc\":2,\"structure_subtype\":0,\"bull_event\":true,\"bear_event\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"feed\":\"mt5_fallback\",\"trust_status\":\"approved_by_parity\"}"
   ],
   [
-   "localcalc:OANDA:XAUUSD:60:1795068000000:gmi",
-   "{\"engine\":\"gmi\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795068000000:gmi_hud",
-   "{\"engine\":\"gmi_hud\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"implementation_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70_hud\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false,\"cshi_viability\":64,\"deploy_status\":3,\"muddy_waters\":false,\"grid_viable\":true}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795068000000:mizan",
-   "{\"engine\":\"mizan\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
    "localcalc:OANDA:XAUUSD:60:1795068000000:prophet",
    "{\"engine\":\"prophet\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"prophet_r38\":{\"direction\":1,\"buy_confirmed\":true,\"sell_confirmed\":false,\"buy_high_quality\":false,\"sell_high_quality\":false,\"t_enc\":2,\"d_enc\":-1,\"structure_subtype\":0},\"prophet_r37_ssot\":{\"direction\":1,\"d_enc\":-1,\"b_enc\":2,\"structure_subtype\":0,\"bull_event\":true,\"bear_event\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795071600000:gmi",
-   "{\"engine\":\"gmi\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"implementation_hash\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795071600000:gmi_hud",
-   "{\"engine\":\"gmi_hud\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"implementation_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"dependencies\":{\"mizan\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"}}},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{\"gmi_v12_70_hud\":{\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false,\"cshi_viability\":64,\"deploy_status\":3,\"muddy_waters\":false,\"grid_viable\":true}},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
-  ],
-  [
-   "localcalc:OANDA:XAUUSD:60:1795071600000:mizan",
-   "{\"engine\":\"mizan\",\"timeframe\":\"60\",\"provenance\":{\"source_hash\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"implementation_hash\":\"8888888888888888888888888888888888888888888888888888888888888888\"},\"values\":{\"candle\":{\"o\":3950.1,\"h\":3955.2,\"l\":3948,\"c\":3953.4,\"volume\":2103},\"comparable\":{},\"diagnostics\":{\"branch\":\"jma_long\",\"entropy\":0.4}},\"trust_status\":\"approved_by_parity\"}"
   ],
   [
    "localcalc:OANDA:XAUUSD:60:1795071600000:prophet",
@@ -7187,7 +7151,11 @@
  "signal_cache": [
   [
    "parity:reclassify-input-only:v1",
-   "{\"reclassified\":0,\"restored\":[\"gmi\",\"gmi_hud\",\"gmi_m15\",\"gmi_hud_m15\"],\"at\":\"2026-11-19T08:20:00.000Z\"}"
+   "{\"reclassified\":0,\"restored\":[],\"at\":\"2026-11-19T08:20:00.000Z\"}"
+  ],
+  [
+   "parity:repair:approved-at:v1",
+   "{\"repaired\":0,\"skipped\":[],\"revoked_cleared\":0,\"at\":\"2026-11-19T08:20:00.000Z\"}"
   ]
  ]
 }
