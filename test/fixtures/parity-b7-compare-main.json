@@ -1,0 +1,321 @@
+{
+ "prophet match": {
+  "status": "match",
+  "compared": 24,
+  "mismatches": [],
+  "missing": []
+ },
+ "gmi match": {
+  "status": "match",
+  "compared": 10,
+  "mismatches": [],
+  "missing": []
+ },
+ "gmi_hud match": {
+  "status": "match",
+  "compared": 14,
+  "mismatches": [],
+  "missing": []
+ },
+ "gmi mismatch": {
+  "status": "mismatch",
+  "compared": 10,
+  "mismatches": [
+   {
+    "source": "gmi_v12_70",
+    "field": "verdict",
+    "local": 3,
+    "webhook": -3
+   }
+  ],
+  "missing": [],
+  "values": {
+   "gmi_v12_70": {
+    "local": {
+     "verdict": 3,
+     "gate": 2,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false
+    },
+    "webhook": {
+     "verdict": -3,
+     "gate": 2,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false,
+     "shared_core_status": "ok"
+    }
+   }
+  },
+  "local_diagnostics": {
+   "branch": "jma_long",
+   "entropy": 0.4,
+   "value_area": "inside",
+   "zones": {
+    "demand": true
+   }
+  }
+ },
+ "gmi tolerance": {
+  "status": "match",
+  "compared": 10,
+  "mismatches": [],
+  "missing": []
+ },
+ "prophet input only": {
+  "status": "input_mismatch",
+  "compared": 24,
+  "mismatches": [
+   {
+    "source": "prophet_r38",
+    "field": "input:c",
+    "local": 3953.4,
+    "webhook": 3954
+   },
+   {
+    "source": "prophet_r37_ssot",
+    "field": "input:c",
+    "local": 3953.4,
+    "webhook": 3954
+   }
+  ],
+  "missing": []
+ },
+ "prophet input and field": {
+  "status": "mismatch",
+  "compared": 24,
+  "mismatches": [
+   {
+    "source": "prophet_r38",
+    "field": "input:c",
+    "local": 3953.4,
+    "webhook": 3954
+   },
+   {
+    "source": "prophet_r38",
+    "field": "t_enc",
+    "local": 3,
+    "webhook": 2
+   }
+  ],
+  "missing": [],
+  "values": {
+   "prophet_r38": {
+    "local": {
+     "direction": 1,
+     "buy_confirmed": true,
+     "sell_confirmed": false,
+     "buy_high_quality": false,
+     "sell_high_quality": false,
+     "t_enc": 3,
+     "d_enc": -1,
+     "structure_subtype": 0
+    },
+    "webhook": {
+     "direction": 1,
+     "buy_confirmed": true,
+     "sell_confirmed": false,
+     "buy_high_quality": false,
+     "sell_high_quality": false,
+     "t_enc": 2,
+     "d_enc": -1,
+     "structure_subtype": 0
+    }
+   },
+   "prophet_r37_ssot": {
+    "local": {
+     "direction": 1,
+     "d_enc": -1,
+     "b_enc": 2,
+     "structure_subtype": 0,
+     "bull_event": true,
+     "bear_event": false
+    },
+    "webhook": {
+     "direction": 1,
+     "d_enc": -1,
+     "b_enc": 2,
+     "structure_subtype": 0,
+     "bull_event": true,
+     "bear_event": false
+    }
+   }
+  },
+  "local_diagnostics": {
+   "branch": "jma_long",
+   "entropy": 0.4,
+   "value_area": "inside",
+   "zones": {
+    "demand": true
+   }
+  }
+ },
+ "prophet incomplete local": {
+  "status": "incomplete",
+  "compared": 23,
+  "mismatches": [],
+  "missing": [
+   "prophet_r38:t_enc"
+  ]
+ },
+ "prophet incomplete webhook": {
+  "status": "incomplete",
+  "compared": 23,
+  "mismatches": [],
+  "missing": [
+   "webhook:prophet_r38:t_enc"
+  ]
+ },
+ "gmi null both": {
+  "status": "mismatch",
+  "compared": 10,
+  "mismatches": [
+   {
+    "source": "gmi_v12_70",
+    "field": "gate",
+    "local": null,
+    "webhook": null
+   }
+  ],
+  "missing": [],
+  "values": {
+   "gmi_v12_70": {
+    "local": {
+     "verdict": 3,
+     "gate": null,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false
+    },
+    "webhook": {
+     "verdict": 3,
+     "gate": null,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false,
+     "shared_core_status": "ok"
+    }
+   }
+  },
+  "local_diagnostics": {
+   "branch": "jma_long",
+   "entropy": 0.4,
+   "value_area": "inside",
+   "zones": {
+    "demand": true
+   }
+  }
+ },
+ "gmi nan": {
+  "status": "mismatch",
+  "compared": 10,
+  "mismatches": [
+   {
+    "source": "gmi_v12_70",
+    "field": "gate",
+    "local": null,
+    "webhook": null
+   }
+  ],
+  "missing": [],
+  "values": {
+   "gmi_v12_70": {
+    "local": {
+     "verdict": 3,
+     "gate": null,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false
+    },
+    "webhook": {
+     "verdict": 3,
+     "gate": null,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false,
+     "shared_core_status": "ok"
+    }
+   }
+  },
+  "local_diagnostics": {
+   "branch": "jma_long",
+   "entropy": 0.4,
+   "value_area": "inside",
+   "zones": {
+    "demand": true
+   }
+  }
+ },
+ "gmi absent source": {
+  "status": "not_comparable",
+  "reason": "webhooks_not_all_present",
+  "absent_sources": [
+   "gmi_v12_70"
+  ]
+ },
+ "mizan no counterpart": {
+  "status": "not_comparable",
+  "reason": "engine_has_no_webhook_counterpart"
+ },
+ "unknown engine": {
+  "status": "not_comparable",
+  "reason": "engine_has_no_webhook_counterpart"
+ },
+ "no candle": {
+  "status": "incomplete",
+  "compared": 5,
+  "mismatches": [],
+  "missing": [
+   "input:o",
+   "input:h",
+   "input:l",
+   "input:c",
+   "input:volume"
+  ]
+ },
+ "no record": {
+  "status": "not_comparable",
+  "reason": "engine_has_no_webhook_counterpart"
+ },
+ "gmi string vs number": {
+  "status": "mismatch",
+  "compared": 10,
+  "mismatches": [
+   {
+    "source": "gmi_v12_70",
+    "field": "gate",
+    "local": "2",
+    "webhook": 2
+   }
+  ],
+  "missing": [],
+  "values": {
+   "gmi_v12_70": {
+    "local": {
+     "verdict": 3,
+     "gate": "2",
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false
+    },
+    "webhook": {
+     "verdict": 3,
+     "gate": 2,
+     "gmi_dir": 1,
+     "prophet_dir": 1,
+     "conflict": false,
+     "shared_core_status": "ok"
+    }
+   }
+  },
+  "local_diagnostics": {
+   "branch": "jma_long",
+   "entropy": 0.4,
+   "value_area": "inside",
+   "zones": {
+    "demand": true
+   }
+  }
+ }
+}

@@ -16,6 +16,8 @@ export interface ReconcileEngineOutcome {
 export interface ReconcileResult {
   comparisons: Record<string, ReconcileEngineOutcome>;
   trust: Record<string, boolean>;
+  /** Field groups (B7): present only when an observed record carries a declared group. */
+  groups?: { comparisons: Record<string, ReconcileEngineOutcome & { null_fields?: string[] }>; trust: Record<string, boolean> };
 }
 export interface SweepResult {
   swept_at: string;
@@ -25,7 +27,7 @@ export interface SweepResult {
   results: Record<string, ReconcileResult | { error: string }>;
 }
 
-export function reconcileLocalComputation(env: unknown, candleKey: string): Promise<ReconcileResult>;
+export function reconcileLocalComputation(env: unknown, candleKey: string, options?: { groups?: Record<string, import("./parity-registry.mjs").ParityGroup> }): Promise<ReconcileResult>;
 export function closedH1CandleKeys(now?: number, options?: { symbol?: string; timeframe?: string; lookback?: number }): string[];
 export function closedM5CandleKeys(now?: number, options?: { symbol?: string; lookback?: number }): string[];
 export function closedM15CandleKeys(now?: number, options?: { symbol?: string; lookback?: number }): string[];

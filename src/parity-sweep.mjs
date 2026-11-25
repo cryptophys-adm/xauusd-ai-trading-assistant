@@ -15,7 +15,8 @@
 import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
-  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches
+  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches,
+  PARITY_GROUPS, groupsFor, groupIdentityOf, groupCompareOptions, registerIdentity
 } from "./parity-registry.mjs";
 import { readIntrabars, recheckMismatchIntrabars } from "./parity-intrabars.mjs";
 
@@ -70,7 +71,7 @@ export async function decisionLocalRecords(env, candleKey) {
  * rule), then places into the trusted local_computation lane exactly those
  * observed records whose identity is currently approved.
  */
-export async function reconcileLocalComputation(env, candleKey) {
+export async function reconcileLocalComputation(env, candleKey, { groups = PARITY_GROUPS } = {}) {
   await ensureSchema(env.DB);
   const policy = policyFromEnv(env);
   const observed = {};
@@ -105,6 +106,34 @@ export async function reconcileLocalComputation(env, candleKey) {
     const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
     comparisons[engine] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
   }
+  // Field groups (B7): each group a record carries is compared on its own fields only, under its own
+  // identity (groupIdentityOf), so it earns or loses trust apart from the engine and from the other
+  // groups. Only for an observed record of an engine that declares groups; none does today.
+  const groupRuns = [];
+  for (const engine of INGEST_ENGINES) {
+    const record = observed[engine];
+    if (!record) continue;
+    for (const groupId of groupsFor(engine, groups)) {
+      const gid = groupIdentityOf(record, groupId, groups);
+      if (gid) groupRuns.push({ engine, groupId, gid, record });
+    }
+  }
+  const groupComparisons = {};
+  const hookCache = {};
+  for (const { groupId, gid, record } of groupRuns) {
+    if (record.feed === "mt5_fallback") { groupComparisons[groupId] = { result: "fallback_skipped", counted: false, mismatches: [], missing: [] }; continue; }
+    const options = groupCompareOptions(groupId, groups);
+    const webhooks = {};
+    for (const source of Object.keys(options.fieldMap)) {
+      if (!(source in hookCache)) hookCache[source] = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
+      if (hookCache[source]) webhooks[source] = hookCache[source];
+    }
+    const comparison = compareWithWebhooks(record, webhooks, policy, options);
+    // The group's registry row exists once it has something to count (ingest registers only engines).
+    if (["match", "mismatch", "incomplete", "input_mismatch"].includes(comparison.status)) await registerIdentity(env.DB, gid);
+    const outcome = await recordComparison(env.DB, gid, candleKey, comparison, policy);
+    groupComparisons[groupId] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(comparison.null_fields ? { null_fields: comparison.null_fields } : {}), ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
+  }
   // A candle whose local input bar differs from TradingView's final bar never enters the trusted
   // lane, whatever the identity's status: the H1 chain then reads the TradingView evidence for it,
   // until the pull adapter republishes the candle on the final bar and it matches.
@@ -133,7 +162,27 @@ export async function reconcileLocalComputation(env, candleKey) {
     if (trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
     else await env.WEBHOOK_BUFFER.delete(trustedKey);
   }
-  return { comparisons, trust };
+  if (!groupRuns.length) return { comparisons, trust };
+  // A trusted group's copy (localcalc:<candle>:<group id>) carries only that group's fields, so
+  // approvedComparable (hud-store.mjs) reads them as verified even while another group of the same
+  // source, or the engine itself, is revoked. Never a LOCAL_ENGINES key: the decision lane never sees it.
+  const groupTrust = {};
+  for (const { groupId, gid, record } of groupRuns) {
+    const ownInputDiffers = groupComparisons[groupId]?.result === "input_mismatch";
+    groupTrust[groupId] = !inputDiffers && !ownInputDiffers ? await isTrusted(env.DB, gid) : false;
+    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + groupId;
+    if (groupTrust[groupId]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify(groupRecord(record, groupId, groups)), LOCAL_TTL);
+    else await env.WEBHOOK_BUFFER.delete(trustedKey);
+  }
+  return { comparisons, trust, groups: { comparisons: groupComparisons, trust: groupTrust } };
+}
+
+/** The trusted copy of one group: the record with only the group's own comparable fields. */
+function groupRecord(record, groupId, groups) {
+  const g = groups[groupId];
+  const local = record?.values?.comparable?.[g.source];
+  const fields = local && typeof local === "object" ? Object.fromEntries(Object.keys(g.fields).filter((f) => f in local).map((f) => [f, local[f]])) : {};
+  return { ...record, group: groupId, values: { candle: record?.values?.candle, comparable: { [g.source]: fields } }, trust_status: "approved_by_parity" };
 }
 
 /**
