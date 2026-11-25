@@ -48,6 +48,7 @@ import { inRollover, liveSpreadSpike, LIQUIDITY_MODIFY_DEFER_MAX_MS, ensureLiqui
 import { gateText, stopInProfit, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
 import { ensurePositionSchema } from "./position-actions.mjs";
 import { corpusSource } from "./corpus-oracle.mjs";
+import { readPmLinesLive, lineTag, PM_FAST_LINE_IDS } from "./pm-line-breaker.mjs";
 
 export const PM_FAST_MODES = Object.freeze(["on", "off"]);
 export const PM_FAST_RULES = Object.freeze({ tp: "pm_fast_tp", cut: "pm_fast_cut" });
@@ -152,11 +153,13 @@ function swing5m(bars, endMs, n, dir) {
  *             "off" also its zone-driven moves (branch "zone", bar_ms the minute before the move's minute), which count
  *             for the 3-minute rate only, never for the hysteresis;
  *   pmBar     the 5-minute Position Manager sent an action for it in this 5m bar;
- *   atrSource "broker_m1" live, "feed_m1" in v4.
+ *   atrSource "broker_m1" live, "feed_m1" in v4;
+ *   off       B5 (src/pm-line-breaker.mjs): the lines that are off; pm_fast_tp or pm_fast_cut among them does not fire
+ *             (its trigger reads as not met, no record). None (the default): the layer as before.
  * Returns { status: "inert", code, why } (no evaluation, no record), { status: "none" } (no trigger), or a record:
  * { status: "act" | "held", action: "sl" | "tp" | "close" | "hold", rule, sl?, tp?, why, bar_ms, atr, atr_source, branch }.
  */
-export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}, gate = undefined, spike = false, history = [], pmBar = false, atrSource = "broker_m1" } = {}) {
+export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}, gate = undefined, spike = false, history = [], pmBar = false, atrSource = "broker_m1", off = null } = {}) {
   if (p?.side !== "BUY" && p?.side !== "SELL") return { status: "inert", code: "no_position", why: "no position" };
   const mode = fastMode(meta?.mode), K = PM_FAST_1M[mode];
   const point = positive(sym.point) ? sym.point : 0.01, digits = Number.isInteger(sym.digits) ? sym.digits : 2;
@@ -183,6 +186,7 @@ export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}
   const at = `bar ${hhmm(barMs)} UTC, ${mode}, ${rNow != null ? `${rNow >= 0 ? "+" : ""}${rNow}R` : `${r2(profit)} in price`}`;
   const base = { bar_ms: barMs, atr: r2(atr), atr_source: atrSource, mode };
   const hold = (rule, branch, why) => ({ status: "held", action: "hold", rule, branch, why, ...base });
+  const lineOn = (rule) => !(Array.isArray(off) && off.includes(rule));
   const holdReason = (branch) => {
     if (spike) return "the spread-spike deferral holds modifications (docs/RFC_POSITIONING_LIQUIDITY.md §6)";
     if (pmBar) return "the 5-minute Position Manager acted on this position in this 5m bar";
@@ -200,7 +204,7 @@ export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}
   const near = targets.length ? Math.min(...targets.map((x) => dir * (x - price))) : Infinity;
   const tail = xb.slice(-K.against_of);
   const against = tail.filter((b) => dir * (b.c - b.o) < 0 && Math.abs(b.c - b.o) >= K.body_atr * atr - 1e-9).length;
-  if (rDist && profit > 0 && near <= K.near_zone_r * rDist + 1e-9 && against >= K.against_min) {
+  if (lineOn(PM_FAST_RULES.tp) && rDist && profit > 0 && near <= K.near_zone_r * rDist + 1e-9 && against >= K.against_min) {
     const fired = `1m TP anticipation: ${near <= 0 ? "at or past the target" : `${r2(near / rDist)}R from the target`} (zone ${K.near_zone_r}R), ${against} of the last ${K.against_of} closed 1m bars against the ${buy ? "long" : "short"} with a body of at least ${K.body_atr} x ${atrTxt}; ${at}`;
     const held = holdReason("tp");
     if (held) return hold(PM_FAST_RULES.tp, "tp", `${fired}; held: ${held}`);
@@ -221,7 +225,7 @@ export function fastProtect({ position: p, meta = null, bars = [], now, sym = {}
   }
 
   // pm_fast_cut: an impulse bar beyond the last 5m swing, the next bar not reclaiming it.
-  if (n >= 3) {
+  if (n >= 3 && lineOn(PM_FAST_RULES.cut)) {
     const imp = xb[n - 2], conf = xb[n - 1], prev = xb[n - 3];
     const tr = trueRange(imp, prev);
     const swing = swing5m(xb, imp.t, K.swing_5m_bars, dir);
@@ -258,7 +262,7 @@ export const PM_FAST_RETRY_MS = 5_000;
  * (null while the gate is "legacy"); `spike` the spread-spike deferral holds modifications now. Writes each trigger's
  * record (pending for an action, noted for a held one) into position_actions. Never throws.
  */
-export async function runFastProtect(env, { executor, openIntents = null, gates = null, spike = false, now = Date.now(), zoneMgmt = false } = {}) {
+export async function runFastProtect(env, { executor, openIntents = null, gates = null, spike = false, now = Date.now(), zoneMgmt = false, lines = undefined } = {}) {
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
   const positions = (Array.isArray(executor?.positions) ? executor.positions : []).filter((p) => Number(p?.ticket) > 0 && (p.side === "BUY" || p.side === "SELL") && typeof p.intent_id === "string" && (p.intent_id.startsWith("open:") || /^re:\d+:\d+(:\d+)?$/.test(p.intent_id)));
@@ -295,6 +299,9 @@ export async function runFastProtect(env, { executor, openIntents = null, gates 
     const pmBar = Math.floor(now / M5);
     const pmRows = (await db.prepare(`SELECT ticket FROM position_actions WHERE id LIKE 'pm:%' AND ticket IN (${marks}) AND bar = ? AND action IN ('close', 'sl', 'tp') AND status IN ('pending', 'applied')`).bind(...tickets, pmBar).all()).results ?? [];
     const pmTickets = new Set(pmRows.map((r) => Number(r.ticket)));
+    // B5 (src/pm-line-breaker.mjs): this layer's lines that are off are skipped; its records carry lines_json.
+    const lineOff = (lines !== undefined ? lines : await readPmLinesLive(env, { now }))?.off ?? [];
+    const present = PM_FAST_LINE_IDS.filter((id) => !lineOff.includes(id)).map(lineTag).sort();
     const out = [];
     for (const p of positions) {
       const it = intents[p.intent_id] ?? {};
@@ -303,13 +310,14 @@ export async function runFastProtect(env, { executor, openIntents = null, gates 
       const history = zoneRows.length ? [...history0, ...zoneRows.filter((r) => Number(r.ticket) === Number(p.ticket)).map((r) => ({ bar_ms: zoneBarMs(Number(r.created_ms)), branch: "zone" }))] : history0;
       // SLG1: a position without gate facts reads as closed while the gate is on; "legacy" (gates null): no gate.
       const gate = gates == null ? undefined : gates[String(p.ticket)] ?? GATE_UNMEASURED;
-      const f = fastProtect({ position: p, meta, bars, now, sym: executor.symbol ?? {}, gate, spike, history, pmBar: pmTickets.has(Number(p.ticket)), atrSource: "broker_m1" });
+      const f = fastProtect({ position: p, meta, bars, now, sym: executor.symbol ?? {}, gate, spike, history, pmBar: pmTickets.has(Number(p.ticket)), atrSource: "broker_m1", ...(lineOff.length ? { off: lineOff } : {}) });
       if (f.status !== "act" && f.status !== "held") { out.push({ ticket: p.ticket, status: f.status, code: f.code ?? null }); continue; }
       const dir = p.side === "BUY" ? 1 : -1, price = dir > 0 ? Number(executor.symbol?.bid) : Number(executor.symbol?.ask);
       const pips = finite(price) && finite(Number(p.open_price)) ? Math.round((dir * (price - Number(p.open_price)) / 0.1) * 10) / 10 : null;
       const id = fastId(p.ticket, f.bar_ms);
-      await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, p.ticket, Math.floor(f.bar_ms / M1), now, p.side, pips, finite(price) ? price : null, f.action, f.rule, f.sl ?? null, f.tp ?? null, f.why, null, positive(Number(p.sl)) ? Number(p.sl) : null, positive(Number(p.tp)) ? Number(p.tp) : null, null, f.status === "act" ? "pending" : "noted").run();
+      const linesJson = JSON.stringify({ present, cause: f.status === "act" && PM_FAST_LINE_IDS.includes(f.rule) ? lineTag(f.rule) : null });
+      await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status, lines_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, p.ticket, Math.floor(f.bar_ms / M1), now, p.side, pips, finite(price) ? price : null, f.action, f.rule, f.sl ?? null, f.tp ?? null, f.why, null, positive(Number(p.sl)) ? Number(p.sl) : null, positive(Number(p.tp)) ? Number(p.tp) : null, null, f.status === "act" ? "pending" : "noted", linesJson).run();
       out.push({ ticket: p.ticket, status: f.status, action: f.action, rule: f.rule });
     }
     return { status: "ran", bar_ms: want, positions: out };

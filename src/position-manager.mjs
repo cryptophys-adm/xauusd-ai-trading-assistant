@@ -67,6 +67,7 @@ import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
 import { changeTokens, changeOn, trendFor, sideReadings, measuredFall, stanceAgainstConfirmed, changeRule, decisionHistory, heldText } from "./change-thresholds.mjs";
 import { isEntryIntentId } from "./reentry-1m.mjs";
+import { PM_LINES, lineTag, isPmLine, isA8Line, PM_FAST_LINE_IDS, readPmLinesLive, readPmLines } from "./pm-line-breaker.mjs";
 export { ensurePositionSchema, pendingPositionActions, markPositionActions, ACTION_TTL_MS, actionMessage, actionIdOfIntent } from "./position-actions.mjs";
 
 export const PIP = 0.1;
@@ -199,23 +200,53 @@ export function loosenFacts(loosen, { openIntent = null, mode = DEFAULT_MODE, le
  * council failed or was not asked). Returns { action: "close" | "sl" | "tp" | "hold" | "none", rule, sl?, tp?, why }.
  * "none" means no action for want of an input; "hold" is a decision to keep the position as it is.
  */
-export function positionAction(f, council) {
-  const base = ruleAction(f, council);
+export function positionAction(f, council, { off = null } = {}) {
+  // B5 (src/pm-line-breaker.mjs): the lines that are off (`off`, ids) are skipped exactly as if their rule did not fire;
+  // the line `liquidity` off reads as lens B's reading absent. None off (the default): the rules as before, byte for byte.
+  const lines = Array.isArray(off) && off.length ? new Set(off) : null;
+  const g = lines?.has("liquidity") && f?.liquidity ? withoutLiquidity(f) : f;
+  const base = ruleAction(g, council, lines);
   // ADR-0020 Amendment 8 (owner 2026-11-20), only with its switch on (the facts then carry `loosen`) and only on the
   // council's answer: a silent council changes nothing, and nothing loosens mechanically. After a loosening a lock
   // waits until it passes the stop before it (as Omega would drop it).
-  if (!f?.loosen) return base;
-  const held = loosenHold(f, base);
-  return council ? a8Action(f, council, held) : held;
+  if (!g?.loosen) return base;
+  const held = loosenHold(g, base);
+  return council ? a8Action(g, council, held, lines) : held;
+}
+
+/** Pure (B5): the facts without lens B's reading (the line `liquidity` off). */
+function withoutLiquidity(f) {
+  const { liquidity: _, ...rest } = f;
+  return rest;
+}
+
+/**
+ * Pure (B5): position_actions.lines_json of one Position Manager action: `present` the on lines of this layer whose input
+ * the evaluation had (the fixed rules with facts, A8's with its switch on, `liquidity` with a reading), `cause` the line
+ * whose reason or level set a close, stop or target: `liquidity` when the action without lens B's reading would differ,
+ * else the action's own rule when it is a line; null otherwise. Tags "id@version".
+ */
+export function pmLinesJson(f, council, a, { off = [] } = {}) {
+  const offS = new Set(Array.isArray(off) ? off : []);
+  const present = PM_LINES.filter((l) => !offS.has(l.id) && !PM_FAST_LINE_IDS.includes(l.id) && (l.id === "liquidity" ? Boolean(f?.liquidity) : isA8Line(l.id) ? Boolean(f?.loosen) : Boolean(f))).map((l) => lineTag(l.id)).sort();
+  let cause = null;
+  if (f && a && (a.action === "close" || a.action === "sl" || a.action === "tp")) {
+    if (f.liquidity && !offS.has("liquidity")) {
+      const b = positionAction(f, council, { off: [...offS, "liquidity"] });
+      if (b.action !== a.action || b.rule !== a.rule || (b.sl ?? null) !== (a.sl ?? null) || (b.tp ?? null) !== (a.tp ?? null)) cause = "liquidity";
+    }
+    if (!cause && isPmLine(a.rule) && !offS.has(a.rule) && !PM_FAST_LINE_IDS.includes(a.rule)) cause = a.rule;
+  }
+  return { present, cause: cause ? lineTag(cause) : null };
 }
 
 /**
  * Pure: the fixed rules of today (before ADR-0020 Amendment 8), as positionAction gave them. With CH1's tokens on
  * (`f.ch`), a close today's rule would make that a token holds back says so at the end of the action's why.
  */
-export function ruleAction(f, council) {
+export function ruleAction(f, council, off = null) {
   const held = [];
-  const a = ruleCore(f, council, held);
+  const a = ruleCore(f, council, held, off);
   return held.length ? { ...a, why: `${a.why}; ${held.join("; ")}` } : a;
 }
 
@@ -225,8 +256,10 @@ export function weakeningReason(f) {
 }
 
 /** Pure: ruleAction's rules; `held` collects what a CH1 token held back (ruleAction appends it to the why). */
-export function ruleCore(f, council, held = []) {
+export function ruleCore(f, council, held = [], off = null) {
   if (!f) return { action: "none", rule: "inputs_missing", why: "an input the rules need is missing" };
+  // B5: a line that is off does not fire (its condition reads false); `off` null or empty: every rule as before.
+  const on = (rule) => !off || !off.has(rule);
   const better = (x) => f.sl == null || (f.dir > 0 ? x > f.sl + f.point / 2 : x < f.sl - f.point / 2);
   const room = (x) => (f.dir > 0 ? x < f.price - f.spread : x > f.price + f.spread);
   // TP2 at the broker once: a take-profit still at TP1 moves out to the next key level.
@@ -246,7 +279,7 @@ export function ruleCore(f, council, held = []) {
   // cents to it (as the ladder takes its break-even once).
   const pastEntry = G != null && f.sl != null && f.dir * (f.sl - f.open) > f.point / 2;
   // SLG1: the gate open, the stop not yet past the entry and its first lock tighter than the stop: the lock is due.
-  const gateLock = G != null && G.open === true && !pastEntry && better(G.be);
+  const gateLock = on("breakeven") && G != null && G.open === true && !pastEntry && better(G.be);
   const lockWaitsRoom = () => ({ action: "hold", rule: "lock_waits_room", why: `the profit-lock gate is open (${gateText(G)}) but the price leaves no room for the stop at ${G.be} (break-even plus the spread and 0.1 x ATR(M5)): the lock waits` });
   // CH1 token tpw: the council's weakening closes only with a measured reason; without one the rules below it run.
   const tpwOn = changeOn(f.ch?.on, "tpw");
@@ -254,17 +287,20 @@ export function ruleCore(f, council, held = []) {
   const weakHeld = () => held.push(`${heldText("tpw", "close")}: the council reads the momentum weakening, but no measured change holds (${f.ch.rule.mode}: the share's fall at least ${f.ch.rule.share_fall}${f.ch.rule.conf_drop != null ? ` or the confidence's drop at least ${f.ch.rule.conf_drop}` : ""}${f.ch.rule.confirm >= 2 ? `, on ${f.ch.rule.confirm} consecutive decisions` : ""})`);
   // Beyond TP1 by 30 pips: the stop locks TP1, or the position closes when the council reads the momentum weakening.
   if (f.beyond_tp1_pips >= THRESHOLD_PIPS && better(f.tp1) && room(f.tp1)) {
-    if (council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
-    if (council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1, the momentum is weakening and ${weakWhy}: closed instead of locking TP1` };
-    if (council?.momentum === "weakening") weakHeld();
-    if (shut) return waits("lock_waits_gate", `${f.beyond_tp1_pips} pips beyond TP1: the TP1 lock`);
-    return mfe({ action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` });
+    if (on("take_profit_weakening") && council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1 and the momentum is weakening: closed instead of locking TP1` };
+    if (on("take_profit_weakening") && council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${f.beyond_tp1_pips} pips beyond TP1, the momentum is weakening and ${weakWhy}: closed instead of locking TP1` };
+    if (on("take_profit_weakening") && council?.momentum === "weakening") weakHeld();
+    // B5: lock_tp1 off, the rules below it run as if the position were not beyond TP1.
+    if (on("lock_tp1")) {
+      if (shut) return waits("lock_waits_gate", `${f.beyond_tp1_pips} pips beyond TP1: the TP1 lock`);
+      return mfe({ action: "sl", rule: "lock_tp1", sl: f.tp1, why: `${f.beyond_tp1_pips} pips beyond TP1: stop to TP1${reading}` });
+    }
   }
   // TP2 (owner 2026-11-19, PM PR 2): the target moves out only when the council answered with the momentum not
   // weakening and the thesis intact, and, under the TP ladder, once the stop locks its TP1. Otherwise the target holds
   // and nothing is sent (no action, so no "not applied" line every five minutes).
   const tp2 = (fallback) => {
-    if (!tpAtTp1 || f.tp2 == null) return fallback;
+    if (!tpAtTp1 || f.tp2 == null || !on(f.ladder_hold ? "tp2_breakeven" : "tp2_target")) return fallback;
     if (shut) return waits("tp2_waits_gate", "TP2");
     if (!council) return { action: "hold", rule: "tp2_waits_council", why: "TP2 waits: the council did not answer" };
     if (council.momentum === "weakening" || council.thesis !== "intact") return { action: "hold", rule: "tp2_waits_council", why: `TP2 waits: the council reads ${council.momentum}, thesis ${council.thesis}` };
@@ -285,12 +321,12 @@ export function ruleCore(f, council, held = []) {
   const band = isNum(f.band_pips) && f.band_pips > 0 ? f.band_pips : THRESHOLD_PIPS;
   const at = (sign) => `${sign > 0 ? "+" : ""}${f.pips} pips${f.r != null ? ` (${sign > 0 ? "+" : ""}${f.r}R, band ${f.band_r}R ${f.mode})` : ""}`;
   if (f.pips >= band) {
-    if (council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
-    if (council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${at(1)}, the momentum is weakening and ${weakWhy}: closed without waiting for TP1` };
-    if (council?.momentum === "weakening") weakHeld();
+    if (on("take_profit_weakening") && council?.momentum === "weakening" && !tpwOn) return { action: "close", rule: "take_profit_weakening", why: `${at(1)} and the momentum is weakening: closed without waiting for TP1` };
+    if (on("take_profit_weakening") && council?.momentum === "weakening" && weakWhy) return { action: "close", rule: "take_profit_weakening", why: `${at(1)}, the momentum is weakening and ${weakWhy}: closed without waiting for TP1` };
+    if (on("take_profit_weakening") && council?.momentum === "weakening") weakHeld();
     // SLG1: with the gate on, the break-even waits for it and is then the gate's first lock.
     const be = G ? G.be : f.open + f.dir * f.spread;
-    if (better(be) && room(be) && !pastEntry) {
+    if (on("breakeven") && better(be) && room(be) && !pastEntry) {
       if (shut) return waits("lock_waits_gate", `${at(1)}: the break-even`);
       // CH1: a weakening tpw held back is not "still strong" (today a weakening never reaches this line).
       return mfe({ action: "sl", rule: "breakeven", sl: be, why: `${at(1)}${council && council.momentum !== "weakening" ? " and still strong" : ""}: stop to break-even plus the spread${G ? " and 0.1 x ATR(M5)" : ""}${reading}` });
@@ -324,6 +360,8 @@ export function ruleCore(f, council, held = []) {
     // The cut goes through the council: without its answer, or with the thesis intact, the position holds.
     if (!council) return { action: "none", rule: "council_unavailable", why: `${at(-1)} and ${reasons.join("; ")}, but the council did not answer: the stop stays` };
     if (council.thesis === "intact") return { action: "hold", rule: "hold_thesis_intact", why: `${at(-1)} and ${reasons.join("; ")}, but the council calls the thesis intact: held to the original stop` };
+    // B5: cut_loss off, the cut does not fire and the position holds to its stop.
+    if (!on("cut_loss")) return { action: "hold", rule: "hold_to_stop", why: `${at(-1)} and ${reasons.join("; ")}, but the cut_loss line is off (the PM line breaker): held to the original stop` };
     return { action: "close", rule: "cut_loss", why: `${at(-1)} and ${[...reasons, ...(wait ? [wait] : [])].join("; ")}; the council calls the thesis ${council.thesis}: loss cut` };
   }
   // TP2 inside the band: at any profit before SLG1; with the gate on, the gate is its trigger (tp2_breakeven's any-profit
@@ -477,14 +515,16 @@ export function targetPlan(f, council) {
  * band nothing is loosened or moved. One change per position and bar: the stop first, and a target moved further
  * never with a looser stop. A refused request keeps the hold and says why.
  */
-export function a8Action(f, council, base) {
+export function a8Action(f, council, base, off = null) {
   if (base?.action !== "hold" || !A8_BASE_RULES.includes(base.rule)) return base;
-  const stop = loosenPlan(f, council);
+  // B5: an A8 line that is off does not fire (its plan reads as not asked).
+  const fires = (p) => (p?.ok && off?.has(p.action.rule) ? null : p);
+  const stop = fires(loosenPlan(f, council));
   if (stop?.ok) {
     const waits = council.target === "further" ? "; the target waits: a target moved further never comes with a looser stop" : council.target === "nearer" ? "; the target waits for the next bar (one change at a time)" : "";
     return { ...stop.action, why: `${stop.action.why}${waits}` };
   }
-  const target = targetPlan(f, council);
+  const target = fires(targetPlan(f, council));
   if (target?.ok) return stop ? { ...target.action, why: `${target.action.why}; ${stop.why}` } : target.action;
   const refused = [stop, target].filter(Boolean).map((x) => x.why);
   return refused.length ? { ...base, why: `${base.why}; ${refused.join("; ")}` } : base;
@@ -576,7 +616,7 @@ export async function positionCouncilSpendUsd(db, { now = Date.now() } = {}) {
  * The runner, on the main Worker's 5-minute cron: each open Omega position once per 5-minute bar. `deps` lets the
  * tests give the executor, the open intents, the signal, the decision, the model call and Telegram. Never throws.
  */
-export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn, events: eventsIn, gates: gatesIn } = {}) {
+export async function runPositionManager(env, { now = Date.now(), call = callBusModel, send = null, executor: executorIn, openIntents: intentsIn, signal: signalIn, decision: decisionIn, events: eventsIn, gates: gatesIn, lines: linesIn } = {}) {
   if (positionManagerMode(env) !== "live") return { status: "off" };
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
@@ -626,6 +666,8 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     // ADR-0020 Amendment 8 (owner 2026-11-20): with the owner's switch on, what the bounded loosening reads.
     const loosenOf = a8 ? await loosenInputs(env, db, { positions, openIntents, sym, now, events: eventsIn }) : null;
     const bar = Math.floor(now / 300_000);
+    // B5 (src/pm-line-breaker.mjs): the lines that are off (PM_LINES_OFF and the breaker); none off: the rules as before.
+    const lineOff = (linesIn !== undefined ? linesIn : await readPmLinesLive(env, { now }))?.off ?? [];
     const capUsd = dailyCapUsd(env);
     const spent = await positionCouncilSpendUsd(db, { now });
     const out = [];
@@ -649,12 +691,13 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
           if (!council) councilNote = "council_failed";
         } catch { council = null; councilNote = "council_failed"; }
       } else if (f) councilNote = "daily_cap";
-      const a = positionAction(f, council);
+      const a = positionAction(f, council, { off: lineOff });
       const row = { id, ticket: p.ticket, bar, at_ms: now, side: p.side, pips: f?.pips ?? null, price: f?.price ?? null, action: a.action, rule: councilNote && a.action === "none" ? councilNote : a.rule,
         sl: a.sl ?? null, tp: a.tp ?? null, why: a.why, council: councilText(council),
-        orig_sl: f?.sl ?? null, orig_tp: f?.tp ?? null, basis: isNum(signal?.feed_basis) ? signal.feed_basis : null, status: ["close", "sl", "tp"].includes(a.action) ? "pending" : "noted" };
-      await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(row.id, row.ticket, row.bar, row.at_ms, row.side, row.pips, row.price, row.action, row.rule, row.sl, row.tp, row.why, row.council, row.orig_sl, row.orig_tp, row.basis, row.status).run();
+        orig_sl: f?.sl ?? null, orig_tp: f?.tp ?? null, basis: isNum(signal?.feed_basis) ? signal.feed_basis : null, status: ["close", "sl", "tp"].includes(a.action) ? "pending" : "noted",
+        lines_json: JSON.stringify(pmLinesJson(f, council, a, { off: lineOff })) };
+      await db.prepare("INSERT OR IGNORE INTO position_actions (id, ticket, bar, at_ms, side, pips, price, action, rule, sl, tp, why, council, orig_sl, orig_tp, basis, status, lines_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(row.id, row.ticket, row.bar, row.at_ms, row.side, row.pips, row.price, row.action, row.rule, row.sl, row.tp, row.why, row.council, row.orig_sl, row.orig_tp, row.basis, row.status, row.lines_json).run();
       // No Telegram line here: Omega says what reached the broker, or why the action was not applied (owner 2026-11-19).
       out.push({ ticket: row.ticket, action: row.action, rule: row.rule, pips: row.pips });
     }
@@ -735,14 +778,7 @@ export function positionReport(rows, bars, { now = Date.now() } = {}) {
     if (r.action !== "close" || r.status !== "applied") { items.push({ ticket: r.ticket, rule: r.rule, action: r.action, status: r.status ?? null, pips: r.pips, held_pips: null, saved_pips: null }); continue; }
     const dir = r.side === "BUY" ? 1 : -1, basis = isNum(r.basis) ? r.basis : 0;
     const after = bars.filter((b) => ms(b) >= r.at_ms && ms(b) <= now);
-    let heldExit = null;
-    for (const b of after) {
-      const hi = b.high + basis, lo = b.low + basis;
-      const hitSl = isNum(r.orig_sl) && (dir > 0 ? lo <= r.orig_sl : hi >= r.orig_sl);
-      const hitTp = isNum(r.orig_tp) && (dir > 0 ? hi >= r.orig_tp : lo <= r.orig_tp);
-      if (hitSl) { heldExit = r.orig_sl; break; }
-      if (hitTp) { heldExit = r.orig_tp; break; }
-    }
+    let heldExit = heldExitPrice(after, { dir, sl: r.orig_sl, tp: r.orig_tp, basis });
     if (heldExit == null && after.length) heldExit = after.at(-1).close + basis;
     const open = isNum(r.price) && isNum(r.pips) ? r.price - dir * r.pips * PIP : null;
     const held = heldExit != null && open != null ? pipsOf(dir * (heldExit - open)) : null;
@@ -751,6 +787,22 @@ export function positionReport(rows, bars, { now = Date.now() } = {}) {
     items.push({ ticket: r.ticket, rule: r.rule, action: r.action, status: r.status ?? null, pips: r.pips, held_pips: held, saved_pips: s });
   }
   return { actions: rows.length, scored, saved_pips: r1(saved), items };
+}
+
+/**
+ * Pure: holding's exit over bars after an action ({ high, low, close }, on the feed's scale plus `basis`): the first of
+ * the stop or the target touched (the stop first within a bar), or null when neither was. Also B5's hold
+ * counterfactual (src/pm-line-breaker.mjs holdR).
+ */
+export function heldExitPrice(after, { dir, sl, tp, basis = 0 } = {}) {
+  for (const b of after) {
+    const hi = b.high + basis, lo = b.low + basis;
+    const hitSl = isNum(sl) && (dir > 0 ? lo <= sl : hi >= sl);
+    const hitTp = isNum(tp) && (dir > 0 ? hi >= tp : lo <= tp);
+    if (hitSl) return sl;
+    if (hitTp) return tp;
+  }
+  return null;
 }
 
 /** The UTC hour of the daily report (after New York's close). */
@@ -787,7 +839,9 @@ export async function readPositionManager(env, { now = Date.now(), limit = 50 } 
   try {
     await ensurePositionSchema(env.DB);
     const rows = (await env.DB.prepare("SELECT * FROM position_actions ORDER BY at_ms DESC LIMIT ?").bind(Math.max(1, Math.min(200, Number(limit) || 50))).all()).results ?? [];
-    return { version: "cryptophys.position-manager.v1", mode: positionManagerMode(env), cap_usd: dailyCapUsd(env), spent_usd: await positionCouncilSpendUsd(env.DB, { now }), threshold_pips: THRESHOLD_PIPS, band_r: PM_R_BAND, rows };
+    // B5: the lines (KV pm:line-breaker:v1 and PM_LINES_OFF; their closes counted from position_actions' lines_json).
+    const lines = await readPmLines(env, { now });
+    return { version: "cryptophys.position-manager.v1", mode: positionManagerMode(env), cap_usd: dailyCapUsd(env), spent_usd: await positionCouncilSpendUsd(env.DB, { now }), threshold_pips: THRESHOLD_PIPS, band_r: PM_R_BAND, rows, lines };
   } catch (error) {
     return { version: "cryptophys.position-manager.v1", error: String(error?.message ?? error).slice(0, 160), rows: [] };
   }

@@ -313,6 +313,7 @@ import {
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
 import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
+import { pmLineBreakerTick, setPmLine } from "./pm-line-breaker.mjs";
 import { runLimitCouncil } from "./limit-council.mjs";
 import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode, ownerCheck, noteOwnerSub } from "./strategy-arm.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
@@ -2017,6 +2018,11 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     await this.fs();
     return setProbation(this.env, { enabled: input?.enabled, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
   }
+  /** B5: the owner turns a Position Manager line back on (the omega Worker has checked OWNER_ACCESS_SUB, same origin and the body). */
+  async setPmLine(input: { line?: unknown; enabled?: unknown; actor?: string }): Promise<JsonObject> {
+    await this.fs();
+    return setPmLine(this.env, { line: input?.line, enabled: input?.enabled, actor: String(input?.actor ?? "owner"), send: (t: string) => sendOmegaTelegram(this.env, t) }) as Promise<JsonObject>;
+  }
 
   async setAccountProfile(input: { account_ref?: string; action?: string; value?: string | null; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
     await this.fs();
@@ -2988,6 +2994,11 @@ async function runLedgerStep(env: Env): Promise<void> {
     const p = await probationTick(env) as { status?: string };
     if (p?.status === "changed" || p?.status === "failed") console.log("probation", JSON.stringify(p));
   } catch (e) { console.error("probation_failed", e instanceof Error ? e.message : String(e)); }
+  // B5 (src/pm-line-breaker.mjs): the Position Manager lines' breaker: a line whose last 15 closes average under 0R goes off.
+  try {
+    const b = await pmLineBreakerTick(env, { send: (t: string) => sendOmegaTelegram(env, t) }) as { status?: string };
+    if (b?.status === "changed" || b?.status === "failed") console.log("pm_line_breaker", JSON.stringify(b));
+  } catch (e) { console.error("pm_line_breaker_failed", e instanceof Error ? e.message : String(e)); }
   try {
     const relay = await relayProfileChanges(env) as { status?: string };
     if (relay?.status !== "disabled" && relay?.status !== "waiting" && relay?.status !== "idle") console.log("risk_profile_relay", JSON.stringify(relay));
