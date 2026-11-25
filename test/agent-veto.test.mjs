@@ -13,6 +13,7 @@ import {
   resetVetoTagMemoForTests, softenedTrades, AGENT_VETO_AUTO_KEY, AGENT_VETO_OWNER_KEY, AGENT_VETO_REVERT, A6_MIN_ONE_SIDED
 } from "../src/agent-veto.mjs";
 import { SV1A_BLOCKS, guardsFrom, quorumFrom, ANSWER_SELL } from "./fixtures/sv1a-veto-blocks.mjs";
+import { FEATURE_SWITCH_OVERRIDE_KEY } from "../src/feature-switches.mjs";
 
 const sha = (x) => createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const decideRow = (row, rule = null) => decide({ answer: ANSWER_SELL, guards: guardsFrom(row, { rule }), quorum: quorumFrom(row) });
@@ -218,7 +219,9 @@ test("AV7 the owner's force wins over the revert and the env value; \"auto\" han
   const back = await setAgentVetoForce(env, { rule: "auto", now: T0 });
   assert.deepEqual([back.rule, back.source], ["two_sided", "env"]);
   assert.equal((await runAgentVetoRevert(env, { now: T0 + DAY })).status, "reverted");
-  assert.deepEqual(env.DB.raw.prepare("SELECT action FROM omega_events ORDER BY id").all().map((x) => x.action), ["agent_veto_owner", "agent_veto_owner", "agent_veto_owner", "agent_veto_reverted"]);
+  // FS1: the force is written to the feature-switch store; its audit row and Telegram line are FS1's POST's
+  // (test/feature-switches.test.mjs FS-POST), so setAgentVetoForce itself writes no Omega event.
+  assert.deepEqual(env.DB.raw.prepare("SELECT action FROM omega_events ORDER BY id").all().map((x) => x.action), ["agent_veto_reverted"]);
   // A force on top of the revert: the owner's rule is in force at once.
   await setAgentVetoForce(env, { rule: "two_sided", now: T0 + DAY });
   assert.deepEqual(Object.values(await resolveAgentVetoRule(env, { now: T0 + DAY + 1 })), ["two_sided", "owner", "two_sided"]);
@@ -231,7 +234,9 @@ test("AV7 the owner's force wins over the revert and the env value; \"auto\" han
   // An unreadable KV: classic, never the softened rule by accident.
   const broken = { ...env, SIGNAL_CACHE: { get: async () => { throw new Error("kv down"); } } };
   assert.deepEqual(Object.values(await resolveAgentVetoRule(broken, { now: T0 })), ["classic", "unreadable", "two_sided"]);
-  assert.ok(env.SIGNAL_CACHE.m.has(AGENT_VETO_OWNER_KEY));
+  // FS1: the single store of the owner's choice is the feature-switch override; SV1b's own key is no longer written.
+  assert.equal(JSON.parse(env.SIGNAL_CACHE.m.get(FEATURE_SWITCH_OVERRIDE_KEY)).AGENT_VETO_RULE.value, "two_sided");
+  assert.equal(env.SIGNAL_CACHE.m.has(AGENT_VETO_OWNER_KEY), false);
 });
 
 test("AV8 the trade carries the tag: the entry intent from its decision, the Signal Ledger row from ingestDecision; others unchanged", async () => {

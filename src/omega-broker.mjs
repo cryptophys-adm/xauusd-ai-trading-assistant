@@ -27,6 +27,7 @@ import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol,
 import { fallbackSinceMs } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { vetoSoftenedTag } from "./agent-veto.mjs";
+import { roleWord } from "./feature-switches.mjs";
 import { delegationsForSync, withDelegated, delegatedStopIntents, markDelegatedIntents, plannerIds, hitlSupported, readDelegations, HITL_EA_MIN_VERSION } from "./omega-hitl.mjs";
 import { runProfileAgent, ownerSetProfile, accountHistory } from "./profile-agent.mjs";
 import { reviewProfileChange, downgradeCouncilOn, lastCouncilReviews } from "./profile-council.mjs";
@@ -109,6 +110,9 @@ async function ensureSchema(db) {
   // Fail closed on limit results (2026-11-21): the open fault, and the owner's own last save (an Aether write is not one).
   try { await db.prepare("ALTER TABLE omega_settings ADD COLUMN limit_fault TEXT").run(); } catch { /* already there */ }
   try { await db.prepare("ALTER TABLE omega_settings ADD COLUMN owner_saved_ms INTEGER").run(); } catch { /* already there */ }
+  // FS1 (2026-11-25, ruling 3): who set each setting last and when ({ key: { by, at } }, `by` a role word), for the owner's
+  // switch panel. updated_ms stays the whole row's time (the parity era's switch time).
+  try { await db.prepare("ALTER TABLE omega_settings ADD COLUMN key_meta TEXT").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 const parse = (text, fallback = null) => { try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; } };
@@ -563,7 +567,32 @@ export async function writeSettings(env, { body, actor }, { now = Date.now() } =
   await env.DB.prepare("UPDATE omega_settings SET settings = ?, version = ?, updated_by = ?, updated_ms = ?, limit_fault = CASE WHEN ? = 1 THEN NULL ELSE limit_fault END, owner_saved_ms = CASE WHEN ? = 1 THEN ? ELSE owner_saved_ms END WHERE id = 1")
     .bind(JSON.stringify(r.settings), version, actor, now, byOwner ? 1 : 0, byOwner ? 1 : 0, now).run();
   await event(env.DB, now, actor, "settings", r.settings);
+  await recordKeyMeta(env.DB, current.settings, r.settings, { actor, now });
   return { ok: true, settings: r.settings, version };
+}
+
+/**
+ * FS1 (ruling 3): each setting a save changed gets { by, at } in omega_settings.key_meta (`by` a role word: owner, aether,
+ * agent or system; never an email). Best effort: a save never fails on it.
+ */
+async function recordKeyMeta(db, before, after, { actor, now }) {
+  try {
+    const changed = Object.keys(OMEGA_DEFAULTS).filter((k) => JSON.stringify(before?.[k] ?? null) !== JSON.stringify(after?.[k] ?? null));
+    if (!changed.length) return;
+    const meta = parse((await db.prepare("SELECT key_meta FROM omega_settings WHERE id = 1").first())?.key_meta, {}) ?? {};
+    const at = new Date(now).toISOString(), by = roleWord(actor) ?? "system";
+    for (const k of changed) meta[k] = { by, at };
+    await db.prepare("UPDATE omega_settings SET key_meta = ? WHERE id = 1").bind(JSON.stringify(meta)).run();
+  } catch { /* the save stands */ }
+}
+
+/** FS1: the per-setting { by, at } of the stored settings ({} when none or unreadable). */
+export async function readSettingsKeyMeta(env) {
+  try {
+    await ensureSchema(env.DB);
+    const meta = parse((await env.DB.prepare("SELECT key_meta FROM omega_settings WHERE id = 1").first())?.key_meta, {});
+    return meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {};
+  } catch { return {}; }
 }
 
 // ---------------------------------------------------------------- connection

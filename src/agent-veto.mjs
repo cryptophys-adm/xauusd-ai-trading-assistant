@@ -15,13 +15,19 @@
 // detail the classic rule would have written; words, never a price). Its Omega entry intent (omega-broker bridgeSync)
 // and its Signal Ledger row (signal_ledger.veto_softened) carry the same object, so its Omega R is tracked per trade.
 //
-// The rule in force: the owner's force (KV AGENT_VETO_OWNER_KEY, set through the owner-only POST /api/strategy-council
-// of the Omega Worker), else the automatic revert (KV AGENT_VETO_AUTO_KEY, while its hold lasts), else the env value.
+// The rule in force: the owner's force, else the automatic revert (KV AGENT_VETO_AUTO_KEY, while its hold lasts), else the
+// env value. Since FS1 (2026-11-25) the owner's force is the feature-switch override of AGENT_VETO_RULE (KV
+// FEATURE_SWITCH_OVERRIDE_KEY, src/feature-switches.mjs), the single store of the owner's choice, set through the owner
+// panel's POST or the owner-only POST /api/strategy-council `veto_rule` of the Omega Worker (both write it through FS1).
+// Until the one-time move (migrateAgentVetoOwner, marker FEATURE_SWITCH_VETO_MIGRATION_KEY) has run, SV1b's own key
+// (AGENT_VETO_OWNER_KEY) is still read, so the rule in force never changes with the move.
 // The automatic revert (runAgentVetoRevert, once a UTC day on the 5-minute ledger step, beside the grid's): once at
 // least AGENT_VETO_REVERT.min_trades closed softened trades exist (Omega R as grid-adapt's live check reads it: the
 // entry intents joined to signal_ledger.r_omega), the mean of the latest of them; below 0R the rule goes back to
 // "classic" for AGENT_VETO_REVERT.hold_days, with one Telegram line and an Omega event. After the hold the env rule is
-// back and only the trades opened after the hold count. Both KV keys are written only by this Worker at run time.
+// back and only the trades opened after the hold count. Every KV key is written only by this Worker at run time.
+
+import { FEATURE_SWITCH_OVERRIDE_KEY, FEATURE_SWITCH_VETO_MIGRATION_KEY, parseOverrides, validOverride, switchByKey, roleWord } from "./feature-switches.mjs";
 
 export const AGENT_VETO_RULES = Object.freeze(["two_sided", "classic"]);
 export const AGENT_VETO_AUTO_KEY = "agent-veto:auto:v1";
@@ -49,6 +55,46 @@ export function ownerForceOf(doc) {
   return rule ? { rule, actor: typeof doc.actor === "string" ? doc.actor : null, at: typeof doc.at === "string" ? doc.at : null } : null;
 }
 
+const VETO_SWITCH = switchByKey("AGENT_VETO_RULE");
+const isoAt = (now) => new Date(now).toISOString();
+
+/**
+ * The owner's force as a stored { rule, actor, at }, or null: FS1's override of AGENT_VETO_RULE; before the one-time move,
+ * SV1b's own key. Throws when the KV cannot be read (the callers' unreadable rule).
+ */
+export async function readOwnerForceDoc(kv) {
+  const o = parseOverrides(await kv?.get?.(FEATURE_SWITCH_OVERRIDE_KEY)).AGENT_VETO_RULE;
+  if (validOverride(VETO_SWITCH, o)) return { rule: o.value, actor: typeof o.actor === "string" ? o.actor : null, at: typeof o.at === "string" ? o.at : null };
+  if (await kv?.get?.(FEATURE_SWITCH_VETO_MIGRATION_KEY)) return null;
+  return ownerForceOf(parse(await kv?.get?.(AGENT_VETO_OWNER_KEY)));
+}
+
+/**
+ * FS1: moves SV1b's owner force (AGENT_VETO_OWNER_KEY) into the feature-switch override once, behind the marker
+ * FEATURE_SWITCH_VETO_MIGRATION_KEY. Idempotent: with the marker it does nothing; an override already there is never
+ * replaced; the old key is left as it is and never read again. One log line. Never throws.
+ */
+export async function migrateAgentVetoOwner(env, { now = Date.now() } = {}) {
+  const kv = env?.SIGNAL_CACHE;
+  if (!kv?.get || !kv?.put) return { status: "unavailable" };
+  try {
+    if (await kv.get(FEATURE_SWITCH_VETO_MIGRATION_KEY)) return { status: "done" };
+    const legacy = ownerForceOf(parse(await kv.get(AGENT_VETO_OWNER_KEY)));
+    const doc = parseOverrides(await kv.get(FEATURE_SWITCH_OVERRIDE_KEY));
+    let moved = null;
+    if (legacy && !validOverride(VETO_SWITCH, doc.AGENT_VETO_RULE)) {
+      doc.AGENT_VETO_RULE = { value: legacy.rule, actor: roleWord(legacy.actor) ?? "owner", at: legacy.at ?? isoAt(now) };
+      await kv.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify(doc));
+      moved = legacy.rule;
+    }
+    await kv.put(FEATURE_SWITCH_VETO_MIGRATION_KEY, JSON.stringify({ at: isoAt(now), moved }));
+    console.log(JSON.stringify({ event: "feature_switch_migrated", key: "AGENT_VETO_RULE", from: AGENT_VETO_OWNER_KEY, moved }));
+    return { status: "migrated", moved };
+  } catch (e) {
+    return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
 /** Pure: the automatic revert in force at `now` (a stored { rule: "classic", until }), or null. */
 export function autoRevertAt(doc, now = Date.now()) {
   return doc?.rule === "classic" && Date.parse(String(doc.until ?? "")) > now ? doc : null;
@@ -71,7 +117,7 @@ export async function resolveAgentVetoRule(env, { now = Date.now() } = {}) {
   const envRule = agentVetoRuleOf(env);
   try {
     const kv = env?.SIGNAL_CACHE;
-    const owner = parse(await kv?.get?.(AGENT_VETO_OWNER_KEY));
+    const owner = await readOwnerForceDoc(kv);
     const auto = !ownerForceOf(owner) && envRule === "two_sided" ? parse(await kv?.get?.(AGENT_VETO_AUTO_KEY)) : null;
     return { ...resolveRule({ envRule, owner, auto, now }), env_rule: envRule };
   } catch {
@@ -112,10 +158,12 @@ async function omegaEvent(db, now, action, detail) {
  */
 export async function runAgentVetoRevert(env, { now = Date.now(), send = null, force = false } = {}) {
   const db = env?.DB, kv = env?.SIGNAL_CACHE;
+  // FS1: SV1b's owner force moves into the feature-switch override once (a marker; nothing changes in force).
+  if (kv) await migrateAgentVetoOwner(env, { now });
   if (!db || !kv) return { status: "unavailable" };
   try {
     const envRule = agentVetoRuleOf(env);
-    const owner = ownerForceOf(parse(await kv.get(AGENT_VETO_OWNER_KEY)));
+    const owner = ownerForceOf(await readOwnerForceDoc(kv));
     let auto = parse(await kv.get(AGENT_VETO_AUTO_KEY)) ?? {};
     const day = new Date(now).toISOString().slice(0, 10);
     // Neither the env nor a force turns the softened rule on: nothing was softened, nothing to check.
@@ -146,20 +194,24 @@ export async function runAgentVetoRevert(env, { now = Date.now(), send = null, f
 }
 
 /**
- * The owner's force (the Omega Worker's owner-only POST /api/strategy-council with `veto_rule`; the AI Worker checks
- * OWNER_ACCESS_SUB again): "two_sided" or "classic" pins the rule, "auto" clears the force. Audited in omega_events.
+ * The owner's force, written to its single store, FS1's override of AGENT_VETO_RULE: "two_sided" or "classic" pins the
+ * rule, "auto" removes the override (the automatic revert and the env value again). Reached only through FS1's owner POST
+ * (src/feature-switch-store.mjs setFeatureSwitch, which checks OWNER_ACCESS_SUB and writes the audit row, the Omega event
+ * and the Telegram line), from the owner panel or the Omega Worker's POST /api/strategy-council `veto_rule`.
  */
 export async function setAgentVetoForce(env, { rule, actor = "owner", now = Date.now() } = {}) {
   const kv = env?.SIGNAL_CACHE;
   if (!kv) return { ok: false, error: "unavailable" };
   const want = String(rule ?? "").trim().toLowerCase();
   if (want !== "auto" && !ruleOf(want)) return { ok: false, error: "veto_rule must be two_sided, classic or auto" };
-  const prev = ownerForceOf(parse(await kv.get(AGENT_VETO_OWNER_KEY)));
-  const next = want === "auto" ? null : { rule: want, actor: String(actor).slice(0, 120), at: new Date(now).toISOString() };
-  await kv.put(AGENT_VETO_OWNER_KEY, JSON.stringify(next ?? { rule: null, actor: String(actor).slice(0, 120), at: new Date(now).toISOString() }));
-  if (env?.DB) await omegaEvent(env.DB, now, "agent_veto_owner", { rule: want, previous: prev?.rule ?? null, by: String(actor).slice(0, 120) });
+  await migrateAgentVetoOwner(env, { now });
+  const prev = ownerForceOf(await readOwnerForceDoc(kv));
+  const doc = parseOverrides(await kv.get(FEATURE_SWITCH_OVERRIDE_KEY));
+  if (want === "auto") delete doc.AGENT_VETO_RULE;
+  else doc.AGENT_VETO_RULE = { value: want, actor: roleWord(actor) ?? "owner", at: isoAt(now) };
+  await kv.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify(doc));
   const resolved = await resolveAgentVetoRule(env, { now });
-  return { ok: true, changed: (prev?.rule ?? "auto") !== want, force: want, rule: resolved.rule, source: resolved.source };
+  return { ok: true, changed: (prev?.rule ?? "auto") !== want, force: want, previous: prev?.rule ?? null, rule: resolved.rule, source: resolved.source };
 }
 
 /**
@@ -169,7 +221,7 @@ export async function setAgentVetoForce(env, { rule, actor = "owner", now = Date
 export async function agentVetoStatus(env, { now = Date.now() } = {}) {
   const resolved = await resolveAgentVetoRule(env, { now });
   let auto = null, owner = null;
-  try { auto = parse(await env?.SIGNAL_CACHE?.get?.(AGENT_VETO_AUTO_KEY)); owner = ownerForceOf(parse(await env?.SIGNAL_CACHE?.get?.(AGENT_VETO_OWNER_KEY))); } catch { /* none */ }
+  try { auto = parse(await env?.SIGNAL_CACHE?.get?.(AGENT_VETO_AUTO_KEY)); owner = ownerForceOf(await readOwnerForceDoc(env?.SIGNAL_CACHE)); } catch { /* none */ }
   let softened = null;
   try {
     const rows = (await env.DB.prepare("SELECT json_extract(veto_softened, '$.rule') AS rule, COUNT(*) AS n FROM signal_ledger WHERE veto_softened IS NOT NULL GROUP BY rule").all()).results ?? [];
