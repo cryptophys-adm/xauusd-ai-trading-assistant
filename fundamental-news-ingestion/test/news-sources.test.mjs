@@ -1,7 +1,7 @@
 // News without TradingView, in shadow (owner 2026-11-14; docs/RFC_CONTENT_AGENT.md P0).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES, ITEMS_PREFIX, readShadowDays, shadowReport, shadowItemsSince } from "../src/news-sources.mjs";
+import { parseFeed, parseGdelt, symbolsOf, similarity, compareWithTradingView, runNewsShadow, readNewsShadow, inBackoff, NEWS_SOURCES, BACKOFF_AFTER_FAILURES, ITEMS_PREFIX, readShadowDays, shadowReport, shadowItemsSince, timeMs } from "../src/news-sources.mjs";
 
 class MemoryKV { constructor() { this.map = new Map(); } async get(k) { return this.map.has(k) ? this.map.get(k) : null; } async put(k, v) { this.map.set(k, v); } }
 const NOW = Date.parse("2026-11-16T14:05:00Z");
@@ -149,4 +149,65 @@ test("measurement phase A (2026-11-17): each headline kept once a day with its f
   assert.deepEqual([recent.shadow.length, recent.tv.length], [2, 2]);
   assert.ok(recent.shadow.every((x) => x.title && x.source));
   assert.deepEqual((await shadowItemsSince({ OAUTH_STORE: kv }, 1, NOW + 3 * 3_600_000)).shadow, [], "first seen more than an hour ago");
+});
+
+test("the report (2026-11-25 fix): a headline stored again under the next UTC day counts once, with its earliest first-seen", async () => {
+  // As stored in production: the hourly run at 00:04 UTC finds the same feed items and keeps them again under the new day.
+  const kv = new MemoryKV();
+  const sources = [{ id: "a", kind: "rss", url: "https://a.example/rss" }];
+  const rss = `<rss><channel><item><title>Gold climbs as the dollar and yields slip</title><link>https://a.example/g</link><pubDate>Mon, 16 Nov 2026 22:50:00 GMT</pubDate></item></channel></rss>`;
+  const fetcher = async () => new Response(rss);
+  const late = Date.parse("2026-11-16T23:04:00Z"), next = Date.parse("2026-11-17T00:04:00Z");
+  await runNewsShadow({ OAUTH_STORE: kv }, { now: late, fetcher, sources });
+  await runNewsShadow({ OAUTH_STORE: kv }, { now: next, fetcher, sources });
+  assert.equal(Object.keys(JSON.parse(await kv.get(ITEMS_PREFIX + "2026-11-16")).shadow).length, 1);
+  assert.equal(Object.keys(JSON.parse(await kv.get(ITEMS_PREFIX + "2026-11-17")).shadow).length, 1, "stored again under the new day (the old keys)");
+  const report = shadowReport(await readShadowDays({ OAUTH_STORE: kv }, 2, next), { now: next });
+  assert.equal(report.coverage.shadow_items, 1, "counted once over the window");
+  assert.deepEqual(report.days.map((d) => [d.date, d.shadow]), [["2026-11-16", 1], ["2026-11-17", 0]], "on the day it was first seen");
+  assert.deepEqual(report.latency_minutes.shadow.a, { median: 14, p90: 14, n: 1 }, "23:04 less 22:50, not 00:04");
+
+  // Pure, and in any order of days: the earliest first-seen wins; another headline of the second day still counts.
+  const gold = { s: "a", t: "Gold climbs as the dollar and yields slip", u: "https://a.example/g", p: "2026-11-16T22:50:00.000Z" };
+  const days = [
+    { date: "2026-11-17", items: { shadow: { g: { ...gold, f: "2026-11-17T00:04:00.000Z" }, o: { s: "b", t: "Oil extends losses on OPEC supply worries", u: "https://b.example/o", p: "2026-11-17T00:00:00.000Z", f: "2026-11-17T00:04:00.000Z" } }, tv: {}, hours: {} } },
+    { date: "2026-11-16", items: { shadow: { g: { ...gold, f: "2026-11-16T23:04:00.000Z" } }, tv: {}, hours: {} } }
+  ];
+  const r = shadowReport(days, { now: next });
+  assert.equal(r.coverage.shadow_items, 2);
+  assert.deepEqual(r.days.map((d) => [d.date, d.shadow]), [["2026-11-17", 1], ["2026-11-16", 1]]);
+  assert.deepEqual([r.latency_minutes.shadow.a.median, r.latency_minutes.shadow.b.median], [14, 4]);
+});
+
+test("the report (2026-11-25 fix): TradingView's epoch-second publication times give its latency, the six-hour window and the lead", () => {
+  const sec = (iso) => Math.floor(Date.parse(iso) / 1000);
+  const title = "Gold climbs as the dollar and yields slip";
+  const days = [{
+    date: "2026-11-16",
+    items: {
+      shadow: { g: { s: "a", t: title, u: "https://a.example/g", p: "2026-11-16T13:00:00.000Z", f: "2026-11-16T14:05:00.000Z" } },
+      tv: {
+        t1: { t: title, u: "https://tv.example/1", p: sec("2026-11-16T14:50:00Z"), f: "2026-11-16T15:05:00.000Z" },
+        t2: { t: "US CPI rises more than expected in October", u: "https://tv.example/2", p: String(sec("2026-11-16T14:35:00Z")), f: "2026-11-16T15:05:00.000Z" }
+      },
+      hours: {}
+    }
+  }];
+  const r = shadowReport(days, { now: Date.parse("2026-11-16T16:00:00Z") });
+  assert.deepEqual(r.latency_minutes.tv, { median: 15, p90: 15, n: 2 }, "15 and 30 minutes, from seconds as a number and as digits (pct rounds the rank down)");
+  assert.equal(r.coverage.overlap, 1);
+  assert.deepEqual(r.latency_minutes.lead_shadow_over_tv, { median: 60, p90: 60, n: 1 }, "the shadow saw it an hour earlier");
+  assert.equal(r.high_impact.tv_only[0].published_at, "2026-11-16T14:35:00.000Z", "shown as ISO");
+
+  // The same title published more than six hours apart is another story: the window now applies to seconds too.
+  days[0].items.tv.t1.p = sec("2026-11-16T20:00:00Z");
+  days[0].items.tv.t1.f = "2026-11-16T20:05:00.000Z";
+  const apart = shadowReport(days, { now: Date.parse("2026-11-16T21:00:00Z") });
+  assert.equal(apart.coverage.overlap, 0);
+  assert.equal(apart.latency_minutes.lead_shadow_over_tv.n, 0);
+
+  // Seconds, milliseconds and ISO read the same; nothing else is a time.
+  const ms = Date.parse("2026-11-16T14:50:00Z");
+  assert.deepEqual([timeMs(ms / 1000), timeMs(ms), timeMs(String(ms / 1000)), timeMs(" 2026-11-16T14:50:00Z ")], [ms, ms, ms, ms]);
+  assert.ok([null, undefined, "", "soon", 0, -5, NaN, {}].every((v) => Number.isNaN(timeMs(v))));
 });
