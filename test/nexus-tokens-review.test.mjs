@@ -19,7 +19,9 @@ const REVIEW_FILES = [
   // Track C2: the Liquidity page, the Intelligence pages' chart and their helpers.
   "pages/Liquidity.tsx", "components/IntelChart.tsx", "lib/intel.ts",
   // Track C3: the Chart patterns page, the charts' lines and the pattern agents' rules.
-  "pages/Patterns.tsx", "lib/lines-primitive.ts", "lib/patternRules.ts"
+  "pages/Patterns.tsx", "lib/lines-primitive.ts", "lib/patternRules.ts",
+  // FS1: the Feature switches page and its pure model.
+  "pages/Switches.tsx", "lib/featureSwitches.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {

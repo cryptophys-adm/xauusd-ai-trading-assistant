@@ -1,0 +1,123 @@
+{
+  "saved": {
+    "ok": true,
+    "switch": {
+      "key": "ZONE_PRIORITY",
+      "label": "Zone priority",
+      "description": "Z2: the guardrails' zone_ahead check and the zone aims, all under this switch; off behaves as before Z2 (no zone rule anywhere).",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "override",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": "owner",
+      "set_at": "2026-11-25T03:41:00.000Z",
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    "changed": true
+  },
+  "unchanged": {
+    "ok": true,
+    "switch": {
+      "key": "ZONE_PRIORITY",
+      "label": "Zone priority",
+      "description": "Z2: the guardrails' zone_ahead check and the zone aims, all under this switch; off behaves as before Z2 (no zone rule anywhere).",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "override",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": "owner",
+      "set_at": "2026-11-25T03:41:00.000Z",
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    "changed": false
+  },
+  "reset": {
+    "ok": true,
+    "switch": {
+      "key": "ZONE_PRIORITY",
+      "label": "Zone priority",
+      "description": "Z2: the guardrails' zone_ahead check and the zone aims, all under this switch; off behaves as before Z2 (no zone rule anywhere).",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": true,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    "changed": true
+  },
+  "omega_saved": {
+    "ok": true,
+    "switch": {
+      "key": "pm_fast_1m",
+      "label": "1m fast-protect layer",
+      "description": "PM-1M: the fast TP anticipation and loss reduction on closed broker M1 bars; off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "override",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": "owner",
+      "set_at": "2026-11-25T03:41:03.000Z",
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    "changed": true,
+    "audit": "settings"
+  },
+  "unknown_key": {
+    "ok": false,
+    "error": "unknown_key"
+  },
+  "invalid_value": {
+    "ok": false,
+    "error": "invalid_value"
+  },
+  "read_only": {
+    "ok": false,
+    "error": "read_only"
+  },
+  "owner_only": {
+    "ok": false,
+    "error": "owner_only"
+  }
+}

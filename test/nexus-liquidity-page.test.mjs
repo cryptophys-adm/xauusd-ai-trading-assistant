@@ -49,7 +49,7 @@ const textOf = (html) => html.replace(/<[^>]+>/g, "\n").split("\n").map((t) => t
 
 test("LQ1 NAV and PAGES: Liquidity at /#/liquidity, key liquidity, icon Droplets, after Strategy agents and Chart patterns (C3)", () => {
   const shell = src("components/AppShell.tsx");
-  const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf("] }\n];"));
+  const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf('{ title: "Settings"'));
   const labels = [...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(labels, ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Neuron allocation", "Decision audit", "Alerts"]);
   assert.match(intel, /\{ label: "Liquidity", href: "\/#\/liquidity", key: "liquidity", icon: Droplets \}/);

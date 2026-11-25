@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Shapes, Swords, Trophy, Users, X, Zap, Cpu } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, LineChart, Menu, Puzzle, Shapes, Swords, ToggleRight, Trophy, Users, X, Zap, Cpu } from "lucide-react";
 import { StatusRow, StatusStrip } from "./HeaderStatus";
 import { omegaCell, roomCell } from "../lib/headerStatus";
 import { useWarRoom } from "../lib/warroom";
@@ -41,7 +41,10 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     { label: "Neuron allocation", href: "/#/neurons", key: "neurons", icon: Cpu },
     { label: "Decision audit", href: "/#/audit", key: "audit", icon: BookOpenCheck },
     { label: "Alerts", href: "/#/alerts", key: "alerts", icon: BellRing }
-  ] }
+  ] },
+  // FS1 (owner 2026-11-25: "panel khusus pengaturan on off untuk semua fitur ini"): the owner's feature switches, the last
+  // group, on their own page (#/switches). The Omega page keeps its own settings.
+  { title: "Settings", items: [{ label: "Feature switches", href: "/#/switches", key: "switches", icon: ToggleRight }] }
 ];
 export const NAV = NAV_GROUPS.flatMap((g) => g.items).filter((i) => !i.soon);
 

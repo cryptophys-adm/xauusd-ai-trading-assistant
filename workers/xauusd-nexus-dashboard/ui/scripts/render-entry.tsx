@@ -22,6 +22,15 @@ import { DecisionPlanView } from "../src/components/PlanLadder";
 import { OmegaSignalView } from "../src/components/OmegaZone";
 import { Mt5ChartCanvas } from "../src/pages/Omega";
 import { knownFeedBasis } from "../src/lib/entryZone";
+import fs1Owner from "../../../../test/fixtures/nexus-fs1/feature-switches.json";
+import fs1Viewer from "../../../../test/fixtures/nexus-fs1/feature-switches-viewer.json";
+import fs1Revert from "../../../../test/fixtures/nexus-fs1/feature-switches-revert.json";
+import fs1Replies from "../../../../test/fixtures/nexus-fs1/post-replies.json";
+import fs1Record from "../../../../test/fixtures/nexus-fs1/feature-switches-record.json";
+import { ConfirmBody, SwitchRowView, SwitchesLoading, SwitchesView, type RowStatus } from "../src/pages/Switches";
+import { ConfirmDialog } from "../src/components/ConfirmDialog";
+import { POST_ERRORS, confirmText, rowOf, type Change } from "../src/lib/featureSwitches";
+import { PollError } from "../src/components/ui";
 import type { Poll } from "../src/lib/usePoll";
 
 export type Entry = {
@@ -187,7 +196,69 @@ const OMEGA_CHART_OLD = ["candles, PLAN lines", "(feed ", "basis (intents", "not
 const EZ1_ZONE_SHOWS = ["Entry zone", "2684.20–2685.60", "· feed scale", "zone · feed scale", "plan 2684.90", "key zone 2683.60–2686.60", "Omega limit", "not available on this page", "near edge", "2685.60", "feed · allowed", "min 1R · feed scale"];
 const EZ1_NEW = ["Entry zone", "zone · feed scale", "Omega limit", "EZ1"];
 
+/**
+ * FS1, the Feature switches page (Settings › Feature switches, the owner-reviewed mockup) over GET
+ * /omega/api/feature-switches: test/fixtures/nexus-fs1/*.json, the seeded answers of the real registry and store
+ * (test/support/nexus-fs1-seed.mjs): the owner's (three overrides), a viewer's (read only), the veto rule's automatic
+ * revert, and the POST's replies. The states: the tooltip open, saving, saved (a switch and an Omega setting), each
+ * error code, the first load, a failed GET, and each confirm (normal, era, mode evidence, emergency stop, reset).
+ */
+const FS1_ROW = (key: string, d: any = fs1Owner) => (d as any).switches.find((r: any) => r.key === key);
+export const FS1_SAVED_AT = Date.parse("2026-11-25T03:41:00Z");
+const fs1Status = (key: string, s: RowStatus) => ({ d }: { d: any }) => <SwitchesView d={d} status={{ [key]: s }} />;
+const fs1Unread = (code: string): Poll => ({ data: null, error: code, loading: false, refresh: () => {}, lastOk: null, lastFail: 1, failures: 1, stale: false, intervalMs: 60_000 });
+/** One confirm, rendered as the dialog shows it (the row as the varied body). */
+const fs1Confirm = (c: (r: any) => Change) => ({ d }: { d: any }) => {
+  const r = rowOf(d);
+  if (!r) return <p>no row</p>;
+  const t = confirmText(r, c(r));
+  return <ConfirmDialog options={{ title: t.title, tone: t.tone, confirmLabel: t.confirmLabel, typed: t.typed ?? undefined, body: <ConfirmBody t={t} /> }} onDone={() => {}} />;
+};
+const FS1_GROUPS = ["Demand and supply zones", "Plans, entries and targets", "Strategy agents and councils", "Trading-mode evidence", "Liquidity lens and calendar", "Knowledge and shadow arms", "Omega engine (owner settings)"];
+const FS1_ROW_VIEW = (canControl: boolean, open = false) => ({ d }: { d: any }) => {
+  const r = rowOf(d);
+  return r ? <SwitchRowView r={r} canControl={canControl} open={open} onTip={() => {}} onChange={() => {}} /> : <p>no row</p>;
+};
+
 export const VIEWS: Entry[] = [
+  {
+    name: "FS1Owner", View: SwitchesView, fixture: fs1Owner,
+    shows: [...FS1_GROUPS, "Feature switches", "Settings · owner", "3 overrides", "as of 03:40 UTC · 10:40 GMT+7", "omega_settings", "role=\"switch\"", "aria-pressed=\"true\"",
+      "Reset to config: ENTRY_ZONE_MODE", "Reset to config: CFC_MODE", "Reset to default: change_thresholds", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN",
+      "aria-label=\"Emergency stop\"", ">era<", ">ev<", "2026-11-25 02:14 UTC · 09:14 GMT+7", "deploy (wrangler.jsonc)", "OMEGA_DEFAULTS"],
+    hides: ["read only", "sample", "provisional", "owner@", ".com", "Reset to config: METRIC_REBUTTAL", "Reset to config: ZONE_PRIORITY", "bull", "zone_mgmt"]
+  },
+  {
+    name: "FS1Viewer", View: SwitchesView, fixture: fs1Viewer,
+    shows: [...FS1_GROUPS, "Settings · viewer", "read only", "as of 03:40 UTC · 10:40 GMT+7", "none on", "conf,tpw,limit,skip", "prophet_zone,prophet_best,whale,gabfx,gmi_flag"],
+    hides: ["role=\"switch\"", "aria-pressed", "Reset to", "overrides"]
+  },
+  { name: "FS1Revert", View: SwitchesView, fixture: fs1Revert, shows: ["Automatic revert to classic: since 2026-11-24 08:00 UTC · 15:00 GMT+7, until 2026-12-01 08:00 UTC · 15:00 GMT+7."] },
+  { name: "FS1ConfigOnly", View: ({ d }) => <SwitchesView d={d} open="ZONE_AHEAD_MODE" />, fixture: fs1Record,
+    shows: ["record is set in the config (wrangler.jsonc) and cannot be set here; the panel sets trend or all.", "Set in the config; not settable here"], hides: ["aria-pressed=\"true\">trend<"] },
+  { name: "FS1SavedNote", View: ({ d }) => <SwitchesView d={d} open="ENTRY_ZONE_MODE" status={{ ENTRY_ZONE_MODE: { phase: "saved", at: FS1_SAVED_AT, changed: true, era: false } }} />, fixture: fs1Owner, shows: ["Takes effect within ~30 s."] },
+  { name: "FS1TipOpen", View: ({ d }) => <SwitchesView d={d} open="CFC_MODE" />, fixture: fs1Owner, shows: ["aria-expanded=\"true\"", "aria-describedby=\"fs-tip-CFC_MODE\"", "2026-11-24 22:05 UTC · 05:05 GMT+7"] },
+  { name: "FS1Saving", View: fs1Status("ENTRY_ZONE_MODE", { phase: "saving" }), fixture: fs1Owner, shows: ["saving…", "aria-busy=\"true\""] },
+  { name: "FS1Saved", View: fs1Status("ENTRY_ZONE_MODE", { phase: "saved", at: FS1_SAVED_AT, changed: true, era: false }), fixture: fs1Owner, shows: ["saved", "03:41 UTC · 10:41 GMT+7 · owner"], hides: ["· new parity era"] },
+  { name: "FS1SavedUnchanged", View: fs1Status("ENTRY_ZONE_MODE", { phase: "saved", at: FS1_SAVED_AT, changed: false, era: false }), fixture: fs1Owner, shows: ["no change"] },
+  { name: "FS1SavedOmega", View: fs1Status("change_thresholds", { phase: "saved", at: FS1_SAVED_AT, changed: true, era: true }), fixture: fs1Owner, shows: ["saved", "03:41 UTC · 10:41 GMT+7 · owner · new parity era"] },
+  ...POST_ERRORS.map((code) => ({ name: `FS1Failed_${code}`, View: fs1Status("ENTRY_ZONE_MODE", { phase: "failed", error: code }), fixture: fs1Owner, shows: [code, "role=\"alert\""] })),
+  { name: "FS1FailedReply", View: ({ d }: { d: any }) => <SwitchesView d={fs1Owner} status={{ ENTRY_ZONE_MODE: { phase: "failed", error: String(d?.error ?? "read failed") } }} />, fixture: (fs1Replies as any).invalid_value, shows: ["invalid_value", "allowed: edge, on, off."] },
+  { name: "FS1Loading", View: () => <SwitchesLoading />, fixture: fs1Owner, shows: ["Feature switches", "animate-pulse"] },
+  { name: "FS1GetError", View: ({ d }) => <PollError poll={fs1Unread(`/omega/api/feature-switches 502 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "feature_switches_failed" }, shows: ["/omega/api/feature-switches 502 feature_switches_failed", "Retry now"] },
+  { name: "FS1ConfirmNormal", View: fs1Confirm(() => ({ value: "off" })), fixture: FS1_ROW("CHART_PATTERNS_MODE"), shows: ["Turn chart patterns off?", "CHART_PATTERNS_MODE: on → off", "Turn off"], hides: ["Starts a new parity era.", "Restarts mode evidence.", "Type the key to confirm"] },
+  { name: "FS1ConfirmEra", View: fs1Confirm(() => ({ value: "off" })), fixture: FS1_ROW("reentry_1m"), shows: ["Turn 1m re-entry after a lock stop off?", "reentry_1m: on → off", "Starts a new parity era."] },
+  { name: "FS1ConfirmEv", View: fs1Confirm(() => ({ value: "all" })), fixture: FS1_ROW("ZONE_AHEAD_MODE"), shows: ["Set zone-ahead check to all?", "ZONE_AHEAD_MODE: trend → all", "Restarts mode evidence.", "Set"] },
+  { name: "FS1ConfirmEmergency", View: fs1Confirm(() => ({ value: "off" })), fixture: FS1_ROW("KEY_LEVEL_ZONE_TYPES"), shows: ["Turn typed key-level zones off?", "KEY_LEVEL_ZONE_TYPES: on → off", "Restarts mode evidence.", "Type the key to confirm", "disabled=\"\""] },
+  { name: "FS1ConfirmReset", View: fs1Confirm(() => ({ reset: true })), fixture: FS1_ROW("ENTRY_ZONE_MODE"), shows: ["Reset entry zone to config?", "ENTRY_ZONE_MODE: on → edge", "Reset"] },
+  { name: "FS1ConfirmTokens", View: fs1Confirm(() => ({ value: ["tp"] })), fixture: FS1_ROW("ZONE_AIM_OFF"), shows: ["Change zone aims?", "ZONE_AIM_OFF: none → tp", "Save"] },
+  // One row as the varied body, so each of its paths is nulled (the page's variants are capped).
+  { name: "FS1RowOwner", View: FS1_ROW_VIEW(true), fixture: FS1_ROW("ENTRY_ZONE_MODE"), shows: ["Entry zone", "Reset to config: ENTRY_ZONE_MODE"] },
+  { name: "FS1RowTokens", View: FS1_ROW_VIEW(true, true), fixture: FS1_ROW("ZONE_SOURCES_OFF"), shows: ["Zone typing sources", "prophet_zone", "aria-expanded=\"true\""] },
+  { name: "FS1RowOmega", View: FS1_ROW_VIEW(true, true), fixture: FS1_ROW("change_thresholds"), shows: ["Change thresholds", "Reset to default: change_thresholds", "2026-11-24 14:30 UTC · 21:30 GMT+7", "An Omega setting"] },
+  { name: "FS1RowReadOnly", View: FS1_ROW_VIEW(true, true), fixture: FS1_ROW("METRIC_REBUTTAL"), shows: ["Metric rebuttals", "Read only: shown for information"], hides: ["role=\"switch\""] },
+  { name: "FS1RowVeto", View: FS1_ROW_VIEW(false, true), fixture: FS1_ROW("AGENT_VETO_RULE", fs1Revert), shows: ["Strategy-agent veto rule", "Automatic revert to classic"] },
+
   { name: "EZ1DecisionEngineOn", View: DecisionPlanView, fixture: ez1Global, shows: EZ1_ZONE_SHOWS, hides: ["stale"] },
   { name: "EZ1DecisionStale", View: ({ d }) => <DecisionPlanView d={d} suffix=" · stale 12m" />, fixture: ez1Global, shows: ["Entry zone", "2684.20–2685.60", "· stale 12m"] },
   { name: "EZ1DecisionEngineOff", View: DecisionPlanView, fixture: EZ1_ENGINE_OFF, shows: ["Entry zone", "2684.30–2685.50", "plan 2684.90", "Omega limit"], hides: ["2684.20–2685.60", "EZ1b"] },
