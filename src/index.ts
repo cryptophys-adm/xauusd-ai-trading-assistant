@@ -277,6 +277,7 @@ import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat, readControl } from "./ea-signal.mjs";
 import { dedupeDeals, listDeals, omegaOverview, setControl, storeDeal } from "./ea-execution.mjs";
+import { closeReconcileBackfill } from "./close-reconcile.mjs";
 import { omegaHealth } from "./omega-health.mjs";
 import { relayEaHeartbeat } from "./ea-heartbeat-relay.mjs";
 import { relayStrategyArm } from "./strategy-arm-relay.mjs";
@@ -3051,6 +3052,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // per deal ticket (owner 2026-11-13: "setuju, bersihkan duplikat deal lewat PR").
   const deals = await dedupeDeals(env);
   if (deals.status !== "clean") console.log("ea_deals_dedupe", JSON.stringify(deals));
+  // CA1 (src/close-reconcile.mjs): the one-time 30-day pass over the close intents whose ack was lost, behind its KV
+  // marker; the Omega sync reconciles new ones live.
+  const closeAcks = await closeReconcileBackfill(env) as { status?: string };
+  if (closeAcks.status !== "done") console.log("close_reconcile_backfill", JSON.stringify(closeAcks));
   // The plan learner (owner 2026-11-13, docs/RFC_PLAN_LEARNING.md): the engine's plans replayed with other
   // entries and stops on the bars that followed. Shadow only; it reads decisions and never writes one.
   const plans = await runPlanLearning(env);
