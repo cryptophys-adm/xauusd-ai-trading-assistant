@@ -4,6 +4,9 @@ This file is the single source of truth for repository changes. Topology and
 deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
+## 2026-11-25
+- feat(decision): `ZONE_PRIORITY` "on" in wrangler.jsonc: the Z2 zone_ahead check goes live in 'trend' (orchestrator ruling on Z2: on only after the live-capture replay). Replay on 8 hourly captures (2026-11-24 16:41Z to 2026-11-25 00:41Z) with 1H/4H Prophet boxes: 55 plans, 28 with a decisive opposing zone within need, 15 (27%) fail in 'trend' (all counter-trend longs), 28 (51%) would fail in 'all'; Z1a on vs off changes no plan verdict (typed 75.0% vs 74.0%). `ZONE_NEED` kept at max(1R, 0.75 ATR). `rule_version` becomes `tp1_kz:on+zone_ahead@1` from this deploy, so the mode selector's evidence restarts, as TP1-KZ did. No code change; Z2's off pins stay.
+
 ## 2026-11-24
 - feat(knowledge): the shadow arm's verdicts posted to the platform as the kernel agent `shadow-knowledge` (KA2; platform PF3, capability `knowledge.verdict`, migration 0088), so Aether's curator learns from them. `src/knowledge-verdicts.mjs` (new), docs/SSOT.md shadow knowledge arm and the DNA.
   - **DNA.** `organism.json` declares `shadow-knowledge` (capabilities `knowledge.verdict` only, tier 1, no seat); `test/organism-dna.test.mjs` D2 adds it to the code set and the per-agent ceiling (`AGENT_EXTRA`) and pins its entry. No hash pins organism.json. The census then proposes `register_agent` (platform side).
