@@ -9,8 +9,10 @@
 //   feature-switches-record.json  the same state with wrangler's ZONE_AHEAD_MODE "record", a config-only value the panel
 //                                 never sets (the registry's config_only; the payload carries the value, not the list);
 //   post-replies.json             the POST's answers: saved, unchanged, reset, and each error code.
-// test/nexus-feature-switches.test.mjs checks each file against this seed, byte for byte.
-import { readFileSync } from "node:fs";
+// test/nexus-feature-switches.test.mjs checks each file against this seed, byte for byte. After a registry change (a new
+// switch in src/feature-switches.mjs), regenerate them: node test/support/nexus-fs1-seed.mjs --write
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { featureSwitchesPayload, setFeatureSwitch, resetFeatureSwitchMemoForTests } from "../../src/feature-switch-store.mjs";
 import { FEATURE_SWITCHES } from "../../src/feature-switches.mjs";
 import { AGENT_VETO_AUTO_KEY } from "../../src/agent-veto.mjs";
@@ -71,4 +73,13 @@ export async function seedFs1() {
     owner_only: await set({ key: "ZONE_PRIORITY", value: "off" }, at, "someone-else")
   };
   return { owner, viewer, revert, record, replies: JSON.parse(JSON.stringify(replies)) };
+}
+
+// CLI: `node test/support/nexus-fs1-seed.mjs --write` rewrites the fixtures from the seed (after a registry change).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv.includes("--write")) {
+  const out = await seedFs1();
+  const dir = new URL("../fixtures/nexus-fs1/", import.meta.url);
+  const files = { "feature-switches.json": out.owner, "feature-switches-viewer.json": out.viewer, "feature-switches-revert.json": out.revert, "feature-switches-record.json": out.record, "post-replies.json": out.replies };
+  for (const [name, body] of Object.entries(files)) writeFileSync(new URL(name, dir), JSON.stringify(body, null, 2) + "\n");
+  console.log(`wrote ${Object.keys(files).length} fixtures to test/fixtures/nexus-fs1/`);
 }
