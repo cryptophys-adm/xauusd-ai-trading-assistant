@@ -238,7 +238,8 @@ export const typedZones = (zones) => Array.isArray(zones) && zones.some((z) => z
 /** Z1b: at most this many source labels per recorded level (ds_sources), each at most ZONE_SOURCE_LABEL_MAX chars. */
 export const ZONE_SOURCE_LABELS_MAX = 12;
 export const ZONE_SOURCE_LABEL_MAX = 32;
-const LABEL = /^[a-z_]+@(15m|1H|4H|daily)(\(dup\))?$/;
+// Every ZONE_TF_NAME word (weekly included: a snapshot whose timeframe is "W" types as weekly).
+const LABEL = new RegExp(`^[a-z_]+@(${[...new Set(Object.values(ZONE_TF_NAME))].join("|")})(\\(dup\\))?$`);
 /**
  * Pure (Z1b): a typed zone's source labels for the recorded set, words only: its weighted sources (`prophet_zone@1H`)
  * sorted, then the same-block duplicates that added no weight as `<source>@<tf>(dup)` (`gmi_ob@1H(dup)`), sorted;

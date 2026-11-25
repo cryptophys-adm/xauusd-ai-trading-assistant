@@ -687,7 +687,13 @@ test("Z1b-8 ds_sources: the recorded set's source labels (words only, weighted s
   assert.equal(dsSourceLabels(null), null);
   // Words only: anything not <source>@<15m|1H|4H|daily> is dropped; at most ZONE_SOURCE_LABELS_MAX.
   assert.deepEqual(dsSourceLabels({ sources: ["prophet_zone@1H", "x y@1H", "a@5m", 7, "<b>@1H", "z".repeat(40) + "@1H"] }), ["prophet_zone@1H"]);
-  const many = ZONE_SOURCES.flatMap((s) => ["15m", "1H", "4H", "daily"].map((tf) => `${s}@${tf}`));
+  // Every timeframe word of ZONE_TF_NAME is kept, weekly included.
+  assert.deepEqual(dsSourceLabels({ sources: ["whale@weekly", "prophet_zone@daily"], also: ["gmi_ob@weekly"] }), ["prophet_zone@daily", "whale@weekly", "gmi_ob@weekly(dup)"]);
+  // A snapshot whose timeframe is "W" types as weekly, and the label reaches the recorded set.
+  const wSnap = achart("1D", [az("demand", 3990.5, 3991.5)]); wSnap.timeframe = "W";
+  const wZone = zoneTypes([{ low: 3990, high: 3992, candidate: true }], dsEvidence({ snapshots: { "1D": wSnap }, atrH1: 10 }));
+  assert.deepEqual(aroundSet(wZone, 4000)[0].ds_sources, ["gmi_ob@weekly"]);
+  const many = ZONE_SOURCES.flatMap((s) => ["15m", "1H", "4H", "daily", "weekly"].map((tf) => `${s}@${tf}`));
   assert.equal(dsSourceLabels({ sources: many, also: many }).length, ZONE_SOURCE_LABELS_MAX);
   // In the recorded set: present on a typed level with sources, absent on one without.
   const set = aroundSet([
