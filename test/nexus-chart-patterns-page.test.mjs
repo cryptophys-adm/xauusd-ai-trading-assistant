@@ -50,7 +50,7 @@ const LIVE = { show: true, dim: false, suffix: "", note: null };
 
 test("CP1 NAV and PAGES: Chart patterns at /#/patterns, key patterns, icon Shapes, between Strategy agents and Liquidity", () => {
   const shell = src("components/AppShell.tsx");
-  const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf("] }\n];"));
+  const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf('{ title: "Settings"'));
   const labels = [...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(labels.slice(2, 5), ["Strategy agents", "Chart patterns", "Liquidity"]);
   assert.match(intel, /\{ label: "Chart patterns", href: "\/#\/patterns", key: "patterns", icon: Shapes \}/);

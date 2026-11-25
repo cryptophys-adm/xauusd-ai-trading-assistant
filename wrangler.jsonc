@@ -66,6 +66,12 @@
     // the one best strategy by confidence x confluence). "off" restores today's choice; "shadow" records only.
     "STRATEGY_ARM_MODE": "live",
     "GRID_ADAPT_MODE": "live",
+    // The strategy agents' veto rule (SV1b, src/agent-veto.mjs; owner 2026-11-24, relayed: "Build A6+A7, switch on,
+    // auto-revert"): "two_sided" lets an agent that speaks on both sides no longer count against the side it also speaks
+    // for (A6: the lean veto; A7: the arm veto). Back to "classic" by itself for 7 days once its latest 15 closed softened
+    // trades average below 0R (KV agent-veto:auto:v1); the owner's force wins (KV agent-veto:owner:v1). Unset or any
+    // other value: "classic", the vetoes as before.
+    "AGENT_VETO_RULE": "two_sided",
     // The council auto-arm ceiling (platform ADR-0020 Amendment 2, merged 2026-11-17, platform main 6df9a34): "allowed"
     // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
     // council to proposals.
@@ -149,6 +155,32 @@
     // "on" | "off". "on": Omega rests a limit inside it where the plan's level is through price; "edge" (EZ1b, owner
     // "setuju") also at its near edge where the plan's level is out of the placement band; "off" sends no zone.
     "ENTRY_ZONE_MODE": "edge",
+    // Z0 (2026-11-24, src/zone-types.mjs): demand/supply type, strength and freshness of the Key Level Agent's zones and
+    // each plan's nearest decisive opposing zone ahead, recorded only (no behaviour change): "on" | "off". "off" removes
+    // every typed field (decision key_levels words, plan zone_types and opposing_ahead, the plan_setups zone columns).
+    "KEY_LEVEL_ZONE_TYPES": "on",
+    // Z2 (2026-11-24, src/zone-types.mjs zoneAheadCheck; owner 2026-11-23, "Langsung prioritaskan"): the guardrails'
+    // zone_ahead check, no trade into a decisive opposing demand or supply zone inside max(1R, 0.75 ATR(1H)) against
+    // the trend, and the same rule on the strategy agents' plans (outside the consensus and the quorum).
+    // ZONE_PRIORITY "on" | "off" (unset reads "off": everything as before). ZONE_AHEAD_MODE "trend" (a with-trend plan
+    // is exempt) | "all" (owner-set only: no exemption, one warning line per decision) | "record" (no check; the plan
+    // keeps would_block) | "off".
+    // On since the Z2 follow-up (2026-11-25), after the typing replay and the ZONE_NEED re-check on 8 live captures with 1H/4H
+    // Prophet boxes (Z1a): need max(1R, 0.75 ATR) kept; in 'trend' 15 of 55 plans fail, all counter-trend longs.
+    // Owner decision 2026-11-25 (relayed by the orchestrator): "Turn on, 'trend' mode".
+    "ZONE_PRIORITY": "on",
+    "ZONE_AHEAD_MODE": "trend",
+    // Z2b (2026-11-25, src/zone-types.mjs zoneAim; docs/RFC_DEMAND_SUPPLY_ZONES.md §6): the execution plans aimed by zone
+    // type, on copies after the agents' consensus and the quorum, all under ZONE_PRIORITY. ZONE_AIM_OFF: the rules left
+    // off, comma tokens "tp" (TP2 at the next decisive opposing key zone, TP1's words), "stop" (the stop past a decisive
+    // opposing-type zone), "factor" (pickStrategy's zone factor); "" = every rule on. ZONE_AIM_TP "label" (TP1's price
+    // never moves) | "qualified" (owner-set only, after TP1-KZ becomes tp1_kz@2: a decisive opposing qualified zone at
+    // or beyond ZONE_NEED, nearer than TP1, becomes TP1).
+    // Inert at ship (orchestrator ruling 2026-11-25): every rule off, so plans, signals and rule_version are Z2's. The
+    // owner turns each rule on separately (remove "tp", "stop" or "factor" from the list); stop_skip and the factor wait
+    // for their evidence.
+    "ZONE_AIM_OFF": "tp,stop,factor",
+    "ZONE_AIM_TP": "label",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.
@@ -208,7 +240,16 @@
     // "Hentikan seluruh arm"; the record per arm is in docs/CHANGELOG.md): the learned-note arm and its A/A arm, the
     // metric rebuttals and the model arena make no model call. Their stored rows stay. The metric opening shadow stays:
     // it was better than its control (sign test 238 vs 170, Holm p 0.003).
-    "SHADOW_KNOWLEDGE_ENABLED": "false",
+    // The learned-note arm reopened 2026-11-24 (KA1; the owner, relayed by the orchestrator:
+    // "buka arm, biarkan system menilai dirinya sendiri"): an item with a final verdict closes by itself (better goes
+    // live through learned-live; not better, holdout failed or worse retires in learned_live), so the queue flows.
+    // Same cap (32 calls an hour, 6 items), kill switch and neuron breaker; its A/A arm runs with the first item, as
+    // before. The metric rebuttals and the model arena stay off.
+    "SHADOW_KNOWLEDGE_ENABLED": "true",
+    // KA2 (platform PF3, capability knowledge.verdict): the arm's verdicts posted to the platform as the kernel agent
+    // shadow-knowledge, for Aether's curator (src/knowledge-verdicts.mjs). Code default "off"; it also needs
+    // SHADOW_KNOWLEDGE_ENABLED. Until the platform registers the agent, each hourly run stops at the first refusal.
+    "KNOWLEDGE_VERDICT_POSTS": "on",
     "METRIC_REBUTTAL": "off",
     "MODEL_ARENA": "off",
     "LEARNED_KNOWLEDGE_ENABLED": "true"

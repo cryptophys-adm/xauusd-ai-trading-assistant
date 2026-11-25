@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, barsVerified, HUD_SNAPSHOT_VERSION } from "../src/hud-store.mjs";
+import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, barsVerified, HUD_SNAPSHOT_VERSION, HUD_LATEST_TTL_S, latestTtlSeconds } from "../src/hud-store.mjs";
 
 function kv(init = {}) {
   const m = new Map(Object.entries(init));
@@ -21,14 +21,17 @@ function snapshot(extra = {}) {
   };
 }
 
-test("validation rejects wrong schema, keys, stale or future snapshots, unknown HUDs and credentials", () => {
+test("validation rejects wrong schema, keys, stale or future snapshots, malformed HUDs and credentials", () => {
   assert.equal(validateHudSnapshot(snapshot(), now).valid, true);
   assert.ok(validateHudSnapshot(snapshot({ schema_version: "x" }), now).errors.includes("unsupported_schema_version"));
   assert.ok(validateHudSnapshot(snapshot({ timeframe: "5" }), now).errors.includes("unsupported_timeframe"));
   assert.ok(validateHudSnapshot(snapshot({ candle_key: "OANDA:XAUUSD:15:" + Date.parse("2026-11-05T11:00:00Z") }), now).errors.includes("candle_key_invalid"));
   assert.ok(validateHudSnapshot(snapshot({ computed_at: "2026-11-05T10:00:00Z" }), now).errors.includes("snapshot_stale"));
   assert.ok(validateHudSnapshot(snapshot({ computed_at: "2026-11-05T13:00:00Z" }), now).errors.includes("computed_at_in_future"));
-  assert.ok(validateHudSnapshot(snapshot({ huds: { not_a_hud: { fields: {} } } }), now).errors.includes("huds_invalid"));
+  // B7: an unknown HUD id is dropped, not rejected (test/parity-groups.test.mjs); a malformed known HUD still is.
+  assert.deepEqual(validateHudSnapshot(snapshot({ huds: { not_a_hud: { fields: {} } } }), now), { valid: true, errors: [], dropped_huds: ["not_a_hud"] });
+  assert.ok(validateHudSnapshot(snapshot({ huds: { prophet: { fields: null } } }), now).errors.includes("huds_invalid"));
+  assert.ok(validateHudSnapshot(snapshot({ huds: [] }), now).errors.includes("huds_invalid"));
   assert.ok(validateHudSnapshot(snapshot({ secret: "x" }), now).errors.includes("credential_fields_not_permitted"));
 });
 
@@ -127,4 +130,21 @@ test("invalid snapshots are refused without writing", async () => {
   const r = await storeHudSnapshot(env, snapshot({ timeframe: "5" }), now);
   assert.equal(r.status, 400);
   assert.equal(env.SIGNAL_CACHE.map.size, 0);
+});
+
+test("HT1: the latest snapshot per chart outlives its bar (4H 5h, 1D 26h; 15m and 1H keep 3h) and is stored with that TTL", async () => {
+  assert.deepEqual({ ...HUD_LATEST_TTL_S }, { "15": 10800, "60": 10800, "240": 18000, "1D": 93600 });
+  const barS = { "15": 900, "60": 3600, "240": 14400, "1D": 86400 };
+  for (const tf of Object.keys(barS)) assert.ok(latestTtlSeconds(tf) > barS[tf], `${tf}: TTL longer than one bar`);
+  assert.equal(latestTtlSeconds("unknown"), 10800);
+  const puts = [];
+  const store = { async get() { return null; }, async put(k, v, o) { puts.push([k, o?.expirationTtl]); } };
+  for (const [tf, bar] of [["240", "2026-11-05T08:00:00Z"], ["1D", "2026-11-04T00:00:00Z"], ["60", "2026-11-05T11:00:00Z"]]) {
+    const s4 = snapshot({ timeframe: tf, candle_key: `OANDA:XAUUSD:${tf}:` + Date.parse(bar) });
+    const res = await storeHudSnapshot({ SIGNAL_CACHE: store }, s4, now);
+    assert.equal(res.status, 202, tf);
+  }
+  const latest = Object.fromEntries(puts.filter(([k]) => k.endsWith(":latest")).map(([k, t]) => [k.split(":")[1], t]));
+  assert.deepEqual(latest, { "240": 18000, "1D": 93600, "60": 10800 });
+  assert.ok(puts.filter(([k]) => !k.endsWith(":latest")).every(([, t]) => t === 60 * 60 * 24 * 14), "per-candle keys keep 14 days");
 });

@@ -9,6 +9,7 @@ import { organismDna, ORGANISM_SCHEMA } from "../src/organism.mjs";
 import { HUD_PLATFORM_IDS, PLATFORM_HOST_WORKER } from "../src/platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "../src/health-alerts.mjs";
 import { NEXUS_TEACHER_ID } from "../src/owner-corrections.mjs";
+import { KNOWLEDGE_VERDICT_AGENT_ID, KNOWLEDGE_VERDICT_CAPABILITY } from "../src/knowledge-verdicts.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -18,7 +19,8 @@ const ai = dna.organs.find((o) => o.service === PLATFORM_HOST_WORKER);
 const CEILING = new Set(["signals.observe", "reports.publish", "memory.recall", "memory.remember"]);
 // XAUUSD_CEILING (platform V3, live 2026-11-17): the moderator alone may also read its handed-off proposals' state.
 // Platform HAIC H3e: nexus-teacher alone may record the owner's corrections (src/owner-corrections.mjs).
-const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"] });
+// Platform PF3 (migration 0088, KA2): shadow-knowledge alone may post the shadow arm's verdicts (src/knowledge-verdicts.mjs).
+const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"], "shadow-knowledge": ["knowledge.verdict"] });
 // DNA-1 (2026-11-22): genes the platform registered before this repository runs their code. Platform PF1 (migration
 // 0087) registers hud-mizan-oracle; declaring it here keeps the census free of undeclared_agent until B27 wires it.
 // Each is idle: not in HUD_PLATFORM_IDS and named nowhere in src/, so nothing reports as it. B27 moves
@@ -44,7 +46,7 @@ test("D1. one organ per Worker of this repository, named as its wrangler config 
 });
 
 test("D2. the agents are exactly those that report to the platform kernel, within the external ceiling", () => {
-  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID].sort();
+  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID, KNOWLEDGE_VERDICT_AGENT_ID].sort();
   assert.deepEqual(ai.agents.map((a) => a.id).sort(), [...code, ...DECLARED_IDLE].sort());
   // A declared-idle gene has no code path: no kernel id in HUD_PLATFORM_IDS and no mention anywhere in src/.
   for (const id of DECLARED_IDLE) {
@@ -58,6 +60,8 @@ test("D2. the agents are exactly those that report to the platform kernel, withi
   }
   // The platform's per-agent ceiling (XAUUSD_CEILING, H3e): nexus-teacher holds corrections.record and nothing else.
   assert.deepEqual(ai.agents.find((a) => a.id === NEXUS_TEACHER_ID).capabilities, ["corrections.record"]);
+  // PF3: shadow-knowledge holds knowledge.verdict and nothing else, tier 1, no seat (KA2).
+  assert.deepEqual(ai.agents.find((a) => a.id === KNOWLEDGE_VERDICT_AGENT_ID), { id: "shadow-knowledge", display_name: "Shadow Knowledge", capabilities: [KNOWLEDGE_VERDICT_CAPABILITY], tier_max: 1, voter: false });
   for (const o of dna.organs.filter((x) => x !== ai)) assert.deepEqual(o.agents, [], o.service);
   assert.ok(read("src/platform-reports.mjs").includes('"xauusd-reasoner"') && read("src/platform-reports.mjs").includes('"xauusd-moderator"'));
 });

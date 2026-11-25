@@ -14,6 +14,7 @@
 
 import { SCORING, scoreStance } from "./outcome-scoring.mjs";
 import { goldClosedAt } from "./parity-sweep.mjs";
+import { zoneSourcesList } from "./zone-types.mjs";
 
 export const STRATEGY_INPUTS_VERSION = "cryptophys.strategy-inputs.v1";
 export const STRATEGY_INPUTS_DAYS = 60;
@@ -59,10 +60,13 @@ const snapshot = (s) => (s?.huds ? {
   ...(s.chart_plane ? { chart_plane: s.chart_plane } : {})
 } : null);
 
-const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone"]);
+const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone", "zoneTypes"]);
 /** The strategy switches that are off, in SLIM_MODES order, or null when all are on. */
 const offModes = (modes) => {
   const off = Object.fromEntries(SLIM_MODES.filter((k) => modes?.[k] === "off").map((k) => [k, "off"]));
+  // Z1a: the ZONE_SOURCES_OFF tokens, kept only when a source is off.
+  const sources = zoneSourcesList(modes?.zoneSourcesOff);
+  if (sources.length) off.zoneSourcesOff = sources;
   return Object.keys(off).length ? off : null;
 };
 /** Pure: the inputs buildStrategy reads, without the room texts or other unused fields. */
@@ -82,7 +86,7 @@ export function slimInputs(inputs) {
     calendar: Array.isArray(inputs?.calendar?.events) ? { events: inputs.calendar.events.map((e) => ({ title: e.title, currency: e.currency, time: e.time, impact: e.impact })) } : null,
     // The released figures of the Projection Agent's event patterns: the replay must see them too.
     releases: Array.isArray(inputs?.releases) ? inputs.releases.map((e) => ({ title: e.title, time: e.time, gold_direction: e.gold_direction })) : [],
-    // CHART_PATTERNS_MODE, TP1_KEY_ZONE_MODE and ENTRY_ZONE_MODE at capture time, so the replay builds what the live
+    // CHART_PATTERNS_MODE, TP1_KEY_ZONE_MODE, ENTRY_ZONE_MODE and KEY_LEVEL_ZONE_TYPES (Z0) at capture time, so the replay builds what the live
     // strategy built; each kept only when off (stored inputs are unchanged while all are on).
     ...(offModes(inputs?.modes) ? { modes: offModes(inputs.modes) } : {}),
     now: inputs?.now ?? null

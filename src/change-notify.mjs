@@ -42,7 +42,9 @@ export const TOLD_ELSEWHERE = Object.freeze([
   "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed", "limit_fault_cleared",
   "pm_stop_loosened", "pm_tp_moved", "autonomous_recovery",
   // MS2: the mode probation passed (src/mode-selector.mjs tells it in one line; its failure is a mode_changed).
-  "mode_probation_passed"
+  "mode_probation_passed",
+  // FS1: an owner feature-switch change (src/feature-switch-store.mjs tells it in one line next to its audit row).
+  "feature_switch"
 ]);
 /** Not a change of what Omega trades with: a state, a reading or a refused attempt (health alerts carry the problems). */
 export const NOT_A_CHANGE = Object.freeze([

@@ -25,6 +25,7 @@
 import { planForDirection, zoneLevels, SCALP_TARGET, TP1_MIN_R, tp1KeyZoneOf, entryZoneOf } from "./strategy-engine.mjs";
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
+import { zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
@@ -57,8 +58,25 @@ function targetsAhead({ dir, entry, risk, levels, atr, gapAtr, keyZone = false }
   if (keyZone && Math.abs(tp1 - entry) / risk < TP1_MIN_R) return null;
   return {
     tp1, tp1_note: t1 ? t1.label : PROJECTION_NOTE,
-    tp2: t2 ? edge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk), tp2_note: t2 ? t2.label : "a projection beyond the first target"
+    tp2: t2 ? edge(t2) : entry + dir * Math.max(3 * risk, Math.abs(tp1 - entry) + risk), tp2_note: t2 ? t2.label : "a projection beyond the first target",
+    // Z0 (recorded only): the type words of the two target zones, with typed zones.
+    ...(typedZones(levels) ? { zone_types: { tp1: zoneWords(t1), tp2: zoneWords(t2) } } : {})
   };
+}
+
+/**
+ * Pure, Z0 (recorded only): the type words of the zones an agent's plan stands on, from the typed levels: the entry's
+ * zone (the one holding the entry), the stop's (the zone between the entry and the stop whose far edge lies nearest the
+ * stop: the structure the stop hides behind) and each target's (targetsAhead's own zone, else the zone holding the
+ * target). Null where no zone is. Without typed levels: null (no zone_types on the plan).
+ */
+function planZoneTypes(dir, levels, { entry, stop, t }) {
+  if (!typedZones(levels)) return null;
+  const holding = (p) => (levels || []).find((z) => p >= lo(z) && p <= hi(z)) ?? null;
+  const far = (z) => (dir > 0 ? lo(z) : hi(z));
+  const behind = (levels || []).filter((z) => dir * (entry - far(z)) > 0 && dir * (far(z) - stop) >= 0).sort((a, b) => dir * (far(a) - far(b)))[0] ?? null;
+  const own = t.zone_types;
+  return { entry: zoneWords(holding(entry)), stop: zoneWords(behind), tp1: own ? own.tp1 : zoneWords(holding(t.tp1)), tp2: own ? own.tp2 : zoneWords(holding(t.tp2)) };
 }
 
 /**
@@ -101,10 +119,14 @@ export function finishPlan(agent, dir, { entry, stop, atLevel, entryNote, stopNo
   const rr = (tp) => r2(Math.abs(tp - entry) / risk);
   // EZ1 (src/strategy-engine.mjs ENTRY_ZONE): a structural plan's entry zone, the entry +/- 0.15 x ATR(1H).
   const zone = ctx.entryZone === true ? entryZoneOf({ dir, entry, stop: s, atrH1: atr }) : null;
-  return {
+  const types = planZoneTypes(dir, ctx.levels, { entry, stop: s, t });
+  const plan = {
     agent, setup, at_level: atLevel === true, entry: r2(entry), entry_note: entryNote, ...(zone ?? {}), stop: r2(s), stop_note: note, risk: r2(risk),
-    tp1: r2(t.tp1), tp1_note: t.tp1_note, tp2: r2(t.tp2), tp2_note: t.tp2_note, progressive_stop: r2(entry), rrr: { tp1: rr(t.tp1), tp2: rr(t.tp2) }
+    tp1: r2(t.tp1), tp1_note: t.tp1_note, tp2: r2(t.tp2), tp2_note: t.tp2_note, progressive_stop: r2(entry), rrr: { tp1: rr(t.tp1), tp2: rr(t.tp2) },
+    ...(types ? { zone_types: types } : {})
   };
+  // Z0 (recorded only): the nearest decisive opposing zone ahead, last, on the final entry and stop (src/zone-types.mjs).
+  return withZoneAhead(plan, ctx.strategy, dir);
 }
 
 const zonePullback = Object.freeze({
@@ -319,6 +341,14 @@ const patternInside = Object.freeze({
 /** The registry: adding or removing a strategy is one entry here. */
 export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
+/**
+ * Z2b's TP2 helper (src/zone-types.mjs zoneAim, tp_typed): the agents whose targets come from the key levels
+ * (tradeLevels or targetsAhead: the default agent, the sweep and the break-and-retest). Only their TP2 may move to the
+ * next decisive opposing key zone; the agents with their own targets (range_fade, the pattern agents, pattern_inside)
+ * keep theirs.
+ */
+export const KEY_TARGET_AGENTS = Object.freeze([DEFAULT_AGENT, "sweep_reversal", "breakout_retest"]);
+export const keyLevelTargets = (id) => KEY_TARGET_AGENTS.includes(id);
 
 export function strategyAgentsMode(env) {
   return String(env?.STRATEGY_AGENTS_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
@@ -566,7 +596,8 @@ export function priceActionReading(patterns, calibration = null) {
 }
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
-export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}) });
+// Z0: zone_types and opposing_ahead only when the plan has them (KEY_LEVEL_ZONE_TYPES on).
+export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}), ...(p.zone_types ? { zone_types: p.zone_types } : {}), ...(p.opposing_ahead ? { opposing_ahead: p.opposing_ahead } : {}) });
 
 /**
  * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): a BUY or SELL trades only

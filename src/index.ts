@@ -278,6 +278,8 @@ import { relayStrategyArm } from "./strategy-arm-relay.mjs";
 import { relayProfileChanges } from "./profile-agent.mjs";
 import { computeRecommendations, readRecommendations } from "./strategy-recommendation.mjs";
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
+import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
+import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { pollCouncilDecisions, platformStates, decisionsPollStatus } from "./council-decisions.mjs";
@@ -293,8 +295,9 @@ import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mj
 import { storeBrokerTrigger } from "./broker-trigger.mjs";
 import { readWeightingReplay } from "./weighting-replay.mjs";
 import { runPendingTimeframeThreads, runTimeframeThread, runShadowJob, readTimeframeThread, tfThreadsEnabled, tfAgentName } from "./timeframe-threads.mjs";
-import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge } from "./shadow-knowledge.mjs";
+import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge, runShadowClosures } from "./shadow-knowledge.mjs";
 import { runLearnedPromotion, readLearnedLive } from "./learned-live.mjs";
+import { postKnowledgeVerdicts } from "./knowledge-verdicts.mjs";
 import {
   H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
   h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
@@ -1692,7 +1695,13 @@ async function ingestM5Context(env: Env, payload: unknown, waitUntil?: (p: Promi
 }
 
 export class LocalComputationIngress extends WorkerEntrypoint<Env> {
+  /**
+   * FS1 (src/feature-switch-store.mjs): this call's env with the owner's feature-switch overrides, resolved once on a copy
+   * (env itself is never written; without an override it is env itself).
+   */
+  private async fs(): Promise<void> { this.env = await withFeatureSwitches(this.env); }
   async submit(record: unknown): Promise<{ status: number; body: JsonObject }> {
+    await this.fs();
     return ingestLocalCalculation(this.env, record);
   }
   /** The pull adapter's daily TradingView call budget, reserved atomically in D1 (src/tv-budget.mjs). */
@@ -1703,10 +1712,12 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
     return releaseTvCalls(this.env.DB, { day: String(input?.day ?? ""), count: Number(input?.count) }) as Promise<JsonObject>;
   }
   async submitContext(record: unknown): Promise<{ status: number; body: JsonObject }> {
+    await this.fs();
     return ingestM5Context(this.env, record, (p) => this.ctx.waitUntil(p));
   }
   /** Phase C2: HUD snapshot of a closed H1 or 15m bar (HUD agents only, never decision evidence). */
   async submitHud(snapshot: unknown): Promise<{ status: number; body: JsonObject }> {
+    await this.fs();
     return storeHudSnapshot(this.env, snapshot) as Promise<{ status: number; body: JsonObject }>;
   }
   /**
@@ -1715,13 +1726,16 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
    */
   /** 5m execution for Omega (docs/RFC_OMEGA_5M_EXECUTION.md): the broker 5m bar's trigger and structure. */
   async submitBrokerTrigger(payload: unknown): Promise<Record<string, unknown>> {
+    await this.fs();
     return storeBrokerTrigger(this.env, payload);
   }
   /** Corpus Oracle phase 2: the broker shadow lane's agreement for one 15m bar (feeds nothing). */
   async recordBrokerShadow(payload: unknown): Promise<Record<string, unknown>> {
+    await this.fs();
     return recordBrokerShadow(this.env, payload);
   }
   async corpusBars(request: { since_ms?: number; limit?: number; base?: string } = {}): Promise<Record<string, unknown>> {
+    await this.fs();
     // With a base (stage 2: XAGUSD, USOIL, the DXY pairs): that macro symbol's bars; else the traded pair's.
     if (typeof request?.base === "string" && request.base) return readMacroBars(this.env, { base: request.base, sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
     return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
@@ -1769,7 +1783,13 @@ export class OrganismDna extends WorkerEntrypoint<Env> {
  * Read-only; it exposes nothing else of this Worker.
  */
 export class PublicProjection extends WorkerEntrypoint<Env> {
+  /**
+   * FS1 (src/feature-switch-store.mjs): this call's env with the owner's feature-switch overrides, resolved once on a copy
+   * (env itself is never written; without an override it is env itself).
+   */
+  private async fs(): Promise<void> { this.env = await withFeatureSwitches(this.env); }
   async recaps(input?: { days?: number }): Promise<JsonObject> {
+    await this.fs();
     return readPublicProjection(this.env, { days: Number(input?.days) || 2 }) as Promise<JsonObject>;
   }
   /**
@@ -1777,6 +1797,7 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    * the H1/H4/D1 chart patterns and the structure, with no decision, plan or account data (src/public-analysis.mjs).
    */
   async analysis(): Promise<JsonObject> {
+    await this.fs();
     const [strategy, latest] = await Promise.all([readStrategy(this.env).catch(() => null), readLatestDecision(this.env).catch(() => null)]);
     return publicAnalysis((strategy as any)?.key_levels ?? null, { structure: (latest as any)?.structure ?? null }) as unknown as JsonObject;
   }
@@ -1786,6 +1807,7 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    * price (src/public-warroom.mjs).
    */
   async warroom(input?: { source?: string }): Promise<JsonObject> {
+    await this.fs();
     return readPublicWarRoom(this.env, { source: String(input?.source ?? "") }) as Promise<JsonObject>;
   }
   /**
@@ -1793,6 +1815,7 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    * and each analyst's filtered claim and rebuttal; never a stance, confidence, decision or price (src/public-warroom.mjs).
    */
   async warroomScene(): Promise<JsonObject> {
+    await this.fs();
     return readPublicWarRoomScene(this.env) as Promise<JsonObject>;
   }
   /**
@@ -1802,6 +1825,7 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    * replay matches the live account (src/public-track-record.mjs).
    */
   async trackRecord(): Promise<JsonObject> {
+    await this.fs();
     return readPublicTrackRecord(this.env) as Promise<JsonObject>;
   }
 }
@@ -1853,17 +1877,26 @@ async function publishOmegaOverview(env: Env, state: unknown = null): Promise<vo
 }
 
 export class OmegaGateway extends WorkerEntrypoint<Env> {
+  /**
+   * FS1 (src/feature-switch-store.mjs): this call's env with the owner's feature-switch overrides, resolved once on a copy
+   * (env itself is never written; without an override it is env itself).
+   */
+  private async fs(): Promise<void> { this.env = await withFeatureSwitches(this.env); }
   async overview(): Promise<JsonObject> {
+    await this.fs();
     return omegaOverviewBody(this.env);
   }
   /** The Omega badge's light status (UI audit DEF-10): one bridge row and the settings. */
   async status(): Promise<JsonObject> {
+    await this.fs();
     return brokerStatus(this.env) as Promise<JsonObject>;
   }
   async deals(options: { limit?: number } = {}): Promise<JsonObject> {
+    await this.fs();
     return { deals: await listDeals(this.env, { limit: options?.limit ?? 200, account: "last" }) } as JsonObject;
   }
   async setControl(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     const result = await setControl(this.env, input ?? {}) as JsonObject;
     // The strategy arm (owner 2026-11-17, ADR-0020): the kill switch disarms every armed strategy in the same call.
     if (input?.mode === "killed" && result?.ok !== false) {
@@ -1873,12 +1906,14 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   /** The strategy arm's state for the Strategy Agents page (owner 2026-11-17). */
   async strategyArm(input?: { viewer?: string; viewer_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     const check = ownerCheck(this.env, input?.viewer_sub ?? null);
     if (check === "unset" && input?.viewer_sub) await noteOwnerSub(this.env, { sub: input.viewer_sub, actor: input?.viewer });
     return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner", council: await readCouncilState(this.env) } as JsonObject;
   }
   /** Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, or switch sessions on or off. Owner only. */
   async council(input: { action?: string; topic_key?: string; text?: string; seats?: string[]; session_id?: string; option_id?: string; to?: string[]; on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
     const actor = String(input?.actor ?? "owner");
     const enqueue = (t: unknown) => sendQueueTask(this.env.XAUUSD_EVENTS, t as QueueTask);
@@ -1892,17 +1927,50 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   /** The owner's "Council auto-arm" toggle (owner 2026-11-17; refused while the code ceiling is off). */
   async setCouncilAuto(input: { on?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
     return setCouncilAuto(this.env, { on: input?.on === true, actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null }) as Promise<JsonObject>;
   }
+  /**
+   * SV1b: the owner's force of the strategy agents' veto rule (src/agent-veto.mjs): "two_sided" or "classic" pins it, "auto"
+   * clears the force. Through the Omega Worker's owner-only POST /api/strategy-council; since FS1 it writes through the
+   * feature-switch store (setFeatureSwitch: the owner checked again, one audit row, one Telegram line), the single store.
+   */
+  async setAgentVetoRule(input: { rule?: string; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
+    const rule = String(input?.rule ?? "").trim().toLowerCase();
+    if (!["two_sided", "classic", "auto"].includes(rule)) return { ok: false, error: "veto_rule must be two_sided, classic or auto" } as JsonObject;
+    const r = await setFeatureSwitch(this.env, { key: "AGENT_VETO_RULE", value: rule, reset: rule === "auto", actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null, send: (t: string) => sendTelegram(this.env, t) });
+    if (r.ok !== true) return r as unknown as JsonObject;
+    return { ok: true, changed: r.changed === true, force: rule, rule: r.veto?.rule ?? null, source: r.veto?.source ?? null } as JsonObject;
+  }
+  /**
+   * FS1: the owner's feature-switch panel (src/feature-switch-store.mjs), for the Omega Worker's GET /api/feature-switches:
+   * every switch with its value in force; viewer.can_control from the owner check (OWNER_ACCESS_SUB).
+   */
+  async featureSwitches(input?: { viewer_sub?: string | null }): Promise<JsonObject> {
+    return featureSwitchesPayload(this.env, { canControl: ownerCheck(this.env, input?.viewer_sub ?? null) === "owner" }) as unknown as Promise<JsonObject>;
+  }
+  /**
+   * FS1: the owner's POST /api/feature-switches through the Omega Worker ({ key, value } or { key, reset: true }); the owner
+   * is checked again here. A switch of the override store writes its audit row and its Telegram line in setFeatureSwitch;
+   * an Omega setting goes through the settings page's write path, told by the change audit's sweep as a save is.
+   */
+  async setFeatureSwitch(input: { key?: string; value?: unknown; reset?: boolean; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    const r = await setFeatureSwitch(this.env, { key: input?.key, value: input?.value, reset: input?.reset === true, actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null, send: (t: string) => sendTelegram(this.env, t) });
+    if (r.ok === true && r.audit === "settings") this.ctx.waitUntil(runAuditNotify(this.env).then(() => undefined, () => undefined));
+    return r as unknown as JsonObject;
+  }
   /** The owner's manual arm or disarm pins a strategy against the council until the owner unpins it. */
   async unpinStrategy(input: { strategy_id?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     if (ownerCheck(this.env, input?.actor_sub ?? null) === "not_owner") return { ok: false, error: "owner_only" } as JsonObject;
     if (typeof input?.strategy_id !== "string" || !/^[a-z0-9_]{2,40}$/.test(input.strategy_id)) return { ok: false, error: "unknown strategy" } as JsonObject;
     return unpinStrategy(this.env, { strategy_id: input.strategy_id }) as Promise<JsonObject>;
   }
   /** The owner's one click: arm or disarm one strategy (ADR-0020; at most 3; never moves the quorum). */
   async setStrategyArm(input: { strategy_id?: string; action?: string; request_id?: string; expected_version?: number; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     const r = await this.armByOwner(input);
     // The owner's click pins the strategy against the council until the owner unpins it (owner 2026-11-17).
     if ((r as Record<string, unknown>)?.ok === true && typeof input?.strategy_id === "string") { try { await pinStrategy(this.env, { strategy_id: input.strategy_id, actor: String(input?.actor ?? "owner"), action: String(input?.action ?? "") }); } catch { /* the arm stands */ } }
@@ -1918,30 +1986,37 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   /** The owner's account profile controls (docs/RFC_ACCOUNT_PROFILES.md §10): ceiling, profile, agent mode, accept, decline. */
   /** The owner's reversal-probation switch (the omega Worker has checked OWNER_ACCESS_SUB and same origin). */
   async setProbation(input: { enabled?: unknown; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     return setProbation(this.env, { enabled: input?.enabled, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
   }
 
   async setAccountProfile(input: { account_ref?: string; action?: string; value?: string | null; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
     return setAccountProfile(this.env, { account_ref: String(input?.account_ref ?? ""), action: String(input?.action ?? ""), value: input?.value ?? null, actor: String(input?.actor ?? "owner") }) as Promise<JsonObject>;
   }
   async setSettings(input: { body?: unknown; actor: string }): Promise<JsonObject> {
+    await this.fs();
     const result = await writeSettings(this.env, { body: input?.body, actor: String(input?.actor ?? "") }) as JsonObject;
     // The change audit on Telegram (src/change-notify.mjs): told at once, debounced per switch per minute.
     if (result?.ok !== false) this.ctx.waitUntil(runAuditNotify(this.env).then(() => undefined, () => undefined));
     return result;
   }
   async setConnection(input: { envelope?: unknown; server?: unknown; trade_symbol?: unknown; units_per_usd?: unknown; actor: string }): Promise<JsonObject> {
+    await this.fs();
     const units = input?.units_per_usd == null || input.units_per_usd === "" ? null : Number(input.units_per_usd);
     return setConnection(this.env, { envelope: input?.envelope, server: input?.server, trade_symbol: typeof input?.trade_symbol === "string" ? input.trade_symbol : null, units_per_usd: units, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
   async clearConnection(input: { reason?: unknown; actor: string }): Promise<JsonObject> {
+    await this.fs();
     return clearConnection(this.env, { reason: input?.reason, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
   async bridgeKey(): Promise<JsonObject | null> {
+    await this.fs();
     return bridgeKey(this.env) as Promise<JsonObject | null>;
   }
   async bridgeSync(input: { state?: unknown; results?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown; corpusMacro?: unknown; calendar?: unknown; bridgeSymbol?: unknown }): Promise<JsonObject> {
+    await this.fs();
     const result = await bridgeSync(this.env, input ?? {}) as JsonObject;
     // The bridge gets its answer at once; the open Omega pages get the new state after it.
     if (result?.ok !== false) this.ctx.waitUntil(publishOmegaOverview(this.env, input?.state ?? null));
@@ -1960,6 +2035,7 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
    * automatic switch. Owner only (OWNER_ACCESS_SUB), audited, one Telegram line.
    */
   async setTradingMode(input: { mode?: string; action?: string; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
     if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
     if (!String(input?.actor ?? "").trim()) return { ok: false, error: "a person makes this change" } as JsonObject;
     const now = Date.now();
@@ -1968,10 +2044,12 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   /** The MT5 fallback switch and its state (owner 2026-11-11), for the War Room through Omega. */
   async feedFallback(): Promise<JsonObject> {
+    await this.fs();
     return readFeedFallback(this.env) as Promise<JsonObject>;
   }
   /** A person switches the MT5 fallback on ("auto") or off, with a reason; audited and sent to Telegram. */
   async setFeedFallback(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     const result = await setFeedFallback(this.env, input ?? {}) as JsonObject;
     if (result.ok === true && result.changed === true) {
       const on = result.mode === "auto";
@@ -1982,10 +2060,12 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   }
   /** The shadow kill switch and today's shadow spend (owner 2026-11-14), for Nexus through Omega. */
   async shadowMode(): Promise<JsonObject> {
+    await this.fs();
     return readShadowMode(this.env) as Promise<JsonObject>;
   }
   /** A person switches every shadow model call on or off, with a reason; audited and sent to Telegram. */
   async setShadowMode(input: { mode?: string; reason?: string; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     const result = await setShadowMode(this.env, input ?? {}) as JsonObject;
     if (result.ok === true && result.changed === true) {
       try { await sendTelegram(this.env, shadowModeMessage(result, { reason: String(input?.reason ?? "") })); } catch (e) { console.error("shadow_mode_telegram_failed", e instanceof Error ? e.message : String(e)); }
@@ -1993,19 +2073,23 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     return result;
   }
   async closePosition(input: { ticket: number; reason?: string; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     return closePosition(this.env, input ?? {}) as Promise<JsonObject>;
   }
   /** The owner's edit of a position's SL/TP or a pending order's price/SL/TP (owner 2026-11-19, src/omega-hitl.mjs). */
   async ownerModify(input: { target?: string; ticket?: number; sl?: number | null; tp?: number | null; price?: number | null; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     await ensureHitlSchema(this.env.DB);
     return ownerModify(this.env, { ...(input ?? {}), target: input?.target === "order" ? "order" : "position" }) as Promise<JsonObject>;
   }
   /** Delegate a manual position to Omega or take it back (owner 2026-11-19). */
   async setDelegation(input: { ticket?: number; on?: boolean; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     return setDelegation(this.env, input ?? {}) as Promise<JsonObject>;
   }
   /** The toggle: delegate every manual position opened from now on (owner 2026-11-19). */
   async setDelegateMode(input: { on?: boolean; actor?: string }): Promise<JsonObject> {
+    await this.fs();
     return setDelegateMode(this.env, input ?? {}) as Promise<JsonObject>;
   }
 }
@@ -2398,12 +2482,17 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // The Nexus page's view of the patterns themselves is GET /api/chart-patterns (B9, INTEL_VIEW_PATHS below).
     return dashboardJson({ status: "ok", calibration: await readPatternCalibration(env) });
   }
+  if (url.pathname === "/api/feature-switches") {
+    // FS1 (src/feature-switch-store.mjs): every feature switch with its value in force, read-only here (no viewer: the
+    // owner's panel changes them through Omega's POST /omega/api/feature-switches).
+    return dashboardJson(await featureSwitchesPayload(env, { canControl: false }));
+  }
   if (url.pathname === "/api/strategy-agents") {
     // The strategy agents (src/strategy-agents.mjs): the registry with each agent's status and what it is
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
     // and the one the trade took.
     try {
-      const [state, latest, reco, council] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env)]);
+      const [state, latest, reco, council, veto] = await Promise.all([readPlanLearning(env), decisionEngineEnabled(env) ? readLatestDecision(env) : Promise.resolve(null), readRecommendations(env), readCouncilVerdicts(env), agentVetoStatus(env).catch(() => null)]);
       const verdicts = (((council as Record<string, any> | null)?.verdicts ?? {}) as Record<string, any>);
       const d = latest as Record<string, any> | null;
       const records = ((state as Record<string, any> | null)?.agents ?? []) as Array<Record<string, any>>;
@@ -2416,6 +2505,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         council: council ? { day: (council as Record<string, any>).day ?? null, acting: (council as Record<string, any>).acting ?? false } : null,
         // The patterns the breaker holds back (their own trades here lost; the rest of the family trades on).
         suspended_patterns: suspendedPatterns(records),
+        // SV1b (src/agent-veto.mjs): the veto rule in force and its source, the softened decisions, the closed softened trades and their mean R.
+        veto_rule: veto,
         latest: d ? { decision_key: d.decision_key, bar_close: d.bar_close, stance: d.stance, chosen: d.trade ? (d.trade.strategy ?? DEFAULT_AGENT) : null, plans: d.strategy_plans ?? null } : null
       });
     } catch (error) {
@@ -2930,6 +3021,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // The grid's automatic entry/stop per strategy x regime (src/grid-adapt.mjs, owner 2026-11-17): once a UTC day.
   const grid = await runGridAdapt(env, { send: (text: string) => sendTelegram(env, text) });
   if (grid.status === "computed" || grid.status === "failed") console.log("grid_adapt", JSON.stringify(grid));
+  // SV1b (src/agent-veto.mjs, owner 2026-11-24: "auto-revert"): the strategy agents' softened veto rule back to classic for
+  // 7 days once its latest 15 closed softened trades average below 0R; once a UTC day, beside the grid's check.
+  const veto = await runAgentVetoRevert(env, { send: (text: string) => sendTelegram(env, text) });
+  if (veto.status === "reverted" || veto.status === "failed") console.log("agent_veto", JSON.stringify(veto));
   // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
   // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
   const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });
@@ -2955,6 +3050,8 @@ export default {
     if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
       return new Response(null, { status: 204, headers: { ...DASHBOARD_CORS, "access-control-allow-methods": "GET,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400" } });
     }
+    // FS1: the owner's feature-switch overrides, resolved once for this request on a copy of env (src/feature-switch-store.mjs).
+    env = await withFeatureSwitches(env);
     if (request.method === "GET" && url.pathname === "/dashboard") {
       // The old debate/raw-output page is retired: Nexus (threads + live room) is the only dashboard.
       return Response.redirect(String(env.NEXUS_DASHBOARD_URL || "https://nexus.cryptophys.work/"), 302);
@@ -3165,14 +3262,18 @@ export default {
     return json({ error: "Not found", endpoints: ["GET /health", "GET /ready", "GET /dashboard", "POST /webhook", "POST /evidence/local-calculation", "POST /news/analyze", "GET /news/latest", "GET /api/status", "GET /api/news", "GET /api/news/:key", "GET /api/decisions", "GET /api/decision/:key"] }, 404);
   },
   async queue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> {
-    return consumeQueue(batch, env);
+    // FS1: the owner's feature-switch overrides, resolved once for this batch on a copy of env.
+    return consumeQueue(batch, await withFeatureSwitches(env));
   },
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // Closed-market idle (src/market-idle.mjs, 2026-11-14): from two hours after the Friday close to the
     // Sunday reopen nothing the ledger step or the sweep reads can change.
     const idle = marketIdleAt(env, event.scheduledTime || Date.now());
+    if (event.cron === LEDGER_CRON && idle) return;
+    // FS1: the owner's feature-switch overrides, resolved once for this cron run on a copy of env (an idle ledger step
+    // above reads nothing at all, as before).
+    env = await withFeatureSwitches(env);
     if (event.cron === LEDGER_CRON) {
-      if (idle) return;
       ctx.waitUntil(runLedgerStep(env));
       return;
     }
@@ -3284,6 +3385,23 @@ export default {
             if (promoted.status !== "no_pack" && (promoted.status !== "ok" || Number(promoted.promoted) || Number(promoted.retired))) console.log("learned_promotion", JSON.stringify({ ...promoted, message: undefined }));
             if (promoted.message) await sendTelegram(env, String(promoted.message)).catch((e) => console.error("learned_promotion_telegram_failed", e instanceof Error ? e.message : String(e)));
           } catch (e) { console.error("learned_promotion_failed", e instanceof Error ? e.message : String(e)); }
+          // KA1 (owner 2026-11-24: "buka arm, biarkan system menilai dirinya sendiri"): after the promotion, an item whose
+          // final shadow verdict is not better, failed its holdout or is worse closes by itself (learned_live 'retired');
+          // the first run settles the items tested until #492 once (KV shadow-knowledge:settle:v1). Only with the arm on.
+          let closurePlan: unknown = null;
+          try {
+            const closures = await runShadowClosures(env);
+            if (closures.status === "ok") closurePlan = closures.plan ?? null;
+            if (closures.status !== "disabled" && (closures.status !== "ok" || closures.closed?.length || closures.settle)) console.log("shadow_knowledge_closures", JSON.stringify({ ...closures, message: undefined }));
+            if (closures.message) await sendTelegram(env, String(closures.message)).catch((e) => console.error("shadow_knowledge_closures_telegram_failed", e instanceof Error ? e.message : String(e)));
+          } catch (e) { console.error("shadow_knowledge_closures_failed", e instanceof Error ? e.message : String(e)); }
+          // KA2 (platform PF3, knowledge.verdict): the arm's verdicts posted to the platform as the shadow-knowledge agent,
+          // for Aether's curator: one call per item on each verdict change, collecting at most once a UTC day. Off unless
+          // SHADOW_KNOWLEDGE_ENABLED and KNOWLEDGE_VERDICT_POSTS "on" (src/knowledge-verdicts.mjs). One log line, no Telegram.
+          try {
+            const verdicts = await postKnowledgeVerdicts(env, { plan: closurePlan });
+            if (!["disabled", "unavailable", "no_plan"].includes(verdicts.status) && (verdicts.status !== "ok" || verdicts.posted?.length || verdicts.not_found?.length || verdicts.invalid?.length || verdicts.stopped)) console.log("knowledge_verdicts", JSON.stringify(verdicts));
+          } catch (e) { console.error("knowledge_verdicts_failed", e instanceof Error ? e.message : String(e)); }
           try { console.log("shadow_versions", JSON.stringify(await runShadowVersions(env, { candidates: await shadowCandidates(env) }))); }
           catch (e) { console.error("shadow_versions_failed", e instanceof Error ? e.message : String(e)); }
           // Neuron allocation by reputation (owner 2026-11-14, src/agent-allocation.mjs): a room agent below 45% over

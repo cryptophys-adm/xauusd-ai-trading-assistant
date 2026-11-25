@@ -36,7 +36,7 @@
 // The server never sizes a position; prices come only from the key-level plan.
 
 import { goldClosedAt, nextGoldChange, SESSIONS, nyHour } from "./market-hours.mjs";
-import { loadStrategyInputs, buildStrategy, planForDirection, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr, TP1_MIN_R, tp1KeyZoneMode, entryZoneMode } from "./strategy-engine.mjs";
+import { loadStrategyInputs, buildStrategy, planForDirection, zoneLevels, riskChecks, triggerOf, squeezeOf, roomAtrOf, SQUEEZE_RULE, STRATEGY_PARAMS, atr, TP1_MIN_R, tp1KeyZoneMode, entryZoneMode } from "./strategy-engine.mjs";
 import { buildGlobalConclusion } from "./global-conclusion.mjs";
 import { readMacroRoom } from "./macro-room.mjs";
 import { readCorrelations } from "./correlations.mjs";
@@ -58,7 +58,9 @@ import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
-import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences } from "./strategy-agents.mjs";
+import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
+import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf } from "./zone-types.mjs";
+import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
@@ -615,7 +617,12 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   try { risk = riskChecks(dir, { h1Snapshot: inputs.h1Snapshot ?? null, m15Snapshot: inputs.m15Snapshot ?? null, news: inputs.news ?? null, macro: macro ?? inputs.macro ?? null, calendar: inputs.calendar ?? null, mode: env?.TRADING_MODE ?? null, env, now }); } catch { /* none */ }
   add("no_veto", !risk.vetoes.length, risk.vetoes.length ? risk.vetoes.join("; ") : "no veto");
   const nearest = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).target === "nearest";
-  const plan = planForDirection(strategy, dir, { scalp: nearest });
+  // Z2b (src/zone-types.mjs zoneAim): the side's plan is the execution copy aimed by zone type (its stop past a decisive
+  // opposing-type zone, its TP2 at the next decisive opposing key zone, zoneAhead last), before the checks read it. The
+  // quorum and the agents' consensus are already made (assess); a copy that fails the reward gate keeps the base.
+  const aim = zoneAimMode(env, inputs.modes ?? null);
+  const basePlan = planForDirection(strategy, dir, { scalp: nearest });
+  const plan = aim ? zoneAimHeld(basePlan, ...zoneAimArgs(strategy, dir, aim, tp1KeyZoneMode(env) === "on", DEFAULT_AGENT), (p) => agentPlanPasses(p, { target_rule: nearest ? "nearest" : "rrr", min_rrr: MIN_RRR })) : basePlan;
   add("levels", Boolean(plan), plan ? `entry ${plan.entry_note}, stop ${plan.stop_note}` : "no key-level plan (price, 1H range or zones missing)");
   if (nearest) {
     // Scalp: the target is the nearest key level ahead (the plan's first target), whatever it pays.
@@ -625,6 +632,12 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
     const best = plan ? Math.max(plan.rrr?.tp1 ?? 0, plan.rrr?.tp2 ?? 0) : 0;
     add("reward", Boolean(plan) && best >= MIN_RRR, plan ? `${best}R to the best target (at least ${MIN_RRR}R needed)` : "no plan");
   }
+  // Z2 (owner 2026-11-23, "Langsung prioritaskan"; docs/RFC_DEMAND_SUPPLY_ZONES.md §5): no trade into a decisive opposing
+  // demand or supply zone inside ZONE_NEED, against the trend ('trend'), or at all ('all', owner-set only). It reads the
+  // plan's recorded opposing_ahead (Z0's zoneAhead on the final plan); a with-trend plan is noted in the detail only, never
+  // a caution. ZONE_PRIORITY "off", ZONE_AHEAD_MODE "record" or "off", or untyped zones: no check.
+  const zoneMode = zoneAheadMode(env, inputs.modes ?? null);
+  if (zoneAheadChecks(zoneMode)) { const z = zoneAheadCheck(plan, zoneMode, dir); add("zone_ahead", z.pass, z.detail); }
   // Squeezed between key zones (owner 2026-11-13: "no trade"): the same check on both sides, because it
   // is about the place, not the direction. SQUEEZE_GUARD "off" leaves the check out.
   if (squeezeGuardEnabled(env)) {
@@ -640,7 +653,31 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
       : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${roomAtr} needed)`);
   }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
-  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger };
+  return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger,
+    // Z2: the zone_ahead mode the side was checked in, for the plan filter (zonePlanPasses) and the council; absent when off.
+    ...(zoneMode !== "off" ? { zone_ahead: zoneMode } : {}),
+    // Z2b: the zone rules in force ({ tp, stop, factor }), for the agents' copies and pickStrategy's factor; absent when inert.
+    ...(aim ? { zone_aim: aim } : {}) };
+}
+
+/**
+ * Pure (Z2b): zoneAim's recorded set and context for an agent's plan on a side: the strategy's recorded set (aroundSet,
+ * as decision.key_levels keeps it), its 1H ATR and trend, every zone for the stop's search, TP1-KZ's switch, and the
+ * agent's geometry (key-level targets: tp_typed; the tradeLevels stop of the default agent: stop_skip).
+ */
+function zoneAimArgs(strategy, dir, aim, keyZone, id) {
+  const zones = strategy?.key_levels?.zones;
+  return [aroundSet(zones, strategy?.price), { dir, atrH1: strategy?.atr_h1, trend: strategy?.trend ?? null, aim, keyZone, typedTargets: keyLevelTargets(id), stopFromZones: id === DEFAULT_AGENT, levels: zoneLevels(zones) }];
+}
+
+/**
+ * Pure (Z2b): a side's agent plans ({ id: { status, plan } }) as execution copies aimed by zone type (zoneAimHeld with
+ * `passes`, the consensus' own reward gate), or the plans themselves while Z2b is inert. Called where assess attaches
+ * them, after agentsConsensus, the agents' confidence and the quorum have read the plans as they are.
+ */
+export function aimedAgentPlans(plans, dir, { strategy = null, aim = null, keyZone = false, passes = () => true } = {}) {
+  if (!aim || !plans) return plans;
+  return Object.fromEntries(Object.entries(plans).map(([id, a]) => [id, a?.plan ? { ...a, plan: zoneAimHeld(a.plan, ...zoneAimArgs(strategy, dir, aim, keyZone, id), passes) } : a]));
 }
 
 /**
@@ -667,7 +704,11 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     // A market entry waits for the confirmation candle at execution; a limit at the key level waits for price.
     trigger_required: market,
     // The strategy agent whose plan this is, when it is not the default agent's.
-    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {})
+    ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {}),
+    // Z0 (recorded only): the plan's zone type words and its nearest decisive opposing zone ahead, when it has them.
+    ...(plan.zone_types ? { zone_types: plan.zone_types } : {}), ...(plan.opposing_ahead ? { opposing_ahead: plan.opposing_ahead } : {}),
+    // Z2b (record only): the zone rules that moved a price of this copy, as distances from the entry.
+    ...(plan.zone_rules ? { zone_rules: plan.zone_rules } : {})
   };
 }
 
@@ -700,7 +741,8 @@ const WITNESS_KEYS = ["D1", "H4", "H1", "M15", "NEWS", "MACRO", "STRATEGY", "STR
 export function liveAgentPlans(g) {
   // The default agent is exempt from the reward guardrail (its plan is the guardrail's own), not from TP1-KZ's floor.
   const tp1Floor = (plan) => !isNum(g?.tp1_min_r) || (plan.rrr?.tp1 ?? 0) >= g.tp1_min_r;
-  const all = Object.entries(g?.plans || {}).filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT ? tp1Floor(a.plan) : agentPlanPasses(a.plan, g)));
+  // Z2: a plan into an opposing demand or supply zone the side's zone_ahead rule refuses is left out (zonePlanPasses).
+  const all = Object.entries(g?.plans || {}).filter(([id, a]) => a?.status === "live" && a.plan && (id === DEFAULT_AGENT ? tp1Floor(a.plan) : agentPlanPasses(a.plan, g)) && zonePlanPasses(a.plan, g));
   return all.sort(([a], [b]) => (a === DEFAULT_AGENT ? -1 : b === DEFAULT_AGENT ? 1 : 0));
 }
 
@@ -717,7 +759,11 @@ export function agentPlanPasses(plan, g) {
 
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
 export function councilEvidence({ barClose, cards, quorum, guards, context = {}, agentRecords = null, condition = null }) {
-  const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr } : null);
+  // Z2, only while ZONE_PRIORITY is on (a side carries its zone_ahead mode): each plan adds its zone words, the room to the
+  // nearest decisive opposing zone ahead in 1H ranges and whether it is with the trend. Nothing goes to the cautions.
+  const zoneOn = Boolean(guards?.long?.zone_ahead || guards?.short?.zone_ahead);
+  const zoneWordsOf = (p) => (zoneOn ? { zone_types: p.zone_types ?? null, opposing_zone_ahead_atr: p.opposing_ahead?.room_atr ?? null, with_trend: p.opposing_ahead ? p.opposing_ahead.with_trend === true : null } : {});
+  const plan = (g) => (g.plan ? { entry: g.plan.entry, entry_note: g.plan.entry_note, at_level: g.plan.at_level, stop: g.plan.stop, stop_note: g.plan.stop_note, tp1: g.plan.tp1, tp1_note: g.plan.tp1_note, tp2: g.plan.tp2, tp2_note: g.plan.tp2_note, progressive_stop: g.plan.progressive_stop ?? null, reward_to_risk: g.plan.rrr, ...zoneWordsOf(g.plan) } : null);
   // The strategies the council may choose from on a side: only when a live agent other than the default
   // sees its setup there (else the evidence is as before: one plan).
   const strategies = (g) => {
@@ -781,6 +827,7 @@ export function councilMessages(evidence, { learned = null } = {}) {
     ...((evidence?.witnesses || []).some((w) => w.key === "POSITIONING") ? [POSITIONING_PROMPT] : []),
     ...((evidence?.witnesses || []).some((w) => w.key === "LIQUIDITY") ? [LIQUIDITY_PROMPT] : []),
     ...(evidence?.long?.liquidity || evidence?.short?.liquidity ? ["A side may carry liquidity: the broker's own tick volume shows a reclaimed sweep on a volume spike in the last 15 minutes, sweep_with (the reversal is for that side) or sweep_against, with the lens weight to weigh it at. It confirms a pullback the strategy agents already plan; it never creates a plan or a side on its own."] : []),
+    ...(zonePriorityIn(evidence) ? [ZONE_PRIORITY_PROMPT] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
@@ -789,6 +836,16 @@ export function councilMessages(evidence, { learned = null } = {}) {
     { role: "user", content: `EVIDENCE:\n${JSON.stringify(evidence)}` }
   ];
 }
+
+/**
+ * Z2: the council's one sentence on the owner's demand and supply priority (owner 2026-11-23, "Langsung prioritaskan"),
+ * only when the evidence carries it (ZONE_PRIORITY on: a zone_ahead check, or a plan's with_trend word).
+ */
+export const ZONE_PRIORITY_PROMPT = "Since 2026-11-23 the owner gives demand and supply zones priority: a plan's zone_types name the type of the zones at its entry, stop and targets, opposing_zone_ahead_atr is how far ahead, in 1H average ranges, the nearest strong or medium zone against the trade lies (null when there is none) and with_trend says whether the higher-timeframe trend is with the trade; the zone_ahead check, where it is listed, already holds back a plan that runs into such a zone inside the room it needs against the trend, so weigh a with-trend plan that meets one for its location and its targets, not as a missing check.";
+const zonePriorityIn = (evidence) => ["long", "short"].some((k) => {
+  const s = evidence?.[k];
+  return (Array.isArray(s?.checks) && s.checks.some((c) => c?.check === "zone_ahead")) || (s?.plan && typeof s.plan === "object" && "with_trend" in s.plan);
+});
 
 /** Pure: the council answer's errors (empty when valid). Normalises the answer in place. */
 export function validateCouncil(o) {
@@ -817,7 +874,7 @@ export function validateCouncil(o) {
 export function decide({ answer = null, guards, strategy = null, quorum, minConfidence = MIN_CONFIDENCE }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
-  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null;
+  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null, softened = null;
   if (answer) {
     stance = answer.stance; confidence = r2(Math.max(0, Math.min(0.95, answer.confidence)));
     entryType = answer.entry_type; target = answer.target; chosen = answer.strategy ?? null;
@@ -848,23 +905,39 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
         const word = dir > 0 ? "buy" : "sell";
         const speakers = [...((dir > 0 ? guards.consensus?.long : guards.consensus?.short) || [])].sort((a, b) => (b.voice - a.voice) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
         const lean = guards.consensus?.lean;
-        if (isNum(lean) && dir * lean <= -LEAN) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` }] };
+        const opposite = (dir > 0 ? guards.consensus?.short : guards.consensus?.long) || [];
+        // SV1b (src/agent-veto.mjs, AGENT_VETO_RULE "two_sided"): an agent that speaks on both sides does not count
+        // against the side it also speaks for (A6: the lean veto needs A6_MIN_ONE_SIDED one-sided opposing agents; A7:
+        // the arm veto ignores such an armed agent). "classic" (the default): the vetoes as before.
+        const twoSided = guards.veto_rule === "two_sided";
+        const alsoFor = (x) => speakers.some((o) => o.id === x.id);
+        const leanDetail = isNum(lean) ? `the strategy agents lean against the decision (${lean > 0 ? "+" : ""}${Math.round(lean * 100)})` : null;
+        const leanAgainst = isNum(lean) && dir * lean <= -LEAN;
+        if (leanAgainst && (!twoSided || opposite.filter((x) => !alsoFor(x)).length >= A6_MIN_ONE_SIDED)) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: leanDetail }] };
         else if (guards.arms?.mode === "live") {
+          if (leanAgainst) softened = { rule: "A6", old_detail: leanDetail };
           // The strategy arm (owner 2026-11-17, docs/RFC_STRATEGY_RECOMMENDATION.md): 1 to 3 armed, only they; none
           // armed, AUTO: every speaker. Either way ONE strategy, the best by measured confidence x confluence.
-          const opposite = (dir > 0 ? guards.consensus?.short : guards.consensus?.long) || [];
           const armed = Array.isArray(guards.arms.ids) ? guards.arms.ids : [];
+          const armedAgainst = opposite.filter((x) => armed.includes(x.id));
+          const armBlocks = twoSided ? armedAgainst.filter((x) => !alsoFor(x)) : armedAgainst;
           if (guards.arms.known === false) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: "the arm state could not be read" }] };
-          else if (armed.length && opposite.some((x) => armed.includes(x.id))) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: `an armed strategy sees its setup on the other side (${opposite.filter((x) => armed.includes(x.id)).map((x) => x.id).join(", ")})` }] };
+          else if (armed.length && armBlocks.length) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: `an armed strategy sees its setup on the other side (${armBlocks.map((x) => x.id).join(", ")})` }] };
           else {
-            const pick = pickStrategy({ side: dir > 0 ? "long" : "short", speakers, plans: g.plans, agentConfidence: guards.agent_confidence, quorum, strategy, armed, stance, opts });
+            if (armed.length && armedAgainst.length) softened ??= { rule: "A7", old_detail: `an armed strategy sees its setup on the other side (${armedAgainst.map((x) => x.id).join(", ")})` };
+            const pick = pickStrategy({ side: dir > 0 ? "long" : "short", speakers, plans: g.plans, agentConfidence: guards.agent_confidence, quorum, strategy, armed, stance, opts, ...(g.zone_ahead ? { zoneAhead: g.zone_ahead } : {}), ...(g.zone_aim?.factor ? { zoneFactor: true } : {}) });
             selection = pick;
             if (!pick.agent) overruled = { by: "strategy_arm", wanted: stance, failed: [{ check: "strategy_arm", detail: pick.reason }] };
             else trade = { ...pick.trade, agent: pick.agent };
           }
         } else {
-          const pickOf = speakers.find((x) => x.id === chosen) ?? speakers.find((x) => g.plans?.[x.id]?.plan);
-          if (!pickOf) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `no live strategy agent sees its setup on the ${word} side` }] };
+          if (leanAgainst) softened = { rule: "A6", old_detail: leanDetail };
+          // Z2: a speaker whose plan the side's zone_ahead rule refuses is skipped (zonePlanPasses; always true when off).
+          const clear = (x) => zonePlanPasses(g.plans?.[x.id]?.plan, g);
+          const pickOf = speakers.find((x) => x.id === chosen && clear(x)) ?? speakers.find((x) => g.plans?.[x.id]?.plan && clear(x));
+          const zoneSkipped = !pickOf && speakers.some((x) => g.plans?.[x.id]?.plan && !clear(x));
+          if (!pickOf && zoneSkipped) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "zone_ahead", detail: `every strategy agent's plan on the ${word} side runs into a demand or supply zone against the trade, inside the room it needs` }] };
+          else if (!pickOf) overruled = { by: "strategy_agents", wanted: stance, failed: [{ check: "strategy_agents", detail: `no live strategy agent sees its setup on the ${word} side` }] };
           else {
             const t = tradeFor(stance, g.plans[pickOf.id].plan, opts);
             trade = t ? { ...t, agent: pickOf.id } : null;
@@ -881,7 +954,8 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
     if (overruled) stance = "WAIT";
   }
   const bias = answer?.bias ?? quorum.bias;
-  return { stance, bias, confidence, source, trade, overruled, selection };
+  // SV1b: a BUY or SELL that trades only because A6 or A7 lifted a veto the classic rule would have kept says so.
+  return { stance, bias, confidence, source, trade, overruled, selection, ...(softened && !overruled && trade ? { veto_softened: softened } : {}) };
 }
 
 /**
@@ -897,7 +971,7 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
  * `armed` (1 to 3 ids) limits the candidates; empty is AUTO (every speaker). A candidate whose plan does not pay the
  * mode's R is skipped. Returns { mode, agent, trade, score, candidates, reason }; the losers stay in `candidates`.
  */
-export function pickStrategy({ side, speakers = [], plans = {}, agentConfidence = null, quorum = null, strategy = null, armed = [], stance, opts = {} }) {
+export function pickStrategy({ side, speakers = [], plans = {}, agentConfidence = null, quorum = null, strategy = null, armed = [], stance, opts = {}, zoneAhead = null, zoneFactor = false }) {
   const mode = armed.length ? "armed" : "auto";
   const share = isNum(side === "long" ? quorum?.long_share : quorum?.short_share) ? (side === "long" ? quorum.long_share : quorum.short_share) : 0;
   const engineDir = String(strategy?.direction ?? "").toUpperCase();
@@ -907,13 +981,19 @@ export function pickStrategy({ side, speakers = [], plans = {}, agentConfidence 
     const plan = plans[x.id].plan;
     const confidence = isNum(agentConfidence?.[x.id]?.[side]) ? agentConfidence[x.id][side] : null;
     const confluence = r2(((plan.at_level ? 1 : 0) + share + alignment) / 3);
-    const trade = confidence != null && confidence >= MIN_CONFIDENCE ? tradeFor(stance, plan, opts) : null;
-    return { id: x.id, confidence, confluence, score: confidence == null ? null : r2(confidence * confluence), rrr: trade?.rrr ?? null, eligible: Boolean(trade), trade };
+    // Z2: a plan the side's zone_ahead rule refuses is ineligible, marked zone_ahead: false (zoneAhead: the guardrails' mode).
+    const zoneClear = zonePlanPasses(plan, { zone_ahead: zoneAhead });
+    const trade = confidence != null && confidence >= MIN_CONFIDENCE && zoneClear ? tradeFor(stance, plan, opts) : null;
+    // Z2b (zoneFactor: the side's zone rules have 'factor' on): the score x the plan's entry-zone factor (zoneFactorOf:
+    // 1.2 own-type fresh or tested, 0.85 opposite-type, else 1), carried on a typed plan's candidate. Eligibility is not read.
+    const factor = zoneFactor ? zoneFactorOf(plan, side === "long" ? 1 : -1) : null;
+    const score = confidence == null ? null : r2(confidence * confluence * (factor ?? 1));
+    return { id: x.id, confidence, confluence, score, ...(factor != null ? { zone_factor: factor } : {}), rrr: trade?.rrr ?? null, eligible: Boolean(trade), ...(zoneClear ? {} : { zone_ahead: false }), trade };
   }).sort((a, b) => (b.eligible - a.eligible) || ((b.score ?? -1) - (a.score ?? -1)) || ((b.rrr ?? 0) - (a.rrr ?? 0)) || (a.id === DEFAULT_AGENT ? -1 : b.id === DEFAULT_AGENT ? 1 : 0));
   const best = candidates.find((c) => c.eligible) ?? null;
   const word = side === "long" ? "buy" : "sell";
   const reason = best ? null : !pool.length ? (mode === "armed" ? `no armed strategy sees its setup on the ${word} side` : `no live strategy agent sees its setup on the ${word} side`)
-    : `no ${mode === "armed" ? "armed " : ""}strategy on the ${word} side reaches confidence ${Math.round(MIN_CONFIDENCE * 100)}% with a plan that pays`;
+    : `no ${mode === "armed" ? "armed " : ""}strategy on the ${word} side reaches confidence ${Math.round(MIN_CONFIDENCE * 100)}% with a plan that pays${candidates.some((c) => c.zone_ahead === false) ? " and stays clear of an opposing demand or supply zone" : ""}`;
   return { mode, agent: best?.id ?? null, trade: best?.trade ?? null, score: best?.score ?? null, candidates: candidates.map(({ trade, ...c }) => c), reason };
 }
 
@@ -1161,12 +1241,17 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
-  guards.long.plans = plans.long; guards.short.plans = plans.short;
+  // Z2b: the execution copies, made here after the consensus, the agents' confidence inputs and the quorum (they read
+  // `plans` as they are); the guardrails' own plan was aimed in guardrailsFor. Inert: the plans themselves.
+  const aimed = (dir, g) => aimedAgentPlans(dir > 0 ? plans.long : plans.short, dir, { strategy, aim: g.zone_aim ?? null, keyZone, passes });
+  guards.long.plans = aimed(1, guards.long); guards.short.plans = aimed(-1, guards.short);
   if (keyZone) { guards.long.tp1_min_r = TP1_MIN_R; guards.short.tp1_min_r = TP1_MIN_R; }
   // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): the trade only from an
   // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
   guards.strategy_execution = strategyExecutionEnabled(env);
   guards.consensus = consensus;
+  // SV1b (src/agent-veto.mjs): the two-sided veto rule, only when it is in force (runDecisionEngine resolves it into env).
+  if (agentVetoRuleOf(env) === "two_sided") guards.veto_rule = "two_sided";
   try { guards.agent_confidence = agentConfidences(plans, { score: quorum.score, records: agentRecords, passes, statuses }); } catch { guards.agent_confidence = null; }
   // The Projection Agent's reading of the price action, for the council's choice of strategy.
   let priceAction = [];
@@ -1313,7 +1398,8 @@ export function shadowModeDecisions({ loaded, assessment, council = null, env = 
     out.push({
       mode: m, stance, agent: trading ? agent : null,
       plans: trading ? (strategyPlansOf(a.guards)?.[side] ?? {}) : null,
-      trade: trading ? { entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, action: d.trade.action, at_level: d.trade.at_level === true } : null,
+      // Z0: the trade's zone words and opposing zone ahead ride along when the zones are typed, as on the live record.
+      trade: trading ? { entry: d.trade.entry, stop: d.trade.stop, tp: d.trade.tp, action: d.trade.action, at_level: d.trade.at_level === true, ...(d.trade.zone_types ? { zone_types: d.trade.zone_types } : {}), ...(d.trade.opposing_ahead ? { opposing_ahead: d.trade.opposing_ahead } : {}), ...(d.trade.zone_rules ? { zone_rules: d.trade.zone_rules } : {}) } : null,
       reason
     });
   }
@@ -1342,7 +1428,8 @@ export function liquidityEvidence(liquidity, now = Date.now()) {
 
 /** Pure: both sides' agent plans as the record keeps them ({ long: { id: { status, entry, stop, ... } }, short }), or null without any. */
 export function strategyPlansOf(guards) {
-  const side = (g) => Object.fromEntries(Object.entries(g?.plans || {}).map(([id, a]) => [id, { status: a.status, ...slimPlan(a.plan) }]));
+  // Z2b: a plan's zone_rules ride along (record only; MS2's shadow rows keep them as recorded).
+  const side = (g) => Object.fromEntries(Object.entries(g?.plans || {}).map(([id, a]) => [id, { status: a.status, ...slimPlan(a.plan), ...(a.plan?.zone_rules ? { zone_rules: a.plan.zone_rules } : {}) }]));
   const long = side(guards?.long), short = side(guards?.short);
   return Object.keys(long).length || Object.keys(short).length ? { long, short } : null;
 }
@@ -1350,13 +1437,27 @@ export function strategyPlansOf(guards) {
 /** The first target's note when no key level lies ahead (src/strategy-engine.mjs tradeLevels). */
 export const TP1_PROJECTION = "a 2R projection";
 export const KEY_LEVELS_KEPT = 12;
-/** Pure: the Key Level Agent's candidate (and qualified) zones nearest to price ({ low, high }, lowest first), or []. */
+/**
+ * Pure: the Key Level Agent's candidate (and qualified) zones nearest to price ({ low, high }, lowest first), or []. Z0:
+ * the recorded set of src/zone-types.mjs aroundSet (the same rule), which adds zone_type, zone_strength, zone_freshness
+ * and zone_rank beside low and high when the zones are typed (KEY_LEVEL_ZONE_TYPES on); zoneAhead reads only this set.
+ */
 export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
-  const price = strategy?.price;
-  const zones = (strategy?.key_levels?.zones || []).filter((z) => (z?.candidate || z?.qualified) && isNum(z.low) && isNum(z.high) && z.low <= z.high);
-  if (!isNum(price) || !zones.length) return [];
-  const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
-  return zones.sort((a, b) => dist(a) - dist(b)).slice(0, n).map((z) => ({ low: r2(z.low), high: r2(z.high) })).sort((a, b) => a.low - b.low);
+  return aroundSet(strategy?.key_levels?.zones, strategy?.price, n);
+}
+
+/**
+ * Pure (Z2): decision.zone_blocked, when zone_ahead is a side's only failing check: { side, agent, plan (slim),
+ * opposing_ahead }, the guardrails' plan (the default agent's). The side the decision wanted first, else long, then short.
+ */
+export function zoneBlockedOf(guards, d = null) {
+  const only = (g) => Array.isArray(g?.checks) && g.checks.some((c) => c.id === "zone_ahead" && !c.pass) && g.checks.every((c) => c.pass || c.id === "zone_ahead");
+  const wanted = dirOf(d?.overruled?.wanted ?? null);
+  const order = wanted < 0 ? ["short", "long"] : ["long", "short"];
+  const side = order.find((k) => only(guards?.[k]) && guards[k].plan);
+  if (!side) return null;
+  const plan = guards[side].plan;
+  return { side, agent: DEFAULT_AGENT, plan: slimPlan(plan), opposing_ahead: plan.opposing_ahead ?? null };
 }
 
 /** Pure: the whole decision record from the loaded inputs, their assessment and the council's result (or null). */
@@ -1399,6 +1500,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
+    // SV1b: only a BUY or SELL that trades because A6 or A7 lifted a classic veto ({ rule, old_detail }, words only).
+    ...(d.veto_softened ? { veto_softened: d.veto_softened } : {}),
     // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): each live agent's
     // confidence on both sides at this close, and at the close one bar before (null when that decision is missing).
     strategy_execution: guards.strategy_execution === true,
@@ -1406,6 +1509,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     agent_confidence_prev: previous && previous.decision_key !== key && Date.parse(barClose) - Date.parse(previous.bar_close) === 15 * 60_000 ? previous.agent_confidence ?? null : null,
     quorum, witnesses: cards,
     guardrails: { long: { allowed: guards.long.allowed, checks: guards.long.checks, entry_trigger: guards.long.entry_trigger ?? null }, short: { allowed: guards.short.allowed, checks: guards.short.checks, entry_trigger: guards.short.entry_trigger ?? null } },
+    // Z2: the side the zone_ahead check alone held back, with its plan and the opposing zone ahead; absent otherwise.
+    ...(zoneBlockedOf(guards, d) ? { zone_blocked: zoneBlockedOf(guards, d) } : {}),
     cautions, vetoes: { long: guards.long.vetoes, short: guards.short.vetoes }, supports: { long: guards.long.supports ?? [], short: guards.short.supports ?? [] },
     context: { ...councilContext({ inputs, correlations: loaded?.correlations ?? null, regime: loaded?.regime ?? null, previous, market, now }), ...(modelAdviceOf(council) ? { model: modelAdviceOf(council) } : {}) },
     strategy: strategy ? { decision: strategy.decision, state: strategy.state, direction: strategy.direction, confidence: strategy.confidence, headline: strategy.headline, price: strategy.price, atr_h1: strategy.atr_h1 } : null,
@@ -1527,7 +1632,11 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     // loaded lazily (that module reads this one). Unreadable: the rule's 1.
     let room = SQUEEZE_RULE.corridor_atr;
     try { room = (await (await import("./room-tuning.mjs")).activeRoom(env, mode, { now })).value; } catch { room = SQUEEZE_RULE.corridor_atr; }
-    env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room };
+    // SV1b (src/agent-veto.mjs): the strategy agents' veto rule in force (the owner's force, else the automatic revert,
+    // else AGENT_VETO_RULE), on the same copy. Unreadable: "classic".
+    let vetoRule = "classic";
+    try { vetoRule = (await resolveAgentVetoRule(env, { now })).rule; } catch { vetoRule = "classic"; }
+    env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room, AGENT_VETO_RULE: vetoRule };
     const data = loaded ?? await loadDecisionInputs(env, { now });
     // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens A's facts known at this close
     // (cotAt: released before now) at the mode's knobs, lens B's state for the council's sweep evidence.
@@ -1574,6 +1683,8 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const councilMs = clock() - councilStarted;
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
+    // Z2: ZONE_AHEAD_MODE "all" is owner-set only (no trend exemption): one warning line per decision; Z5 alarms on its share.
+    if (zoneAheadMode(env, data.inputs?.modes ?? null) === "all") console.warn(JSON.stringify({ event: "zone_ahead_mode_all", decision_key: key, stance: record.stance, blocked: ["long", "short"].filter((k) => assessment.guards[k].checks.some((c) => c.id === "zone_ahead" && !c.pass)) }));
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };

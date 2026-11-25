@@ -15,7 +15,8 @@
 import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
-  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches
+  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt,
+  PARITY_GROUPS, groupsFor, groupIdentityOf, groupCompareOptions, registerIdentity
 } from "./parity-registry.mjs";
 import { readIntrabars, recheckMismatchIntrabars } from "./parity-intrabars.mjs";
 
@@ -70,7 +71,7 @@ export async function decisionLocalRecords(env, candleKey) {
  * rule), then places into the trusted local_computation lane exactly those
  * observed records whose identity is currently approved.
  */
-export async function reconcileLocalComputation(env, candleKey) {
+export async function reconcileLocalComputation(env, candleKey, { groups = PARITY_GROUPS } = {}) {
   await ensureSchema(env.DB);
   const policy = policyFromEnv(env);
   const observed = {};
@@ -105,6 +106,34 @@ export async function reconcileLocalComputation(env, candleKey) {
     const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
     comparisons[engine] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
   }
+  // Field groups (B7): each group a record carries is compared on its own fields only, under its own
+  // identity (groupIdentityOf), so it earns or loses trust apart from the engine and from the other
+  // groups. Only for an observed record of an engine that declares groups; none does today.
+  const groupRuns = [];
+  for (const engine of INGEST_ENGINES) {
+    const record = observed[engine];
+    if (!record) continue;
+    for (const groupId of groupsFor(engine, groups)) {
+      const gid = groupIdentityOf(record, groupId, groups);
+      if (gid) groupRuns.push({ engine, groupId, gid, record });
+    }
+  }
+  const groupComparisons = {};
+  const hookCache = {};
+  for (const { groupId, gid, record } of groupRuns) {
+    if (record.feed === "mt5_fallback") { groupComparisons[groupId] = { result: "fallback_skipped", counted: false, mismatches: [], missing: [] }; continue; }
+    const options = groupCompareOptions(groupId, groups);
+    const webhooks = {};
+    for (const source of Object.keys(options.fieldMap)) {
+      if (!(source in hookCache)) hookCache[source] = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
+      if (hookCache[source]) webhooks[source] = hookCache[source];
+    }
+    const comparison = compareWithWebhooks(record, webhooks, policy, options);
+    // The group's registry row exists once it has something to count (ingest registers only engines).
+    if (["match", "mismatch", "incomplete", "input_mismatch"].includes(comparison.status)) await registerIdentity(env.DB, gid);
+    const outcome = await recordComparison(env.DB, gid, candleKey, comparison, policy);
+    groupComparisons[groupId] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(comparison.null_fields ? { null_fields: comparison.null_fields } : {}), ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
+  }
   // A candle whose local input bar differs from TradingView's final bar never enters the trusted
   // lane, whatever the identity's status: the H1 chain then reads the TradingView evidence for it,
   // until the pull adapter republishes the candle on the final bar and it matches.
@@ -133,7 +162,27 @@ export async function reconcileLocalComputation(env, candleKey) {
     if (trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
     else await env.WEBHOOK_BUFFER.delete(trustedKey);
   }
-  return { comparisons, trust };
+  if (!groupRuns.length) return { comparisons, trust };
+  // A trusted group's copy (localcalc:<candle>:<group id>) carries only that group's fields, so
+  // approvedComparable (hud-store.mjs) reads them as verified even while another group of the same
+  // source, or the engine itself, is revoked. Never a LOCAL_ENGINES key: the decision lane never sees it.
+  const groupTrust = {};
+  for (const { groupId, gid, record } of groupRuns) {
+    const ownInputDiffers = groupComparisons[groupId]?.result === "input_mismatch";
+    groupTrust[groupId] = !inputDiffers && !ownInputDiffers ? await isTrusted(env.DB, gid) : false;
+    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + groupId;
+    if (groupTrust[groupId]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify(groupRecord(record, groupId, groups)), LOCAL_TTL);
+    else await env.WEBHOOK_BUFFER.delete(trustedKey);
+  }
+  return { comparisons, trust, groups: { comparisons: groupComparisons, trust: groupTrust } };
+}
+
+/** The trusted copy of one group: the record with only the group's own comparable fields. */
+function groupRecord(record, groupId, groups) {
+  const g = groups[groupId];
+  const local = record?.values?.comparable?.[g.source];
+  const fields = local && typeof local === "object" ? Object.fromEntries(Object.keys(g.fields).filter((f) => f in local).map((f) => [f, local[f]])) : {};
+  return { ...record, group: groupId, values: { candle: record?.values?.candle, comparable: { [g.source]: fields } }, trust_status: "approved_by_parity" };
 }
 
 /**
@@ -186,14 +235,29 @@ function closedCandleKeys(now, seconds, { symbol, timeframe, lookback }) {
  */
 /** KV marker of the one-time input-mismatch reconciliation (owner approval 2026-11-06). */
 export const RECLASSIFY_MARKER = "parity:reclassify-input-only:v1";
+/** KV marker of the one-time approved_at repair (2026-11-25), in the same namespace (SIGNAL_CACHE). */
+export const APPROVED_AT_REPAIR_MARKER = "parity:repair:approved-at:v1";
 
-/** Runs reclassifyInputOnlyMismatches once per database (KV marker); never throws. */
+/** The KV namespace that holds the one-time markers, or null when it cannot both read and write. */
+const markerStore = (env) => (typeof env?.SIGNAL_CACHE?.get === "function" && typeof env?.SIGNAL_CACHE?.put === "function" ? env.SIGNAL_CACHE : null);
+
+/**
+ * Runs reclassifyInputOnlyMismatches once per database; never throws. Single-shot: a missing
+ * RECLASSIFY_MARKER is the only way it runs, and the marker is written (without a TTL, so it never
+ * expires) BEFORE the reclassification, so a run that fails part-way is not repeated either. Without
+ * a marker store (no SIGNAL_CACHE binding) it refuses, instead of running on every sweep. To run it
+ * again, delete the marker deliberately.
+ */
 export async function reclassifyOnce(env, now = Date.now()) {
   try {
-    if (await env.SIGNAL_CACHE?.get?.(RECLASSIFY_MARKER)) return { status: "done_before" };
+    const store = markerStore(env);
+    if (!store) return { status: "no_marker_store" };
+    if (await store.get(RECLASSIFY_MARKER)) return { status: "done_before" };
+    const at = new Date(now).toISOString();
+    await store.put(RECLASSIFY_MARKER, JSON.stringify({ status: "claimed", at }));
     await ensureSchema(env.DB);
-    const result = await reclassifyInputOnlyMismatches(env.DB, new Date(now).toISOString());
-    await env.SIGNAL_CACHE?.put?.(RECLASSIFY_MARKER, JSON.stringify({ ...result, at: new Date(now).toISOString() }));
+    const result = await reclassifyInputOnlyMismatches(env.DB, at);
+    await store.put(RECLASSIFY_MARKER, JSON.stringify({ ...result, at }));
     console.log("parity_reclassify_input_only", JSON.stringify(result));
     return { status: "ok", ...result };
   } catch (error) {
@@ -202,9 +266,33 @@ export async function reclassifyOnce(env, now = Date.now()) {
   }
 }
 
+/**
+ * Runs repairApprovedAt once per database (APPROVED_AT_REPAIR_MARKER, no TTL); never throws. The
+ * marker is written after the repair, so a failed run is retried by the next sweep (the repair is
+ * idempotent). One log line: parity_approved_at_repair with counts and identity ids only.
+ */
+export async function repairApprovedAtOnce(env, now = Date.now()) {
+  try {
+    const store = markerStore(env);
+    if (!store) return { status: "no_marker_store" };
+    if (await store.get(APPROVED_AT_REPAIR_MARKER)) return { status: "done_before" };
+    await ensureSchema(env.DB);
+    const result = await repairApprovedAt(env.DB, policyFromEnv(env));
+    await store.put(APPROVED_AT_REPAIR_MARKER, JSON.stringify({ ...result, at: new Date(now).toISOString() }));
+    console.log("parity_approved_at_repair", JSON.stringify({ event: "parity_approved_at_repair", repaired: result.repaired, skipped: result.skipped, revoked_cleared: result.revoked_cleared }));
+    return { status: "ok", ...result };
+  } catch (error) {
+    console.error("parity_approved_at_repair_failed", error instanceof Error ? error.message : String(error));
+    return { status: "error" };
+  }
+}
+
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
   // Before this sweep compares anything: restore identities revoked only by input-bar differences
   // under the old rule, so this same sweep places their records into the trusted lane again.
+  // The approved_at repair runs first, so the reclassification (if its marker is ever removed)
+  // reads real approval times.
+  await repairApprovedAtOnce(env, now);
   await reclassifyOnce(env, now);
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a

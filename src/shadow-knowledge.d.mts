@@ -15,3 +15,8 @@ export function scoreShadowKnowledge(env: unknown, options?: { now?: number }): 
 export function pruneShadowKnowledge(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, unknown>>;
 export function compareShadowKnowledge(outputs: unknown[], options?: { now?: number }): Record<string, any>;
 export function readShadowKnowledge(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, any>>;
+export const CLOSURE_VERSION: string;
+export const SHADOW_SETTLE: { readonly key: string; readonly until: string };
+export function planShadowClosures(outputs: unknown[], options?: { now?: number; done?: Set<string>; packItems?: unknown[] }): { version: string; items: Array<Record<string, any>>; windows: Record<string, { start: string; end: string }> };
+export function closureMessage(closed: unknown[]): string | null;
+export function runShadowClosures(env: unknown, options?: { now?: number; days?: number; settle?: { key: string; until: string } }): Promise<Record<string, any> & { status: string }>;

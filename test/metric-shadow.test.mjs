@@ -166,10 +166,11 @@ test("retired 2026-11-19: METRIC_REBUTTAL off stops the rebuttals only; the open
   assert.equal((await runMetricRebuttals({ METRIC_REBUTTAL: "off" }, { rebutters: [{ agent: "risk", stance: "WAIT" }] })).status, "disabled");
 });
 
-test("production config (owner 2026-11-19): the note arm, the rebuttals and the arena are off; the metric opening shadow is on", async () => {
+test("production config (owner 2026-11-19; the note arm reopened 2026-11-24, KA1): the rebuttals and the arena are off; the note arm and the metric opening shadow are on", async () => {
   const { readFileSync } = await import("node:fs");
   const cfg = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(cfg, /"SHADOW_KNOWLEDGE_ENABLED": "false"/);
+  assert.match(cfg, /"SHADOW_KNOWLEDGE_ENABLED": "true"/);
+  assert.match(cfg, /biarkan system menilai dirinya sendiri/);
   assert.match(cfg, /"METRIC_REBUTTAL": "off"/);
   assert.match(cfg, /"MODEL_ARENA": "off"/);
   assert.doesNotMatch(cfg, /"METRIC_SHADOW": "off"/);

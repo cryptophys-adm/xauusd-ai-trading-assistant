@@ -102,13 +102,14 @@ export function similarity(a, b) {
  * (TradingView's time - the shadow's time) over the pairs: positive means the shadow had it first.
  */
 export function compareWithTradingView(items, tv, { now = Date.now(), threshold = 0.5 } = {}) {
-  const recent = (list) => list.filter((i) => { const t = Date.parse(i.published_at ?? ""); return Number.isFinite(t) && now - t <= HOUR_MS && t <= now + 5 * 60_000; });
+  // TradingView's published_at is epoch seconds (timeMs, below); Date.parse read it as NaN, so tv_recent was always 0.
+  const recent = (list) => list.filter((i) => { const t = timeMs(i.published_at); return Number.isFinite(t) && now - t <= HOUR_MS && t <= now + 5 * 60_000; });
   const mine = recent(items), theirs = recent(tv);
   const leads = [];
   let overlap = 0;
   for (const i of mine) {
     const best = theirs.reduce((b, t) => { const s = similarity(i.title, t.title); return s > b.s ? { s, t } : b; }, { s: 0, t: null });
-    if (best.s >= threshold) { overlap++; leads.push((Date.parse(best.t.published_at) - Date.parse(i.published_at)) / 60_000); }
+    if (best.s >= threshold) { overlap++; leads.push((timeMs(best.t.published_at) - timeMs(i.published_at)) / 60_000); }
   }
   const tvMatched = theirs.filter((t) => mine.some((i) => similarity(i.title, t.title) >= threshold)).length;
   leads.sort((a, b) => a - b);
@@ -233,21 +234,59 @@ async function recordItems(kv, { items, tv, tvStatus, now }) {
 
 const HIGH_IMPACT = /\b(fomc|fed (rate|decision|chair)|powell|rate (cut|hike|decision)|cpi|inflation|nfp|non-?farm|payrolls?|jobless|pce|gdp|ecb|boj|tariffs?)\b/i;
 const pct = (list, q) => { if (!list.length) return null; const s = [...list].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(q * (s.length - 1)))] * 10) / 10; };
-const minutes = (a, b) => (Date.parse(a) - Date.parse(b)) / 60_000;
+/**
+ * Pure: a stored time as epoch milliseconds, or NaN. The shadow's times are ISO strings, but TradingView's
+ * `published_at` is stored as it came, epoch seconds (a number, or digits in a string), so a bare number below 1e12
+ * is seconds and anything larger milliseconds.
+ */
+export function timeMs(value) {
+  let n;
+  if (typeof value === "number") n = value;
+  else if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^\d+(?:\.\d+)?$/.test(text)) return Date.parse(text);
+    n = Number(text);
+  } else return NaN;
+  return Number.isFinite(n) && n > 0 ? (n < 1e12 ? n * 1000 : n) : NaN;
+}
+const isoOrNull = (value) => { const t = timeMs(value); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
+const minutes = (a, b) => (timeMs(a) - timeMs(b)) / 60_000;
+
+/**
+ * Pure: one side's stored headlines over `days`, each once. A headline still in a feed after 00:00 UTC is stored again
+ * under the new day with a later first-seen time, so the record with the earliest first-seen wins (ties: the older
+ * day). Each comes back with its publication time as ISO and the day it was first seen.
+ */
+function uniqueAcrossDays(days, side) {
+  const byId = new Map();
+  for (const d of days) {
+    for (const [id, x] of Object.entries(d.items?.[side] ?? {})) {
+      if (!x || typeof x !== "object") continue;
+      const seen = timeMs(x.f), f = Number.isFinite(seen) ? seen : Infinity;
+      const prev = byId.get(id);
+      if (prev && f >= prev.f) continue;
+      byId.set(id, { f, date: d.date, x: { ...x, p: isoOrNull(x.p) } });
+    }
+  }
+  return [...byId.values()];
+}
 const script = (title) => { const letters = String(title).replace(/[^\p{L}]/gu, ""); if (!letters) return "unknown"; const latin = letters.replace(/[^\p{Script=Latin}]/gu, "").length; return latin / letters.length >= 0.7 ? "latin" : "other"; };
 
 /**
  * Pure: the comparison report over `days` (each { date, items: news:shadow:items, totals: news:shadow:day }). A
  * shadow and a TradingView headline are the same story when their addresses match or their titles have a
  * similarity of at least 0.8, within six hours. Latency is first seen less published, per source; `lead` is
- * TradingView's first-seen less the shadow's for the same story (positive: the shadow saw it first).
+ * TradingView's first-seen less the shadow's for the same story (positive: the shadow saw it first). Each headline
+ * counts once over the window, with its earliest first-seen (`uniqueAcrossDays`), and TradingView's epoch-second
+ * publication times are read as such (`timeMs`). A day's `shadow` and `tv` are the headlines first seen that day.
  */
 export function shadowReport(days, { threshold = 0.8, now = Date.now() } = {}) {
   const shadowAll = [], tvAll = [], perDay = [], sources = {};
   let dupes = 0, hoursTvPulled = 0, hoursTotal = 0;
+  const shadowUnique = uniqueAcrossDays(days, "shadow"), tvUnique = uniqueAcrossDays(days, "tv");
+  shadowAll.push(...shadowUnique.map((e) => e.x)); tvAll.push(...tvUnique.map((e) => e.x));
   for (const d of days) {
-    const sh = Object.values(d.items?.shadow ?? {}), tv = Object.values(d.items?.tv ?? {});
-    shadowAll.push(...sh); tvAll.push(...tv);
+    const sh = shadowUnique.filter((e) => e.date === d.date), tv = tvUnique.filter((e) => e.date === d.date);
     const hours = Object.values(d.items?.hours ?? {});
     hoursTotal += hours.length; hoursTvPulled += hours.filter((h) => h.tv_status === "ok" || h.tv > 0).length;
     dupes += Number(d.totals?.dupes) || 0;

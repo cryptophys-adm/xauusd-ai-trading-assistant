@@ -13,6 +13,7 @@
 //   MODE_PROBATION        "on" (default) | "off": no probation and no risk scale.
 // Nothing here reaches a room, a council, a price in a room, the EA or a model.
 import { tp1KeyZoneMode } from "./strategy-engine.mjs";
+import { zoneRuleToken, zoneAimRuleToken } from "./zone-types.mjs";
 
 export function modeShadowEvidence(env) {
   return String(env?.MODE_SHADOW_EVIDENCE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
@@ -25,9 +26,15 @@ export function modeProbationMode(env) {
  * The target rule a setup was planned under (plan_setups.rule_version, mode_shadow_plans.rule_version): TP1-KZ on or off
  * (src/strategy-engine.mjs tp1KeyZoneMode). TP1-KZ changes the geometry in every mode, so the selector counts only the
  * setups of the rule in force: its evidence restarts at TP1-KZ's deploy and the shadow refills it on every bar. TP1-KZ
- * itself did not write it; MS2 prepares the column.
+ * itself did not write it; MS2 prepares the column. Z2 (2026-11-24): while the zone_ahead check is in the guardrails
+ * (ZONE_PRIORITY on, ZONE_AHEAD_MODE 'trend' or 'all') the version adds "+zone_ahead@1" ("+zone_ahead@1:all"): the check
+ * changes which decisions trade in every mode, so the evidence restarts at its deploy as it did at TP1-KZ's. Off or
+ * 'record': the version as before. Z2b (2026-11-25): while the zone rules aim the execution plans (ZONE_PRIORITY on,
+ * typed zones, a rule of ZONE_AIM_OFF still on) it adds "+zone_aim@1" (":qualified" in ZONE_AIM_TP 'qualified',
+ * ":no_<token>" per rule left off): they move stops and targets in every mode, so the evidence restarts at their deploy.
+ * The plans keep zone_rules (the base's distances), so a replay keeps a base arm.
  */
-export const ruleVersionOf = (env) => `tp1_kz:${tp1KeyZoneMode(env)}`;
+export const ruleVersionOf = (env) => `tp1_kz:${tp1KeyZoneMode(env)}${[zoneRuleToken(env), zoneAimRuleToken(env)].filter(Boolean).map((t) => `+${t}`).join("")}`;
 
 /** The probation (owner via the orchestrator, MS2): a switch to a mode with fewer live setups is one. */
 export const MODE_PROBATION_RULES = Object.freeze({ min_live_setups: 31, fail_setups: 15, risk_scale: 0.5 });

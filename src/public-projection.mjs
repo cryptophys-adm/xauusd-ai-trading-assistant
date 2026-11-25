@@ -46,11 +46,13 @@ export function sessionOfClose(iso) {
   return h < 7 ? "asia" : h < 13 ? "london" : h < 21 ? "new_york" : "late";
 }
 
+/** Checks a recap never names (Z2's zone_ahead reads the plan's zones: publicRecap stays as it was before it). */
+const HELD_BACK_HIDDEN = Object.freeze(["zone_ahead"]);
 /** Pure: the guardrail checks that failed on one side, by name only. */
 function heldBack(guardrails, side) {
   const g = guardrails?.[side];
   const checks = Array.isArray(g?.checks) ? g.checks : [];
-  return checks.filter((c) => c && c.pass === false && typeof c.id === "string").map((c) => c.id).slice(0, 8);
+  return checks.filter((c) => c && c.pass === false && typeof c.id === "string" && !HELD_BACK_HIDDEN.includes(c.id)).map((c) => c.id).slice(0, 8);
 }
 
 /** Pure: one decision row (engine_decisions with decision_json) as a public recap. */

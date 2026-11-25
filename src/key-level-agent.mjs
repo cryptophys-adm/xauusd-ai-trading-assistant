@@ -35,6 +35,7 @@
 import { readPlane, READERS } from "./level-readers.mjs";
 import { detectPatterns, patternLevels } from "./chart-patterns.mjs";
 import { patternFactor } from "./pattern-calibration.mjs";
+import { zoneTypes as typeZones, dsEvidence } from "./zone-types.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
@@ -208,9 +209,11 @@ export function chartPatterns(bars = {}, { events = [] } = {}) {
 /**
  * The Key Level Agent's reading: every zone near price, the candidates first among equals. `patterns`
  * "off" leaves the chart patterns out (CHART_PATTERNS_MODE); `events` are the released figures for the
- * event patterns ([{ time, gold_direction, title }]).
+ * event patterns ([{ time, gold_direction, title }]). `zoneTypes` "off" leaves the zones untyped (Z0,
+ * KEY_LEVEL_ZONE_TYPES; src/zone-types.mjs): "on" adds z.ds to each zone near price, an overlay only.
+ * `zoneSourcesOff` (Z1a, ZONE_SOURCES_OFF) leaves those evidence sources out of the typing.
  */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [] } = {}) {
   const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
   const found = patterns === "off" ? {} : chartPatterns(bars, { events });
   // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
@@ -218,6 +221,8 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
   const zones = clusterLevels(raw, tolerance, price);
   const near = isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones;
   limitCandidates(near, price);
+  // Z0: demand/supply type, strength and freshness of each zone (z.ds); nothing else of a zone changes.
+  if (zoneTypes !== "off") typeZones(near, dsEvidence({ snapshots, bars15: bars.M15, atrH1, sourcesOff: zoneSourcesOff }));
   const candidates = near.filter((z) => z.candidate);
   const nearestCandidate = (role) => candidates.filter((z) => z.role === role).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0] ?? null;
   const sup = nearestCandidate("support"), res = nearestCandidate("resistance"), at = candidates.find((z) => z.role === "at price") ?? null;
