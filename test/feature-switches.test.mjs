@@ -304,7 +304,7 @@ test("FS-6 GET payload: the promised shape; no email, account or identity key; s
   assert.equal(p.switches.length, FEATURE_SWITCHES.length);
   for (const r of p.switches) {
     const keys = Object.keys(r);
-    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" ? ["auto_revert"] : [], `${r.key}: no extra key`);
+    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" ? ["auto_revert"] : r.key === "ZONE_AHEAD_MODE" || r.key === "ZONE_AIM_OFF" ? ["zone_hold"] : [], `${r.key}: no extra key`);
     assert.deepEqual(ROW_KEYS.filter((k) => !keys.includes(k)), [], `${r.key}: every key`);
     assert.ok(["override", "config", "default"].includes(r.source));
     assert.ok(r.set_by === null || ["owner", "aether", "agent", "system"].includes(r.set_by), `${r.key}: set_by a role word`);

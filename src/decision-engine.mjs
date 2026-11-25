@@ -70,7 +70,7 @@ import { lensKnobs, readLensState } from "./lens-policy.mjs";
 import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS, SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { RANGE_GATED_AGENTS, isRanging } from "./htf-cells.mjs";
 import { modeShadowEvidence, writeShadowPlans } from "./mode-shadow.mjs";
-import { readZoneHolds, applyZoneHolds } from "./zone-readings.mjs";
+import { readZoneHolds, applyZoneHolds, recordDecisionRule } from "./zone-readings.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -1721,6 +1721,9 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };
+    // Z5: the owner's rule version at this decision's time, in its own table (zone_decision_rules; never the record), for
+    // the readings and counterfactuals written hours later. ZONE_READINGS "off": nothing. A hold never changes it.
+    await recordDecisionRule(ownerEnv, { decisionKey: key, barClose: closeIso, now });
     try { await env.SIGNAL_CACHE?.put?.(DECISION_LATEST_KEY, JSON.stringify(record), { expirationTtl: 2 * 86_400 }); } catch { /* D1 has it */ }
     // MS2 (src/mode-shadow.mjs): the deterministic part of this decision for each mode not in force, with the same
     // witnesses and council answer; a mode that would trade writes its plans to mode_shadow_plans, after the live record

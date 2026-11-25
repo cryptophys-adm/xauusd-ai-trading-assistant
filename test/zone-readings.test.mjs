@@ -127,7 +127,9 @@ test("ZR-4 the run: behind its cursor, written once; a rerun writes nothing, and
   assert.equal((await runZoneReadings(env, { now: RNOW })).written, 0);
   assert.equal(n(), 1);
   const row = env.DB.raw.prepare("SELECT * FROM zone_readings").get();
-  assert.deepEqual([row.outcome, row.approach, row.version, row.rule_version], ["held", "from_above", zr.ZONE_READINGS_VERSION, ruleVersionOf(env)]);
+  // No decision-time rule version recorded for these decisions (before Z5's table): NULL, left out of the evidence.
+  assert.deepEqual([row.outcome, row.approach, row.version, row.rule_version], ["held", "from_above", zr.ZONE_READINGS_VERSION, null]);
+  assert.deepEqual((await zr.breakerEvidence(env.DB, ruleVersionOf(env))).readings, []);
   // The schema: twice, the same tables and columns.
   const cols = (db) => ZONE_TABLES.map((t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((c) => [c.name, c.type, c.notnull, c.pk]));
   const before = cols(env.DB);
@@ -173,16 +175,18 @@ test("ZR-6 the counterfactuals: zone_blocked WAITs scored with plan learning's o
   await pl.ensurePlanLearningSchema(env.DB);
   const at = Date.parse("2026-11-20T10:00:00Z");
   seedCounterfactualDecisions(env.DB, at);
+  await zr.recordDecisionRule({ ...env, TP1_KEY_ZONE_MODE: "off" }, { decisionKey: keyOf(at - M15), barClose: iso(at), now: at });
   const now = at + 12 * HOUR;
   const out = await runZoneCounterfactuals(env, { now, bars: rising(at) });
   assert.equal(out.status, "ok", JSON.stringify(out));
   const b = env.DB.raw.prepare("SELECT * FROM zone_blocked_setups").all();
   assert.equal(b.length, 1);
-  assert.deepEqual([b[0].side, b[0].status, b[0].source, b[0].rule_version, JSON.parse(b[0].results_json)["e0@s1"].s], ["BUY", "resolved", "zone_blocked", ruleVersionOf(env), "target"]);
+  // The rule version is the decision's own (recorded at decision time under other rules than this run's env).
+  assert.deepEqual([b[0].side, b[0].status, b[0].source, b[0].rule_version, JSON.parse(b[0].results_json)["e0@s1"].s], ["BUY", "resolved", "zone_blocked", "tp1_kz:off", "target"]);
   // The same step as plan learning's control arm on the same setup.
   assert.deepEqual(JSON.parse(b[0].results_json), pl.setupOutcome(pl.setupFromRow({ ...b[0], status: "open", results_json: null }), rising(at), { now }).results);
   const a = env.DB.raw.prepare("SELECT * FROM zone_rule_arms").all();
-  assert.deepEqual(a.map((x) => [x.agent, x.rule, x.status, x.base_stop, x.base_tp1]), [["zone_pullback", "tp_typed", "resolved", 4020, 4060]]);
+  assert.deepEqual(a.map((x) => [x.agent, x.rule, x.status, x.base_stop, x.base_tp1, x.rule_version]), [["zone_pullback", "tp_typed", "resolved", 4020, 4060, null]], "no decision-time row: NULL");
   assert.ok(a[0].acted_r > 0 && a[0].base_r > a[0].acted_r, JSON.stringify(a[0]));
   assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM plan_setups").get().n, 0, "plan_setups is never written");
   // A rerun adds nothing.
@@ -286,13 +290,15 @@ function seedBlocked(db, n, r, rv) {
     .run(`s${i}`, iso(T0 + i * HOUR), iso(T0 + i * HOUR), iso(T0 + i * HOUR), JSON.stringify({ "e0@s1": { r, s: "target", f: 1 } }), rv);
 }
 
-test("ZR-10 the tick: one 'XAUUSD ZONES' line per change, hourly, recovery and a rule_version bump release; state in KV only, never omega_settings, an FS1 override or any Omega/PM state", async () => {
+test("ZR-10 the tick: one 'XAUUSD ZONES' line per change, hourly; a 7-day hold that outlasts its evidence, then released on recovery or kept while it trips; an owner rule change releases at once; state in KV only, never omega_settings, an FS1 override or any Omega/PM state", async () => {
   reset();
   const db = recordingDb();
   const env = { DB: db, SIGNAL_CACHE: kv(), ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend", ZONE_AIM_OFF: "tp,stop,factor" };
   await env.SIGNAL_CACHE.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify({ ZONE_PRIORITY: { value: "on", actor: "owner", at: "2026-11-25T09:00:00.000Z" } }));
   const lines = [];
   const send = async (t) => { lines.push(t); };
+  const state = async () => JSON.parse(await env.SIGNAL_CACHE.get(ZONE_BREAKER_KEY));
+  assert.equal(ZONE_BREAKER.hold_ms, 7 * DAY, "SV1b's 7 days");
   // Empty tables (none exist yet): no hold, no line, no error.
   assert.deepEqual(await runZoneBreaker(env, { now: RNOW, send }), { status: "unchanged", held: [], told: 0, alarmed: 0 });
   assert.deepEqual(lines, []);
@@ -300,36 +306,63 @@ test("ZR-10 the tick: one 'XAUUSD ZONES' line per change, hourly, recovery and a
   const rv = ruleVersionOf(env);
   seedBlocked(db, 30, 0.15, rv);
   assert.equal((await runZoneBreaker(env, { now: RNOW + 10 * M1, send })).status, "fresh", "hourly");
-  const trip = await runZoneBreaker(env, { now: RNOW + HOUR, send });
+  const t1 = RNOW + HOUR;
+  const trip = await runZoneBreaker(env, { now: t1, send });
   assert.deepEqual([trip.status, trip.held, lines.length], ["changed", ["zone_ahead"], 1]);
-  assert.match(lines[0], /^XAUUSD ZONES: the breaker holds the zone_ahead check \(to record\) on the decision side: the trades the check held back made 0\.15R per setup over 30\./);
+  assert.match(lines[0], /^XAUUSD ZONES: the breaker holds the zone_ahead check \(to record\) on the decision side for at least 7 days: the trades the check held back made 0\.15R per setup over 30\./);
   assert.doesNotMatch(lines[0], /\d{4}\.\d/, "no price");
-  assert.deepEqual((await runZoneBreaker(env, { now: RNOW + 2 * HOUR, send })).status, "unchanged");
-  assert.equal(lines.length, 1, "no repeat");
-  // Recovery: the record falls back to +0.05R: released, one line.
+  assert.deepEqual((await state()).held, { zone_ahead: { by: ["block"], since: iso(t1), until: iso(t1 + 7 * DAY), rule_version: rv } });
+  // Before `until`, the hold stands though the evidence no longer trips (+0.05R): no line, no flicker.
   seedBlocked(db, 30, 0.05, rv);
-  const rel = await runZoneBreaker(env, { now: RNOW + 3 * HOUR, send });
+  for (const dt of [3 * HOUR, DAY, 6 * DAY]) assert.deepEqual((await runZoneBreaker(env, { now: t1 + dt, send })).held, ["zone_ahead"], `+${dt / HOUR}h`);
+  assert.equal(lines.length, 1);
+  // After `until` on the same rule version: released once recovered, one line.
+  const rel = await runZoneBreaker(env, { now: t1 + 7 * DAY + HOUR, send });
   assert.deepEqual([rel.status, rel.held, lines.length], ["changed", [], 2]);
-  assert.match(lines[1], /^XAUUSD ZONES: the breaker releases the zone_ahead check/);
-  // A rule_version bump releases: the evidence of the old rules no longer counts.
+  assert.match(lines[1], /^XAUUSD ZONES: the breaker releases the zone_ahead check \(to record\): its record recovered after the 7-day hold\.$/);
+  // A new hold; after its `until` it is kept while it still trips (no line).
   seedBlocked(db, 30, 0.15, rv);
-  await runZoneBreaker(env, { now: RNOW + 4 * HOUR, send });
+  const t2 = t1 + 8 * DAY;
+  await runZoneBreaker(env, { now: t2, send });
   assert.equal(lines.length, 3);
+  assert.deepEqual((await runZoneBreaker(env, { now: t2 + 7 * DAY + HOUR, send })).held, ["zone_ahead"]);
+  assert.equal(lines.length, 3);
+  assert.equal((await state()).held.zone_ahead.since, iso(t2), "kept as it was");
+  // The owner changes a zone switch (a new rule version): released at once, before any `until`, "the rules changed".
+  const t3 = t2 + 15 * DAY;
+  seedBlocked(db, 30, 0.15, rv);
+  await runZoneBreaker(env, { now: t3, send });
   const bumped = { ...env, ZONE_AIM_OFF: "stop,factor" };
   assert.notEqual(ruleVersionOf(bumped), rv);
-  assert.deepEqual((await runZoneBreaker(bumped, { now: RNOW + 5 * HOUR, send })).held, []);
-  assert.equal(lines.length, 4);
-  // A send that fails is told again at the next tick, and the hold is not stored until it is.
-  await runZoneBreaker(env, { now: RNOW + 6 * HOUR, send: async () => { throw new Error("telegram down"); } });
-  assert.deepEqual(JSON.parse(await env.SIGNAL_CACHE.get(ZONE_BREAKER_KEY)).held, {});
-  await runZoneBreaker(env, { now: RNOW + 7 * HOUR, send });
-  assert.equal(lines.length, 5);
+  assert.deepEqual((await runZoneBreaker(bumped, { now: t3 + HOUR, send })).held, []);
+  assert.match(lines.at(-1), /^XAUUSD ZONES: the breaker releases the zone_ahead check \(to record\): the rules changed \(the owner changed a zone switch\), and the owner's change wins\.$/);
+  const n = lines.length;
+  // Fresh holds read the owner's current rule version only: the old version's evidence does not trip it again.
+  assert.deepEqual((await runZoneBreaker(bumped, { now: t3 + 2 * HOUR, send })).held, []);
+  assert.equal(lines.length, n);
+  // A new hold whose line fails is not stored, and is told at the next tick.
+  await runZoneBreaker(env, { now: t3 + 3 * HOUR, send: async () => { throw new Error("telegram down"); } });
+  assert.deepEqual((await state()).held, {});
+  await runZoneBreaker(env, { now: t3 + 4 * HOUR, send });
+  assert.equal(lines.length, n + 1);
   // Writes: only its own tables' schema (run by the test) and SELECTs; KV: its own key besides the seeded override.
   for (const q of db.sql) assert.match(q.trim(), /^(SELECT|CREATE (TABLE|INDEX) IF NOT EXISTS (idx_)?zone_)/, q);
   assert.ok(!db.sql.some((q) => /omega_settings|position_actions SET|INSERT INTO (omega|position)/i.test(q)));
   assert.deepEqual([...env.SIGNAL_CACHE.m.keys()].sort(), [FEATURE_SWITCH_OVERRIDE_KEY, ZONE_BREAKER_KEY].sort());
   assert.equal(JSON.parse(await env.SIGNAL_CACHE.get(FEATURE_SWITCH_OVERRIDE_KEY)).ZONE_PRIORITY.value, "on", "the owner's FS1 value is unchanged");
   assert.ok(!tables(db).includes("omega_settings"));
+});
+
+test("ZR-10b zoneHoldStep and applyZoneHolds: a hold on another rule version than the owner's is never applied", () => {
+  const rv = "tp1_kz:on+zone_ahead@1", h = { by: ["block"], since: iso(RNOW), until: iso(RNOW + 7 * DAY), rule_version: rv };
+  assert.deepEqual(zr.zoneHoldStep({ zone_ahead: h }, {}, { now: RNOW + DAY, ruleVersion: rv }), { held: { zone_ahead: h }, changes: [] });
+  assert.deepEqual(zr.zoneHoldStep({ zone_ahead: h }, {}, { now: RNOW + 8 * DAY, ruleVersion: rv }).changes.map((c) => c.kind), ["recovered"]);
+  assert.deepEqual(zr.zoneHoldStep({ zone_ahead: h }, { zone_ahead: { by: ["block"] } }, { now: RNOW + 8 * DAY, ruleVersion: rv }).held, { zone_ahead: h });
+  assert.deepEqual(zr.zoneHoldStep({ zone_ahead: h }, { zone_ahead: { by: ["block"] } }, { now: RNOW + DAY, ruleVersion: "tp1_kz:off" }).changes.map((c) => c.kind), ["rules_changed"]);
+  const owner = { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend", ZONE_AIM_OFF: "tp,stop,factor" };
+  assert.equal(ruleVersionOf(owner), rv);
+  assert.deepEqual(applyZoneHolds(owner, { zone_ahead: h }).held, [{ rule: "zone_ahead", by: ["block"] }]);
+  assert.deepEqual(applyZoneHolds(owner, { zone_ahead: { ...h, rule_version: "tp1_kz:on" } }).held, [], "the owner's change wins at once");
 });
 
 test("ZR-11 a hold acts as its own switch off for the run only: ZONE_AHEAD_MODE to record, tokens into ZONE_AIM_OFF; nothing is turned on; ZONE_PRIORITY off still overrides", () => {
@@ -508,4 +541,79 @@ test("ZR-16 GET /api/zones: the shape on empty tables ([] everywhere, SELECT onl
   const e = await worker.fetch(new Request("https://worker.test/api/zones"), broken, ctx);
   assert.equal(e.status, 500);
   assert.deepEqual(await e.json(), { status: "error", error: "zones_unavailable" });
+});
+
+// ---------------------------------------------------------------- the decision-time rule version; holds never stamp one
+
+/** 15m bars around the fixture's decision bar (CLOSE): the bar before closes at 4005, the decision bar dips to 3996, 8 bars at 4004. */
+function fixtureBars() {
+  const close = Date.parse(CLOSE), bar = (open, [o, h, l, c]) => ({ open_time: iso(open), close_time: iso(open + M15), open: o, high: h, low: l, close: c });
+  return [bar(close - 2 * M15, [4006, 4007, 4004, 4005]), bar(close - M15, [4004, 4002, 3996, 4000]), ...Array.from({ length: 8 }, (_, i) => bar(close + i * M15, [4004, 4005, 4003, 4004]))];
+}
+const ZON = { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend", ZONE_AIM_OFF: "tp,stop,factor" };
+
+test("ZR-17 rule_version at the decision's time: the decision writes zone_decision_rules (the record unchanged); a reading written after the rules changed carries the decision-time version; off writes none", async () => {
+  const env = await decisionEnv(ZON);
+  const json = await decide(env);
+  const owner = ruleVersionOf(env);
+  assert.equal(owner, "tp1_kz:on+zone_ahead@1");
+  const rows = env.DB.raw.prepare("SELECT decision_key, bar_close, rule_version FROM zone_decision_rules").all();
+  assert.deepEqual(rows.map((r) => ({ ...r })), [{ decision_key: keyOf(Date.parse(CLOSE) - M15), bar_close: CLOSE, rule_version: owner }]);
+  assert.doesNotMatch(json, /rule_version/, "never in the decision record");
+  // The owner flips a zone switch before the readings run: the reading keeps the decision's version.
+  const later = { ...env, ZONE_AHEAD_MODE: "all" };
+  assert.notEqual(ruleVersionOf(later), owner);
+  const out = await runZoneReadings(later, { now: Date.parse(CLOSE) + 3 * HOUR, bars15: fixtureBars() });
+  assert.ok(out.written >= 1, JSON.stringify(out));
+  assert.deepEqual([...new Set(env.DB.raw.prepare("SELECT rule_version FROM zone_readings").all().map((r) => r.rule_version))], [owner]);
+  // The evidence of the owner's version reads it; another version's does not.
+  assert.ok((await zr.breakerEvidence(env.DB, owner)).readings.length >= 1);
+  assert.deepEqual((await zr.breakerEvidence(env.DB, ruleVersionOf(later))).readings, []);
+  // ZONE_READINGS off: no decision-time row (no table).
+  const off = await decisionEnv({ ...ZON, ZONE_READINGS: "off" });
+  assert.equal(await decide(off), json, "the record is the same either way");
+  assert.ok(!tables(off.DB).includes("zone_decision_rules"));
+});
+
+test("ZR-18 a hold never changes a stored rule_version: with a hold applied, the decision's mode_shadow_plans rows, the plan learner's live stamp and the zone tables carry the owner's (the mode evidence does not restart)", async () => {
+  const env = await decisionEnv(ZON);
+  const owner = ruleVersionOf(env);
+  await env.SIGNAL_CACHE.put(ZONE_BREAKER_KEY, JSON.stringify({ held: { zone_ahead: { by: ["block"], since: iso(NOW - HOUR), until: iso(NOW + 7 * DAY), rule_version: owner } } }));
+  const rec = JSON.parse(await decide(env));
+  assert.deepEqual(rec.zone_rules_held, [{ rule: "zone_ahead", by: ["block"] }], "the hold acted");
+  assert.notEqual(ruleVersionOf({ ...env, ZONE_AHEAD_MODE: "record" }), owner, "the held run's own rules would read another version");
+  const shadow = env.DB.raw.prepare("SELECT rule_version FROM mode_shadow_plans").all();
+  assert.ok(shadow.length > 0);
+  assert.deepEqual([...new Set(shadow.map((r) => r.rule_version))], [owner]);
+  assert.equal(env.DB.raw.prepare("SELECT rule_version FROM zone_decision_rules").get().rule_version, owner);
+  await pl.runPlanLearning(env, { now: Date.parse(CLOSE) + 3 * HOUR, bars: [] });
+  const live = env.DB.raw.prepare("SELECT rule_version FROM plan_setups WHERE source = 'live'").all();
+  assert.ok(live.length > 0);
+  assert.deepEqual([...new Set(live.map((r) => r.rule_version))], [owner]);
+  await runZoneReadings(env, { now: Date.parse(CLOSE) + 3 * HOUR, bars15: fixtureBars() });
+  assert.deepEqual([...new Set(env.DB.raw.prepare("SELECT rule_version FROM zone_readings").all().map((r) => r.rule_version))], [owner]);
+  assert.equal(env.ZONE_AHEAD_MODE, "trend", "the owner's env is unchanged");
+});
+
+test("ZR-19 FS1: the GET rows show the breaker's holds (zone_hold on ZONE_AHEAD_MODE, a token map on ZONE_AIM_OFF); null without one, on another rule version or unreadable; the row's value stays the owner's", async () => {
+  const { featureSwitchesPayload, resetFeatureSwitchMemoForTests } = await import("../src/feature-switch-store.mjs");
+  const base = { ...ZON, ZONE_AIM_OFF: "stop,factor" };
+  const owner = ruleVersionOf(base);
+  const rows = async (env) => { resetFeatureSwitchMemoForTests?.(); const p = await featureSwitchesPayload(env, { now: NOW }); return Object.fromEntries(p.switches.filter((r) => r.key === "ZONE_AHEAD_MODE" || r.key === "ZONE_AIM_OFF").map((r) => [r.key, r])); };
+  const none = await rows({ ...base, SIGNAL_CACHE: kv() });
+  assert.deepEqual([none.ZONE_AHEAD_MODE.zone_hold, none.ZONE_AIM_OFF.zone_hold], [null, null]);
+  const h = (by) => ({ by, since: iso(NOW - HOUR), until: iso(NOW + 7 * DAY - HOUR), rule_version: owner });
+  const store = kv();
+  await store.put(ZONE_BREAKER_KEY, JSON.stringify({ held: { zone_ahead: h(["typing"]), tp: h(["rule:tp_typed"]) } }));
+  const held = await rows({ ...base, SIGNAL_CACHE: store });
+  assert.deepEqual(held.ZONE_AHEAD_MODE.zone_hold, { since: iso(NOW - HOUR), until: iso(NOW + 7 * DAY - HOUR), by: ["typing"] });
+  assert.deepEqual(held.ZONE_AIM_OFF.zone_hold, { tp: { since: iso(NOW - HOUR), until: iso(NOW + 7 * DAY - HOUR), by: ["rule:tp_typed"] } });
+  // The rows are the owner's otherwise, value included.
+  for (const k of ["ZONE_AHEAD_MODE", "ZONE_AIM_OFF"]) { const { zone_hold: _a, ...a } = held[k], { zone_hold: _b, ...b } = none[k]; assert.deepEqual(a, b, k); }
+  assert.deepEqual([held.ZONE_AHEAD_MODE.value, held.ZONE_AIM_OFF.value], ["trend", ["tp"]]);
+  // Another rule version (the owner changed a zone switch): not shown. Unreadable: null.
+  assert.deepEqual((await rows({ ...base, ZONE_AHEAD_MODE: "all", SIGNAL_CACHE: store })).ZONE_AHEAD_MODE.zone_hold, null);
+  const broken = { m: new Map(), async get(k) { if (k === ZONE_BREAKER_KEY) throw new Error("kv down"); return null; }, async put() {} };
+  const b = await rows({ ...base, SIGNAL_CACHE: broken });
+  assert.deepEqual([b.ZONE_AHEAD_MODE.zone_hold, b.ZONE_AIM_OFF.zone_hold], [null, null]);
 });

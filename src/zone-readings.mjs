@@ -37,7 +37,11 @@ const M15 = 15 * 60_000, HOUR = 3600_000, DAY = 24 * HOUR;
 /** The readings' rules (B19's held/broke definition). */
 export const ZONE_READING_RULES = Object.freeze({ horizon_bars: 8, held_atr: 0.5, broke_atr: 0.1, bucket_atr: 0.1, dedupe_ms: 2 * HOUR, max_decisions: 200, backfill_ms: 2 * DAY });
 /** The breaker's rules (min_setups as AGENT_BREAKER, src/strategy-agents.mjs). */
-export const ZONE_BREAKER = Object.freeze({ window: 300, min_group: 60, min_setups: 30, block_mean_r: 0.10, every_ms: HOUR });
+/**
+ * The breaker's rules (min_setups as AGENT_BREAKER, src/strategy-agents.mjs). hold_ms: a hold stands at least 7 days
+ * whatever the evidence says (SV1b's revert period, src/agent-veto.mjs), so the brake never flickers hour to hour.
+ */
+export const ZONE_BREAKER = Object.freeze({ window: 300, min_group: 60, min_setups: 30, block_mean_r: 0.10, every_ms: HOUR, hold_ms: 7 * DAY });
 /** The alarms' rules: zone_ahead alone in more than 40% of the last 96 decisions where the council wanted that side. */
 export const ZONE_ALARMS = Object.freeze({ share: 0.4, window: 96, omega_min_closes: 15, omega_days: 30 });
 /** The view's shrinkage of a held rate toward the overall rate, in readings. */
@@ -169,7 +173,12 @@ export const ZONE_READINGS_SCHEMA_SQL = Object.freeze([
     action TEXT, at_level INTEGER NOT NULL DEFAULT 0, mode TEXT, regime TEXT,
     status TEXT NOT NULL DEFAULT 'open', acted_r REAL, base_r REAL, resolved_at TEXT, rule_version TEXT, version TEXT NOT NULL, updated_at TEXT NOT NULL
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_zone_rule_arms_status ON zone_rule_arms(status, opened_at)"
+  "CREATE INDEX IF NOT EXISTS idx_zone_rule_arms_status ON zone_rule_arms(status, opened_at)",
+  // The owner's rule version at each decision's own time (ruleVersionOf on the FS1-resolved env, before any hold): the
+  // readings and counterfactuals, written hours later, take it from here, never from the env of their write.
+  `CREATE TABLE IF NOT EXISTS zone_decision_rules (
+    decision_key TEXT PRIMARY KEY, bar_close TEXT NOT NULL, rule_version TEXT NOT NULL, created_at TEXT NOT NULL
+  )`
 ]);
 let schemaReady = new WeakSet();
 export function resetZoneReadingsSchemaForTests() { schemaReady = new WeakSet(); }
@@ -178,6 +187,31 @@ export async function ensureZoneReadingsSchema(db) {
   if (!db || schemaReady.has(db)) return;
   for (const sql of ZONE_READINGS_SCHEMA_SQL) await db.prepare(sql).run();
   schemaReady.add(db);
+}
+
+/**
+ * The Decision Engine's one write per decision (ZONE_READINGS on): the owner's rule version at the decision's time
+ * (`ownerEnv`: the run's FS1-resolved env before any hold), INSERT OR IGNORE. Never in the decision record. Never throws.
+ */
+export async function recordDecisionRule(ownerEnv, { decisionKey, barClose, now = Date.now() } = {}) {
+  if (zoneReadingsMode(ownerEnv) === "off" || !ownerEnv?.DB || !decisionKey) return { status: "disabled" };
+  try {
+    await ensureZoneReadingsSchema(ownerEnv.DB);
+    const r = await ownerEnv.DB.prepare("INSERT OR IGNORE INTO zone_decision_rules (decision_key, bar_close, rule_version, created_at) VALUES (?, ?, ?, ?)").bind(decisionKey, barClose, ruleVersionOf(ownerEnv), iso(now)).run();
+    return { status: "ok", written: Number(r?.meta?.changes) || 0 };
+  } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 160) }; }
+}
+
+/** The decision-time rule versions of `keys` (Map decision_key → rule_version); a decision of before Z5's table: absent. */
+export async function decisionRules(db, keys) {
+  const out = new Map(), list = [...new Set((keys || []).filter((k) => typeof k === "string"))];
+  for (let i = 0; i < list.length; i += 50) {
+    const part = list.slice(i, i + 50);
+    try {
+      for (const r of (await db.prepare(`SELECT decision_key, rule_version FROM zone_decision_rules WHERE decision_key IN (${part.map(() => "?").join(", ")})`).bind(...part).all()).results || []) out.set(r.decision_key, r.rule_version);
+    } catch (e) { if (!noTable(e)) throw e; return out; }
+  }
+  return out;
 }
 
 async function runAll(db, statements) {
@@ -220,9 +254,9 @@ export async function runZoneReadings(env, { now = Date.now(), bars15 = null } =
     let written = 0;
     if (out.readings.length) {
       await ensureZoneReadingsSchema(db);
-      const rv = ruleVersionOf(env);
+      const rules = await decisionRules(db, out.readings.map((x) => x.decision_key));
       written = await runAll(db, out.readings.map((x) => db.prepare("INSERT OR IGNORE INTO zone_readings (reading_key, decision_key, bar_close, zone_type, zone_strength, zone_freshness, zone_rank, ds_sources, approach, outcome, mfe_atr, mae_atr, bars, mode, regime, version, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(x.reading_key, x.decision_key, x.bar_close, x.zone_type, x.zone_strength, x.zone_freshness, x.zone_rank, x.ds_sources, x.approach, x.outcome, x.mfe_atr, x.mae_atr, x.bars, x.mode, x.regime, ZONE_READINGS_VERSION, rv)));
+        .bind(x.reading_key, x.decision_key, x.bar_close, x.zone_type, x.zone_strength, x.zone_freshness, x.zone_rank, x.ds_sources, x.approach, x.outcome, x.mfe_atr, x.mae_atr, x.bars, x.mode, x.regime, ZONE_READINGS_VERSION, rules.get(x.decision_key) ?? null)));
     }
     const last = [...rows].reverse().find((r) => out.done.includes(r.decision_key));
     if (last) await env.SIGNAL_CACHE.put(ZONE_READINGS_CURSOR_KEY, JSON.stringify({ bar_close: last.bar_close, recent: out.recent }));
@@ -297,7 +331,10 @@ export async function runZoneCounterfactuals(env, { now = Date.now(), bars = nul
     try { haveOpen = Boolean(await db.prepare("SELECT 1 AS x FROM zone_blocked_setups WHERE status = 'open' UNION ALL SELECT 1 AS x FROM zone_rule_arms WHERE status = 'open' LIMIT 1").first()); } catch (e) { if (!noTable(e)) throw e; }
     if (!blocked.length && !arms.length && !haveOpen) return { status: "idle" };
     await ensureZoneReadingsSchema(db);
-    const rv = ruleVersionOf(env), stamp = iso(now);
+    // Each row's rule version is its first decision's own (zone_decision_rules); none recorded: NULL (left out of the evidence).
+    const stamp = iso(now);
+    const rules = await decisionRules(db, [...blocked, ...arms].map((s) => s.decision_key));
+    const rvOf = (s) => rules.get(s.decision_key) ?? null;
     const writes = [];
     let added = 0, extended = 0;
     const known = async (table, keyCol) => new Map(((await db.prepare(`SELECT ${keyCol} AS k, last_seen_at, status FROM ${table} WHERE opened_at >= ?`).bind(since).all()).results || []).map((r) => [r.k, r]));
@@ -308,7 +345,7 @@ export async function runZoneCounterfactuals(env, { now = Date.now(), bars = nul
       const k = kb.get(s.setup_key);
       if (!k) {
         if (!eb && s.opened_ms - Date.parse(since) < HOUR) continue;
-        const v = [s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, "open", PLAN_LEARNING_VERSION, stamp, "zone_blocked", rv, ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null)];
+        const v = [s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, "open", PLAN_LEARNING_VERSION, stamp, "zone_blocked", rvOf(s), ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null)];
         writes.push(db.prepare(`INSERT OR IGNORE INTO zone_blocked_setups (${ZB_COLUMNS.join(", ")}) VALUES (${ZB_COLUMNS.map(() => "?").join(", ")})`).bind(...v));
         added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
@@ -326,7 +363,7 @@ export async function runZoneCounterfactuals(env, { now = Date.now(), bars = nul
         if (!k) {
           if (!ea && s.opened_ms - Date.parse(since) < HOUR) continue;
           writes.push(db.prepare("INSERT OR IGNORE INTO zone_rule_arms (arm_key, setup_key, decision_key, agent, rule, side, opened_at, decided_at, last_seen_at, decisions, entry, stop, tp1, base_stop, base_tp1, atr_h1, action, at_level, mode, regime, status, rule_version, version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)")
-            .bind(armKey, s.setup_key, s.decision_key, s.agent, rule, s.side, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.entry, s.stop, s.tp1, first.base.stop, first.base.tp1, s.atr_h1, s.action, s.at_level ? 1 : 0, s.mode, s.regime, rv, PLAN_LEARNING_VERSION, stamp));
+            .bind(armKey, s.setup_key, s.decision_key, s.agent, rule, s.side, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.entry, s.stop, s.tp1, first.base.stop, first.base.tp1, s.atr_h1, s.action, s.at_level ? 1 : 0, s.mode, s.regime, rvOf(s), PLAN_LEARNING_VERSION, stamp));
           added += 1;
         } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
           writes.push(db.prepare("UPDATE zone_rule_arms SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE arm_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, armKey));
@@ -414,15 +451,46 @@ const BY_WORDS = (by, checks) => by.map((b) => b === "typing" ? `typed zones hel
   : b === "block" ? `the trades the check held back made ${checks.block.mean_r}R per setup over ${checks.block.n}`
   : `its plans made ${checks.rules[b.slice(5)]?.acted_mean_r}R against ${checks.rules[b.slice(5)]?.base_mean_r}R for the base over ${checks.rules[b.slice(5)]?.n}`).join("; ");
 
-/** Pure: the Telegram lines of a change of holds (one line per rule held or released). */
-export function breakerLines(before = {}, after = {}, checks = null) {
-  const lines = [];
+/**
+ * Pure: one 'XAUUSD ZONES' line per change: `changes` = [{ rule, kind, hold }], kind "held" (a new hold, with its
+ * evidence), "recovered" (released after its hold period on its own rule version) or "rules_changed" (released at once:
+ * the owner's rule version is no longer the hold's).
+ */
+export function breakerLines(changes = [], checks = null) {
+  const days = Math.round(ZONE_BREAKER.hold_ms / DAY);
+  return (changes || []).map(({ rule, kind, hold }) => kind === "held"
+    ? `XAUUSD ZONES: the breaker holds ${RULE_WORDS[rule]} on the decision side for at least ${days} days: ${checks ? BY_WORDS(hold.by, checks) : hold.by.join(", ")}. The owner's switch is unchanged; after that it returns when its record recovers, and at once when the owner changes a zone switch.`
+    : kind === "rules_changed"
+      ? `XAUUSD ZONES: the breaker releases ${RULE_WORDS[rule]}: the rules changed (the owner changed a zone switch), and the owner's change wins.`
+      : `XAUUSD ZONES: the breaker releases ${RULE_WORDS[rule]}: its record recovered after the ${days}-day hold.`);
+}
+
+/**
+ * Pure: the next holds from the stored ones and the evidence's (`fresh`, zoneBreakerHolds' held on the owner's current
+ * rule version `ruleVersion`). A stored hold { by, since, until, rule_version }:
+ *   - its rule_version is not the owner's current one (the owner changed a zone switch): released at once, "rules_changed";
+ *   - now < until: kept, whatever the evidence says;
+ *   - after until: re-evaluated on its stored rule version (the current one, by the first rule): kept while it still
+ *     trips, else released, "recovered".
+ * A rule not held that the evidence trips: held { by, since: now, until: now + hold_ms, rule_version }.
+ * Returns { held, changes: [{ rule, kind, hold }] }.
+ */
+export function zoneHoldStep(before = {}, fresh = {}, { now = Date.now(), ruleVersion = null } = {}) {
+  const held = {}, changes = [];
   for (const rule of ZONE_HOLDABLE) {
-    const was = Boolean(before?.[rule]), now = Boolean(after?.[rule]);
-    if (!was && now) lines.push(`XAUUSD ZONES: the breaker holds ${RULE_WORDS[rule]} on the decision side: ${checks ? BY_WORDS(after[rule].by, checks) : after[rule].by.join(", ")}. The owner's switch is unchanged; it returns by itself when the record recovers or the rules change.`);
-    if (was && !now) lines.push(`XAUUSD ZONES: the breaker releases ${RULE_WORDS[rule]}: its record recovered or the rules changed.`);
+    const h = before?.[rule] && typeof before[rule] === "object" ? before[rule] : null;
+    if (h) {
+      if (h.rule_version !== ruleVersion) { changes.push({ rule, kind: "rules_changed", hold: h }); continue; }
+      if (now < Date.parse(h.until) || fresh?.[rule]) { held[rule] = h; continue; }
+      changes.push({ rule, kind: "recovered", hold: h });
+      continue;
+    }
+    if (fresh?.[rule]) {
+      const n = { by: [...fresh[rule].by], since: iso(now), until: iso(now + ZONE_BREAKER.hold_ms), rule_version: ruleVersion };
+      held[rule] = n; changes.push({ rule, kind: "held", hold: n });
+    }
   }
-  return lines;
+  return { held, changes };
 }
 
 // ---------------------------------------------------------------- the breaker on the decision side
@@ -445,6 +513,9 @@ export async function readZoneHolds(env) {
 export function applyZoneHolds(env, held) {
   if (!held || typeof held !== "object" || zoneReadingsMode(env) === "off") return { env, held: [] };
   const patch = {}, out = [];
+  // The owner's change wins at once: a hold made on another rule version is not applied (the next tick releases it).
+  const rv = ruleVersionOf(env);
+  held = Object.fromEntries(Object.entries(held).filter(([, h]) => h && (typeof h.rule_version !== "string" || h.rule_version === rv)));
   const by = (rule) => (Array.isArray(held[rule]?.by) ? held[rule].by.filter((b) => typeof b === "string") : []);
   if (held.zone_ahead && zoneAheadChecks(zoneAheadMode(env))) { patch.ZONE_AHEAD_MODE = "record"; out.push({ rule: "zone_ahead", by: by("zone_ahead") }); }
   const aim = zoneAimMode(env);
@@ -455,6 +526,25 @@ export function applyZoneHolds(env, held) {
     if (off.length !== zoneAimOffMode(env).length) patch.ZONE_AIM_OFF = ZONE_AIM_TOKENS.filter((t) => off.includes(t)).join(",");
   }
   return out.length ? { env: { ...env, ...patch }, held: out } : { env, held: [] };
+}
+
+/**
+ * FS1 (src/feature-switch-store.mjs): the breaker's holds for the panel rows, from one KV read of ZONE_BREAKER_KEY, as
+ * { zone_ahead: { since, until, by } | null, aim: { tp, stop, factor } | null } (aim lists only the tokens held). A
+ * hold made on another rule version than `env`'s (the owner changed a zone switch; the next tick releases it) is left
+ * out, as applyZoneHolds leaves it out. Unreadable, or ZONE_READINGS off: { zone_ahead: null, aim: null }.
+ */
+export async function zoneHoldRows(env) {
+  const none = { zone_ahead: null, aim: null };
+  if (zoneReadingsMode(env) === "off") return none;
+  try {
+    const st = parse(await env?.SIGNAL_CACHE?.get?.(ZONE_BREAKER_KEY), null);
+    const rv = ruleVersionOf(env);
+    const row = (h) => (h && typeof h === "object" && (typeof h.rule_version !== "string" || h.rule_version === rv)
+      ? { since: typeof h.since === "string" ? h.since : null, until: typeof h.until === "string" ? h.until : null, by: Array.isArray(h.by) ? h.by.filter((b) => typeof b === "string") : [] } : null);
+    const aim = Object.fromEntries(ZONE_AIM_TOKENS.map((t) => [t, row(st?.held?.[t])]).filter(([, v]) => v));
+    return { zone_ahead: row(st?.held?.zone_ahead), aim: Object.keys(aim).length ? aim : null };
+  } catch { return none; }
 }
 
 // ---------------------------------------------------------------- the breaker tick, the alarms, Omega attribution
@@ -552,20 +642,21 @@ export async function runZoneBreaker(env, { now = Date.now(), send = null, force
     const stored = parse(await kv.get(ZONE_BREAKER_KEY), null);
     if (!force && stored?.checked_at && now - Date.parse(stored.checked_at) < ZONE_BREAKER.every_ms) return { status: "fresh" };
     const ruleVersion = ruleVersionOf(env);
-    const { held, checks } = zoneBreakerHolds(await breakerEvidence(db, ruleVersion));
+    // Fresh holds on the owner's current rule version; a stored hold keeps its own (zoneHoldStep).
+    const { held: fresh, checks } = zoneBreakerHolds(await breakerEvidence(db, ruleVersion));
     const before = stored?.held && typeof stored.held === "object" ? stored.held : {};
+    const step = zoneHoldStep(before, fresh, { now, ruleVersion });
     let error = null;
     const tell = async (text) => {
       if (typeof send !== "function") return true;
       try { await send(text); return true; } catch (e) { error = String(e?.message ?? e).slice(0, 160); return false; }
     };
-    const keep = {};
+    // Sent first, then kept: a change whose line fails stays as it was, and is told again at the next tick.
+    const keep = { ...step.held };
     let told = 0;
-    for (const rule of ZONE_HOLDABLE) {
-      const lines = breakerLines({ [rule]: before[rule] }, { [rule]: held[rule] }, checks);
-      if (!lines.length) { if (held[rule]) keep[rule] = held[rule]; continue; }
-      const ok = await tell(lines[0]);
-      if (ok) { told += 1; if (held[rule]) keep[rule] = held[rule]; } else if (before[rule]) keep[rule] = before[rule];
+    for (const c of step.changes) {
+      if (await tell(breakerLines([c], checks)[0])) { told += 1; continue; }
+      if (c.kind === "held") delete keep[c.rule]; else keep[c.rule] = c.hold;
     }
     // The alarms, one line a UTC day each, no action.
     const day = iso(now).slice(0, 10), alarms = { ...(stored?.alarms ?? {}) };
@@ -575,11 +666,12 @@ export async function runZoneBreaker(env, { now = Date.now(), send = null, force
       if (alarms[kind] === day) continue;
       if (await tell(text)) { alarms[kind] = day; alarmed += 1; }
     }
-    const state = { version: ZONE_READINGS_VERSION, rule_version: ruleVersion, checked_at: iso(now), held: keep, checks, alarms };
+    const ordered = Object.fromEntries(ZONE_HOLDABLE.filter((r) => keep[r]).map((r) => [r, keep[r]]));
+    const state = { version: ZONE_READINGS_VERSION, rule_version: ruleVersion, checked_at: iso(now), held: ordered, checks, alarms };
     await kv.put(ZONE_BREAKER_KEY, JSON.stringify(state));
-    const changed = JSON.stringify(Object.keys(keep)) !== JSON.stringify(Object.keys(before).filter((r) => ZONE_HOLDABLE.includes(r)));
-    if (error) return { status: "failed", error, held: Object.keys(keep), told, alarmed };
-    return { status: changed ? "changed" : "unchanged", held: Object.keys(keep), told, alarmed };
+    const changed = JSON.stringify(Object.keys(ordered)) !== JSON.stringify(ZONE_HOLDABLE.filter((r) => before[r]));
+    if (error) return { status: "failed", error, held: Object.keys(ordered), told, alarmed };
+    return { status: changed ? "changed" : "unchanged", held: Object.keys(ordered), told, alarmed };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 160) };
   }
