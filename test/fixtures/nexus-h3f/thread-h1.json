@@ -1,0 +1,189 @@
+{
+  "status": "ok",
+  "enabled": true,
+  "thread": {
+    "reputation": {
+      "technical": {
+        "n": 0,
+        "decisive": 0,
+        "accuracy": null,
+        "shrunk": 0.5,
+        "weight": 1,
+        "hit_rate": null,
+        "wait_accuracy": null,
+        "brier": null,
+        "family": "price action"
+      },
+      "risk": {
+        "n": 0,
+        "decisive": 0,
+        "accuracy": null,
+        "shrunk": 0.5,
+        "weight": 1,
+        "hit_rate": null,
+        "wait_accuracy": null,
+        "brier": null,
+        "family": "risk"
+      },
+      "moderator": {
+        "n": 0,
+        "decisive": 0,
+        "accuracy": null,
+        "shrunk": 0.5,
+        "weight": 1,
+        "hit_rate": null,
+        "wait_accuracy": null,
+        "brier": null,
+        "family": "moderator"
+      }
+    },
+    "crowd": {
+      "version": "cryptophys.reputation.v1",
+      "agents": 2,
+      "stances": {
+        "SELL": 1,
+        "WAIT": 1
+      },
+      "biases": {
+        "BULLISH": 0,
+        "BEARISH": 2,
+        "NEUTRAL": 0
+      },
+      "lean": -1,
+      "bias": "BEARISH",
+      "weighted_biases": {
+        "BULLISH": 0,
+        "BEARISH": 1,
+        "NEUTRAL": 0
+      },
+      "weighted_lean": -1,
+      "weighted_bias": "BEARISH",
+      "disagreement": 0,
+      "scored_agents": 0,
+      "families": [
+        {
+          "family": "price action",
+          "agents": [
+            "technical"
+          ],
+          "weighted_lean": -1,
+          "bias": "BEARISH"
+        },
+        {
+          "family": "risk",
+          "agents": [
+            "risk"
+          ],
+          "weighted_lean": -1,
+          "bias": "BEARISH"
+        }
+      ],
+      "disagreeing_families": [],
+      "quorum_share": 0.5,
+      "weighting": "weighting@p10-r0.25_2-d30-h0-b0-q0.5-g0-v0"
+    },
+    "tf": "H1",
+    "tab": "1H",
+    "bar_open": "2026-11-25T09:00:00.000Z",
+    "reconvened": false,
+    "bar_close": "2026-11-25T09:00:00.000Z",
+    "candle_key": "OANDA:XAUUSD:60:1795593600000",
+    "phase": "closed",
+    "confirmations": null,
+    "hud_snapshot": null,
+    "context": null,
+    "roster": [
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "calibration": null
+      },
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "calibration": null
+      }
+    ],
+    "conclusion": {
+      "status": "ok",
+      "stance": "WAIT",
+      "bias": "BEARISH",
+      "majority_bias": null,
+      "confidence": 0.6,
+      "summary": "The room leans short, but no confirmation candle has closed, so the decision waits.",
+      "reasons": [
+        "Lower high under the session open."
+      ],
+      "dissent": [],
+      "majority": "2/2",
+      "model": "m",
+      "fallback_used": false,
+      "ev_ref": "ev:xauusd/agent_thread_messages/10"
+    },
+    "openings": [
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "status": "ok",
+        "stance": "SELL",
+        "bias": "BEARISH",
+        "confidence": 0.6,
+        "ts": "2026-11-25T09:02:00.000Z",
+        "claim": "The last closed candles made a lower high under the session open.",
+        "argument": null,
+        "rebuts": [],
+        "rebuts_names": [],
+        "conceded": false,
+        "metrics": [
+          "ema"
+        ],
+        "calibration": null,
+        "ev_ref": "ev:xauusd/agent_thread_messages/7"
+      },
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "status": "ok",
+        "stance": "WAIT",
+        "bias": "NEUTRAL",
+        "confidence": 0.6,
+        "ts": "2026-11-25T09:02:00.000Z",
+        "claim": "Volatility is ordinary; no confirmation has closed.",
+        "argument": null,
+        "rebuts": [],
+        "rebuts_names": [],
+        "conceded": false,
+        "metrics": [
+          "atr"
+        ],
+        "calibration": null,
+        "ev_ref": "ev:xauusd/agent_thread_messages/8"
+      }
+    ],
+    "debate": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "status": "ok",
+        "stance": "WAIT",
+        "bias": "BEARISH",
+        "confidence": 0.6,
+        "ts": "2026-11-25T09:03:00.000Z",
+        "claim": null,
+        "argument": "Without the R38 confirmation the short has no entry yet.",
+        "rebuts": [
+          "technical"
+        ],
+        "rebuts_names": [
+          "Technical Analyst"
+        ],
+        "conceded": false,
+        "metrics": [
+          "atr"
+        ],
+        "calibration": null,
+        "ev_ref": "ev:xauusd/agent_thread_messages/9"
+      }
+    ]
+  }
+}

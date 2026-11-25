@@ -205,6 +205,10 @@
     // The public track record's managed exit (src/public-track-record.mjs, owner 2026-11-23): "v3" (the Signal Ledger's
     // own policy, no parity gate) | "v4" (the v4 replay, shown only on a passing parity check).
     "PUBLIC_MANAGED_SOURCE": "v3",
+    // The public delay in hours (src/public-projection.mjs publicDelayHours; the CTA's recaps and track record): "0"
+    // realtime (owner 2026-11-25: "harus realtime", then "Semua sekarang"). "24" restores the old 24-hour delay with no
+    // code change; unset, empty or invalid is also 24.
+    "PUBLIC_DELAY_HOURS": "0",
     // The Nexus Intelligence views (Track B; B8 GET /api/liquidity, src/liquidity-view.mjs): "on" | "off". "off" answers
     // 404 intel_views_off. Read-only, Nexus only (behind Cloudflare Access); the prices there are labelled by scale.
     "INTEL_VIEWS": "on",

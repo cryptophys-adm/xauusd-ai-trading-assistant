@@ -52,7 +52,7 @@ test("TR4 no forbidden key at any depth, no Omega and no price-like number", () 
   assert.deepEqual(forbiddenKeys({ a: [{ tp1: 1 }] }), ["tp1"]);
 });
 
-test("TR5 the reader (v4): D1 and the parity in KV, kept 10 minutes", async () => {
+test("TR5 the reader (v4): D1 and the parity in KV, kept 1 minute", async () => {
   resetTrackRecordMemoForTests();
   let reads = 0;
   const env = {
@@ -63,8 +63,8 @@ test("TR5 the reader (v4): D1 and the parity in KV, kept 10 minutes", async () =
   const a = await readPublicTrackRecord(env, { now: NOW });
   assert.equal(a.scenarios[0].count, 3);
   assert.equal(a.scenarios[2].shown, false);
-  await readPublicTrackRecord(env, { now: NOW + 60_000 });
-  assert.equal(reads, 2, "the second call within 10 minutes is the memo");
+  await readPublicTrackRecord(env, { now: NOW + 30_000 });
+  assert.equal(reads, 2, "the second call within the minute is the memo");
 });
 
 // PUB-V3 (owner 2026-11-23: "yang ditampilkan di cta public harusnya omega (v3) bukan yang live omega v4").
@@ -133,5 +133,71 @@ test("TR9 the switch PUBLIC_MANAGED_SOURCE: v3 by default; the reader's v3 query
   assert.equal(kv, 1);
   assert.match(sqls[1], /FROM ledger_omega4/);
   assert.equal(b.scenarios[2].shown, false, "v4 with a failing parity stays hidden");
+  resetTrackRecordMemoForTests();
+});
+
+// RT1 (owner 2026-11-25: "harus realtime", then "Semua sekarang"): the track record is realtime with Nexus under
+// PUBLIC_DELAY_HOURS "0", kept 1 minute per isolate; it counts closed results only.
+test("RT1 delay 0: a result closed a minute ago counts; the reader reads PUBLIC_DELAY_HOURS; 24 restores the old cutoff", async () => {
+  const justNow = new Date(NOW - 60_000).toISOString();
+  const ledger = [...LEDGER, { opened_at: "2026-11-22 11:00:00", r_tp1: 1, r_tp2: 1, tp1_closed_at: justNow, tp2_closed_at: justNow }];
+  const managed = [...V3, { opened_at: "2026-11-22 11:00:00", omega_closed_at: justNow, r_omega: 1, omega_size: 1 }];
+  const t = publicTrackRecord({ ledger, managed, now: NOW, delayHours: 0 });
+  assert.equal(t.delay_hours, 0);
+  assert.equal(t.scenarios[0].count, 5, "the fresh results and the one closed a minute ago");
+  assert.equal(t.scenarios[2].count, 4);
+  const env = (extra) => ({ ...extra, DB: { prepare: (sql) => ({ all: async () => ({ results: /omega_status = 'closed'/.test(sql) ? managed : ledger }) }) } });
+  resetTrackRecordMemoForTests();
+  const live = await readPublicTrackRecord(env({ PUBLIC_DELAY_HOURS: "0" }), { now: NOW });
+  assert.equal(live.delay_hours, 0);
+  assert.equal(live.scenarios[0].count, 5);
+  resetTrackRecordMemoForTests();
+  const old24 = await readPublicTrackRecord(env({ PUBLIC_DELAY_HOURS: "24" }), { now: NOW });
+  assert.equal(old24.delay_hours, 24);
+  assert.equal(old24.scenarios[0].count, 3, "the rollback: only results closed more than 24 hours ago");
+  resetTrackRecordMemoForTests();
+  for (const v of [undefined, "", "soon"]) {
+    const x = await readPublicTrackRecord(env(v === undefined ? {} : { PUBLIC_DELAY_HOURS: v }), { now: NOW });
+    assert.equal(x.delay_hours, 24, String(v));
+    resetTrackRecordMemoForTests();
+  }
+});
+
+test("RT1 delay 0: an open position or a managed row that is not closed never counts", async () => {
+  const future = new Date(NOW + 3600_000).toISOString();
+  const open = [
+    { opened_at: "2026-11-22 11:50:00", r_tp1: null, r_tp2: null, tp1_closed_at: null, tp2_closed_at: null, closed_at: null },
+    { opened_at: "2026-11-22 11:50:00", r_tp1: 1, r_tp2: 2, tp1_closed_at: null, tp2_closed_at: null, closed_at: null },
+    { opened_at: "2026-11-22 11:50:00", r_tp1: 1, r_tp2: 2, tp1_closed_at: future, tp2_closed_at: future }
+  ];
+  const managedOpen = [
+    { opened_at: "2026-11-22 11:50:00", omega_closed_at: null, r_omega: 0.5, omega_size: 1 },
+    { opened_at: "2026-11-22 11:50:00", omega_closed_at: future, r_omega: 0.5, omega_size: 1 }
+  ];
+  const base = publicTrackRecord({ ledger: LEDGER, managed: V3, now: NOW, delayHours: 0 });
+  const withOpen = publicTrackRecord({ ledger: [...LEDGER, ...open], managed: [...V3, ...managedOpen], now: NOW, delayHours: 0 });
+  assert.deepEqual(withOpen, base, "open rows change nothing");
+  const v4 = publicTrackRecord({ ledger: LEDGER, managed: [...MANAGED, { issued_ms: NOW - 60_000, omega4_closed_at: null, r_omega4: 2 }], parity: { status: "pass" }, now: NOW, delayHours: 0, source: "v4" });
+  assert.equal(v4.scenarios[2].count, 2, "a v4 row without a close is left out");
+  // The reader asks D1 for closed managed rows only: an open omega_status never reaches the sum.
+  resetTrackRecordMemoForTests();
+  const sqls = [];
+  await readPublicTrackRecord({ PUBLIC_DELAY_HOURS: "0", DB: { prepare: (sql) => ({ all: async () => { sqls.push(sql); return { results: [] }; } }) } }, { now: NOW });
+  assert.match(sqls[1], /omega_status = 'closed' AND r_omega IS NOT NULL/);
+  resetTrackRecordMemoForTests();
+  await readPublicTrackRecord({ PUBLIC_DELAY_HOURS: "0", PUBLIC_MANAGED_SOURCE: "v4", DB: { prepare: (sql) => ({ all: async () => { sqls.push(sql); return { results: [] }; } }) } }, { now: NOW });
+  assert.match(sqls[3], /omega4_status = 'closed'/);
+  resetTrackRecordMemoForTests();
+});
+
+test("RT1 the reader keeps a body for 1 minute per isolate, then reads again", async () => {
+  resetTrackRecordMemoForTests();
+  let reads = 0;
+  const env = { PUBLIC_DELAY_HOURS: "0", DB: { prepare: () => ({ all: async () => { reads += 1; return { results: [] }; } }) } };
+  await readPublicTrackRecord(env, { now: NOW });
+  await readPublicTrackRecord(env, { now: NOW + 59_000 });
+  assert.equal(reads, 2, "within the minute: the memo");
+  await readPublicTrackRecord(env, { now: NOW + 60_000 });
+  assert.equal(reads, 4, "after a minute: D1 again");
   resetTrackRecordMemoForTests();
 });

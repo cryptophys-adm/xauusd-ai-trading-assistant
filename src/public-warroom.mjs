@@ -3,8 +3,9 @@
 //   - a timeframe room (15m, 1H, 4H, 1D): its bias (bullish, bearish or neutral), its reasons and the metrics it
 //     weighed, in plain words, and how many analysts were heard;
 //   - the news: the 24-hour digest's reading of gold and the headlines with their effect on gold.
-// Never the room's decision (BUY, SELL, WAIT), its confidence, a price, a level or order wording: the content rules
-// allow the system's decisions in public only as a recap after 24 hours (public-projection.mjs). Every sentence that
+// Never the room's decision (BUY, SELL, WAIT), its confidence, a price, a level or order wording: the system's decisions
+// go public only as recaps (public-projection.mjs, after PUBLIC_DELAY_HOURS: 0 in production since 2026-11-25, owner
+// "Semua sekarang"; never a price, entry, stop or target). Every sentence that
 // names a price, uses order wording or names a side as a signal is dropped (`publicPhrase`: public-projection's price and order checks, "order flow" and "order block" being analysis, plus SIGNAL_WORDING). The
 // CTA studio's guardian checks the post again. Pure, except readPublicWarRoom.
 import { PRICE_LIKE, ORDER_WORDING } from "./public-projection.mjs";

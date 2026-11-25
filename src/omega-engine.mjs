@@ -29,6 +29,7 @@ import { profitLockGateOn, gateBreakEven, gateAtrM5, stopInProfit, gateText, GAT
 import { isFastId, PM_FAST_MODES } from "./pm-fast.mjs";
 import { reentryOn, isReentryId, REENTRY_MODES, REENTRY_RULE, REENTRY_1M } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersededOrders, orderSignalMs, LIMIT_SUPERSEDE_MODES, SUPERSEDE_REASON } from "./limit-supersede.mjs";
+import { cdGateOn, cdGateVerdict, CD_GATE_MODES } from "./cd-gate.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -93,7 +94,12 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // menggantikan (Rekomendasi)"; src/limit-supersede.mjs): "on", the older signal's limit is deleted
   // (superseded_by_signal) and the new signal goes through every gate, placed once the delete is done; "off", today's
   // engine byte for byte. The owner's switch only; Aether's policy never writes it.
-  limit_supersede: "on"
+  limit_supersede: "on",
+  // CDG, the confidence-drop gate (owner 2026-11-25: "Learned gate, hold otherwise (Recommended)"; src/cd-gate.mjs):
+  // "on", a confidence_drop close only where the learned gate passes for the agent x side x drop bucket, every other
+  // drop held (no close, no stop move); "off", today's engine byte for byte. The owner's switch only; Aether's policy
+  // never writes it. Its automatic revert sets it to "off" once (cdGateRevert).
+  cd_gate: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -220,6 +226,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.limit_supersede !== undefined) {
     if (typeof body.limit_supersede !== "string" || !LIMIT_SUPERSEDE_MODES.includes(body.limit_supersede)) return { error: "limit_supersede must be 'on' or 'off'" };
     out.limit_supersede = body.limit_supersede;
+  }
+  if (body.cd_gate !== undefined) {
+    if (typeof body.cd_gate !== "string" || !CD_GATE_MODES.includes(body.cd_gate)) return { error: "cd_gate must be 'on' or 'off'" };
+    out.cd_gate = body.cd_gate;
   }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
@@ -1025,8 +1035,11 @@ export const DEFAULT_POSITION_AGENT = "zone_pullback";
  * trend reads as the last known one for the extend gate (the decision before's own trend, the signal's agent_conf_last
  * and agent_conf_last_prev), so a missing reading no longer blocks it. lean_flip is unchanged.
  */
-export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [], changes = null } = {}) {
+export function strategyExits({ positions = [], signal = null, sym = {}, agents = {}, now = Date.now(), skipTickets = [], changes = null, cdGate = undefined } = {}) {
   const intents = [];
+  // CDG (src/cd-gate.mjs): with `cdGate` ({ cells }, planIntents passes it while cd_gate is "on"), each confidence_drop
+  // close is checked against the learned gate; `cd` records every one (held or closed). Without it: today's rule.
+  const cd = cdGate === undefined ? null : [];
   const extendOf = () => true;
   if (signal?.strategy_execution !== true) return { intents, extendOf };
   const fresh = finite(signal.power_ms) && signal.power_ms > 0 && now - signal.power_ms <= POWER_FRESH_MS;
@@ -1056,9 +1069,17 @@ export function strategyExits({ positions = [], signal = null, sym = {}, agents 
     const move = Number.isFinite(open) && finite(sym.bid) && finite(sym.ask) ? (dir > 0 ? sym.bid - open : open - sym.ask) : 0;
     // The strategy arm (owner 2026-11-17): with 1 to 3 armed, only an armed strategy closes its own positions this way.
     const armedOk = !signal.armed || String(signal.armed).split(",").includes(agentOf(p));
-    if (move > 0 && armedOk && trendOf(p) === "drop") intents.push({ id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) });
+    if (!(move > 0 && armedOk && trendOf(p) === "drop")) continue;
+    const close = { id: `cl:${p.ticket}:cd:${bar}`, kind: "close", ticket: p.ticket, reason: "confidence_drop", agent: agentOf(p) };
+    if (!cd) { intents.push(close); continue; }
+    // CDG: the close only where the agent x side x drop bucket's cell passes; otherwise nothing at all (held).
+    const a = agentOf(p), k = dir > 0 ? "long" : "short";
+    const v = cdGateVerdict(cdGate, { agent: a, side: k, now: conf[a]?.[k], prev: prev[a]?.[k] });
+    if (v.pass) intents.push(close);
+    cd.push({ ticket: p.ticket, bar_ms: bar, agent: a, side: k, drop: v.drop, bucket: v.bucket, cell: v.cell ? { n: v.cell.n ?? null, lift: v.cell.lift ?? null, pass: v.cell.pass === true } : null, action: v.pass ? "closed" : "held", price: dir > 0 ? sym.bid : sym.ask });
   }
-  return { intents, extendOf: (p) => ["stable", "rising"].includes(extendTrend(p)) };
+  const extend = (p) => ["stable", "rising"].includes(extendTrend(p));
+  return cd ? { intents, extendOf: extend, cd } : { intents, extendOf: extend };
 }
 
 /* ---------- live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §2-§6, stage 3) ---------- */
@@ -1248,7 +1269,7 @@ export function fillGapR({ side, planned, filled, rDist }) {
 
 const CELL_GATE_REASONS = Object.freeze(["htf_against", "htf_unknown", "cell_collecting", "cell_below_bar", "probation_unconfirmed", "probation_reverted", "range_breakout", "range_mode_agent"]);
 
-export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null, supersede = [], modeRisk = null } = {}) {
+export function planIntents({ signal = null, control = null, settings = OMEGA_DEFAULTS, executor = null, now = Date.now(), engineEnabled = false, recentIntentIds = [], agents = {}, pmActions = [], account: accountSpec = null, eaGate = false, reentry = null, positionMeta = {}, candles = undefined, stops = {}, entryCouncil = null, limitActions = [], pendingMeta = {}, limitFills = [], conversion = null, pmLoosen = null, liquiditySpikeSince = null, gates: lockGateFacts = {}, reentry1m = null, supersede = [], modeRisk = null, cdGate = undefined } = {}) {
   const intents = [], notes = [];
   // The Position Manager actions that became no intent, with the reason (said on Telegram by the sync).
   const pmDropped = [];
@@ -1307,7 +1328,9 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     const entered = intents.some((it) => it.kind === "place_limit" || it.kind === "open");
     ssNote.detail = `${ssNote.detail}; the new signal: ${entered ? "entered" : last && last !== ssNote ? last.code : "no entry"}`;
   };
-  const done = () => { ssOutcome(); finish(); return extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped }; };
+  // CDG: the plan's confidence-drop events (held or closed), only when there are any (the sync logs them).
+  const cdEvents = [];
+  const done = () => { ssOutcome(); finish(); const out = extra ? { intents, notes, pm_dropped: pmDropped, ...extra } : { intents, notes, pm_dropped: pmDropped }; return cdEvents.length ? { ...out, cd_gate: cdEvents } : out; };
 
   if (signal?.kill === true || control?.mode === "killed") {
     note("kill");
@@ -1442,7 +1465,10 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   }
   const account = executor.account ?? {}, sym = executor.symbol ?? {};
   // The strategy agents' exits and the confidence gate on extending (owner 2026-11-16).
-  const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket), changes: changeTokens(S) });
+  // CDG (src/cd-gate.mjs): the learned gate (`cdGate`, from the sync or v4) only while cd_gate is "on"; "off" or no gate
+  // given (direct calls, a v4 bar before the gate's history): today's rule.
+  const exits = strategyExits({ positions, signal, sym, agents, now, skipTickets: intents.map((it) => it.ticket), changes: changeTokens(S), ...(cdGateOn(S) && cdGate !== undefined ? { cdGate } : {}) });
+  if (exits.cd) cdEvents.push(...exits.cd);
   if (exits.intents.length) note(exits.intents.some((it) => it.reason === "lean_flip") ? "lean_flip" : "confidence_drop");
   intents.push(...exits.intents);
   // The Position Manager's actions (owner 2026-11-17): after the strategy exits, before the routine management.

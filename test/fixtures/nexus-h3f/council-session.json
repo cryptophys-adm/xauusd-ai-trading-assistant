@@ -1,0 +1,140 @@
+{
+  "id": "cfc_h3f_fixture",
+  "topic_key": "strategy:zone_pullback",
+  "topic_text": null,
+  "type": "strategy",
+  "question": "Is the zone pullback stop too tight?",
+  "state": "awaiting_owner",
+  "participants": [
+    {
+      "id": "risk",
+      "name": "Risk Manager",
+      "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+    },
+    {
+      "id": "technical",
+      "name": "Technical Analyst",
+      "role": "price action only: the closed 15m candles"
+    },
+    {
+      "id": "projection",
+      "name": "Projection Agent",
+      "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+    }
+  ],
+  "calls": 8,
+  "options": {
+    "summary": "Two seats see the stop inside the noise; one sees too few setups.",
+    "options": [
+      {
+        "option_id": "widen_to_sweep",
+        "rank": 1,
+        "kind": "repository_task",
+        "title": "Place the stop under the sweep low",
+        "hypothesis": "Fewer setups stop out inside the noise.",
+        "change": "small",
+        "risk": "low",
+        "dissent": null,
+        "spec": "Place the zone pullback stop under the sweep low.",
+        "ev_ref": "ev:xauusd/council_sessions/cfc_h3f_fixture#options.widen_to_sweep"
+      },
+      {
+        "option_id": "tighten_stop",
+        "rank": 2,
+        "kind": "repository_task",
+        "title": "Keep the stop, tighten the entry",
+        "hypothesis": "A deeper entry keeps the same risk.",
+        "change": "small",
+        "risk": "medium",
+        "dissent": "Projection Agent",
+        "spec": "Enter deeper in the zone.",
+        "ev_ref": null
+      },
+      {
+        "option_id": "no_change",
+        "rank": 3,
+        "kind": "no_change",
+        "title": "No change (the control)",
+        "hypothesis": "What runs today stays.",
+        "change": "none",
+        "risk": "none",
+        "dissent": null,
+        "ev_ref": "ev:xauusd/council_sessions/cfc_h3f_fixture#options.no_change"
+      }
+    ]
+  },
+  "reason": null,
+  "pack_hash": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+  "created_by": "owner",
+  "created_ms": 1795596300000,
+  "updated_ms": 1795597500000,
+  "pack_refs": 3,
+  "pack_stale": false,
+  "terminal": false,
+  "messages": [
+    {
+      "id": 1,
+      "round": "position",
+      "seat": "risk",
+      "stance": "amend",
+      "opinion": "The stop sits inside the last swing's noise; most stopped setups would have reached the target.",
+      "proposal": "Widen the stop to the sweep low.",
+      "reply_to": [],
+      "refs": [
+        "ev:xauusd/plan_setups/zp_2026-11-25T08:30:00Z_BUY#results_json",
+        "ev:xauusd/engine_decisions/OANDA:XAUUSD:15:1795096800000#stance"
+      ],
+      "ms": 1795596360000,
+      "name": "Risk Manager",
+      "at": "2026-11-25T08:46:00.000Z",
+      "ev_ref": "ev:xauusd/council_messages/1"
+    },
+    {
+      "id": 2,
+      "round": "position",
+      "seat": "technical",
+      "stance": "support",
+      "opinion": "The setups that held came from the deeper zones.",
+      "proposal": null,
+      "reply_to": [],
+      "refs": [
+        "ev:xauusd/scorecard_snapshots/7d@2026-11-25T08:45:00.000Z#agent:technical"
+      ],
+      "ms": 1795596420000,
+      "name": "Technical Analyst",
+      "at": "2026-11-25T08:47:00.000Z",
+      "ev_ref": "ev:xauusd/council_messages/2"
+    },
+    {
+      "id": 3,
+      "round": "position",
+      "seat": "projection",
+      "stance": "abstain",
+      "opinion": "Too few setups to tell.",
+      "proposal": null,
+      "reply_to": [],
+      "refs": [],
+      "ms": 1795596480000,
+      "name": "Projection Agent",
+      "at": "2026-11-25T08:48:00.000Z",
+      "ev_ref": "ev:xauusd/council_messages/3"
+    },
+    {
+      "id": 4,
+      "round": "owner",
+      "seat": "owner",
+      "stance": null,
+      "opinion": "Which setups were stopped inside the noise?",
+      "proposal": null,
+      "reply_to": [
+        "risk"
+      ],
+      "refs": [],
+      "ms": 1795596540000,
+      "name": "Owner",
+      "at": "2026-11-25T08:49:00.000Z",
+      "ev_ref": "ev:xauusd/council_messages/4"
+    }
+  ],
+  "ev_ref": "ev:xauusd/council_sessions/cfc_h3f_fixture"
+}

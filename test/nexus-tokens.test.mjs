@@ -28,7 +28,9 @@ const DIRECTION_FILES = [
   // FS1: the Feature switches page (no direction colour at all: on is the ok cyan).
   "pages/Switches.tsx",
   // ZN1: the Zones page (a side's word and a zone type's glyph only; rates, outcomes and R neutral).
-  "pages/Zones.tsx"
+  "pages/Zones.tsx",
+  // H3f: the owner's correction control (no direction colour at all: up is the ok cyan, down the off grey).
+  "components/Correction.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

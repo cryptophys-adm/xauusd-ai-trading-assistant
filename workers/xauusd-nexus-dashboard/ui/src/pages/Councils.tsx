@@ -5,6 +5,8 @@ import { get } from "../lib/api";
 import { useConfirm } from "../components/ConfirmDialog";
 import { ago, humanKey, utc } from "../lib/format";
 import { usePoll } from "../lib/usePoll";
+import { CorrectionControl, ROW } from "../components/Correction";
+import { councilOpinionTarget, councilOptionsTarget } from "../lib/corrections";
 
 // Call for Councils (owner 2026-11-16: "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils";
 // docs/RFC_CALL_FOR_COUNCILS.md, phase P1 "evidence only, no model call"). Read-only, from the AI Worker:
@@ -241,7 +243,7 @@ const STATE_TEXT: Record<string, string> = { positions: "the agents are giving t
 const TERMINAL = ["aborted", "expired", "decided", "closed"];
 
 /** One agent's opinion: who, the stance, what it thinks in its own words, what it would try; evidence behind a link. */
-function OpinionCard({ m }: { m: any }) {
+export function OpinionCard({ m }: { m: any }) {
   const [ev, setEv] = useState(false);
   const st = STANCE[m.stance] ?? { text: m.stance ?? "", tone: "off" as const };
   if (m.round === "notice") return (
@@ -256,8 +258,13 @@ function OpinionCard({ m }: { m: any }) {
       {m.reply_to?.length ? <div className="mt-0.5 text-[10.5px] text-slate-500">replying to {m.reply_to.join(", ")}</div> : null}
       <p className="mt-2 text-[12.5px] leading-relaxed text-slate-200">{m.opinion}</p>
       {m.proposal ? <div className="mt-2 text-[11.5px] text-slate-300"><span className="text-slate-500">Would try: </span>{m.proposal}</div> : null}
-      {m.refs?.length ? (<div className="mt-1.5 text-[10.5px]"><button type="button" className="text-slate-500 underline-offset-2 hover:underline" onClick={() => setEv((x) => !x)}>evidence ({m.refs.length})</button>
-        {ev ? <ul className="mono mt-1 space-y-0.5 text-slate-500">{m.refs.map((r: string) => <li key={r}>{r}</li>)}</ul> : null}</div>) : null}
+      {/* H3f: the owner's Rate / correct (the message's own ev_ref; its cited refs as evidence), beside the evidence line. */}
+      {m.refs?.length ? (
+        <div className="mt-1.5 flex items-end justify-between gap-2 text-[10.5px]">
+          <div className="min-w-0"><button type="button" className="text-slate-500 underline-offset-2 hover:underline" onClick={() => setEv((x) => !x)}>evidence ({m.refs.length})</button>
+            {ev ? <ul className="mono mt-1 space-y-0.5 break-all text-slate-500">{m.refs.map((r: string) => <li key={r}>{r}</li>)}</ul> : null}</div>
+          <CorrectionControl target={councilOpinionTarget(m)} />
+        </div>) : <CorrectionControl target={councilOpinionTarget(m)} className={`mt-1.5 ${ROW}`} />}
     </div>
   );
 }
@@ -319,7 +326,9 @@ function SessionView({ id, onOpen, enabled }: { id: string; onOpen: (id: string)
               {o.kind === "repository_task" && o.spec ? <div className="text-[11px] text-amber-100/90">To build: {o.spec}</div> : null}
               <div className="text-[11px] text-slate-400">Change: {o.change} · Risk: {o.risk}{o.dissent ? ` · Dissent: ${o.dissent}` : ""}</div>
               {s.state === "awaiting_owner" ? <div><button type="button" disabled={busy} onClick={() => accept(o)} className="mt-1 rounded-md bg-ok-fill/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-ok ring-1 ring-ok-fill/40 disabled:opacity-40">Accept</button></div> : null}
-            </div>))}</div></div>
+            </div>))}</div>
+          {/* H3f: the owner's Rate / correct under the moderator's options (the session's ev_ref; each option's as evidence). */}
+          <CorrectionControl target={councilOptionsTarget(s)} className={`mt-[12px] ${ROW}`} /></div>
       ) : null}
       {!terminal ? (
         <div className="flex flex-col gap-2">

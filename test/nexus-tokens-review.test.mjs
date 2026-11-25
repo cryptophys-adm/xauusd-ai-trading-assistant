@@ -23,7 +23,9 @@ const REVIEW_FILES = [
   // FS1: the Feature switches page and its pure model.
   "pages/Switches.tsx", "lib/featureSwitches.ts",
   // ZN1: the Zones page and its pure model.
-  "pages/Zones.tsx", "lib/zones.ts"
+  "pages/Zones.tsx", "lib/zones.ts",
+  // H3f: the owner's correction control and its pure model.
+  "components/Correction.tsx", "lib/corrections.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {
