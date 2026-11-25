@@ -11,7 +11,9 @@
 //              retired. Oldest first.
 //   collecting the items still collecting in shadow, at most once a UTC day per item, with rows and scored.
 //   not_tested a pack text item no shadow call can ever test: for the moderator only (never called in shadow),
-//              for Omega (not a room agent), or for charts the arm does not run on (the 4H or daily chart only).
+//              for Omega (not a room agent), or for charts the arm does not run on (the 4H or daily chart only);
+//              and (KA3) an item closed as shadow:not_tested because its agent stopped opening in its room (rule
+//              untestable.agent_inactive, with the rows and scored pairs it had).
 // The payload is exactly the platform's schema (KNOWLEDGE_VERDICT_SCHEMA below; checked here before any call).
 //
 // Errors: knowledge_proposal_not_found marks the item (never retried); an unknown, not yet registered agent stops the
@@ -25,7 +27,9 @@
 import { storedPack } from "./aether-pack.mjs";
 import { TEXT_KINDS } from "./learned-knowledge.mjs";
 import { LEARNED_LIVE_SCHEMA_SQL } from "./learned-live.mjs";
-import { shadowKnowledgeEnabled, subjectOf, SHADOW_CHARTS } from "./shadow-knowledge.mjs";
+import { shadowKnowledgeEnabled, subjectOf, untestableReason, IDLE_RULES } from "./shadow-knowledge.mjs";
+// Moved to src/shadow-knowledge.mjs (KA3 needs it there); exported here as before.
+export { untestableReason };
 import { kernelSyscall, readAgentBackoff, writeAgentBackoff, clearAgentBackoff, kernelAgentStatus, PLATFORM_CALL_TIMEOUT_MS } from "./platform-reports.mjs";
 
 export const KNOWLEDGE_VERDICT_AGENT_ID = "shadow-knowledge";
@@ -82,9 +86,6 @@ export function verdictPayloadProblems(p) {
 
 // ------------------------------------------------------------------ the verdicts (pure)
 const CHART_WORD = Object.freeze({ "15": "quarter-hour", "60": "hourly", "240": "four-hour", "1D": "daily" });
-const SHADOW_CODES = new Set(Object.values(SHADOW_CHARTS));
-/** Audiences that are not room agents: the shadow arm can never call them. */
-const OUTSIDE_ROOMS = new Set(["omega"]);
 const CLOSURE_TOKENS = ["not_better", "holdout_failed", "worse"];
 const who = (agent) => (agent === "council" ? "the council" : String(agent ?? "the agent").replace(/[_-]+/g, " "));
 const chartWord = (c) => CHART_WORD[c] ?? "tested";
@@ -98,7 +99,9 @@ const UNTESTABLE = Object.freeze({
   audience_omega: "Never tested here: the note is for Omega, which is not a room agent the shadow arm can call.",
   chart_4h_only: "Never tested here: the note is for the four-hour chart only, and the shadow arm runs on the hourly and quarter-hour charts.",
   chart_1d_only: "Never tested here: the note is for the daily chart only, and the shadow arm runs on the hourly and quarter-hour charts.",
-  chart_unshadowed: "Never tested here: the note is for charts the shadow arm does not run on (it runs on the hourly and quarter-hour charts)."
+  chart_unshadowed: "Never tested here: the note is for charts the shadow arm does not run on (it runs on the hourly and quarter-hour charts).",
+  // KA3 (src/shadow-knowledge.mjs planIdleClosures): closed in learned_live as shadow:not_tested.
+  agent_inactive: "Not tested to a verdict: its agent stopped opening in its room, so the shadow arm made no call with the note for 72 hours while it ran."
 });
 const RETIRED = [
   [/^worse live/, "live.binomial", "Retired after going live: the agent's scored calls since the promotion were significantly worse than in the shadow test."],
@@ -135,15 +138,18 @@ export function subjectEvidence(s, verdict, windows = {}) {
   });
 }
 
-/** Pure: why a pack item can never be tested by the shadow arm here (a token), or null when it can be. */
-export function untestableReason(it) {
-  const agents = Array.isArray(it?.audience?.agents) ? it.audience.agents.map(String) : [];
-  const testers = agents.filter((a) => a !== "moderator");
-  if (agents.length && !testers.length) return "moderator_only";
-  if (testers.length && testers.every((a) => OUTSIDE_ROOMS.has(a))) return "audience_omega";
-  const charts = Array.isArray(it?.audience?.charts) ? it.audience.charts.map(String) : [];
-  if (charts.length && !charts.some((c) => SHADOW_CODES.has(c))) return charts.length === 1 && charts[0] === "240" ? "chart_4h_only" : charts.length === 1 && charts[0] === "1D" ? "chart_1d_only" : "chart_unshadowed";
-  return null;
+/** Pure: the evidence of a KA3 idle closure: the agent with the most rows, the rows and scored pairs the item had. */
+export function idleEvidence(ev) {
+  const subjects = Array.isArray(ev?.subjects) ? ev.subjects : [];
+  const s = subjects.reduce((best, x) => (best === null || Number(x?.rows) > Number(best?.rows) ? x : best), null);
+  const agent = s?.agent ?? ev?.idle?.agents?.[0];
+  const window = [ev?.window_start, ev?.window_end].every((v) => typeof v === "string" && Number.isFinite(Date.parse(v)));
+  return compact({
+    arm: armOk(agent) ? agent : undefined,
+    window_start: window ? ev.window_start : undefined, window_end: window ? ev.window_end : undefined,
+    rows: intOr(ev?.rows), scored: intOr(ev?.scored),
+    charts: chartsOf(subjects.length ? subjects.map((x) => x?.chart) : ev?.idle?.charts ?? []), rule: IDLE_RULES.rule
+  });
 }
 
 const parse = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
@@ -169,6 +175,10 @@ export function verdictEntries({ plan = null, live = [], packItems = [], firstSe
     if (r.status === "retired" && reason.startsWith("shadow:")) {
       const token = reason.slice("shadow:".length);
       const ev = parse(r.verdict_json, null);
+      if (token === IDLE_RULES.reason) {
+        if (ev?.rule === IDLE_RULES.rule) out.push(entry(r.item_id, version, "not_tested", UNTESTABLE.agent_inactive, idleEvidence(ev)));
+        continue;
+      }
       const subjects = Array.isArray(ev?.subjects) ? ev.subjects : [];
       if (!CLOSURE_TOKENS.includes(token) || !subjects.length) continue;
       const s = subjects.find((x) => x.outcome === token) ?? subjects[0];

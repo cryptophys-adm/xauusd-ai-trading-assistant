@@ -190,18 +190,23 @@ async function world({ answer = () => ({ outcome: "succeeded", result: { verdict
   reset();
   const calls = [];
   const kv = new Map();
-  const items = [packItem(CHRONOS, ["chronos_matrix", "moderator"]), ...COLLECTING.map(([id, agent]) => packItem(id, [agent])), ...UNTESTABLE_ITEMS.map((u) => packItem(u.item_id, u.agents, u.charts)), packItem("k-new-untested-yet", ["risk"])];
+  const items = [packItem(CHRONOS, ["chronos_matrix", "moderator"]), ...COLLECTING.map(([id, agent, chart]) => packItem(id, [agent], chart === "60" ? ["60"] : [])), ...UNTESTABLE_ITEMS.map((u) => packItem(u.item_id, u.agents, u.charts)), packItem("k-new-untested-yet", ["risk"])];
   const env = {
     DB: d1(), SHADOW_KNOWLEDGE_ENABLED: "true", KNOWLEDGE_VERDICT_POSTS: posts,
     SIGNAL_CACHE: { async get(k) { return kv.get(k) ?? null; }, async put(k, v) { kv.set(k, v); } },
     AETHER: { learnedPack: async () => ({ version: "cryptophys.learned-pack.v1", sha256: "a".repeat(64), items }) },
     AGENTS: { syscall: async (agent, capability, input) => { calls.push({ agent, capability, input }); return answer(input, calls.length); }, ...(whoami ? { whoami } : {}) }
   };
+  // KA3: the untested item is new (first seen an hour ago), so its no rows are not an idle agent.
+  const untested = items.pop();
   await pullLearnedPack(env, { now: NOW - 12 * DAY });
+  items.push(untested);
+  await pullLearnedPack({ ...env, AETHER: { learnedPack: async () => ({ version: "cryptophys.learned-pack.v1", sha256: "b".repeat(64), items }) } }, { now: NOW - H });
   const ins = env.DB.raw.prepare("INSERT INTO shadow_agent_outputs (subject, candle_key, agent, item_id, item_version, arm, statement_close, stance, control_stance, status, created_at, result, control_result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const put = (rows) => rows.forEach((r) => ins.run(r.subject, r.candle_key, r.agent, r.item_id, r.item_version, r.arm, r.statement_close, r.stance, r.control_stance, r.status, r.created_at, r.result, r.control_result));
   put(rowsOf(CHRONOS_15, "chronos_matrix", CHRONOS, 404, same, { start: Date.parse("2026-11-12T19:15:00Z") }));
-  for (const [id, agent, chart, n] of COLLECTING) put(rowsOf(`shadow-agent:${agent}@${id}v1${chart === "15" ? "@15" : ""}`, agent, id, n, same, { step: chart === "15" ? Q : H }));
+  // KA3: aegis's rows end where its queue-mates' do (fewer than 72 hours of later items tested after it): still collecting.
+  for (const [id, agent, chart, n] of COLLECTING) put(rowsOf(`shadow-agent:${agent}@${id}v1${chart === "15" ? "@15" : ""}`, agent, id, n, same, { step: chart === "15" ? Q : H, ...(agent === "aegis_footprint" ? { start: Date.parse("2026-11-15T00:00:00Z") } : {}) }));
   // KA1's settle already closed chronos (learned_live), with the real evidence.
   for (const sql of LEARNED_LIVE_SCHEMA_SQL) env.DB.raw.exec(sql);
   const c = chronosLive();
