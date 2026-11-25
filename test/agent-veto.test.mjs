@@ -70,8 +70,10 @@ test("AV2 classic is byte-identical to main: decide(), the decision records and 
   await ensureLedgerSchema(env.DB);
   const d = { decision_key: "OANDA:XAUUSD:15:1795165200000", decided_at: "2026-11-20T10:01:10.000Z", stance: "SELL", confidence: 0.7, summary: "Decision SELL.", trading_mode: "scalp", trade: { side: "SELL", action: "ENTER_LIMIT", entry: 100, stop: 102, target: "tp1", tp: 97, tp1: 97, tp2: 95, progressive_stop: 100 } };
   assert.equal(await ingestDecision(env, d, { now: NOW }), 1);
-  const { veto_softened, ...rest } = env.DB.raw.prepare("SELECT * FROM signal_ledger").get();
+  // RM1b added room_waived after it (NULL here too): both new columns left out of main's hash.
+  const { veto_softened, room_waived, ...rest } = env.DB.raw.prepare("SELECT * FROM signal_ledger").get();
   assert.equal(veto_softened, null);
+  assert.equal(room_waived, null);
   assert.equal(sha({ ...rest }), "69fed71050c5bb29753648d38fd0294d3c6d759420b109c1e8b83b272d4192a9");
 });
 

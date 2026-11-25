@@ -72,6 +72,13 @@
     // trades average below 0R (KV agent-veto:auto:v1); the owner's force wins (KV agent-veto:owner:v1). Unset or any
     // other value: "classic", the vetoes as before.
     "AGENT_VETO_RULE": "two_sided",
+    // RM1b, the room guardrail waived on a with-trend breakout close (src/room-waive.mjs; study RM1a, variant d6). Owner
+    // 2026-11-25, relayed by the orchestrator: "Turn variant (d) on now". "on": a side's failing room check passes when it
+    // is the side's only failing check, the 15m close is beyond the facing edge of a corridor recorded by a decision of the
+    // last hour (1 to 4 bars before), and TREND_TF leans with the side (0.15 or more); the trade is tagged room_waived.
+    // Off by itself for 7 days once its latest 15 closed waived trades average below 0R (KV room-waive:auto:v1); the
+    // owner's FS1 override wins. Unset or any other value: "off", the room check as before.
+    "ROOM_BREAKOUT_WAIVE": "on",
     // The council auto-arm ceiling (platform ADR-0020 Amendment 2, merged 2026-11-17, platform main 6df9a34): "allowed"
     // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
     // council to proposals.
@@ -181,6 +188,10 @@
     // for their evidence.
     "ZONE_AIM_OFF": "tp,stop,factor",
     "ZONE_AIM_TP": "label",
+    // Z5 (src/zone-readings.mjs; docs/RFC_DEMAND_SUPPLY_ZONES.md §7): the zone readings, the counterfactual tables and the
+    // decision-side zone breaker (it only holds Z2/Z2b's rules, for the run, and never writes an owner switch); GET
+    // /api/zones. "on" | "off" (nothing written, the breaker idle, the route 404).
+    "ZONE_READINGS": "on",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.

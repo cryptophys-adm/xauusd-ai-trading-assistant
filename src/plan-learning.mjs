@@ -168,6 +168,15 @@ export function replaySetup(setup, bars, { now = Date.now(), arms = PLAN_ARMS } 
   return open ? { status: "open", results: {} } : { status: "resolved", results, resolved_ms: last };
 }
 
+/** Z5 (src/zone-readings.mjs): the control arm alone, the plan as it is (the shadow setups' replay). */
+export const CONTROL_ONLY = Object.freeze(PLAN_ARMS.filter((a) => a.id === CONTROL_ARM));
+/**
+ * Pure (Z5): the outcome step of one ended setup on the control arm only, replaySetup's rule and result, so a
+ * counterfactual (zone_blocked_setups, zone_rule_arms) is scored exactly as plan learning scores a plan (a limit that
+ * never fills is 0R).
+ */
+export const setupOutcome = (setup, bars, { now = Date.now() } = {}) => replaySetup(setup, bars, { now, arms: CONTROL_ONLY });
+
 const diffOf = (s, arm) => { const a = s.results?.[arm], c = s.results?.[CONTROL_ARM]; return finite(a?.r) && finite(c?.r) ? a.r - c.r : null; };
 
 /**
@@ -401,6 +410,8 @@ const fromRow = (r) => {
   const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, htf: r.htf ?? null, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
   return s;
 };
+/** Pure (Z5): a stored row in plan_setups' columns as the setup the replay reads (the plan learner's own reader). */
+export const setupFromRow = (r) => fromRow(r);
 
 /**
  * One run: new setups from the engine's decisions, the replay of the setups that ended, and the learned
