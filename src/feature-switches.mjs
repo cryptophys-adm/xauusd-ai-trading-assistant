@@ -233,6 +233,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "limit_supersede", label: "Newer signal supersedes a resting limit", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
     description: "SS1: a newer same-side signal deletes Omega's older resting, unfilled limit, then goes through every gate; off: the engine as before.",
     values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
+  }),
+  entry({
+    key: "cd_gate", label: "Confidence-drop gate (CDG)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
+    description: "CDG: a confidence drop closes a winner only where the learned gate passes for the agent, side and drop bucket (lift >= 0.10 over n >= 30); every other drop is held. Reverts itself to off once if its first 15 outcomes average worse than the earlier rule; off: the engine as before.",
+    values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
   })
 ]);
 

@@ -24,9 +24,11 @@ import { readPlane, prophetZoneBoxes, aegisZoneBoxes } from "../src/level-reader
 import { projectionReading } from "../src/projection-agent.mjs";
 import { zoneScenario, zoneInputs, PROPHET_ZONES, AEGIS_ZONES, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
+import { withoutAtrRangeRatio } from "./support/zone-aim-inert.mjs";
 
 const M15 = 15 * 60_000;
-const sha = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
+// CDG (2026-11-25): the decision record's atr_range_ratio (a measurement) is stripped before hashing, so the pins taken before it hold.
+const sha = (v) => createHash("sha256").update(JSON.stringify(withoutAtrRangeRatio(v))).digest("hex");
 const mods = { se, de, ea, pp, pa, pl };
 const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank", "ds_sources"]);
 /** A value without Z0's keys, at any depth. */
@@ -342,7 +344,7 @@ test("Z0-16 plan_setups: the ALTERs run twice are a no-op; live and shadow setup
 
 test("Z0-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to its value; the behaviour hash is MS2's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
   // managementFields reads only low/high: untouched by the words beside them.
   const m = ea.managementFields({ key_levels: [{ low: 3990, high: 3992, zone_type: "demand", zone_strength: "medium", zone_freshness: "fresh", zone_rank: "candidate" }] });
@@ -507,7 +509,7 @@ test("Z1a-8 the readers and the rooms: readPlane and the Projection Agent read t
 
 test("Z1a-9 no hashed engine function changes: ENGINE_CODE_HASH and the behaviour hash are Z0's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 
@@ -677,7 +679,7 @@ test("Z1b-7 the readers: readPlane and the Projection Agent read a plane with ae
     assert.equal(JSON.stringify(projectionReading({ bars: rich.m15Bars, plane: rich[k].chart_plane, timeframe: "15 minutes" })), JSON.stringify(projectionReading({ bars: plain.m15Bars, plane: plain[k].chart_plane, timeframe: "15 minutes" })), k);
   }
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

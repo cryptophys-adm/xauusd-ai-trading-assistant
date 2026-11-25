@@ -39,6 +39,7 @@ import { readLatestDecision } from "./decision-engine.mjs";
 import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
+import { cdGateOn, readCdGateLive, recordCdEvents } from "./cd-gate.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -563,8 +564,9 @@ export async function writeSettings(env, { body, actor }, { now = Date.now() } =
   const r = settingsFrom(body, current.settings, { ea_version: eaVersion });
   if (r.error) return { ok: false, error: r.error };
   const version = current.version + 1;
-  // A save by a person (not Aether's policy write nor its rollback) clears an open limit fault: the owner looked at it.
-  const byOwner = !/^aether/i.test(String(actor ?? ""));
+  // A save by a person (not Aether's policy write nor its rollback, nor an agent's automatic revert such as CDG's
+  // "agent:cd-gate") clears an open limit fault: the owner looked at it.
+  const byOwner = !/^(aether|agent:)/i.test(String(actor ?? ""));
   await env.DB.prepare("UPDATE omega_settings SET settings = ?, version = ?, updated_by = ?, updated_ms = ?, limit_fault = CASE WHEN ? = 1 THEN NULL ELSE limit_fault END, owner_saved_ms = CASE WHEN ? = 1 THEN ? ELSE owner_saved_ms END WHERE id = 1")
     .bind(JSON.stringify(r.settings), version, actor, now, byOwner ? 1 : 0, byOwner ? 1 : 0, now).run();
   await event(env.DB, now, actor, "settings", r.settings);
@@ -1333,7 +1335,12 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     ? await runReentry(env, { executor, signal, now }) : null;
   // MS2: the mode probation's risk scale for new entries (null: full risk; MODE_PROBATION "off": always null).
   const modeRisk = await modeProbationRisk(env, signal);
-  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}), ...(re1 ? { reentry1m: re1 } : {}), ...(modeRisk ? { modeRisk } : {}) });
+  // CDG (owner 2026-11-25, src/cd-gate.mjs): the learned confidence-drop gate, read (KV, at most every 5 minutes per
+  // isolate) only while cd_gate is "on" and a position is open; a missing gate holds every drop. "off": nothing read.
+  const cdGate = hasPositions && cdGateOn(settings) ? await readCdGateLive(env, { now }) : undefined;
+  const plan = planIntents({ signal, control: planControl, settings, executor: dlg.executor, now, engineEnabled: engineEnvEnabled(env), recentIntentIds: plannerIds((recent.results ?? []).map((r) => r.id)), agents, pmActions, account, eaGate, reentry, positionMeta: allMeta, candles, stops, ...limitIn, ...(pmLoosen ? { pmLoosen } : {}), liquiditySpikeSince, ...(gates ? { gates } : {}), ...(re1 ? { reentry1m: re1 } : {}), ...(modeRisk ? { modeRisk } : {}), ...(cdGate ? { cdGate } : {}) });
+  // CDG: every confidence drop the gate held or let close, once per ticket and decision bar (omega_cd_holds).
+  if (Array.isArray(plan.cd_gate) && plan.cd_gate.length) await recordCdEvents(db, { events: plan.cd_gate, positions: dlg.executor?.positions ?? [], meta: allMeta, now });
   // RE1: the trigger's record, applied when the plan made its open intent, else skipped with the plan's reason.
   if (re1) {
     const made = plan.intents.some((it) => it.id === re1.id);
@@ -1987,8 +1994,8 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       const record = { ...applied, evaluated: true, evaluated_at: new Date(now).toISOString(), after };
       if (worse) {
         // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
-        // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M), the 1m re-entry's (RE1) and
-        // the limit supersede's (SS1).
+        // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M), the 1m re-entry's (RE1),
+        // the limit supersede's (SS1) and the confidence-drop gate's (CDG).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
@@ -1996,6 +2003,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
         delete back.pm_fast_1m;
         delete back.reentry_1m;
         delete back.limit_supersede;
+        delete back.cd_gate;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -2017,7 +2025,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
   // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1)
-  // nor limit_supersede (SS1): the owner's switches are carried as stored.
+  // nor limit_supersede (SS1) nor cd_gate (CDG): the owner's switches are carried as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
@@ -2025,6 +2033,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   delete body.pm_fast_1m;
   delete body.reentry_1m;
   delete body.limit_supersede;
+  delete body.cd_gate;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

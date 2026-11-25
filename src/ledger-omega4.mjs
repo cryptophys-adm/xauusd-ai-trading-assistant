@@ -61,6 +61,8 @@ import * as pmFast from "./pm-fast.mjs";
 import { reentryOn, reentrySetup, reentryCheck, isReentryId, REENTRY_1M } from "./reentry-1m.mjs";
 import * as reentry1m from "./reentry-1m.mjs";
 import * as limitSupersede from "./limit-supersede.mjs";
+import * as cdGateModule from "./cd-gate.mjs";
+import { cdGateOn, gateAt, readCdGateHistory } from "./cd-gate.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
 
@@ -226,7 +228,8 @@ export const MAX_REPLAY_MINUTES = 720;
 export function replayOmega4({
   bars = [], decisions = [], from = null, to = Infinity, settings = OMEGA_DEFAULTS, state = null,
   profileAt = () => null, balanceAt = null, councils = {}, control = [], blackouts = [], grid = null, arms = null,
-  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity, entry = null, version = OMEGA4_VERSION
+  eaGate = false, plan = planIntents, trace = null, spread = OMEGA4_SIM.spread, maxSteps = Infinity, entry = null, version = OMEGA4_VERSION,
+  cdGate = null
 } = {}) {
   // v4 is the market replay (the taker): the live entry_order ("limit" or "council", docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3)
   // never reaches it; the maker side is the limit policy's (`entry`, src/ledger-omega-limit.mjs).
@@ -243,6 +246,10 @@ export function replayOmega4({
   const fastOn = pmFastOn(S);
   // RE1 (2026-11-23, src/reentry-1m.mjs): the latest exit's re-entry setup, checked at every minute on these 1m bars.
   const reOn = reentryOn(S);
+  // CDG (2026-11-25, src/cd-gate.mjs): the learned confidence-drop gate in force at each minute, from its history
+  // (`cdGate.history`, [{ at_ms, pass }]), while cd_gate is "on"; a minute before the history's first entry has no gate
+  // (the rule before CDG). Off, or no history: planIntents never gets a gate, today's replay byte for byte.
+  const cdHistory = cdGateOn(S) && Array.isArray(cdGate?.history) && cdGate.history.length ? cdGate.history : null;
   const start = finite(from) ? from : (m1.length ? m1[0].t + OMEGA4_SIM.warmup_ms : Infinity);
   const ctl = (Array.isArray(control) ? control : []).filter((c) => finite(c?.at_ms)).sort((a, b) => a.at_ms - b.at_ms);
   const spreadPts = Math.round(spread / OMEGA4_SIM.point);
@@ -487,6 +494,7 @@ export function replayOmega4({
       const candles = recentBars ? { M5: lastClosedCandle(recentBars, 5, now), M15: lastClosedCandle(recentBars, 15, now), H1: lastClosedCandle(recentBars, 60, now) } : {};
       const re = reentry && now - reentry.exit_ms <= REENTRY_LOOKBACK_MS ? reentry : null;
       const input = { signal, control: { mode, reason: "", actor: "", at: iCtl >= 0 ? iso(ctl[iCtl].at_ms) : null }, settings: S, executor, now, engineEnabled: true, recentIntentIds, agents, pmActions, account, eaGate, reentry: re, positionMeta, candles, stops, ...(gates ? { gates } : {}), ...(reCand ? { reentry1m: reCand } : {}) };
+      if (cdHistory) { const g = gateAt(cdHistory, now); if (g) input.cdGate = g; }
       const out = plan(input);
       plans += 1;
       if (trace) trace.push({ now, input, output: out });
@@ -644,6 +652,9 @@ export const ENGINE_CODE = Object.freeze({
   "reentry-1m": [reentry1m, ["reentryOn", "reentryId", "isReentryId", "isEntryIntentId", "reentrySetup", "reentryCheck", "liveSetup", "runReentry", "recordReentry", "isLockRule", "REENTRY_1M", "REENTRY_LOCK_PATTERN", "REENTRY_RULE", "REENTRY_MODES", "REENTRY_READ_MIN", "REENTRY_RETRY_MS"]],
   // SS1 (2026-11-23): a newer same-side signal supersedes a resting limit (the switch, the orders it ends, the deletes read back).
   "limit-supersede": [limitSupersede, ["limitSupersedeOn", "orderSignalMs", "supersededOrders", "supersedeDeletes", "LIMIT_SUPERSEDE_MODES", "SUPERSEDE_REASON", "SUPERSEDE_READ_MS"]],
+  // CDG (2026-11-25): the learned confidence-drop gate (the switch, the drop and its bucket, the verdict, the gate in
+  // force from its history, the cells' math).
+  "cd-gate": [cdGateModule, ["cdGateOn", "cdDrop", "dropBucket", "cellKey", "cdGateVerdict", "gateAt", "closeSeries", "gateCells", "passKeys", "CD_GATE_MODES", "CD_GATE_RULE"]],
   // CH1 (2026-11-23): the change thresholds (their tokens, per-mode thresholds, the decision history, the measured falls).
   "change-thresholds": [changeThresholds, ["normalizeChangeThresholds", "changeTokens", "changeOn", "changeRule", "trendFor", "decisionHistory", "sideReadings", "measuredFall", "stanceAgainstConfirmed", "pendingShareFall", "heldText", "heldTag", "CHANGE_TOKENS", "CHANGE_THRESHOLDS_ALL", "CHANGE_THRESHOLDS_OFF", "SHARE_FALL_MIN", "CONFIRM_DECISIONS", "CONFIDENCE_CHANGE_MIN"]],
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
@@ -702,7 +713,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620";
+export const ENGINE_CODE_HASH = "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -764,7 +775,13 @@ export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941
 // owner setting it to "off" writes "reentry_1m=off" and starts a new era at that time.
 // limit_supersede (SS1, owner 2026-11-23) is "on" by default: its era starts with this behaviour hash at the deploy; the
 // owner setting it to "off" writes "limit_supersede=off" and starts a new era at that time.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede"]);
+// cd_gate (CDG, owner 2026-11-25) is "on" by default. Unlike the switches above it does not move ENGINE_BEHAVIOUR_HASH
+// (ruled): the gate is an input of the engine (planIntents' cdGate, the learned cells), and the fingerprint's fixtures
+// carry none, so they replay the rule before CDG as they are. The era is carried over at its deploy (a new code hash,
+// the same behaviour hash, nextEra), and v4 replays the gate in force at each bar from its history, so live and v4 stay
+// comparable inside it; the owner (or its automatic revert) setting it to "off" writes "cd_gate=off" and starts a new
+// era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
@@ -1104,7 +1121,9 @@ export async function loadOmega4Context(env, { sinceMs, now = Date.now() }) {
   const blackouts = (await safe(() => gatedEvents(env, { now }), [])).map((e) => { const t = Date.parse(e?.time ?? e?.date ?? ""); return finite(t) ? { from_ms: t - beforeMs, to_ms: t + afterMs, reason: String(e.title ?? e.event ?? "high-impact USD event").slice(0, 80) } : null; }).filter(Boolean);
   const grid = gridAdaptMode(env) === "live" ? await safe(() => readGridChoices(env), null) : null;
   const arms = strategyArmMode(env) === "live" ? await safe(() => readArmState(env), null) : null;
-  return { settings, profileAt: profileTimeline(changes, current), balanceAt, councils, control, blackouts, grid, arms, eaGate: eaVersionGateOn(env), live_account: Boolean(ref), profile_source: changes.length ? "history" : current ? "current" : "none" };
+  // CDG: the gate's history (KV), only while cd_gate is "on".
+  const cdGate = cdGateOn(settings) ? { history: await safe(() => readCdGateHistory(env), []) } : null;
+  return { settings, profileAt: profileTimeline(changes, current), balanceAt, councils, control, blackouts, grid, arms, eaGate: eaVersionGateOn(env), live_account: Boolean(ref), profile_source: changes.length ? "history" : current ? "current" : "none", cdGate };
 }
 
 // The feed's 1m bars kept in D1 (ledger_bars_1m), so the replay stays reproducible once the KV 1m series (about two

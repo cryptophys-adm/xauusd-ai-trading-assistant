@@ -22,11 +22,12 @@ import {
 } from "../src/zone-types.mjs";
 import { zoneScenario, zoneInputs, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
-import { inertOutputs, wranglerVars, withoutDsSources } from "./support/zone-aim-inert.mjs";
+import { inertOutputs, wranglerVars, withoutDsSources, withoutAtrRangeRatio } from "./support/zone-aim-inert.mjs";
 import { CAPTURE_2026_11_20_22 } from "./fixtures/z2-capture-2026-11-20-22.mjs";
 
 const mods = { se, de, ea, pp, pa, pl };
-const sha = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
+// CDG (2026-11-25): the decision record's atr_range_ratio (a measurement) is stripped before hashing, so the pins taken before it hold.
+const sha = (v) => createHash("sha256").update(JSON.stringify(withoutAtrRangeRatio(v))).digest("hex");
 const Z2 = Object.freeze({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend", ZONE_AIM_OFF: "tp,stop,factor" });
 const ON = Object.freeze({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend" });
 const only = (...off) => ({ ...ON, ZONE_AIM_OFF: off.join(",") });
@@ -394,9 +395,9 @@ test("ZA-16 the frozen 2026-11-20 22:00 capture: Z2b moves no price there, label
   }
 });
 
-test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to c4aa5772…; the behaviour hash is ecfe3f90…", async () => {
+test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 6c0f8142… (CDG moved it); the behaviour hash is ecfe3f90…", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
+  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

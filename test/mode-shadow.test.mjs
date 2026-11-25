@@ -13,6 +13,7 @@ import * as au from "../src/ai-usage.mjs";
 import * as rt from "../src/room-tuning.mjs";
 import { modeShadowEvidence, modeProbationMode, ruleVersionOf, MODE_PROBATION_RULES, ensureModeShadowSchema } from "../src/mode-shadow.mjs";
 import { planIntents } from "../src/omega-engine.mjs";
+import { withoutAtrRangeRatio } from "./support/zone-aim-inert.mjs";
 import { modeNow } from "../src/lens-steps.mjs";
 import { runGridAdapt, readGridChoices } from "../src/grid-adapt.mjs";
 import { runStrategyCouncil, resetCouncilSchemaForTests, COUNCIL_KEY } from "../src/strategy-council.mjs";
@@ -31,7 +32,8 @@ const { runPlanLearning, PLAN_ARMS, CONTROL_ARM, PLAN_LEARNING_KEY, ensurePlanLe
 const { runModeSelector, ownerModeAction, modeStatus, modeEvidenceStatus, unionSetups, rangeShadowEvidence, probationStep, liveRecordOf, modeProbationRisk, modeReport, MODE_CONTROL_KEY } = ms;
 const M1 = 60_000, M15 = 15 * M1, HOUR = 60 * M1, DAY = 24 * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
-const sha = (x) => createHash("sha256").update(typeof x === "string" ? x : JSON.stringify(x)).digest("hex");
+// CDG (2026-11-25): the decision record's atr_range_ratio (a measurement) is stripped before hashing, so the pins taken before it hold.
+const sha = (x) => { const y = withoutAtrRangeRatio(x); return createHash("sha256").update(typeof y === "string" ? y : JSON.stringify(y)).digest("hex"); };
 const reset = () => { de.resetDecisionSchemaCacheForTests(); pl.resetPlanLearningSchemaCacheForTests(); ms.resetModeSchemaForTests(); au.resetAiUsageSchemaCacheForTests(); rt.resetRoomTuningCacheForTests(); resetCouncilSchemaForTests(); resetLedgerSchemaCacheForTests(); resetStrategyArmSchemaCacheForTests(); resetSessionSchemaForTests(); };
 const decisionEnv = async (over = {}, mode = "intraday") => { reset(); const env = { DB: d1(), SIGNAL_CACHE: kv(), AI: failingAi, ...ENV_BASE, ...over }; await env.SIGNAL_CACHE.put(TRADING_MODE_KEY, mode); return env; };
 const decideBar = (env, l = loaded()) => runDecisionEngine(env, { barClose: CLOSE, now: NOW, clock: () => NOW + 5_000, loaded: l });
