@@ -373,7 +373,7 @@ export const VIEWS: Entry[] = [
     shows: [...FS1_GROUPS, "Feature switches", "Settings · owner", "3 overrides", "as of 03:40 UTC · 10:40 GMT+7", "omega_settings", "role=\"switch\"", "aria-pressed=\"true\"",
       "Reset to config: ENTRY_ZONE_MODE", "Reset to config: CFC_MODE", "Reset to default: change_thresholds", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN",
       "aria-label=\"Emergency stop\"", ">era<", ">ev<", "2026-11-25 02:14 UTC · 09:14 GMT+7", "deploy (wrangler.jsonc)", "OMEGA_DEFAULTS"],
-    hides: ["read only", "sample", "provisional", "owner@", ".com", "Reset to config: METRIC_REBUTTAL", "Reset to config: ZONE_PRIORITY", "bull", "zone_mgmt"]
+    hides: ["read only", "sample", "provisional", "owner@", ".com", "Reset to config: METRIC_REBUTTAL", "Reset to config: ZONE_PRIORITY", "bull"]
   },
   {
     name: "FS1Viewer", View: SwitchesView, fixture: fs1Viewer,
