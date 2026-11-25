@@ -5,6 +5,7 @@
 //                                 tp_typed and stop_skip arms below their base), sample readings over 30 days, the forced
 //                                 tick at 2026-11-24 07:22 UTC (zone_ahead by "block", tp and stop by "rule:…"), then
 //                                 12 SELL setups, 7 days of stances and 16 Omega closes a zone touched;
+//   zones-legacy.json             the held answer with held[] as { rule, by } (a backend before ZN1: the fallbacks);
 //   zones-clear.json              the same readings only (no counterfactual rows), a tick: nothing held;
 //   zones-empty.json              no table at all (ZR-16's shape: every list [], breaker null);
 //   feature-switches-held.json    the held state's GET /api/feature-switches (read-only, viewer.can_control false):
@@ -141,11 +142,14 @@ export async function seedZones() {
   // empty: no table at all
   resetZoneReadingsSchemaForTests();
   const empty = await zonesView({ ...configEnv(), SIGNAL_CACHE: kv(), DB: d1() }, { now: NOW });
-  return JSON.parse(JSON.stringify({ held, clear, empty, switches, off: OFF_BODY, error: ERROR_BODY }));
+  // legacy: the held answer as a backend before ZN1 gave it (held[] entries { rule, by } only), so the page's fallbacks
+  // (the switches' times, else none; effective unknown) stay tested against a real shape.
+  const legacy = { ...held, breaker: { ...held.breaker, held: held.breaker.held.map(({ rule, by }) => ({ rule, by })) } };
+  return JSON.parse(JSON.stringify({ held, legacy, clear, empty, switches, off: OFF_BODY, error: ERROR_BODY }));
 }
 
 /** The fixture files and the seed's answer each one holds. */
-export const FILES = { "zones.json": "held", "zones-clear.json": "clear", "zones-empty.json": "empty", "feature-switches-held.json": "switches", "zones-off.json": "off", "zones-error.json": "error" };
+export const FILES = { "zones.json": "held", "zones-legacy.json": "legacy", "zones-clear.json": "clear", "zones-empty.json": "empty", "feature-switches-held.json": "switches", "zones-off.json": "off", "zones-error.json": "error" };
 
 // CLI: `node test/support/nexus-zones-seed.mjs --write` rewrites the fixtures from the seed.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv.includes("--write")) {

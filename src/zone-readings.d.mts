@@ -26,6 +26,9 @@ export function decisionRules(db: unknown, keys: string[]): Promise<Map<string, 
 export function zoneHoldRows(env: unknown): Promise<{ zone_ahead: { since: string | null; until: string | null; by: string[] } | null; aim: Record<string, { since: string | null; until: string | null; by: string[] }> | null }>;
 export function readZoneHolds(env: unknown): Promise<Record<string, { by: string[] }> | null>;
 export function applyZoneHolds<E>(env: E, held: Record<string, any> | null): { env: E; held: Array<{ rule: string; by: string[] }> };
+export function zoneHoldEffective(env: unknown, rule: string, hold: unknown): boolean;
+export function zoneHoldCurrent(hold: unknown, rv: string | null | undefined): boolean;
+export function zoneHoldTimes(hold: unknown): { since: string | null; until: string | null };
 export function breakerEvidence(db: unknown, ruleVersion: string): Promise<{ readings: Array<Record<string, any>>; blocked: Array<{ r: number }>; arms: Array<Record<string, any>> }>;
 export function blockShare(rows: unknown[]): { n: number; blocked: number; share: number | null };
 export function omegaZoneAttribution(db: unknown, options?: { now?: number }): Promise<{ closes: number; mean_r: number | null; by: Array<{ source: string; n: number; mean_r: number | null }>; advisory: boolean }>;

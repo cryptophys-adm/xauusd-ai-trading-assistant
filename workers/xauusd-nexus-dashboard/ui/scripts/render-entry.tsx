@@ -29,6 +29,7 @@ import fs1Replies from "../../../../test/fixtures/nexus-fs1/post-replies.json";
 import fs1Record from "../../../../test/fixtures/nexus-fs1/feature-switches-record.json";
 import fs1Hold from "../../../../test/fixtures/nexus-fs1/feature-switches-hold.json";
 import zonesHeld from "../../../../test/fixtures/nexus-zones/zones.json";
+import zonesLegacy from "../../../../test/fixtures/nexus-zones/zones-legacy.json";
 import zonesClear from "../../../../test/fixtures/nexus-zones/zones-clear.json";
 import zonesEmpty from "../../../../test/fixtures/nexus-zones/zones-empty.json";
 import zonesOffBody from "../../../../test/fixtures/nexus-zones/zones-off.json";
@@ -253,11 +254,12 @@ export const VIEWS: Entry[] = [
       "edge +0.059", "own 43% n153 · untyped 37% n86", "+0.15R", "+0.10R vs +0.30R", "+0.05R vs +0.20R", "tripped", "Rule version tp1_kz:on+zone_ahead@1.",
       "30 days · prior 20", "▲</span> demand", "▼</span> supply", "untyped", "from_above", "All readings", ">245<", ">40%<", ">0.62<", ">0.51<", "aria-sort=\"ascending\"",
       "▲ BUY", "▼ SELL", "−0.15R", "75%", "100%", "−0.1 · 0 · +0.4R", "−0.20R", "7 days · 672 decisions", "WAIT", ">24<",
-      "intent:level_source_zone", "pm:zone_trail", "−0.009R", "−0.017R", ">advisory<", ">16<"],
-    hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", NO_EFFECT_NOTE, "price", "feed scale", "broker scale", "also seen by"],
+      "intent:level_source_zone", "pm:zone_trail", "−0.009R", "−0.017R", ">advisory<", ">16<", NO_EFFECT_NOTE],
+    hides: ["no breaker tick yet", ">0 readings · ", ">0 resolved · ", "sample", "price", "feed scale", "broker scale", "also seen by"],
     missing: [zonesOffBody]
   },
-  { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesHeld, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
+  { name: "ZonesHeldNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesLegacy, shows: ["bg-late-fill", "rule:tp_typed"], hides: [">since<", ">until<"] },
+  { name: "ZonesHeldOwnTimesNoSwitches", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesHeld, shows: ["bg-late-fill", "rule:tp_typed", ">since<", ">until<"] },
   { name: "ZonesHeldOwnTimes", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_OWN_TIMES, shows: ["11-24 08:00 UTC · 15:00 GMT+7", "12-01 08:00 UTC · 15:00 GMT+7", "12-01 07:22 UTC · 14:22 GMT+7"] },
   { name: "ZonesEffective", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: ZONES_EFFECTIVE, shows: [`Held: tp joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`], hides: [`Held: stop joins ZONE_AIM_OFF for the run while Z2b has it on. ${NO_EFFECT_NOTE}`] },
   { name: "ZonesClear", View: ({ d }) => <ZonesView d={d} switches={null} />, fixture: zonesClear,
