@@ -55,7 +55,7 @@ export const isSet = (raw) => raw !== undefined && raw !== null;
 const onUnlessOff = (raw) => (s(raw) === "off" ? "off" : "on");
 const offUnlessOn = (raw) => (s(raw) === "on" ? "on" : "off");
 const ZONE_AIM_TOKENS = Object.freeze(["tp", "stop", "factor"]);
-const ZONE_SOURCES = Object.freeze(["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag"]);
+const ZONE_SOURCES = Object.freeze(["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag", "gmi_ob"]);
 const CHANGE_TOKENS = Object.freeze(["conf", "tpw", "limit", "skip", "stance"]);
 const tokensGiven = (raw) => new Set(String(raw ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean));
 
@@ -99,7 +99,7 @@ export const FEATURE_SWITCHES = Object.freeze([
   }),
   entry({
     key: "ZONE_SOURCES_OFF", label: "Zone typing sources", group: "zones", restarts_mode_evidence: true,
-    description: "Z1a: the evidence sources the zone typing reads; the tokens listed are the sources ON (prophet_zone, prophet_best, whale, gabfx, gmi_flag). Taking prophet_zone off restores Z0's typing. Not set in the config: every source on.",
+    description: "Z1a/Z1b: the evidence sources the zone typing reads; the tokens listed are the sources ON (prophet_zone, prophet_best, whale, gabfx, gmi_flag, gmi_ob). Taking gmi_ob off restores Z1a's typing (gmi_flag back on the 15m); taking prophet_zone off too restores Z0's. Not set in the config: every source on.",
     values: { tokens: ZONE_SOURCES }, default_value: [...ZONE_SOURCES], config_value: null,
     // The env holds the sources left OFF (src/zone-types.mjs zoneSourcesOffMode); the panel shows the sources ON.
     read: (raw) => { const off = tokensGiven(raw); return ZONE_SOURCES.filter((t) => !off.has(t)); },

@@ -3,6 +3,14 @@
 // were taken with it on main 6135237, before Z2b). Pure: no Worker run, no network, no D1.
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+// Z1b adds ds_sources (the source labels) to the recorded key_levels; the pins hold everything else byte for byte.
+// On a tree without the field (main 6135237) this is the identity.
+// Stored rows hold the record as JSON text, so a string that parses as an object or array is stripped inside too.
+export const withoutDsSources = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
+  if (k === "ds_sources") return undefined;
+  if (typeof x === "string" && /^[[{]/.test(x)) { try { return JSON.stringify(withoutDsSources(JSON.parse(x))); } catch { return x; } }
+  return x;
+}));
 
 /** The top-level `vars` of a wrangler.jsonc (comments and trailing commas stripped; strings kept whole). */
 export function wranglerVars(url) {
@@ -48,7 +56,7 @@ export async function inertOutputs({ se, de, ea, gunzipJson }, fx, env) {
     out[c.name] = {
       messages: sha(de.councilMessages(evidence)),
       guards: sha({ long: side(a.guards.long), short: side(a.guards.short) }),
-      trade: sha(record.trade), strategy_plans: sha(record.strategy_plans), record: sha(record),
+      trade: sha(record.trade), strategy_plans: sha(record.strategy_plans), record: sha(withoutDsSources(record)),
       signal: sha(ea.eaSignalFromDecision({ decision: record, now: NOW })), management: sha(ea.managementFields(record)),
       shadow: sha(de.shadowModeDecisions({ loaded: c.loaded, assessment: a, council: c.council, env, now: NOW })),
       stance: record.stance

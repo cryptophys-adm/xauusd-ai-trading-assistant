@@ -137,7 +137,7 @@
     {
       "key": "ZONE_SOURCES_OFF",
       "label": "Zone typing sources",
-      "description": "Z1a: the evidence sources the zone typing reads; the tokens listed are the sources ON (prophet_zone, prophet_best, whale, gabfx, gmi_flag). Taking prophet_zone off restores Z0's typing. Not set in the config: every source on.",
+      "description": "Z1a/Z1b: the evidence sources the zone typing reads; the tokens listed are the sources ON (prophet_zone, prophet_best, whale, gabfx, gmi_flag, gmi_ob). Taking gmi_ob off restores Z1a's typing (gmi_flag back on the 15m); taking prophet_zone off too restores Z0's. Not set in the config: every source on.",
       "group": "zones",
       "worker": "ai",
       "values": {
@@ -147,14 +147,16 @@
           "prophet_best",
           "whale",
           "gabfx",
-          "gmi_flag"
+          "gmi_flag",
+          "gmi_ob"
         ],
         "on": [
           "prophet_zone",
           "prophet_best",
           "whale",
           "gabfx",
-          "gmi_flag"
+          "gmi_flag",
+          "gmi_ob"
         ]
       },
       "value": [
@@ -162,7 +164,8 @@
         "prophet_best",
         "whale",
         "gabfx",
-        "gmi_flag"
+        "gmi_flag",
+        "gmi_ob"
       ],
       "source": "default",
       "config_value": null,
@@ -171,7 +174,8 @@
         "prophet_best",
         "whale",
         "gabfx",
-        "gmi_flag"
+        "gmi_flag",
+        "gmi_ob"
       ],
       "set_by": null,
       "set_at": null,
