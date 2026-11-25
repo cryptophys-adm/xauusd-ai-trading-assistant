@@ -28,6 +28,7 @@ import { supertrendFields } from "./supertrend.mjs";
 import { gridBotFields } from "./grid-bot.mjs";
 import { buildChartPlane } from "./chart-plane.mjs";
 import { prophetZones } from "./adopt/prophet-ob.mjs";
+import { aegisBoxes } from "./adopt/gmi-zone.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
 const CHART = Object.freeze({
@@ -237,14 +238,20 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
     // Every price object GMI draws on the chart (chart-plane.mjs, owner decision 2026-11-08): read
     // by the Key Level Agent and the Nexus chart. Not a HUD section, so it creates no room agent;
     // a failure leaves it null. Z1a: `zones.prophet` beside its fields, every active Prophet order block (the 4 nearest
-    // per side, adopt/prophet-ob.mjs); a failure there leaves the plane as it was, without `zones`.
+    // per side, adopt/prophet-ob.mjs); a failure there leaves the plane as it was, without `zones`. Z1b: `zones.aegis`
+    // beside it, GMI's active Aegis validated order blocks (the 4 nearest per side, adopt/gmi-zone.mjs), on the bars and
+    // mintick the GMI run used and only on a chart where it ran; a failure leaves the plane without `aegis`, and
+    // `prophet` as it was.
     chart_plane: (() => {
       let plane;
       try { plane = buildChartPlane(bundle, { chart, chartBars, mintick }); } catch { return null; }
       if (!plane || typeof plane !== "object") return plane ?? null;
       let prophet = null;
       try { prophet = prophetZones(ob, chartBars, { perSide: 4, atr: sensors.atr14 }); } catch { prophet = null; }
-      return prophet ? { ...plane, zones: { prophet } } : plane;
+      let aegis = null;
+      try { aegis = gmi ? aegisBoxes(chartBars, { mintick, perSide: 4 })?.boxes ?? null : null; } catch { aegis = null; }
+      const zoneSets = { ...(prophet ? { prophet } : {}), ...(aegis ? { aegis } : {}) };
+      return Object.keys(zoneSets).length ? { ...plane, zones: zoneSets } : plane;
     })()
   };
 }

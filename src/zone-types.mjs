@@ -17,6 +17,10 @@
 //                 0.7, 0.9 when high_volume. On a chart that has them, prophet_best (one of them) is dropped. A zone's
 //                 freshness reads the most touches of its own count and of the prophet_zone boxes typing it (worn
 //                 dominates).
+//   gmi_ob        (Z1b) GMI's active Aegis validated order blocks the producer adds to the chart plane
+//                 (chart_plane.zones.aegis, the 4 nearest per side; local-engines/producer/src/adopt/gmi-zone.mjs):
+//                 bull demand, bear supply, 0.8. On a chart that has them, gmi_flag is dropped (its order-block flag is
+//                 price inside one of them); a chart without them keeps it. Their touches age a zone as prophet_zone's.
 // each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5). A box types a zone on a strict overlap; a
 // point must lie inside the zone. Per side, a (source, timeframe) adds only its heaviest box, so two overlapping 15m
 // whales count once. Type: demand when demand_w > 0 and demand_w >= 2 x supply_w, supply in the mirror case, mixed when
@@ -28,9 +32,9 @@
 // zoneAhead reads only the recorded set (aroundSet, the decision's key_levels with their zone words), so a replay of a
 // stored decision reproduces it. Switch: KEY_LEVEL_ZONE_TYPES = "on" (default) | "off" (no typed field anywhere),
 // through the strategy modes. ZONE_SOURCES_OFF (Z1a): a list of ZONE_SOURCES tokens left out of the typing, through the
-// strategy modes too; "prophet_zone" restores Z0's typing.
+// strategy modes too; "prophet_zone" restores Z0's typing, "gmi_ob" (Z1b) Z1a's.
 
-import { prophetZoneBoxes } from "./level-readers.mjs";
+import { prophetZoneBoxes, aegisZoneBoxes } from "./level-readers.mjs";
 
 export const ZONE_TYPES_VERSION = "cryptophys.zone-types.v1";
 /** The Key Level Agent's timeframe weights (src/key-level-agent.mjs TF_WEIGHT; a test holds them equal). */
@@ -41,8 +45,20 @@ export const ZONE_TF_NAME = Object.freeze({ "15": "15m", "60": "1H", "240": "4H"
 export const ZONE_SOURCE_WEIGHT = Object.freeze({ whale_active: 0.9, whale_mitigation: 0.7, prophet_best: 0.7, rbs: 1, sbr: 1, qm_buy: 0.9, qm_sell: 0.9, gmi_flag: 0.7 });
 /** Z1a: an active Prophet order block's base weight, and its weight when the core flags its source bar high_volume. */
 export const ZONE_PROPHET_WEIGHT = Object.freeze({ active: 0.7, high_volume: 0.9 });
+/** Z1b: an active GMI Aegis validated order block's base weight. */
+export const ZONE_GMI_OB_WEIGHT = 0.8;
+/**
+ * Z1b: one block counts once. A gmi_ob box on the same chart and side as a prophet_zone box, with both edges within
+ * this tolerance, is the same block (both cores run the same order-block algorithm): it adds no box, only provenance
+ * (`also: ["gmi_ob"]` on the prophet_zone box). Absolute, in price units: 0.001 on XAUUSD is about 0.0000025 of price.
+ */
+export const ZONE_SAME_BLOCK_TOL = 0.001;
+// The edges are 3 dp; 1e-9 absorbs binary rounding, so a difference of exactly one 0.001 step is within.
+const near = (a, b) => Math.abs(a - b) <= ZONE_SAME_BLOCK_TOL + 1e-9;
 /** The evidence sources, the tokens of ZONE_SOURCES_OFF. */
-export const ZONE_SOURCES = Object.freeze(["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag"]);
+export const ZONE_SOURCES = Object.freeze(["prophet_zone", "prophet_best", "whale", "gabfx", "gmi_flag", "gmi_ob"]);
+/** The sources whose boxes carry their own chart's touches, read into a zone's freshness. */
+const BOX_TOUCH_SOURCES = new Set(["prophet_zone", "gmi_ob"]);
 export const ZONE_RULES = Object.freeze({
   dominance: 2, medium: 1, strong: 2,
   touch_band_atr: 0.15, touch_bars: 40, touch_gap: 3, touch_cap: 3,
@@ -105,6 +121,17 @@ export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null, sourcesO
     // Z1a: every active Prophet order block of the chart (the producer's chart_plane.zones.prophet).
     const prophet = off.has("prophet_zone") ? [] : prophetZoneBoxes(snap.chart_plane);
     for (const z of prophet) box("prophet_zone", tf, z.side, z.bottom, z.top, z.high_volume ? ZONE_PROPHET_WEIGHT.high_volume : ZONE_PROPHET_WEIGHT.active, { touches: z.touches });
+    // Z1b: GMI's active Aegis validated order blocks of the chart (the producer's chart_plane.zones.aegis).
+    // A box that is the same block as one of this chart's prophet_zone boxes counts once: it is recorded as provenance
+    // on that box (no weight); with prophet_zone off, every gmi_ob box counts.
+    const aegis = off.has("gmi_ob") ? [] : aegisZoneBoxes(snap.chart_plane);
+    const chartProphet = boxes.filter((b) => b.source === "prophet_zone" && b.tf === tf);
+    for (const z of aegis) {
+      const same = chartProphet.find((b) => b.side === z.side && isNum(z.bottom) && isNum(z.top)
+        && near(b.bottom, z.bottom) && near(b.top, z.top));
+      if (same) { if (!same.also) same.also = ["gmi_ob"]; continue; }
+      box("gmi_ob", tf, z.side, z.bottom, z.top, ZONE_GMI_OB_WEIGHT, { touches: z.touches });
+    }
     for (const z of off.has("whale") || !Array.isArray(liq?.whale_zones) ? [] : liq.whale_zones) {
       const side = z?.role === "support" ? "demand" : z?.role === "resistance" ? "supply" : null;
       if (side) box("whale", tf, side, z.bottom, z.top, z.state === "active" ? ZONE_SOURCE_WEIGHT.whale_active : ZONE_SOURCE_WEIGHT.whale_mitigation);
@@ -121,8 +148,9 @@ export function dsEvidence({ snapshots = {}, bars15 = [], atrH1 = null, sourcesO
       box("prophet_best", tf, "demand", ob.bull_bottom, ob.bull_top, ZONE_SOURCE_WEIGHT.prophet_best);
       box("prophet_best", tf, "supply", ob.bear_bottom, ob.bear_top, ZONE_SOURCE_WEIGHT.prophet_best);
     }
-    // The 15m GMI flags say price is inside a block: they type the zone holding price only.
-    const ae = tf === "15" && !off.has("gmi_flag") ? snap.huds?.aegis_footprint?.fields : null;
+    // The 15m GMI flags say price is inside a block: they type the zone holding price only. Z1b: dropped on a chart
+    // that has gmi_ob boxes (the blocks themselves).
+    const ae = tf === "15" && !off.has("gmi_flag") && !aegis.length ? snap.huds?.aegis_footprint?.fields : null;
     if (ae) {
       const flag = (side) => boxes.push({ source: "gmi_flag", tf, side, bottom: null, top: null, weight: r2(ZONE_SOURCE_WEIGHT.gmi_flag * ZONE_TF_WEIGHT[tf]), at_price: true });
       if (ae.in_bull_order_block === true || ae.in_bull_mitigation === true) flag("demand");
@@ -179,11 +207,13 @@ export function zoneTypes(zones, evidence) {
     const score = r2(type === "demand" ? d : type === "supply" ? s : Math.max(d, s));
     const strength = type === "none" ? null : score >= ZONE_RULES.strong ? "strong" : score >= ZONE_RULES.medium ? "medium" : "weak";
     // Z1a: the most touches of the zone's own count and of the prophet_zone boxes typing it (each on its own chart's
-    // bars, the core's rule), capped as the count: worn dominates.
+    // bars, the core's rule), capped as the count: worn dominates. Z1b: the gmi_ob boxes' touches too.
     const own = zoneTouches(z.low, z.high, evidence?.bars, band);
-    const boxTouches = boxes.filter((b) => b.source === "prophet_zone" && isNum(b.touches) && boxTypes(b, z)).map((b) => b.touches);
+    const boxTouches = boxes.filter((b) => BOX_TOUCH_SOURCES.has(b.source) && isNum(b.touches) && boxTypes(b, z)).map((b) => b.touches);
     const touches = boxTouches.length ? Math.min(ZONE_RULES.touch_cap, Math.max(own ?? 0, ...boxTouches)) : own;
-    z.ds = { type, strength, score, freshness: freshnessOf(touches), touches, sources: [...new Set([...best.demand.keys(), ...best.supply.keys()])].sort() };
+    // Z1b: the sources that found the same block as a box typing the zone (provenance only, no weight); absent when none.
+    const also = [...new Set(boxes.filter((b) => Array.isArray(b.also) && boxTypes(b, z)).flatMap((b) => b.also.map((a) => `${a}@${ZONE_TF_NAME[b.tf]}`)))].sort();
+    z.ds = { type, strength, score, freshness: freshnessOf(touches), touches, sources: [...new Set([...best.demand.keys(), ...best.supply.keys()])].sort(), ...(also.length ? { also } : {}) };
   }
   return zones;
 }
