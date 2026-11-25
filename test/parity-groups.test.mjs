@@ -61,8 +61,13 @@ test("B7-2 compareWithWebhooks without the new options deep-equals main's", () =
   }
 });
 
-test("B7-3 no group id starts with mizan; the registry declares only the witness group, and it is sound", () => {
-  assert.deepEqual(Object.keys(PARITY_GROUPS), ["probe_mizan_witness"]);
+test("B7-3 no group id starts with mizan; the registry declares the witness group and B10's HUD groups, and it is sound", () => {
+  assert.deepEqual(Object.keys(PARITY_GROUPS), [
+    "probe_mizan_witness",
+    "gmi_adopt_hud", "gmi_adopt_flow", "gmi_adopt_kin", "gmi_adopt_zone", "gmi_adopt_zone_levels", "gmi_adopt_burst", "gmi_adopt_order", "gmi_adopt_levels", "gmi_adopt_plan",
+    "prophet_adopt_hud", "prophet_adopt_core", "prophet_adopt_ob", "prophet_adopt_scalp", "prophet_adopt_plan",
+    "probe_mizan_core", "probe_mizan_mtf", "probe_mizan_decision", "probe_mizan_state"
+  ]);
   assert.ok(Object.keys(PARITY_GROUPS).every((id) => !id.startsWith("mizan")));
   assert.deepEqual(parityGroupProblems(PARITY_GROUPS), []);
   const bad = { engine: "gmi", source: "gmi_v12_70", kind: "witness", fields: { verdict: "verdict" } };

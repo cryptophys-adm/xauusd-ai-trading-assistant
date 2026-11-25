@@ -1,0 +1,18 @@
+{
+  "response": {
+    "status": 202,
+    "text": "{\n  \"status\": \"accepted\",\n  \"candle_key\": \"OANDA:XAUUSD:15:1794178800000\",\n  \"source\": \"gmi_v12_70_hud\",\n  \"analysis_status\": \"stored_only\",\n  \"queued\": false,\n  \"reason\": \"hud_comparator_source\",\n  \"normalized_non_finite_tokens\": 1\n}"
+  },
+  "rows": [
+    {
+      "candle_key": "OANDA:XAUUSD:15:1794178800000",
+      "source": "gmi_v12_70_hud",
+      "payload": "{\"v\":1,\"source\":\"gmi_v12_70_hud\",\"src\":\"gmi_v12_70_hud\",\"ticker\":\"OANDA:XAUUSD\",\"symbol\":\"OANDA:XAUUSD\",\"timeframe\":\"15\",\"tf\":\"15\",\"candle_time\":\"1794178800000\",\"timestamp\":\"1794178800000\",\"t\":1794178800000,\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false,\"cshi_viability\":null,\"deploy_status\":3,\"muddy_waters\":false,\"grid_viable\":true,\"schema_version\":\"cryptophys.webhook-evidence.v1\",\"candle_key\":\"OANDA:XAUUSD:15:1794178800000\"}"
+    }
+  ],
+  "buffer": {
+    "candle:OANDA:XAUUSD:15:1794178800000:gmi_v12_70_hud": "{\"v\":1,\"source\":\"gmi_v12_70_hud\",\"src\":\"gmi_v12_70_hud\",\"ticker\":\"OANDA:XAUUSD\",\"symbol\":\"OANDA:XAUUSD\",\"timeframe\":\"15\",\"tf\":\"15\",\"candle_time\":\"1794178800000\",\"timestamp\":\"1794178800000\",\"t\":1794178800000,\"verdict\":3,\"gate\":2,\"gmi_dir\":1,\"prophet_dir\":1,\"conflict\":false,\"cshi_viability\":null,\"deploy_status\":3,\"muddy_waters\":false,\"grid_viable\":true,\"schema_version\":\"cryptophys.webhook-evidence.v1\",\"candle_key\":\"OANDA:XAUUSD:15:1794178800000\"}"
+  },
+  "cache": {},
+  "sent": []
+}

@@ -152,7 +152,12 @@ const SOURCE_ALIASES: Record<string, string> = {
   "prophet r38 hud": "prophet_r38_hud",
   gmi_v12_70_hud: "gmi_v12_70_hud",
   "gmi-v12.70-hud": "gmi_v12_70_hud",
-  "gmi v12.70 hud": "gmi_v12_70_hud"
+  "gmi v12.70 hud": "gmi_v12_70_hud",
+  // B10 (RFC_INDICATOR_ADOPTION): the *.hud.v2 adoption alerts and the Cryptophys Mizan Probe.
+  // HUD comparator sources (*_hud): stored for parity only, they never start the AI chain.
+  gmi_v12_70_adopt_hud: "gmi_v12_70_adopt_hud",
+  prophet_r38_adopt_hud: "prophet_r38_adopt_hud",
+  probe_mizan_hud: "probe_mizan_hud"
 };
 
 function json(data: unknown, status = 200): Response {
@@ -1301,7 +1306,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!source) {
     return json({
       error: "Unsupported source",
-      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70", "prophet_r38_hud", "gmi_v12_70_hud"]
+      accepted_sources: ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70", "prophet_r38_hud", "gmi_v12_70_hud", "gmi_v12_70_adopt_hud", "prophet_r38_adopt_hud", "probe_mizan_hud"]
     }, 400);
   }
 
