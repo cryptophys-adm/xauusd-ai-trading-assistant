@@ -22,6 +22,7 @@ import {
 } from "../src/zone-types.mjs";
 import { zoneScenario, zoneInputs, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
+import { inertOutputs, wranglerVars } from "./support/zone-aim-inert.mjs";
 import { CAPTURE_2026_11_20_22 } from "./fixtures/z2-capture-2026-11-20-22.mjs";
 
 const mods = { se, de, ea, pp, pa, pl };
@@ -64,7 +65,7 @@ const ctxOf = (strategy, aim, extra = {}) => ({ dir: 1, atrH1: strategy.atr_h1, 
 
 // ---------------------------------------------------------------- the switches
 
-test("ZA-1 the switches: ZONE_PRIORITY gates all of Z2b; ZONE_AIM_OFF tokens; ZONE_AIM_TP label | qualified; wrangler.jsonc ships every rule on", () => {
+test("ZA-1 the switches: ZONE_PRIORITY gates all of Z2b; ZONE_AIM_OFF tokens; ZONE_AIM_TP label | qualified; wrangler.jsonc ships every rule off", () => {
   assert.deepEqual(ZONE_AIM_TOKENS, ["tp", "stop", "factor"]);
   assert.equal(zoneAimMode({}), null, "unset ZONE_PRIORITY reads off");
   assert.equal(zoneAimMode({ ZONE_PRIORITY: "off" }), null);
@@ -82,7 +83,7 @@ test("ZA-1 the switches: ZONE_PRIORITY gates all of Z2b; ZONE_AIM_OFF tokens; ZO
   assert.equal(ZONE_AIM.factor_own / ZONE_AIM.factor_opposite > 1.41 && ZONE_AIM.factor_own / ZONE_AIM.factor_opposite < 1.42, true);
   assert.deepEqual(ZONE_NEED, { risk: 1, atr: 0.75 }, "the typed-TP floor is Z2's need");
   const w = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(w, /"ZONE_AIM_OFF": "",/);
+  assert.match(w, /"ZONE_AIM_OFF": "tp,stop,factor",/, "inert at ship (orchestrator ruling 2026-11-25)");
   assert.match(w, /"ZONE_AIM_TP": "label",/);
   assert.match(w, /"ZONE_PRIORITY": "on"/);
   assert.deepEqual([...KEY_TARGET_AGENTS], [DEFAULT_AGENT, "sweep_reversal", "breakout_retest"]);
@@ -397,4 +398,33 @@ test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to c4
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.equal(ENGINE_CODE_HASH, "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+});
+
+// ---------------------------------------------------------------- shipped inert (orchestrator ruling 2026-11-25)
+
+const LIVE_VARS = Object.freeze(wranglerVars(new URL("../wrangler.jsonc", import.meta.url)));
+// test/support/zone-aim-inert.mjs's outputs under main 6135237's own wrangler.jsonc vars (before Z2b), on a git-archive of it.
+const MAIN_6135237_INERT = Object.freeze({"z0_buy": {"messages": "84c40d71ca1f061a9b891bbdd0ebb216c095d668c0bc9360031ef6b7c79b7fd4", "guards": "1569de568e33df0eac57a1781af1a0db496eb8febc48302d9f70fa49952b7154", "trade": "c6ec77bcd386ef18305fd72eb552a11813100bc92c8bfd8539b58979cc5570c5", "strategy_plans": "3b4acc6e85808e9e9b9fcd758da94ed364bdb2c3a653fdd6e4b04b5f84de8dd7", "record": "e521c72230cc71a5b5cf104e872f3b68d72cd1a21e3ba59f19e9433c96553a82", "signal": "dcaade6e07a65a73d55d895a61516476098beee5c8d7a62f54febd741ebafaf6", "management": "51e714db2275fd3293b5ea8d205d18b68df9e98172cd8c875625073094ae26a7", "shadow": "99839590b63cccc6e5663e8b627d9292fdd7aaba4a383984c75b4622d81057cc", "stance": "BUY"}, "z0_sell": {"messages": "80a7cfc6ebba22869e907df9a6a2e22c391d7cad8ca1a161cf92005e684ac713", "guards": "c6160bd83b066398148c18091c490b470cc57e6ca16b5934ba85a17daa142820", "trade": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b", "strategy_plans": "3b4acc6e85808e9e9b9fcd758da94ed364bdb2c3a653fdd6e4b04b5f84de8dd7", "record": "6d5d58ebeda94ade2e014b66e405a7a670d26cd66524b12dc119356a7cdf512e", "signal": "da196d1a4940b9ec66441113e06f1a6647725c14f328cb6af880ba9af576edb0", "management": "47d4b9ab1786d3fba184388c51efadaf969b8a14fec397a33d88b05babca1ab2", "shadow": "64a260966e20318321db9acc6fe6377b3c4ec1696135e736e6c274f16201e3d1", "stance": "WAIT"}, "prophet_buy": {"messages": "f2dfeef87384e4c62b3f25624cb181e52b31224d03403f20477ea7e1c53a461f", "guards": "89284063e4daac132df8733763d66176679de6be1990803da15b9f4bbc57c48c", "trade": "ece1aa5198ef42d0a556cc0001ae329d830652aaef17894f8afd1a668b77e15f", "strategy_plans": "13ce92b2f5cbb833d30c6126c1ef97ab48c0665c7e6cceb45da010fb2bc3e1a8", "record": "c0ae40efe352b6be53fddc8efa142bf09fb57a9703450c8b967a6cad1df9e513", "signal": "dcaade6e07a65a73d55d895a61516476098beee5c8d7a62f54febd741ebafaf6", "management": "51e714db2275fd3293b5ea8d205d18b68df9e98172cd8c875625073094ae26a7", "shadow": "ed55b3e94bc50eca9fdecc1fea1b7c7f24313b5920fcf721599493c32cecbb55", "stance": "BUY"}, "prophet_sell": {"messages": "1e717205e24fc0cb30c29fae1b135405c206d713d4e1e03e320c7d1ee3e41bce", "guards": "4cf780382411d0e5f74596aa36f0015b40fcd896405f6a5b86a93143b5f6bd8b", "trade": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b", "strategy_plans": "13ce92b2f5cbb833d30c6126c1ef97ab48c0665c7e6cceb45da010fb2bc3e1a8", "record": "c6db162f46d3638aece1c6cdc6520d350a426ae6e89e80de47e0748b1c8f7acb", "signal": "da196d1a4940b9ec66441113e06f1a6647725c14f328cb6af880ba9af576edb0", "management": "47d4b9ab1786d3fba184388c51efadaf969b8a14fec397a33d88b05babca1ab2", "shadow": "64a260966e20318321db9acc6fe6377b3c4ec1696135e736e6c274f16201e3d1", "stance": "WAIT"}, "capture": "d49f7563079ca0dbb6a74d3255893642ea727c540dda37f3829062a7b0f4bde9"});
+
+test("ZA-18 shipped inert: under the live wrangler.jsonc vars (ZONE_PRIORITY on, ZONE_AIM_OFF tp,stop,factor) the council's messages, the plans, the trade, strategy_plans, the record, the EA signal, managementFields and MS2's rows are main 6135237's byte for byte", async () => {
+  assert.equal(LIVE_VARS.ZONE_PRIORITY, "on");
+  assert.equal(LIVE_VARS.ZONE_AHEAD_MODE, "trend");
+  assert.equal(LIVE_VARS.ZONE_AIM_OFF, "tp,stop,factor");
+  assert.equal(LIVE_VARS.ZONE_AIM_TP, "label");
+  assert.equal(zoneAimMode(LIVE_VARS), null, "every rule off: Z2b is inert");
+  const fx = { zoneInputs, CLOSE, NOW, capture: CAPTURE_2026_11_20_22 };
+  const got = await inertOutputs({ se, de, ea, gunzipJson }, fx, { ...LIVE_VARS });
+  assert.deepEqual(got, MAIN_6135237_INERT);
+  // Not vacuous: one rule on changes what the council reads (TP1's words in tp1_note).
+  const tp = await inertOutputs({ se, de, ea, gunzipJson }, fx, { ...LIVE_VARS, ZONE_AIM_OFF: "stop,factor" });
+  assert.notEqual(tp.z0_buy.messages, MAIN_6135237_INERT.z0_buy.messages);
+});
+
+test("ZA-19 rule_version under the live vars: exactly Z2's while inert; the zone_aim token only with a rule on", () => {
+  assert.equal(ruleVersionOf(LIVE_VARS), "tp1_kz:on+zone_ahead@1");
+  assert.equal(zoneAimRuleToken(LIVE_VARS), null);
+  assert.equal(ruleVersionOf({ ...LIVE_VARS, ZONE_AIM_OFF: "stop,factor" }), "tp1_kz:on+zone_ahead@1+zone_aim@1:no_stop:no_factor");
+  assert.equal(ruleVersionOf({ ...LIVE_VARS, ZONE_AIM_OFF: "tp,factor" }), "tp1_kz:on+zone_ahead@1+zone_aim@1:no_tp:no_factor");
+  assert.equal(ruleVersionOf({ ...LIVE_VARS, ZONE_AIM_OFF: "tp,stop" }), "tp1_kz:on+zone_ahead@1+zone_aim@1:no_tp:no_stop");
+  assert.equal(ruleVersionOf({ ...LIVE_VARS, ZONE_AIM_OFF: "" }), "tp1_kz:on+zone_ahead@1+zone_aim@1");
 });

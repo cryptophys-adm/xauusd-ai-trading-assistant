@@ -176,7 +176,10 @@
     // opposing-type zone), "factor" (pickStrategy's zone factor); "" = every rule on. ZONE_AIM_TP "label" (TP1's price
     // never moves) | "qualified" (owner-set only, after TP1-KZ becomes tp1_kz@2: a decisive opposing qualified zone at
     // or beyond ZONE_NEED, nearer than TP1, becomes TP1).
-    "ZONE_AIM_OFF": "",
+    // Inert at ship (orchestrator ruling 2026-11-25): every rule off, so plans, signals and rule_version are Z2's. The
+    // owner turns each rule on separately (remove "tp", "stop" or "factor" from the list); stop_skip and the factor wait
+    // for their evidence.
+    "ZONE_AIM_OFF": "tp,stop,factor",
     "ZONE_AIM_TP": "label",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the

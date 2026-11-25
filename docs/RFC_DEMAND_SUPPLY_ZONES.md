@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) follows it on the decision side; Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on; Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -244,13 +244,13 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 
 ### 6.3 The record and the replay
 - **`zone_rules`** = `[{ rule: "tp_typed" | "stop_skip", base_tp1_r, base_stop_atr }]` on the trade (`tradeFor`) and on `strategy_plans` when a rule moved a price; `[{ rule, held: "rrr" }]` on a kept base; absent otherwise (a label alone is no rule). Distances from the entry, never a price: Z5 and MS2's base arm rebuild the base's stop and TP1 from the entry (`zoneAimBase`). Record only: never in the council's evidence, a card, a room, the EA signal or public output. The relabelled `tp1_note` is the only word the council sees change.
-- **`rule_version`** (`ruleVersionOf`) becomes `tp1_kz:on+zone_ahead@1+zone_aim@1` with the shipped switches (`:qualified` in that TP mode, `:no_<token>` per rule left off): the rules move stops and targets in every mode, so the mode selector's evidence restarts at Z2b's deploy, as at TP1-KZ's and Z2's.
+- **`rule_version`** (`ruleVersionOf`) stays `tp1_kz:on+zone_ahead@1` while Z2b is inert (the shipped switches; ZA-19). With a rule on it becomes `tp1_kz:on+zone_ahead@1+zone_aim@1` (`:qualified` in that TP mode, `:no_<token>` per rule left off): the rules move stops and targets in every mode, so the mode selector's evidence restarts at Z2b's deploy, as at TP1-KZ's and Z2's.
 - **MS2.** The shadow modes run the same `assess`, so their plans are aimed the same way; `mode_shadow_plans.plans_json` keeps `zone_rules` as recorded, so the plan learner's shadow setups are the aimed plans and the base arm comes from the record.
 - **Untouched.** `managementFields`, the EA's keys, Omega, the Position Manager, `publicAnalysis`, `publicRecap`, the hashed local engines; ENGINE_CODE_HASH (c4aa5772…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…) and ERA_SWITCHES; no era moves (v4 replays the stored plans as they are).
 
 ### 6.4 The switches
 - `ZONE_PRIORITY` "off" (or unset) disables all of Z2b: byte for byte main 3958d7c's output (ZA-15: the scenario with and without Prophet zones, the zone-held SELL, MS2's shadow rows and the frozen capture's guardrails). Untyped zones (`KEY_LEVEL_ZONE_TYPES` "off") disable it too.
-- `ZONE_AIM_OFF` = comma tokens `tp`, `stop`, `factor` (wrangler.jsonc "": every rule on); all three off is Z2's output (ZA-15).
+- `ZONE_AIM_OFF` = comma tokens `tp`, `stop`, `factor`, the rules left off ("" = every rule on). **Shipped "tp,stop,factor"** (orchestrator ruling 2026-11-25): all three off is Z2's output, and under the live wrangler.jsonc vars the council's messages, the plans, the trade, `strategy_plans`, the record, the EA signal, `managementFields` and MS2's rows are main 6135237's byte for byte (ZA-18). The owner turns each rule on separately; stop_skip and the factor wait for their evidence.
 - `ZONE_AIM_TP` = "label" (default) | "qualified" (owner-set only).
 
 ### 6.5 Evidence on the fixtures
