@@ -51,7 +51,7 @@ export const RISK_VALUES = Object.freeze([...SESSIONS, ...TRADING_MODES, ...REGI
 export const TOPIC_KEY_MAX = 120;
 
 /** Bounds of every read (RFC §8: no unbounded scan). */
-export const PACK_LIMITS = Object.freeze({ window_days: 60, trades: 200, trades_read: 400, trades_shown: 50, setups: 200, held: 200, deals: 500, releases: 300, short_days: 7, statements: 200, compliance: 500, decisions: 200, events: 500, intents: 500, usage_days: 14, refs: 300 });
+export const PACK_LIMITS = Object.freeze({ window_days: 60, trades: 200, trades_read: 400, trades_shown: 50, setups: 200, held: 200, deals: 500, releases: 300, short_days: 7, statements: 200, compliance: 500, decisions: 200, events: 500, intents: 500, usage_days: 14, refs: 300, corrections: 5, corrections_read: 50 });
 
 /** Every key that names a price, a price distance or money; never kept in a pack, never a ref's field. */
 export const PRICE_FIELDS = Object.freeze([
@@ -478,6 +478,70 @@ const PRIOR = unavailable("no earlier council decision on this topic is stored")
 
 async function safe(what, fn) { try { return await fn(); } catch (e) { return failed(what, e); } }
 
+// ---------------------------------------------------------------------------------------------- the owner's corrections
+
+/**
+ * HAIC H3g (owner "2. yes" to H3f, 2026-11-25: "harus dibuat jalurnya untuk feedback loop"): the owner's corrections of a
+ * seat's or a learned item's outputs, read from the local D1 table owner_corrections (src/owner-corrections.mjs). Only
+ * the masked record_json is read (secrets redacted, prices already [level]); original_json is never selected. Each
+ * query reads the window's newest CORRECTIONS_READ rows of its target, newest first.
+ */
+const CORRECTIONS_SEAT_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE created_ms >= ? AND created_ms <= ? AND json_extract(record_json, '$.target.subject') IN (?, ?) ORDER BY created_ms DESC LIMIT ?";
+const CORRECTIONS_ITEM_SQL = "SELECT correction_id, record_json, created_ms FROM owner_corrections WHERE created_ms >= ? AND created_ms <= ? AND (substr(json_extract(record_json, '$.target.ref'), 1, ?) = ? OR json_extract(record_json, '$.target.subject') IN (?, ?, ?)) ORDER BY created_ms DESC LIMIT ?";
+const DIGIT_RUN = /\p{Nd}{3,}/u;
+
+/** Pure: the newest correction per target ref, at most PACK_LIMITS.corrections, without a text that still holds a 3+ digit run. */
+export function correctionItems(rows, { keep = () => true } = {}) {
+  const seen = new Set(), items = [];
+  for (const r of rows || []) {
+    const rec = parse(r?.record_json, null);
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) continue;
+    const target_ref = str(rec.target?.ref), subject = str(rec.target?.subject);
+    if (!target_ref || !keep(rec) || seen.has(target_ref)) continue;
+    seen.add(target_ref);
+    items.push({
+      correction_id: str(r.correction_id) ?? str(rec.correction_id), label: str(rec.label), rating: str(rec.rating), category: str(rec.category),
+      text: clip(str(rec.text), 500), subject, target_ref, created_at: str(rec.created_at) ?? (finite(Number(r.created_ms)) ? iso(Number(r.created_ms)) : null),
+      redactions: Array.isArray(rec.redactions) ? rec.redactions.filter((x) => typeof x === "string") : []
+    });
+  }
+  // Belt and braces: the record is masked already, so a text with a 3+ digit run is dropped rather than shown.
+  return stripPrices(items).filter((x) => x.correction_id && !(x.text && DIGIT_RUN.test(x.text))).slice(0, PACK_LIMITS.corrections);
+}
+
+/** The corrections block of a pack, or unavailable: off in FS1 (no D1 read then), a missing table, an unreadable one. */
+async function ownerCorrections(env, { now, refs, query, keep, note }) {
+  // Resolved as OmegaGateway.recordCorrection resolves it: the FS1 overrides on the env, then correctionsEnabled. Dynamic
+  // imports: feature-switch-store's own imports reach this module, so a static one would be an import cycle (and the
+  // line of REF_RE above is cited by the Nexus lib, test/nexus-correction-control.test.mjs HC3).
+  const [{ withFeatureSwitches }, { correctionsEnabled }] = await Promise.all([import("./feature-switch-store.mjs"), import("./owner-corrections.mjs")]);
+  if (!correctionsEnabled(await withFeatureSwitches(env))) return unavailable("owner corrections are off (FS1 OWNER_CORRECTIONS)");
+  return safe("owner_corrections", async () => {
+    let rows;
+    try { rows = (await query(env.DB, [now - PACK_LIMITS.window_days * DAY, now])).results || []; }
+    catch (e) { if (/no such table/i.test(String(e?.message ?? e))) return unavailable("no owner correction is stored yet (owner_corrections)"); throw e; }
+    const items = correctionItems(rows, { keep });
+    refs.push(...items.map((x) => evRef("owner_corrections", x.correction_id)));
+    return { n: items.length, items, note };
+  });
+}
+
+const seatCorrections = (env, t, ctx) => ownerCorrections(env, {
+  ...ctx, note: "the owner's corrections of this seat's outputs (masked record; prices already [level])",
+  query: (db, window) => db.prepare(CORRECTIONS_SEAT_SQL).bind(...window, `agent:${t.seat}`, `seat:${t.seat}`, PACK_LIMITS.corrections_read).all()
+});
+
+const itemCorrections = (env, t, ctx) => {
+  const prefix = `ev:xauusd/learned_live/${t.item}`;
+  const subjects = ["agent", "model", "seat"].map((k) => `${k}:${t.item}`);
+  return ownerCorrections(env, {
+    ...ctx, note: "the owner's corrections of this learned item's outputs (masked record; prices already [level])",
+    // The ref is the item's own (the id ends there or at a / @ #), so item note-1 never reads note-10's corrections.
+    keep: (rec) => subjects.includes(rec.target?.subject) || (typeof rec.target?.ref === "string" && rec.target.ref.startsWith(prefix) && (rec.target.ref.length === prefix.length || "/@#".includes(rec.target.ref[prefix.length]))),
+    query: (db, window) => db.prepare(CORRECTIONS_ITEM_SQL).bind(...window, prefix.length, prefix, ...subjects, PACK_LIMITS.corrections_read).all()
+  });
+};
+
 async function strategyPack(env, t, { now, asOf, refs }) {
   const db = env.DB;
   const state = await readPlanLearning(env);
@@ -553,7 +617,7 @@ async function seatPack(env, t, { now, asOf, refs }) {
     scope: { seat: t.seat, name: roster?.name ?? t.seat, rooms: roster?.rooms ?? [], chart: t.chart },
     reputation, statements, compliance,
     room_runs: unavailable("a seat's own text sits inside whole run documents (room_runs); reading one seat would read every document, so this pack cites its scored statements instead"),
-    owner_corrections: unavailable("owner corrections are kept in the council sessions and are not read into a seat pack yet"),
+    owner_corrections: await seatCorrections(env, t, { now, refs }),
     prior: PRIOR
   };
 }
@@ -763,7 +827,7 @@ async function knowledgePack(env, t, { now, refs }) {
     const right = (x) => x === "hit";
     return { outputs: rows.length, scored: scored.length, note_right: scored.filter((r) => right(r.result)).length, control_right: scored.filter((r) => right(r.control_result)).length, agents: [...new Set(rows.map((r) => r.agent))].sort(), note: "the shadow knowledge arm's answers with the note against the same agent's live answer (src/shadow-knowledge.mjs)" };
   });
-  return { scope: { item: t.item }, item, shadow, owner_corrections: unavailable("owner corrections are kept in the council sessions and are not read into this pack yet"), prior: PRIOR };
+  return { scope: { item: t.item }, item, shadow, owner_corrections: await itemCorrections(env, t, { now, refs }), prior: PRIOR };
 }
 
 /**
