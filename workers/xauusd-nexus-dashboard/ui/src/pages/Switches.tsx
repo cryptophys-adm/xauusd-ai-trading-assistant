@@ -7,7 +7,7 @@ import { get } from "../lib/api";
 import { usePoll } from "../lib/usePoll";
 import { CHIP } from "../lib/tokens";
 import {
-  FS_PATH, FS_POLL_MS, MARK_ERA, MARK_EV, MARK_STOP, PROPAGATION_NOTE, canChange, configOnlyValue, canReset, clockText, columnsOf, confirmText, controlKind, errorWords, flipped, halves,
+  FS_PATH, FS_POLL_MS, HELD_TITLE, MARK_ERA, MARK_EV, MARK_STOP, PROPAGATION_NOTE, canChange, configOnlyValue, canReset, clockText, columnsOf, confirmText, controlKind, errorWords, flipped, halves,
   optionsOf, postBody, postSwitch, resetLabel, resetTarget, switchesOf, tipOf, toggledTokens, valueText, wideControl,
   type Change, type ConfirmText, type Source, type SwitchGroup, type SwitchRow
 } from "../lib/featureSwitches";
@@ -32,6 +32,7 @@ function Marks({ r }: { r: SwitchRow }) {
       {r.era_switch ? <span className="mono rounded-sm border border-white/15 px-1 text-[10.5px] leading-[14px] text-fg-2" title={MARK_ERA}>era</span> : null}
       {r.restarts_mode_evidence ? <span className="mono rounded-sm border border-dashed border-white/15 px-1 text-[10.5px] leading-[14px] text-fg-2" title={MARK_EV}>ev</span> : null}
       {r.emergency_stop ? <span role="img" aria-label="Emergency stop" title={MARK_STOP} className="inline-flex text-late"><AlertTriangle className="h-3.5 w-3.5" /></span> : null}
+      {r.zone_hold ? <span className="mono rounded-sm border border-late-fill/40 bg-late-fill/10 px-1 text-[10.5px] leading-[14px] text-late" title={HELD_TITLE}>held</span> : null}
     </span>
   );
 }
