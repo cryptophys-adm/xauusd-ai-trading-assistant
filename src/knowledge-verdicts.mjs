@@ -22,9 +22,21 @@
 // transport error stops the run and is retried, at most KNOWLEDGE_VERDICT_RULES.max_attempts times. At most
 // KNOWLEDGE_VERDICT_RULES.strikes_per_hour refused or failed calls an hour, below the kernel's suspension at 5.
 // A timeout (KNOWLEDGE_VERDICT_TIMEOUT_MS, 20 s: each call takes about 5 s on the platform) is unknown, not failed:
-// the call may have landed. It stops the run like any transport error, leaves the row pending without counting an
-// attempt or a strike, and the next run posts again; the platform's idempotency answers a repeat of the same
-// (proposal, verdict, window_end) with deduplicated: true, which is marked posted.
+// the call may have landed. It stops the run like any transport error and leaves the row pending; it counts an
+// attempt but no strike. The platform's idempotency answers a repeat of the same (proposal, verdict, window_end) with
+// deduplicated: true, which is marked posted.
+// Retries (KA2 fix, 2026-11-25): a pending row is retried no sooner than KNOWLEDGE_VERDICT_RULES.retry_gap_ms after its
+// own updated_at. A pending row that is no longer among the current entries (a collecting row whose window_end the
+// next run moved on from, or a final verdict the plan no longer makes) is retried from its stored payload_json, after
+// the current entries, oldest first, through the same gates (per_run, strikes_per_hour, the agent backoff, the
+// payload check, not_registered, not_found, the denial). A row whose attempts reach max_attempts is marked failed
+// (reason attempts_exhausted:<last reason>) and never retried: no row stays pending for ever.
+// Superseded (orchestrator ruling on the KA2 fix): an orphan collecting row is marked superseded, final, with no call,
+// no attempt and no strike, once the same item@version has a posted collecting row with a later window_end (from an
+// earlier run, or posted earlier in the same run) or a posted final verdict; the reason names the newer row
+// (superseded:<window_end> or superseded:<verdict>). So the platform never receives an older collecting window after a
+// newer one. No call is made, so the retry gap does not hold it back. A final-verdict orphan is never superseded; it is
+// retried as above. superseded is done: never retried.
 // Switch: off unless SHADOW_KNOWLEDGE_ENABLED is "true" and KNOWLEDGE_VERDICT_POSTS is "on"; off, nothing is read,
 // written or called.
 
@@ -40,7 +52,8 @@ export const KNOWLEDGE_VERDICT_AGENT_ID = "shadow-knowledge";
 export const KNOWLEDGE_VERDICT_CAPABILITY = "knowledge.verdict";
 export const KNOWLEDGE_VERDICTS = Object.freeze(["live", "retired", "not_better", "worse", "holdout_failed", "collecting", "inconclusive", "not_tested"]);
 export const KNOWLEDGE_VERDICT_EVIDENCE_KEYS = Object.freeze(["arm", "window_start", "window_end", "rows", "scored", "treat_hits", "control_hits", "aa_changed", "aa_total", "p_value", "p_holm", "charts", "rule"]);
-export const KNOWLEDGE_VERDICT_RULES = Object.freeze({ per_run: 12, max_attempts: 5, strikes_per_hour: 3, backoff_ms: 55 * 60_000 });
+export const KNOWLEDGE_VERDICT_RULES = Object.freeze({ per_run: 12, max_attempts: 5, strikes_per_hour: 3, backoff_ms: 55 * 60_000, retry_gap_ms: 50 * 60_000 });
+// retry_gap_ms: the least time between two tries of one pending row, on its own updated_at (the runs are hourly at :11).
 /** The knowledge.verdict call's own timeout (2026-11-25); PLATFORM_CALL_TIMEOUT_MS stays for the other kernel calls. */
 export const KNOWLEDGE_VERDICT_TIMEOUT_MS = 20_000;
 
@@ -223,24 +236,71 @@ export function verdictEntries({ plan = null, live = [], packItems = [], firstSe
   return out.filter((e) => ITEM_ID.test(e.item_id) && Number.isInteger(e.version));
 }
 
-const DONE = new Set(["posted", "failed", "invalid"]);
+const DONE = new Set(["posted", "failed", "invalid", "superseded"]);
 const utcDay = (iso) => String(iso ?? "").slice(0, 10);
+const rowKey = (item_id, version, verdict, window_end) => `${item_id}@${Number(version)}|${verdict}|${window_end ?? ""}`;
+/** A pending row may be tried again once retry_gap_ms has passed since its own updated_at (unknown: it may). */
+const retryDue = (m, now, gapMs) => { const t = Date.parse(String(m?.updated_at ?? "")); return !Number.isFinite(t) || now - t >= gapMs; };
+/** A pending row the current plan no longer makes, rebuilt from its stored payload_json (checked before the call). */
+const orphanEntry = (m, superseded = null) => ({
+  key: `${m.item_id}@${Number(m.item_version)}`, item_id: m.item_id, version: Number(m.item_version), verdict: m.verdict, window_end: m.window_end ?? "",
+  payload: parse(String(m.payload_json ?? ""), null), payload_json: m.payload_json ?? null, orphan: true, ...(superseded ? { superseded } : {})
+});
+/**
+ * Pure (orchestrator ruling on the KA2 fix): an orphan collecting row is superseded, never posted, once the same
+ * item@version has a posted collecting row with a later window_end, or a posted final verdict: the platform must never
+ * receive an older collecting window after a newer one. The reason names the newer row ("superseded:<window_end>" or
+ * "superseded:<verdict>"); null when neither. Final-verdict orphans are never superseded.
+ */
+export function supersededBy(m, itemRows = []) {
+  if (m?.verdict !== "collecting") return null;
+  const posted = itemRows.filter((x) => x.status === "posted");
+  const final = posted.find((x) => x.verdict !== "collecting");
+  if (final) return `superseded:${final.verdict}`;
+  const later = posted.filter((x) => x.verdict === "collecting" && String(x.window_end ?? "") > String(m.window_end ?? "")).map((x) => String(x.window_end)).sort().at(-1);
+  return later ? `superseded:${later}` : null;
+}
 /**
  * Pure: the entries to post now, in order. `markers` are the knowledge_verdict_posts rows. An item marked not_found is
  * never posted again; a final verdict is posted once; collecting at most once a UTC day per item, and once per
- * window_end.
+ * window_end. A pending row waits gapMs after its updated_at. After the current entries come the pending rows the
+ * current entries no longer cover (oldest first), rebuilt from their payload_json (`orphan: true`).
  */
-export function planVerdictPosts({ entries = [], markers = [], now = Date.now() } = {}) {
+export function planVerdictPosts({ entries = [], markers = [], now = Date.now(), gapMs = KNOWLEDGE_VERDICT_RULES.retry_gap_ms } = {}) {
   const byItem = new Map();
   for (const m of markers) { const k = `${m.item_id}@${Number(m.item_version)}`; byItem.set(k, [...(byItem.get(k) || []), m]); }
+  const byRow = new Map(markers.map((m) => [rowKey(m.item_id, m.item_version, m.verdict, m.window_end), m]));
+  const notFound = (k) => (byItem.get(k) || []).some((m) => m.status === "not_found");
   const today = utcDay(new Date(now).toISOString());
-  return entries.filter((e) => {
+  const current = entries.filter((e) => {
     const ms = byItem.get(e.key) || [];
-    if (ms.some((m) => m.status === "not_found")) return false;
+    if (notFound(e.key)) return false;
+    const own = byRow.get(rowKey(e.item_id, e.version, e.verdict, e.window_end));
+    if (own?.status === "pending" && !retryDue(own, now, gapMs)) return false;
     if (e.verdict !== "collecting") return !ms.some((m) => m.verdict === e.verdict && m.window_end === "" && DONE.has(m.status));
     if (ms.some((m) => m.verdict === "collecting" && m.status === "posted" && utcDay(m.posted_at) === today)) return false;
     return !ms.some((m) => m.verdict === "collecting" && m.window_end === e.window_end && DONE.has(m.status));
   });
+  // Every current entry (posted, due or held) covers its own row; a pending row none covers is retried on its own.
+  const covered = new Set(entries.map((e) => rowKey(e.item_id, e.version, e.verdict, e.window_end)));
+  const oldest = (a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || String(a.updated_at ?? "").localeCompare(String(b.updated_at ?? ""))
+    || rowKey(a.item_id, a.item_version, a.verdict, a.window_end).localeCompare(rowKey(b.item_id, b.item_version, b.verdict, b.window_end));
+  // A superseded orphan is closed at once (no call, so no gap); the others wait their gap.
+  const orphans = markers
+    .filter((m) => m.status === "pending" && !covered.has(rowKey(m.item_id, m.item_version, m.verdict, m.window_end)) && !notFound(`${m.item_id}@${Number(m.item_version)}`))
+    .map((m) => [m, supersededBy(m, byItem.get(`${m.item_id}@${Number(m.item_version)}`) || [])])
+    .filter(([m, sup]) => sup || retryDue(m, now, gapMs))
+    .sort(([a], [b]) => oldest(a, b))
+    .map(([m, sup]) => orphanEntry(m, sup));
+  return [...current, ...orphans];
+}
+
+/** Pure: an orphan's stored payload must still be the row's own (item, version, verdict and, collecting, window_end). */
+function orphanProblems(e) {
+  const p = e.payload;
+  if (!e.orphan || !p || typeof p !== "object") return [];
+  const windowEnd = e.verdict === "collecting" ? p.evidence?.window_end ?? "" : "";
+  return p.item_id === e.item_id && p.item_version === e.version && p.verdict === e.verdict && windowEnd === e.window_end ? [] : ["payload_not_the_row"];
 }
 
 // ------------------------------------------------------------------ the store and the sender
@@ -277,7 +337,7 @@ async function mark(db, e, status, reason, nowIso, attempts) {
   await db.prepare(
     "INSERT INTO knowledge_verdict_posts (item_id, item_version, verdict, window_end, status, attempts, reason, payload_json, created_at, updated_at, posted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
     "ON CONFLICT(item_id, item_version, verdict, window_end) DO UPDATE SET status = excluded.status, attempts = excluded.attempts, reason = excluded.reason, payload_json = excluded.payload_json, updated_at = excluded.updated_at, posted_at = COALESCE(excluded.posted_at, knowledge_verdict_posts.posted_at)"
-  ).bind(e.item_id, e.version, e.verdict, e.window_end, status, attempts, reason, JSON.stringify(e.payload), nowIso, nowIso, status === "posted" ? nowIso : null).run();
+  ).bind(e.item_id, e.version, e.verdict, e.window_end, status, attempts, reason, e.payload_json ?? JSON.stringify(e.payload), nowIso, nowIso, status === "posted" ? nowIso : null).run();
 }
 
 // The kernel's words for an agent it has no row for (the platform has not registered shadow-knowledge yet).
@@ -286,7 +346,7 @@ const NOT_FOUND = /knowledge_proposal_not_found/;
 
 /**
  * Hourly, after runShadowClosures (its non-enumerable `plan`). Never throws. Returns what it did, for one log line:
- * { status: "ok" | "not_registered" | "backoff" | ..., due, posted, not_found, invalid, failed, stopped }.
+ * { status: "ok" | "not_registered" | "backoff" | ..., due, orphans, posted, not_found, invalid, failed, exhausted, superseded, stopped }.
  */
 export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now(), limit = KNOWLEDGE_VERDICT_RULES.per_run, timeoutMs = KNOWLEDGE_VERDICT_TIMEOUT_MS } = {}) {
   if (!knowledgeVerdictPostsEnabled(env)) return { status: "disabled" };
@@ -308,16 +368,29 @@ export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now()
     const live = (await db.prepare("SELECT item_id, version, status, verdict_json, promoted_at, retired_at, reason FROM learned_live").all()).results || [];
     let stored = null;
     try { stored = await storedPack(env); } catch { stored = null; }
-    const markers = (await db.prepare("SELECT item_id, item_version, verdict, window_end, status, attempts, posted_at FROM knowledge_verdict_posts").all()).results || [];
+    const markers = (await db.prepare("SELECT item_id, item_version, verdict, window_end, status, attempts, reason, payload_json, created_at, updated_at, posted_at FROM knowledge_verdict_posts").all()).results || [];
     const entries = verdictEntries({ plan, live, packItems: Array.isArray(stored?.pack?.items) ? stored.pack.items : [], firstSeen: stored?.firstSeen ?? {} });
     const todo = planVerdictPosts({ entries, markers, now });
     const attemptsOf = (e) => Number(markers.find((m) => m.item_id === e.item_id && Number(m.item_version) === e.version && m.verdict === e.verdict && m.window_end === e.window_end)?.attempts ?? 0);
     const at = new Date(now).toISOString();
-    const out = { status: "ok", due: todo.length, posted: [], not_found: [], invalid: [], failed: 0, stopped: null };
+    const lastReason = (e) => String(markers.find((m) => m.item_id === e.item_id && Number(m.item_version) === e.version && m.verdict === e.verdict && m.window_end === e.window_end)?.reason ?? "unknown");
+    const exhausted = (reason) => `attempts_exhausted:${reason}`.slice(0, 200);
+    const max = KNOWLEDGE_VERDICT_RULES.max_attempts;
+    const out = { status: "ok", due: todo.length, orphans: todo.filter((e) => e.orphan).length, posted: [], not_found: [], invalid: [], failed: 0, exhausted: [], superseded: [], stopped: null };
     let calls = 0, cleared = !off;
+    const postedNow = [];
     for (const e of todo) {
-      const problems = verdictPayloadProblems(e.payload);
+      // A superseded orphan is final without a call (it counts no attempt and no strike); also when this run already
+      // posted a newer collecting window, or a final verdict, for the same item@version.
+      if (!e.superseded && e.orphan) {
+        const same = (x) => x.item_id === e.item_id && Number(x.item_version) === e.version;
+        e.superseded = supersededBy(e, [...markers.filter(same), ...postedNow.filter(same)]);
+      }
+      if (e.superseded) { await mark(db, e, "superseded", e.superseded, at, attemptsOf(e)); out.superseded.push(`${e.key}:${e.window_end}`); continue; }
+      const problems = [...verdictPayloadProblems(e.payload), ...orphanProblems(e)];
       if (problems.length) { await mark(db, e, "invalid", problems.slice(0, 3).join(","), at, 0); out.invalid.push(`${e.key}:${e.verdict}`); continue; }
+      // A pending row already at the cap (before attempts counted timeouts) is final now, without another call.
+      if (attemptsOf(e) >= max) { await mark(db, e, "failed", exhausted(lastReason(e)), at, attemptsOf(e)); out.exhausted.push(`${e.key}:${e.verdict}`); continue; }
       if (calls >= limit) { out.stopped = "per_run"; break; }
       if (await strikesLastHour(db, now) >= KNOWLEDGE_VERDICT_RULES.strikes_per_hour) { out.stopped = "local_budget"; break; }
       calls += 1;
@@ -326,14 +399,19 @@ export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now()
       if (r?.outcome === "succeeded" || r?.outcome === "success") {
         await mark(db, e, "posted", r?.result?.deduplicated ? "deduplicated" : null, at, attemptsOf(e) + 1);
         out.posted.push(`${e.key}:${e.verdict}`);
+        postedNow.push({ item_id: e.item_id, item_version: e.version, verdict: e.verdict, window_end: e.window_end, status: "posted" });
         if (!cleared) { await clearAgentBackoff(env, agent); cleared = true; }
         continue;
       }
       // Not yet registered on the platform: nothing is marked, the next run tries again.
       if (NOT_REGISTERED.test(reason)) { out.status = "not_registered"; out.stopped = "not_registered"; break; }
-      // A timeout is unknown (the kernel may have stored it): pending, no attempt and no strike; the run still stops.
+      // A timeout is unknown (the kernel may have stored it): an attempt but no strike; pending until the cap, then
+      // failed; the run still stops.
       if (r?.outcome === "transport" && r?.reason === "timeout") {
-        await mark(db, e, "pending", "timeout", at, attemptsOf(e));
+        const attempts = attemptsOf(e) + 1;
+        const final = attempts >= max;
+        await mark(db, e, final ? "failed" : "pending", final ? exhausted("timeout") : "timeout", at, attempts);
+        if (final) out.exhausted.push(`${e.key}:${e.verdict}`);
         Object.assign(out, { stopped: "transport", reason: "timeout" });
         break;
       }
@@ -345,7 +423,9 @@ export async function postKnowledgeVerdicts(env, { plan = null, now = Date.now()
         break;
       }
       const attempts = attemptsOf(e) + 1;
-      await mark(db, e, attempts >= KNOWLEDGE_VERDICT_RULES.max_attempts ? "failed" : "pending", reason, at, attempts);
+      const final = attempts >= max;
+      await mark(db, e, final ? "failed" : "pending", final ? exhausted(reason) : reason, at, attempts);
+      if (final) out.exhausted.push(`${e.key}:${e.verdict}`);
       out.failed += 1;
       Object.assign(out, { stopped: r?.outcome === "transport" ? "transport" : "failed", reason });
       break;
