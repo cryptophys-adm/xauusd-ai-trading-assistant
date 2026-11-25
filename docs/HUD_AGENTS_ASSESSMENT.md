@@ -2,6 +2,7 @@
 
 > Owner request 2026-11-04, updated with owner decisions 2026-11-05 (brief `docs/BRIEF_HUD_AGENTS.md`). Documents only — no runtime change.
 > Canonical documents `docs/SSOT.md` and `AGENTS.md` win over anything here.
+> Indicator adoption status (2026-11-25): the unported GMI, Prophet and Mizan modules are adopted by `docs/RFC_INDICATOR_ADOPTION.md` (owner 2026-11-19; live without shadow since the owner's words of 2026-11-22). Only the B7 field groups are merged; stages 1-6 and the Mizan Oracle (a HUD agent of the 15m room only, not a Decision Engine witness) are planned. Rows below marked "Computed (not exposed)" or "Not ported" are as of 2026-11-05; stage 1 corrects this document (for example Camarilla and `s_jerk`).
 
 ## 0. Scope, method and sources
 
