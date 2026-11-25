@@ -33,5 +33,8 @@ export function breakerEvidence(db: unknown, ruleVersion: string): Promise<{ rea
 export function blockShare(rows: unknown[]): { n: number; blocked: number; share: number | null };
 export function omegaZoneAttribution(db: unknown, options?: { now?: number }): Promise<{ closes: number; mean_r: number | null; by: Array<{ source: string; n: number; mean_r: number | null }>; advisory: boolean }>;
 export function alarmLines(input?: { share?: Record<string, any> | null; mode?: string; omega?: Record<string, any> | null }): Record<string, string>;
+export function typingSignature(env: unknown): { types: "on" | "off"; sources_off: string[] };
+export function storedZoneMgmt(db: unknown): Promise<string>;
+export function typingFlagLine(before: { types?: string; sources_off?: string[] } | null, after: { types?: string; sources_off?: string[] } | null, zoneMgmt: string): string | null;
 export function runZoneBreaker(env: unknown, options?: { now?: number; send?: ((text: string) => Promise<unknown>) | null; force?: boolean }): Promise<Record<string, any>>;
 export function zonesView(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;

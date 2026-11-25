@@ -30,6 +30,17 @@ const M15 = 15 * 60_000;
 // CDG (2026-11-25): the decision record's atr_range_ratio (a measurement) is stripped before hashing, so the pins taken before it hold.
 const sha = (v) => createHash("sha256").update(JSON.stringify(withoutAtrRangeRatio(v))).digest("hex");
 const mods = { se, de, ea, pp, pa, pl };
+/**
+ * Z3a (2026-11-25): typed, the management fields add key_level_types (one "type/strength/freshness" token per key level,
+ * words only); every other key and its order is the untyped run's byte for byte, and the untyped run has none.
+ */
+function assertManagementTyped(on, off) {
+  assert.equal("key_level_types" in off, false, "untyped: no key_level_types");
+  const { key_level_types: types, ...rest } = on;
+  assert.equal(JSON.stringify(rest), JSON.stringify(off), "management: every other key as untyped");
+  assert.equal(types.split(",").length, on.key_levels.split(",").length, "one token per key level");
+  assert.ok(types.split(",").every((t) => /^(demand|supply|mixed|none)\/(strong|medium|weak|-)\/(fresh|tested|worn|-)$/.test(t)), types);
+}
 const Z0_KEYS = new Set(["ds", "zone_types", "opposing_ahead", "zone_type", "zone_strength", "zone_freshness", "zone_rank", "ds_sources"]);
 /** A value without Z0's keys, at any depth. */
 const strip = (v) => (Array.isArray(v) ? v.map(strip) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !Z0_KEYS.has(k)).map(([k, x]) => [k, strip(x)])) : v);
@@ -197,7 +208,9 @@ test("Z0-11 on: every pre-existing key deep-equals off; guardrails, council, EA 
   assert.deepEqual(strip(JSON.parse(on.stored)), JSON.parse(off.stored));
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(off.guards[side].checks), `${side} checks`);
   assert.deepEqual(on.record.guardrails, off.record.guardrails);
-  for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(off[k]), k);
+  for (const k of ["evidence", "messages", "signal", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(off[k]), k);
+  // Z3a: the management fields add key_level_types (typed only; Omega reads it only with zone_mgmt not off); every other key is off's.
+  assertManagementTyped(on.management, off.management);
   // keyLevelsAround's { low, high } array is deep-equal; the words sit beside them.
   assert.deepEqual(on.record.key_levels.map(({ low, high }) => ({ low, high })), off.record.key_levels);
   assert.ok(on.record.key_levels.length > 0 && on.record.key_levels.every((z) => typeof z.zone_type === "string" && ["candidate", "qualified"].includes(z.zone_rank)));
@@ -344,11 +357,13 @@ test("Z0-16 plan_setups: the ALTERs run twice are a no-op; live and shadow setup
 
 test("Z0-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to its value; the behaviour hash is MS2's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
+  assert.equal(ENGINE_CODE_HASH, "38daf894293032698abb8dcd0d993f5be9088e16af9e496a5530f03177b7b7de");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
-  // managementFields reads only low/high: untouched by the words beside them.
+  // managementFields' key_levels reads only low/high; Z3a (2026-11-25) adds key_level_types beside it for typed levels.
   const m = ea.managementFields({ key_levels: [{ low: 3990, high: 3992, zone_type: "demand", zone_strength: "medium", zone_freshness: "fresh", zone_rank: "candidate" }] });
-  assert.deepEqual(m, ea.managementFields({ key_levels: [{ low: 3990, high: 3992 }] }));
+  const { key_level_types, ...rest } = m;
+  assert.equal(key_level_types, "demand/medium/fresh");
+  assert.deepEqual(rest, ea.managementFields({ key_levels: [{ low: 3990, high: 3992 }] }));
 });
 
 // ---------------------------------------------------------------- Z1a: every active Prophet order block as a source
@@ -478,7 +493,8 @@ test("Z1a-7 on: guardrails, council, EA signal, management fields, public output
   assert.deepEqual(strip(on.strategy), off.strategy);
   assert.deepEqual(strip(on.record), off.record);
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(off.guards[side].checks), `${side} checks`);
-  for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(off[k]), k);
+  for (const k of ["evidence", "messages", "signal", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(off[k]), k);
+  assertManagementTyped(on.management, off.management);
   for (const k of ["strategy", "record", "stored", "evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(z0Again[k]), JSON.stringify(z0[k]), `prophet_zone off: ${k}`);
   // The recorded words move with the new source (the trade's TP1 zone now reads worn from its 1H box).
   assert.deepEqual(on.record.key_levels.map(({ low, high }) => ({ low, high })), z0.record.key_levels.map(({ low, high }) => ({ low, high })));
@@ -509,7 +525,7 @@ test("Z1a-8 the readers and the rooms: readPlane and the Projection Agent read t
 
 test("Z1a-9 no hashed engine function changes: ENGINE_CODE_HASH and the behaviour hash are Z0's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
+  assert.equal(ENGINE_CODE_HASH, "38daf894293032698abb8dcd0d993f5be9088e16af9e496a5530f03177b7b7de");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 
@@ -658,7 +674,8 @@ test("Z1b-6 the scenario: gmi_ob off is Z1a's record and everything downstream; 
   const on = await zoneScenario(mods, { db: d1, kv, aegis: true });
   assert.deepEqual(strip(on.record), typesOff.record);
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(typesOff.guards[side].checks), `${side} checks`);
-  for (const k of ["evidence", "messages", "signal", "management", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(typesOff[k]), k);
+  for (const k of ["evidence", "messages", "signal", "recap", "analysis", "planRows"]) assert.equal(JSON.stringify(on[k]), JSON.stringify(typesOff[k]), k);
+  assertManagementTyped(on.management, typesOff.management);
   // Z1b's only new recorded key is ds_sources (orchestrator ruling): on a level Z1a left untyped, now typed by gmi_ob.
   const noSrc = (keys) => keys.filter((k) => !k.endsWith(".ds_sources"));
   assert.deepEqual(noSrc(z0Keys(on.record)), noSrc(z0Keys(z1a.record)), "Z1b adds no other recorded key");
@@ -679,7 +696,7 @@ test("Z1b-7 the readers: readPlane and the Projection Agent read a plane with ae
     assert.equal(JSON.stringify(projectionReading({ bars: rich.m15Bars, plane: rich[k].chart_plane, timeframe: "15 minutes" })), JSON.stringify(projectionReading({ bars: plain.m15Bars, plane: plain[k].chart_plane, timeframe: "15 minutes" })), k);
   }
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
+  assert.equal(ENGINE_CODE_HASH, "38daf894293032698abb8dcd0d993f5be9088e16af9e496a5530f03177b7b7de");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

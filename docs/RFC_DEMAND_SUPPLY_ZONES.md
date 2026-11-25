@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them. Z1b (GMI's Aegis validated order blocks as a source, §4b) is built, not live until its PR merges; Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them. Z1b (GMI's Aegis validated order blocks as a source, §4b) is built, not live until its PR merges. Z3a (typed zones in Omega's SL+ and trailing TP, §8) ships behind the owner's Omega setting `zone_mgmt`, default "off" (the owner flips it at merge); Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -328,7 +328,7 @@ plan_setups is read by 14 queries in 8 modules. A cohort column there would leak
 - **Alarms.** One line a UTC day each, no action:
   - zone_ahead is the only failing check in more than 40% of the last 96 decisions where the council wanted that side (needs the full 96);
   - under `ZONE_AHEAD_MODE` 'all', that share every day.
-- **Omega attribution.** Read-only and SELECT only: `omega_intents` by reason and `level_source` 'zone', and `position_actions` by the PM's zone rules (pm_zone_*), joined to their `ea_deals` in R (`liveTradesFrom`). At 15 or more closes with a mean below 0R, the line says the owner may set zone_mgmt lower. Z3a adds a flag for the decision-side typing toggles while zone_mgmt is not off (the TODO in `omegaZoneAttribution`).
+- **Omega attribution.** Read-only and SELECT only: `omega_intents` by reason and `level_source` 'zone', and `position_actions` by the PM's zone rules (pm_zone_*), joined to their `ea_deals` in R (`liveTradesFrom`). At 15 or more closes with a mean below 0R, the line says the owner may set zone_mgmt lower. Z3a adds the flag for the decision-side typing toggles while zone_mgmt is not off (§8.6, `typingFlagLine`).
 
 ### 7.5 GET /api/zones
 - **Access.** The Nexus read API, behind Access. Gated on `ZONE_READINGS` only (off: 404); B8 folds it under INTEL_VIEWS. POST 405.
@@ -347,13 +347,50 @@ plan_setups is read by 14 queries in 8 modules. A cohort column there would leak
 - **Catch-up.** At most 200 decisions a run: about 1 ms of readings CPU for 200 decisions of 12 zones each (test ZR-13).
 - **Counterfactuals.** They read the stitched ledger bars only while a counterfactual setup is open to replay. Today none is: the check has fired on 0 decisions, and Z2b is inert.
 
-## 8. Risks
+## 8. Z3a: typed zones in Omega's SL+ and trailing TP (the owner's setting zone_mgmt)
+
+Management was type-blind: the signal flattened the zones to "low:high", and SL+ and the trailing TP used any band. About 70% of the SL/TP modifications in the 30 days before were zone-driven. Z3a lets the zone words steer those two moves, behind an Omega setting only the owner sets.
+
+### 8.1 Why the default is "off" (the owner flips it at merge)
+- Live Omega is armed (D1 2026-11-23: `live_armed` true, `entry_order` limit, `pm_loosen_enabled` true).
+- `eraSwitches` compares each switch with `OMEGA_DEFAULTS`, so a default-on switch would change behaviour inside a carried era. Off by default, the merge carries the era (a new code hash, the same behaviour hash); the owner's flip writes `zone_mgmt=omega` and starts a new era at the settings' `updated_ms`. `PARITY_MIN_TRADES` 20 takes 2-3 trading days.
+- **Owner-only.** `zone_mgmt` is written only by the owner: the Omega settings page's path, or the FS1 panel's Omega row, which forwards to it. Aether's policy and its rollback carry the stored value and never write it (`applyOmegaPolicy` deletes it from both bodies, as `cd_gate` and `limit_supersede`); Z5's breaker reads it (SELECT only) and never writes it. Precedents: the lens rollback switches and the `ERA_SWITCHES` comment.
+- **Rollback.** The documented rollback is the owner setting `zone_mgmt` "off". `KEY_LEVEL_ZONE_TYPES` "off" also takes the words out of live management with no era move (v4 stays faithful: it rebuilds the signal from the stored `key_levels`), so it is for emergencies only, and Z5 flags it (§8.6).
+
+### 8.2 The signal (`managementFields`)
+`key_level_types`, only when every kept level carries `zone_type` (`KEY_LEVEL_ZONE_TYPES` on): comma tokens aligned 1:1 with `key_levels` after its filter, each `type/strength/freshness`, with `-` for none (e.g. `supply/medium/tested,none/-/worn`). Words only. `key_levels` is unchanged, an untyped decision's signal is byte for byte as before, and the key is named neither tp2 nor extended_tp. The EA reads exact needles and only its own keys (`CryptophysXAUUSD.mq5`); OmegaExecutor does not read the signal.
+
+### 8.3 Omega (`src/omega-engine.mjs`)
+- **The levels.** `brokerKeyLevels(signal, { typed })`: with `typed` and a token count equal to the key levels' count, each key level carries `{ type, strength, freshness }` (`typedLevels`) and lens B's levels type none; otherwise, and always without `typed`, today's objects. It stands alone (no shared options object).
+- **SL+** (`keyLevelPlan`'s `zone`, only while `zone_mgmt` is not off and the levels are typed). The own passed zones: the passed key levels of the position's own type (demand for a long, supply for a short) of medium or higher strength (`typedDecisive`). Strong power: behind the own zone before the last (two needed); normal: behind the last own one; weak: the tighter of that and the broker's 5m swing. Always at or past the lock (break-even plus the buffer, or SLG1's first lock). It is taken when it is at or tighter than today's SL+, or looser by at most `ZONE_GIVEBACK_R[mode]` × the position's R at entry (`positionMeta` mode and `r_dist`): scalp 0.15R, intraday and range 0.25R, swing 0.30R (an unknown mode: intraday). Unknown R: tighter only. Then today's room and forward-only checks.
+- **Trailing TP.** Near the target with a strong power: the first decisive opposing zone among the first two key levels beyond the target, else today's next level. The target moves at most one zone further.
+- **The record.** The intent carries `level_source: "zone"` only when the typing changed its price; its id and reason are today's (`ms:<ticket>:k:<cents>`, `sl_key_level_<band>`; `mt:<ticket>:<cents>`, `trail_tp_key_level`).
+- **Unchanged.** The ladder, the outward-TP hold (Amendment 4), `power_reversal`, the entries, the limit council and the Position Manager. Every other reader of `brokerKeyLevels` (the ladder, the limit council, the liquidity view, v3's ledger) reads today's objects.
+
+### 8.4 One modify per position per 3 minutes, with PM-1M
+The 1m fast layer's rate limit binds its own actions only, and the 5-minute Position Manager holds it for the rest of a 5m bar; Omega's routine key-level management had no rate against it. Z3a adds one (`ZONE_MGMT_RATE_MS`, 3 minutes, the fast layer's own `rate_ms`), only while `zone_mgmt` is not off:
+- **Zone after fast.** A fast action of the position (`pm1:<ticket>:<bar minute>` in the recent intents, decided at its bar's close) within 3 minutes leaves its management untyped: today's SL+ and trailing TP, no `level_source`.
+- **Fast after zone.** A zone-driven move of the position (an `omega_intents` modify with `level_source` "zone", pending, sent or done, in the last 3 minutes; `runFastProtect`'s `zoneMgmt`) holds a fast action: recorded `noted`, "a zone-driven stop or target move went out at … UTC: at most one modify per 3 minutes across the fast layer and zone management". It counts for the rate only, never for the 10-minute hysteresis. v4 does the same with the zone moves it planned.
+- **The same plan.** A fast intent of a position already skips Omega's routine management for that position in that plan (planIntents' `skipTickets`), as before.
+
+### 8.5 Hashes and eras
+`ENGINE_CODE` gains `typedLevels`, `typedDecisive`, `zoneGiveback`, `zoneMgmtOn`, `ZONE_MGMT_MODES`, `ZONE_GIVEBACK_R`, `ZONE_MGMT_RATE_MS` and pm-fast's `zoneBarMs`; `managementFields`, `brokerKeyLevels`, `keyLevelPlan`, `manageIntents`, `settingsFrom`, `fastProtect`, `runFastProtect` and the `OMEGA_DEFAULTS` JSON changed: `ENGINE_CODE_HASH` 6c0f8142… → 38daf894…. `ENGINE_BEHAVIOUR_HASH` ecfe3f90… unchanged (V14: the fixtures are untyped and at defaults, so zone_mgmt is off). `ERA_SWITCHES` += `zone_mgmt`.
+
+### 8.6 Z5's flag line
+`runZoneBreaker`'s hourly tick keeps the decision-side typing signature (`KEY_LEVEL_ZONE_TYPES`, `ZONE_SOURCES_OFF`, FS1-resolved) in its KV state and, when it changed while `zone_mgmt` is not off, sends one `XAUUSD ZONES` line naming the change ("… while zone_mgmt is omega: Omega's SL+ and trailing TP read these words through the signal, with no new parity era. The documented rollback is zone_mgmt off …"). Once per toggle; a failed send is told again at the next tick; a toggle while `zone_mgmt` is off is recorded and never told. No action.
+
+### 8.7 Tests
+test/omega-zone-mgmt.test.mjs Z3a-1 to Z3a-16: the signal (types only when all are typed, untyped byte for byte against main fd22f97, the EA's keys, no tp2/extended_tp, the bridge's intents file); `brokerKeyLevels` (count match, mismatch, without opts); the switch, its era signature and the FS1 row (read-through, owner-only POST, reset, the change-audit line); SL+ within and beyond the cap, unknown R, the lock, the three bands, a short; the trailing TP one zone further, never two; `level_source` only when the price changed; off against main byte for byte; the 3-minute interplay with PM-1M (pure, live sync and v4); a typed decision's v4 replay reproducing the live `planIntents`; the Aether policy and rollback carrying `zone_mgmt`; Z5's flag line; the hashes.
+
+## 9. Risks
 - **Overlapping readings (Z5).** Readings of consecutive decisions overlap; the dedupe limits it.
 - **Recorded plans (Z5).** The counterfactual uses the recorded would-be plan; a limit that never fills scores 0R, as plan learning does.
 - **Typing shifts while Z2 is live (Z1b).** gmi_ob adds 0.8 x TF only for blocks Prophet does not hold (a same block counts once), so some untyped zones become decisive, and a 15m zone at price loses gmi_flag where the 15m has boxes; Z5 attributes by source, and `ZONE_SOURCES_OFF=gmi_ob` reverts it. The duplicate can drift from gmi-core; the equality test fails on drift.
 - **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
 - **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.
+- **Looser SL+ (Z3a).** A stop behind the own zone gives more back: capped at 0.15-0.30R of the position's R, never below the lock, forward only. Unknown R: tighter only.
+- **Era churn (Z3a).** Each flip of `zone_mgmt` is a new era; the recommended flips are "omega" at merge, then straight to "full" after Z4.
 - **Size.** decision_json grows for two reasons. In the test fixture the total went from 10.8 KB to 13.2 KB, with 3 agent plans:
   - the zone words of `key_levels`: about 95 bytes a zone, so about 1.1 KB for 12 zones;
   - each plan's `zone_types` and `opposing_ahead`, in `strategy_plans` and `trade`: about 0.45 KB a plan.
