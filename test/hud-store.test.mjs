@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, barsVerified, HUD_SNAPSHOT_VERSION } from "../src/hud-store.mjs";
+import { validateHudSnapshot, storeHudSnapshot, loadHudSnapshot, hudReadings, barsVerified, HUD_SNAPSHOT_VERSION, HUD_LATEST_TTL_S, latestTtlSeconds } from "../src/hud-store.mjs";
 
 function kv(init = {}) {
   const m = new Map(Object.entries(init));
@@ -127,4 +127,21 @@ test("invalid snapshots are refused without writing", async () => {
   const r = await storeHudSnapshot(env, snapshot({ timeframe: "5" }), now);
   assert.equal(r.status, 400);
   assert.equal(env.SIGNAL_CACHE.map.size, 0);
+});
+
+test("HT1: the latest snapshot per chart outlives its bar (4H 5h, 1D 26h; 15m and 1H keep 3h) and is stored with that TTL", async () => {
+  assert.deepEqual({ ...HUD_LATEST_TTL_S }, { "15": 10800, "60": 10800, "240": 18000, "1D": 93600 });
+  const barS = { "15": 900, "60": 3600, "240": 14400, "1D": 86400 };
+  for (const tf of Object.keys(barS)) assert.ok(latestTtlSeconds(tf) > barS[tf], `${tf}: TTL longer than one bar`);
+  assert.equal(latestTtlSeconds("unknown"), 10800);
+  const puts = [];
+  const store = { async get() { return null; }, async put(k, v, o) { puts.push([k, o?.expirationTtl]); } };
+  for (const [tf, bar] of [["240", "2026-11-05T08:00:00Z"], ["1D", "2026-11-04T00:00:00Z"], ["60", "2026-11-05T11:00:00Z"]]) {
+    const s4 = snapshot({ timeframe: tf, candle_key: `OANDA:XAUUSD:${tf}:` + Date.parse(bar) });
+    const res = await storeHudSnapshot({ SIGNAL_CACHE: store }, s4, now);
+    assert.equal(res.status, 202, tf);
+  }
+  const latest = Object.fromEntries(puts.filter(([k]) => k.endsWith(":latest")).map(([k, t]) => [k.split(":")[1], t]));
+  assert.deepEqual(latest, { "240": 18000, "1D": 93600, "60": 10800 });
+  assert.ok(puts.filter(([k]) => !k.endsWith(":latest")).every(([, t]) => t === 60 * 60 * 24 * 14), "per-candle keys keep 14 days");
 });

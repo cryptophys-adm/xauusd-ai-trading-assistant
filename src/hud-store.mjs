@@ -18,7 +18,12 @@ const KEY = /^OANDA:XAUUSD:(60|15|240|1D):\d{12,13}$/;
 const MAX_AGE_MS = 30 * 60 * 1000;
 const MAX_BYTES = 64 * 1024;
 const TTL = { expirationTtl: 60 * 60 * 24 * 14 };
-const LATEST_TTL = { expirationTtl: 60 * 60 * 3 };
+// The latest snapshot per chart stays readable for at least one bar plus a margin (HT1, 2026-11-25): with one 3-hour TTL
+// for every chart, the last hour of each 4H bar and most of each day read no 4H or 1D chart (found in the Z2 live replay).
+// 15m and 1H keep 3 hours (several bars); 4H 5 hours (bar + 1h); 1D 26 hours (bar + 2h).
+export const HUD_LATEST_TTL_S = Object.freeze({ "15": 60 * 60 * 3, "60": 60 * 60 * 3, "240": 60 * 60 * 5, "1D": 60 * 60 * 26 });
+/** The KV TTL (seconds) of hud:<timeframe>:latest. */
+export const latestTtlSeconds = (timeframe) => HUD_LATEST_TTL_S[timeframe] ?? 60 * 60 * 3;
 
 const isRecord = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 
@@ -45,7 +50,7 @@ export async function storeHudSnapshot(env, p, now = Date.now()) {
   if (!kv || typeof kv.put !== "function") return { status: 503, body: { error: "kv_not_configured" } };
   const stored = { ...p, received_at: new Date(now).toISOString() };
   await kv.put(`hud:${p.timeframe}:${p.candle_key}`, JSON.stringify(stored), TTL);
-  await kv.put(`hud:${p.timeframe}:latest`, JSON.stringify(stored), LATEST_TTL);
+  await kv.put(`hud:${p.timeframe}:latest`, JSON.stringify(stored), { expirationTtl: latestTtlSeconds(p.timeframe) });
   return { status: 202, body: { status: "accepted", candle_key: p.candle_key, timeframe: p.timeframe } };
 }
 
