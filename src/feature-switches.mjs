@@ -110,6 +110,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     description: "Z2b: label keeps TP1's price (its words only); qualified moves TP1 to a nearer decisive opposing qualified zone at or beyond ZONE_NEED, owner-set only and only after the owner's TP1-KZ amendment (tp1_kz@2). Matters only while the tp aim is on.",
     values: ["label", "qualified"], default_value: "label", config_value: "label", read: (raw) => (s(raw) === "qualified" ? "qualified" : "label")
   }),
+  entry({
+    key: "ZONE_READINGS", label: "Zone readings and breaker", group: "zones",
+    description: "Z5: the zone readings, the counterfactual tables (zone_blocked_setups, zone_rule_arms) and the decision-side zone breaker, which holds Z2/Z2b's rules back by itself when their own record turns against them; off writes nothing, the breaker is idle and GET /api/zones answers 404.",
+    values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
+  }),
   // ---- Plans, entries and targets (src/strategy-engine.mjs, src/grid-adapt.mjs, src/projection-agent.mjs)
   entry({
     key: "ENTRY_ZONE_MODE", label: "Entry zone", group: "plans",

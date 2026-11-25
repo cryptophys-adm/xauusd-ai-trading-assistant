@@ -281,6 +281,7 @@ import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
+import { runZoneReadingsStep, runZoneBreaker, zonesView, zoneReadingsMode } from "./zone-readings.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
 import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, runSessionStep, listSessions, readSession, setSessionsSwitch } from "./cfc-session.mjs";
 import { pollCouncilDecisions, platformStates, decisionsPollStatus } from "./council-decisions.mjs";
@@ -2490,6 +2491,14 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     // owner's panel changes them through Omega's POST /omega/api/feature-switches).
     return dashboardJson(await featureSwitchesPayload(env, { canControl: false }));
   }
+  if (url.pathname === "/api/zones") {
+    // Z5 (src/zone-readings.mjs zonesView): the zone readings, the zone_blocked cohort, the rule arms, the breaker, the
+    // stance shares and Omega's attribution. Words, ATR and R only; SELECT only (a table not there yet reads as []).
+    // Gated on ZONE_READINGS alone (B8 folds it under INTEL_VIEWS when it lands); a POST is refused in fetch (405).
+    if (zoneReadingsMode(env) === "off") return dashboardJson({ status: "not_found", reason: "zone_readings_off" }, 404);
+    try { return dashboardJson(await zonesView(env)); }
+    catch (error) { console.error("zones_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "zones_unavailable" }, 500); }
+  }
   if (url.pathname === "/api/strategy-agents") {
     // The strategy agents (src/strategy-agents.mjs): the registry with each agent's status and what it is
     // made for, its measured record from the plan learner, and for the latest decision each agent's plan
@@ -3009,12 +3018,24 @@ async function runLedgerStep(env: Env): Promise<void> {
   // entries and stops on the bars that followed. Shadow only; it reads decisions and never writes one.
   const plans = await runPlanLearning(env);
   if (plans.status !== "unchanged" && plans.status !== "disabled") console.log("plan_learning", JSON.stringify(plans));
+  // Z5 (src/zone-readings.mjs): the zone readings behind their cursor (at most 200 decisions a run) and the counterfactual
+  // tables (zone_blocked_setups, zone_rule_arms; never plan_setups), after the plan learner. ZONE_READINGS "off": nothing.
+  try {
+    const zr = await runZoneReadingsStep(env) as { status?: string; readings?: { status?: string; written?: number }; counterfactuals?: { status?: string; added?: number; resolved?: number } };
+    if (zr.readings?.status === "failed" || zr.counterfactuals?.status === "failed" || Number(zr.readings?.written) || Number(zr.counterfactuals?.added) || Number(zr.counterfactuals?.resolved)) console.log("zone_readings", JSON.stringify(zr));
+  } catch (e) { console.error("zone_readings_failed", e instanceof Error ? e.message : String(e)); }
   // The strategy agents' breaker (src/strategy-agents.mjs): the owner hears once when a live agent's
   // measured record turns negative (it goes back to shadow) and when it is live again.
   if (plans.status === "ok") {
     const breaker = await syncAgentBreaker(env, ((await readPlanLearning(env)) as Record<string, any> | null)?.agents ?? [], { send: (text: string) => sendTelegram(env, text) });
     if (breaker.status !== "unchanged" || breaker.roster) console.log("strategy_agents_breaker", JSON.stringify(breaker));
   }
+  // Z5's zone breaker, beside it, hourly: decision-side holds of Z2/Z2b's rules in KV (one 'XAUUSD ZONES' line per change)
+  // and the daily alarm lines. It never writes an owner switch, omega_settings or any Omega/PM state.
+  try {
+    const zb = await runZoneBreaker(env, { send: (text: string) => sendTelegram(env, text) }) as { status?: string };
+    if (zb.status === "changed" || zb.status === "failed" || Number((zb as { alarmed?: number }).alarmed)) console.log("zone_breaker", JSON.stringify(zb));
+  } catch (e) { console.error("zone_breaker_failed", e instanceof Error ? e.message : String(e)); }
   // The strategy recommendation cards (RFC §3): read-only, deterministic, at most every 15 minutes into KV.
   const reco = await computeRecommendations(env);
   if (reco.status === "failed") console.error("strategy_recommendations_failed", JSON.stringify(reco));
@@ -3065,6 +3086,8 @@ export default {
       // The old debate/raw-output page is retired: Nexus (threads + live room) is the only dashboard.
       return Response.redirect(String(env.NEXUS_DASHBOARD_URL || "https://nexus.cryptophys.work/"), 302);
     }
+    // Z5: GET /api/zones is read-only; any other method is refused.
+    if (url.pathname === "/api/zones" && request.method !== "GET") return dashboardJson({ status: "method_not_allowed" }, 405);
     const dashboardResponse = await handleDashboardApi(request, env, url).catch(() => dashboardJson({ status: "error", error: "dashboard_api_failed" }, 500));
     if (dashboardResponse) return dashboardResponse;
     if (request.method === "GET" && url.pathname === "/ready") {

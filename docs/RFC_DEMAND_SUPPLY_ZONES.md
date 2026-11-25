@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on; Z5, Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them; Z1b, Z3a, Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -256,7 +256,61 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 ### 6.5 Evidence on the fixtures
 On the frozen 2026-11-20 22:00 capture (scalp, intraday and swing, both sides, the guardrails' plan and every agent plan: 17 plans), Z2b moves no price: no decisive opposing zone sits under a long's or over a short's stop, no decisive opposing key zone qualifies as a typed TP2, and every entry zone is mixed (factor 1, no reordering). `tp_typed` relabels 3 TP1 notes (the scalp long's guardrail plan and breakout_retest's long in intraday and swing). The zone_ahead verdicts are Z2's (ZA-16).
 
-## 7. Risks
+## 7. Z5: readings, counterfactual tables, the decision-side zone breaker and Omega attribution
+
+The owner prioritised before measuring, so the measurement and the brake land right behind Z2/Z2b. The only live evidence so far points the other way: S/D-labelled entries made +0.03R per Omega trade (n 27) against +0.28R (n 50). `src/zone-readings.mjs`; switch `ZONE_READINGS` (FS1, group zones).
+
+### 7.1 Readings (`zoneReadings`)
+- **What is read.** Each `decision.key_levels` zone (the recorded set, so a replay reproduces it) that the decision bar's 15m range touched, on the next 8 closed 15m bars.
+- **Outcome** (B19's definition). `held`: a close at least 0.5 ATR(1H) from the near edge in the zone's direction, before a close 0.1 ATR beyond the far edge. `broke`: that close beyond the far edge first. Otherwise `neither`. A decision whose 8 bars have not all closed without an outcome waits, and so does every decision after it.
+- **Direction and approach.** The approach is where the bar before the decision bar closed: `from_above`, `from_below` or `inside`. A demand zone holds up and a supply zone holds down. An untyped zone (none, mixed or no words) reads the side it is met from: support from above, resistance from below. An untyped zone that price opened inside is not read.
+- **Also recorded:** `mfe_atr` and `mae_atr` from the near edge, and `bars`, the bars to the outcome (8 for neither).
+- **Dedupe.** One reading per (0.1 ATR bucket of the zone's middle, approach) per 2 hours. The memory lives in the cursor (KV `zone-readings:cursor:v1`), never in a reading.
+- **Storage.** D1 `zone_readings`: words and ATR only, `rule_version` beside `version`. Written in `runLedgerStep` after the plan learner, at most 200 decisions a run. INSERT OR IGNORE on `<decision_key>#<zone index>`, so a rerun writes nothing.
+
+### 7.2 Counterfactuals, in their own tables
+plan_setups is read by 14 queries in 8 modules. A cohort column there would leak counterfactuals into MS1/MS2, grid adapt, knob tuning and the packs, so neither table is plan_setups:
+- **`zone_blocked_setups`** (plan_setups' columns, `source` 'zone_blocked'). The WAIT decisions with `$.zone_blocked`: their would-be plan (the guardrails' plan, slim) becomes setups by plan learning's own rule (`setupsFrom`). Each is scored with plan learning's exported outcome step, `setupOutcome`: the control arm of `replaySetup`, where a limit that never fills scores 0R.
+- **`zone_rule_arms`** (`decision_key`, `agent`, `rule`, `acted_r`, `base_r`, plus the setup's fields). For the Z2b plans a rule moved, the acted plan (as recorded in `strategy_plans`) against the base rebuilt from the entry, `base_tp1_r` and `base_stop_atr` (`zoneAimBase`), both on the same step. A copy held back by the reward gate (`held: "rrr"`) traded its base, so it has no arm. With Z2b inert the table stays empty.
+
+### 7.3 The breaker (`runZoneBreaker`, `applyZoneHolds`)
+- **When.** Hourly, beside the strategy agents' breaker.
+- **Evidence.** That of the rule version in force (`ruleVersionOf`), newest first:
+  - **(a) typing:** over the last 300 readings with at least 60 per group, the own-type held rate (demand met from above or inside, supply from below or inside) minus the untyped held rate, below 0, holds zone_ahead, tp, stop and factor;
+  - **(b) block:** at least 30 resolved zone_blocked setups with a mean above +0.10R hold zone_ahead (to 'record');
+  - **(c) per rule:** at least 30 resolved arms of a rule whose mean acted R is below the mean base R hold that rule (tp_typed: tp; stop_skip: stop).
+  Thresholds read the 3-dp figures the line and the view show.
+- **Returns** when the record recovers or `rule_version` bumps (the old version's evidence no longer counts).
+- **The state** lives in KV `zone-priority:breaker:v1`. There is one `XAUUSD ZONES` Telegram line per change, sent first and then stored, so a failed send is told again.
+- **Decision side only.** `runDecisionEngine` reads the state into its own env copy for the run: zone_ahead sets `ZONE_AHEAD_MODE` "record" while the check is in the guardrails ('trend' or 'all'), and a held tp, stop or factor joins `ZONE_AIM_OFF` while Z2b has that rule on. The decision records `zone_rules_held` = `[{ rule, by }]`. It never acts on Omega or PM rules: those switches are the owner's (SSOT's lens precedent; the ERA_SWITCHES comment), and v4 cannot replay a KV state. It never writes an FS1 override or `omega_settings`, never turns a rule on, and never changes the EA signal or `managementFields`.
+- **Known effect.** During a hold, plan_setups' `rule_version` still names the owner's rules: the plan learner stamps it from the Worker's vars, and MS2's shadow rows are kept on the same. `zone_rules_held` on the decision tells the two apart.
+
+### 7.4 Alarms and Omega attribution
+- **Alarms.** One line a UTC day each, no action:
+  - zone_ahead is the only failing check in more than 40% of the last 96 decisions where the council wanted that side (needs the full 96);
+  - under `ZONE_AHEAD_MODE` 'all', that share every day.
+- **Omega attribution.** Read-only and SELECT only: `omega_intents` by reason and `level_source` 'zone', and `position_actions` by the PM's zone rules (pm_zone_*), joined to their `ea_deals` in R (`liveTradesFrom`). At 15 or more closes with a mean below 0R, the line says the owner may set zone_mgmt lower. Z3a adds a flag for the decision-side typing toggles while zone_mgmt is not off (the TODO in `omegaZoneAttribution`).
+
+### 7.5 GET /api/zones
+- **Access.** The Nexus read API, behind Access. Gated on `ZONE_READINGS` only (off: 404); B8 folds it under INTEL_VIEWS. POST 405.
+- **Reads.** SELECT only: a table that does not exist yet reads as [], and nothing is created.
+- **Fields:**
+  - `readings` by type x approach x strength (n, held, broke, neither, the held rate and the held rate shrunk toward the overall rate with a prior of 20, mean MFE and MAE in ATR);
+  - `zone_blocked` per side (n, mean R, fill rate);
+  - `rule_arms` (n, the acted and base mean R);
+  - `breaker` (held rules and checks);
+  - `stances` (the 7 days' stance shares and zone_blocked counts);
+  - `omega_attribution` and `omega_advisory`.
+- **Never** an account or identity key, and never a price.
+
+### 7.6 Cost
+- **Steady state.** A ledger run reads one to three decisions behind the cursor. D1 does the `json_extract`, so the Worker never parses a decision_json. The 15m series is read only when a decision is due.
+- **Catch-up.** At most 200 decisions a run: about 1 ms of readings CPU for 200 decisions of 12 zones each (test ZR-13).
+- **Counterfactuals.** They read the stitched ledger bars only while a counterfactual setup is open to replay. Today none is: the check has fired on 0 decisions, and Z2b is inert.
+
+## 8. Risks
+- **Overlapping readings (Z5).** Readings of consecutive decisions overlap; the dedupe limits it.
+- **Recorded plans (Z5).** The counterfactual uses the recorded would-be plan; a limit that never fills scores 0R, as plan learning does.
 - **Coverage jumps at once (Z1a).** Typing coverage was thin until Z1a (`prophet_best` only at intensity +3/-3). Z1a lands before Z2, so the gate acts on the source set it was checked with. 1H blocks can be about 1 ATR wide; the medium floor and 2x dominance keep weak overlaps out.
 - **The window (B11).** B11's window change can shift `born` and `age_bars` while Z2 is live; B11's typing-shift report measures it.
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.

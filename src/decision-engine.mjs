@@ -70,6 +70,7 @@ import { lensKnobs, readLensState } from "./lens-policy.mjs";
 import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS, SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { RANGE_GATED_AGENTS, isRanging } from "./htf-cells.mjs";
 import { modeShadowEvidence, writeShadowPlans } from "./mode-shadow.mjs";
+import { readZoneHolds, applyZoneHolds } from "./zone-readings.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -1658,6 +1659,13 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     let roomWaive = "off";
     try { roomWaive = (await resolveRoomBreakoutWaive(env, { now })).value; } catch { roomWaive = "off"; }
     env = { ...env, ROOM_BREAKOUT_WAIVE: roomWaive };
+    // Z5 (src/zone-readings.mjs): the zone breaker's held rules, read into this run's env copy as their own switches off
+    // (ZONE_AHEAD_MODE "record", ZONE_AIM_OFF tokens), for this decision only: the owner's FS1 values are never written.
+    // Recorded as zone_rules_held when a hold changed a rule. ZONE_READINGS "off", or nothing held: env as it is.
+    // MS2's shadow rows keep the owner's rule_version (ownerEnv), as the plan learner's live setups do.
+    const ownerEnv = env;
+    let zoneHeld = [];
+    try { ({ env, held: zoneHeld } = applyZoneHolds(env, await readZoneHolds(env))); } catch { env = ownerEnv; zoneHeld = []; }
     const data = loaded ?? await loadDecisionInputs(env, { now });
     // RM1b: the corridors the decisions of the last hour recorded (one bounded D1 read), only while the waiver is in force.
     if (roomWaive === "on" && data.room_corridors === undefined) data.room_corridors = await loadRoomCorridors(env.DB, closeIso);
@@ -1706,6 +1714,8 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const councilMs = clock() - councilStarted;
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
+    // Z5: the decision-side zone rules the breaker held for this decision ([{ rule, by }]); absent when none.
+    if (zoneHeld.length) record.zone_rules_held = zoneHeld;
     // Z2: ZONE_AHEAD_MODE "all" is owner-set only (no trend exemption): one warning line per decision; Z5 alarms on its share.
     if (zoneAheadMode(env, data.inputs?.modes ?? null) === "all") console.warn(JSON.stringify({ event: "zone_ahead_mode_all", decision_key: key, stance: record.stance, blocked: ["long", "short"].filter((k) => assessment.guards[k].checks.some((c) => c.id === "zone_ahead" && !c.pass)) }));
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -1723,7 +1733,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
           try { rooms[m] = (await (await import("./room-tuning.mjs")).activeRoom(env, m, { now })).value; } catch { /* the rule's 1 */ }
         }
         const shadows = shadowModeDecisions({ loaded: data, assessment, council, env, now, analytics: data.analytics, witnessWeights, agentRecords, rooms });
-        await writeShadowPlans(env, { record, rows: shadows, now });
+        await writeShadowPlans(ownerEnv, { record, rows: shadows, now });
       } catch { /* the live decision stands */ }
     }
     let telegram = null, ledger = null;
