@@ -77,7 +77,8 @@
       "restarts_mode_evidence": true,
       "emergency_stop": false,
       "read_only": false,
-      "write": "feature-switch"
+      "write": "feature-switch",
+      "zone_hold": null
     },
     {
       "key": "KEY_LEVEL_ZONE_TYPES",
@@ -130,7 +131,8 @@
       "restarts_mode_evidence": true,
       "emergency_stop": false,
       "read_only": false,
-      "write": "feature-switch"
+      "write": "feature-switch",
+      "zone_hold": null
     },
     {
       "key": "ZONE_SOURCES_OFF",
@@ -197,6 +199,28 @@
       "set_at": null,
       "era_switch": false,
       "restarts_mode_evidence": true,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ZONE_READINGS",
+      "label": "Zone readings and breaker",
+      "description": "Z5: the zone readings, the counterfactual tables (zone_blocked_setups, zone_rule_arms) and the decision-side zone breaker, which holds Z2/Z2b's rules back by itself when their own record turns against them; off writes nothing, the breaker is idle and GET /api/zones answers 404.",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
       "emergency_stop": false,
       "read_only": false,
       "write": "feature-switch"
@@ -289,6 +313,29 @@
       "emergency_stop": false,
       "read_only": false,
       "write": "feature-switch"
+    },
+    {
+      "key": "ROOM_BREAKOUT_WAIVE",
+      "label": "Room waiver on a with-trend breakout",
+      "description": "RM1b: the room check passes when it alone holds a side back, the 15m close is beyond the facing edge of a corridor recorded in the last hour, and the trend is with the side; it goes off by itself for 7 days when its waived trades lose. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch",
+      "auto_revert": null
     },
     {
       "key": "AGENT_VETO_RULE",

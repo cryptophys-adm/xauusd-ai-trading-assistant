@@ -59,6 +59,7 @@ import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } 
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
+import { roomBreakoutWaiveOf, roomWaiverFor, resolveRoomBreakoutWaive, loadRoomCorridors } from "./room-waive.mjs";
 import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf } from "./zone-types.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
@@ -69,6 +70,7 @@ import { lensKnobs, readLensState } from "./lens-policy.mjs";
 import { readLiquidityState, sweepFor, LIQUIDITY_STATE_FRESH_MS, SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { RANGE_GATED_AGENTS, isRanging } from "./htf-cells.mjs";
 import { modeShadowEvidence, writeShadowPlans } from "./mode-shadow.mjs";
+import { readZoneHolds, applyZoneHolds, recordDecisionRule } from "./zone-readings.mjs";
 
 export const DECISION_ENGINE_VERSION = "cryptophys.decision-engine.v1";
 export const SYMBOL = "OANDA:XAUUSD";
@@ -585,7 +587,7 @@ export function independentWitnesses(loaded = {}, { now = Date.now() } = {}) {
  * Pure: the guardrails for one side (dir +1 long, -1 short) and the plan the side would trade.
  * `inputs` are the strategy engine's inputs (snapshots, news, calendar, confirmations).
  */
-export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro = null, now = Date.now(), env = null }) {
+export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro = null, now = Date.now(), env = null, roomCorridors = null }) {
   // Adaptive thresholds per trading mode (Cloudflare Workers: env is threaded in; no process.env).
   const { mode: MODE, quorum_min: QUORUM_MIN, min_rrr: MIN_RRR, lean: LEAN } = modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS);
 
@@ -640,6 +642,7 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
   if (zoneAheadChecks(zoneMode)) { const z = zoneAheadCheck(plan, zoneMode, dir); add("zone_ahead", z.pass, z.detail); }
   // Squeezed between key zones (owner 2026-11-13: "no trade"): the same check on both sides, because it
   // is about the place, not the direction. SQUEEZE_GUARD "off" leaves the check out.
+  let roomWaived = null;
   if (squeezeGuardEnabled(env)) {
     // The room in 1H ranges: the trading mode's learned value (src/room-tuning.mjs, owner 2026-11-19), inside 0.5 to 1.5.
     const roomAtr = roomAtrOf(env?.ROOM_CORRIDOR_ATR);
@@ -647,17 +650,25 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
     let sq = null;
     try { sq = squeezeOf(strategy, { corridorAtr: roomAtr }); } catch { sq = null; }
     const zone = (z) => (z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`);
-    add("room", !sq?.squeezed, !sq ? "no price or 1H range to measure the room with"
+    const roomDetail = !sq ? "no price or 1H range to measure the room with"
       : sq.corridor == null ? `no key zone ${sq.below ? "above" : sq.above ? "below" : "above or below"} price within reach: there is room to move`
       : sq.squeezed ? `price is squeezed: the key zones below (${zone(sq.below)}) and above (${zone(sq.above)}) are ${sq.corridor.toFixed(2)} apart, less than ${ranges} (${sq.needed.toFixed(2)})`
-      : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${roomAtr} needed)`);
+      : `the key zones below and above price are ${sq.corridor.toFixed(2)} apart (${sq.corridor_atr} times the 1H average range; at least ${roomAtr} needed)`;
+    // RM1b (src/room-waive.mjs, ROOM_BREAKOUT_WAIVE; owner 2026-11-25: "Turn variant (d) on now"): a squeeze that is the
+    // side's only failing check passes when the 15m close broke out of a corridor of the last hour, with the trend. Only
+    // while the waiver is in force and the earlier corridors were read (runDecisionEngine); else the check as before.
+    const waiver = sq?.squeezed && roomCorridors && roomBreakoutWaiveOf(env) === "on" ? roomWaiverFor(dir, { checks, price: strategy?.price ?? null, cards, corridors: roomCorridors }) : null;
+    if (waiver) roomWaived = waiver.tag;
+    add("room", !sq?.squeezed || Boolean(waiver), waiver ? `${roomDetail}; ${waiver.words}` : roomDetail);
   }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
   return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger,
     // Z2: the zone_ahead mode the side was checked in, for the plan filter (zonePlanPasses) and the council; absent when off.
     ...(zoneMode !== "off" ? { zone_ahead: zoneMode } : {}),
     // Z2b: the zone rules in force ({ tp, stop, factor }), for the agents' copies and pickStrategy's factor; absent when inert.
-    ...(aim ? { zone_aim: aim } : {}) };
+    ...(aim ? { zone_aim: aim } : {}),
+    // RM1b: the waiver of this side's room check ({ corridor, broke_at, trend }), only when room alone held it back.
+    ...(roomWaived ? { room_waived: roomWaived } : {}) };
 }
 
 /**
@@ -874,7 +885,7 @@ export function validateCouncil(o) {
 export function decide({ answer = null, guards, strategy = null, quorum, minConfidence = MIN_CONFIDENCE }) {
   const pick = (dir) => (dir > 0 ? guards.long : guards.short);
   let source = answer ? "council" : "fallback";
-  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null, softened = null;
+  let stance, confidence, entryType, target, overruled = null, chosen = null, selection = null, softened = null, waived = null;
   if (answer) {
     stance = answer.stance; confidence = r2(Math.max(0, Math.min(0.95, answer.confidence)));
     entryType = answer.entry_type; target = answer.target; chosen = answer.strategy ?? null;
@@ -889,6 +900,7 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
   let trade = null;
   if (dir) {
     const g = pick(dir);
+    waived = g.room_waived ?? null;
     if (!g.allowed) overruled = { by: "guardrail", wanted: stance, failed: g.checks.filter((c) => !c.pass).map((c) => ({ check: c.id, detail: c.detail })) };
     else if (confidence < minConfidence) overruled = { by: "guardrail", wanted: stance, failed: [{ check: "confidence", detail: `confidence ${Math.round(confidence * 100)}% is below ${Math.round(minConfidence * 100)}%` }] };
     else {
@@ -955,7 +967,8 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
   }
   const bias = answer?.bias ?? quorum.bias;
   // SV1b: a BUY or SELL that trades only because A6 or A7 lifted a veto the classic rule would have kept says so.
-  return { stance, bias, confidence, source, trade, overruled, selection, ...(softened && !overruled && trade ? { veto_softened: softened } : {}) };
+  // RM1b: one that trades on a side whose room check was waived (room alone held it back) says so too.
+  return { stance, bias, confidence, source, trade, overruled, selection, ...(softened && !overruled && trade ? { veto_softened: softened } : {}), ...(waived && !overruled && trade ? { room_waived: waived } : {}) };
 }
 
 /**
@@ -1237,7 +1250,9 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const quorum = witnesses?.quorum ?? quorumOf(cards, { now, analytics });
   const market = witnesses?.market ?? marketContextOf(loaded, quorum, now);
   const withMarket = { ...inputs, market };
-  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv }) };
+  // RM1b: the corridors of the last hour's decisions, read by runDecisionEngine only while ROOM_BREAKOUT_WAIVE is in force.
+  const roomCorridors = loaded?.room_corridors ?? null;
+  const guards = { long: guardrailsFor(1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv, roomCorridors }), short: guardrailsFor(-1, { cards, quorum, strategy, inputs: withMarket, macro, now, env: effectiveEnv, roomCorridors }) };
   // MT5 fallback (owner 2026-11-11: trade as usual): the decision stands on the broker's bars while
   // TradingView is down; news and the macro series are stale, which the council should weigh.
   if (inputs?.m5Feed === "mt5_fallback") for (const g of [guards.long, guards.short]) g.cautions = [...g.cautions, MT5_FALLBACK_CAUTION];
@@ -1502,6 +1517,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     overruled: d.overruled, trade: d.trade,
     // SV1b: only a BUY or SELL that trades because A6 or A7 lifted a classic veto ({ rule, old_detail }, words only).
     ...(d.veto_softened ? { veto_softened: d.veto_softened } : {}),
+    // RM1b: only a BUY or SELL that trades on a side whose room check was waived ({ corridor, broke_at, trend }; ATR, words).
+    ...(d.room_waived ? { room_waived: d.room_waived } : {}),
     // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): each live agent's
     // confidence on both sides at this close, and at the close one bar before (null when that decision is missing).
     strategy_execution: guards.strategy_execution === true,
@@ -1637,7 +1654,21 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     let vetoRule = "classic";
     try { vetoRule = (await resolveAgentVetoRule(env, { now })).rule; } catch { vetoRule = "classic"; }
     env = { ...env, TRADING_MODE: mode, COUNCIL_KNOBS: knobs, ROOM_CORRIDOR_ATR: room, AGENT_VETO_RULE: vetoRule };
+    // RM1b (src/room-waive.mjs): the room waiver in force (the owner's FS1 override, else "off" while its automatic revert
+    // holds, else ROOM_BREAKOUT_WAIVE as the FS1-resolved env holds it), on the same copy. Unreadable: "off".
+    let roomWaive = "off";
+    try { roomWaive = (await resolveRoomBreakoutWaive(env, { now })).value; } catch { roomWaive = "off"; }
+    env = { ...env, ROOM_BREAKOUT_WAIVE: roomWaive };
+    // Z5 (src/zone-readings.mjs): the zone breaker's held rules, read into this run's env copy as their own switches off
+    // (ZONE_AHEAD_MODE "record", ZONE_AIM_OFF tokens), for this decision only: the owner's FS1 values are never written.
+    // Recorded as zone_rules_held when a hold changed a rule. ZONE_READINGS "off", or nothing held: env as it is.
+    // MS2's shadow rows keep the owner's rule_version (ownerEnv), as the plan learner's live setups do.
+    const ownerEnv = env;
+    let zoneHeld = [];
+    try { ({ env, held: zoneHeld } = applyZoneHolds(env, await readZoneHolds(env))); } catch { env = ownerEnv; zoneHeld = []; }
     const data = loaded ?? await loadDecisionInputs(env, { now });
+    // RM1b: the corridors the decisions of the last hour recorded (one bounded D1 read), only while the waiver is in force.
+    if (roomWaive === "on" && data.room_corridors === undefined) data.room_corridors = await loadRoomCorridors(env.DB, closeIso);
     // The Positioning & Liquidity analyst (docs/RFC_POSITIONING_LIQUIDITY.md): lens A's facts known at this close
     // (cotAt: released before now) at the mode's knobs, lens B's state for the council's sweep evidence.
     if (data.positioning === undefined || data.liquidity === undefined) {
@@ -1683,11 +1714,16 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     const councilMs = clock() - councilStarted;
     if (advice) council.model_advice = advice;
     const record = buildDecisionRecord({ key, barClose: closeIso, loaded: data, assessment, council, previous, now, decidedAt: new Date(clock()).toISOString(), env });
+    // Z5: the decision-side zone rules the breaker held for this decision ([{ rule, by }]); absent when none.
+    if (zoneHeld.length) record.zone_rules_held = zoneHeld;
     // Z2: ZONE_AHEAD_MODE "all" is owner-set only (no trend exemption): one warning line per decision; Z5 alarms on its share.
     if (zoneAheadMode(env, data.inputs?.modes ?? null) === "all") console.warn(JSON.stringify({ event: "zone_ahead_mode_all", decision_key: key, stance: record.stance, blocked: ["long", "short"].filter((k) => assessment.guards[k].checks.some((c) => c.id === "zone_ahead" && !c.pass)) }));
     const ins = await env.DB.prepare("INSERT OR IGNORE INTO engine_decisions (decision_key, bar_close, decided_at, stance, confidence, source, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(key, closeIso, record.decided_at, record.stance, record.confidence ?? null, record.source, JSON.stringify(record)).run();
     if (!Number(ins?.meta?.changes)) return { status: "already_decided", decision_key: key };
+    // Z5: the owner's rule version at this decision's time, in its own table (zone_decision_rules; never the record), for
+    // the readings and counterfactuals written hours later. ZONE_READINGS "off": nothing. A hold never changes it.
+    await recordDecisionRule(ownerEnv, { decisionKey: key, barClose: closeIso, now });
     try { await env.SIGNAL_CACHE?.put?.(DECISION_LATEST_KEY, JSON.stringify(record), { expirationTtl: 2 * 86_400 }); } catch { /* D1 has it */ }
     // MS2 (src/mode-shadow.mjs): the deterministic part of this decision for each mode not in force, with the same
     // witnesses and council answer; a mode that would trade writes its plans to mode_shadow_plans, after the live record
@@ -1700,7 +1736,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
           try { rooms[m] = (await (await import("./room-tuning.mjs")).activeRoom(env, m, { now })).value; } catch { /* the rule's 1 */ }
         }
         const shadows = shadowModeDecisions({ loaded: data, assessment, council, env, now, analytics: data.analytics, witnessWeights, agentRecords, rooms });
-        await writeShadowPlans(env, { record, rows: shadows, now });
+        await writeShadowPlans(ownerEnv, { record, rows: shadows, now });
       } catch { /* the live decision stands */ }
     }
     let telegram = null, ledger = null;

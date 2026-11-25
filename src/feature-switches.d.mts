@@ -5,7 +5,7 @@ export interface FeatureSwitchEntry {
   readonly worker: "ai" | "omega"; readonly values: FeatureSwitchValues; readonly config_only: readonly string[];
   readonly default_value: FeatureSwitchValue; readonly config_value: FeatureSwitchValue | null;
   readonly era_switch: boolean; readonly restarts_mode_evidence: boolean; readonly emergency_stop: boolean; readonly read_only: boolean;
-  readonly write: "feature-switch" | "omega-settings"; readonly resolve: "env" | "agent-veto" | "omega-settings";
+  readonly write: "feature-switch" | "omega-settings"; readonly resolve: "env" | "agent-veto" | "omega-settings"; readonly hold: "room-waive" | null;
   read(raw: unknown): FeatureSwitchValue; toEnv?(value: FeatureSwitchValue): string;
 }
 export interface FeatureSwitchRow {
@@ -19,6 +19,8 @@ export const FEATURE_SWITCHES_VERSION: string;
 export const FEATURE_SWITCH_OVERRIDE_KEY: string;
 export const FEATURE_SWITCH_VETO_MIGRATION_KEY: string;
 export const FEATURE_SWITCH_MEMO_MS: number;
+export const FEATURE_SWITCH_OVERRIDDEN: unique symbol;
+export function overriddenKeys(env: unknown): readonly string[];
 export const FEATURE_SWITCH_GROUPS: ReadonlyArray<{ readonly id: string; readonly label: string }>;
 export const FEATURE_SWITCHES: readonly FeatureSwitchEntry[];
 export const FEATURE_SWITCH_KEYS: readonly string[];
