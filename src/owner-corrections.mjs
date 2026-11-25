@@ -2,10 +2,11 @@
 // owner's corrections and ratings of Nexus outputs, sent to the platform as correction.v1 records by the dedicated
 // kernel agent nexus-teacher (capability corrections.record, tier 1, no seat; platform XAUUSD_CEILING, H3e).
 //
-// What this module is today: the contract (a port of control-plane-shared/src/correction.ts at platform main
-// 72fcbe0, checked against the shared fixtures in test/fixtures/correction-v1), the local store and the sender. The
-// switch OWNER_CORRECTIONS is off by default; nothing records a correction until the Nexus control and
-// POST /omega/api/correction land (the full H3f, later work).
+// What this module is: the contract (a port of control-plane-shared/src/correction.ts at platform main 72fcbe0, checked
+// against the shared fixtures in test/fixtures/correction-v1), the local store and the sender. Since the full H3f (owner
+// "2. yes", 2026-11-25) the owner records a correction through POST /omega/api/correction (the Omega Worker checks the
+// owner and the shape, OmegaGateway.recordCorrection checks the owner again and calls recordOwnerCorrection). The switch
+// OWNER_CORRECTIONS (FS1 row, group knowledge) is off by default: nothing is recorded or sent until the owner turns it on.
 //
 // Rules (§4.4, §5.2, §7.2):
 // - The original, prices included, stays in this Worker's D1 (owner_corrections.original_json). Only the masked record
@@ -46,6 +47,8 @@ export const CORRECTIONS_BACKOFF_MS = 3_600_000;
 /** The local budget of kernel strikes (denied, failed or timed out) in any rolling hour; the kernel proposes a
  *  suspension at 5 (ai-kernel supervisor.ts), so the sender stops at 3 and never reaches it. */
 export const CORRECTIONS_STRIKES_PER_HOUR = 3;
+/** The owner's corrections recorded in any rolling hour (H3f): the next one answers rate_limited (HTTP 429 at the route). */
+export const CORRECTIONS_PER_HOUR = 30;
 
 const ID = /^cor_[0-9a-f]{16}$/;
 const SUBJECT = /^(agent|model|seat):[A-Za-z0-9_.:-]{1,100}$/;
@@ -303,7 +306,10 @@ const SCHEMA_SQL = Object.freeze([
     created_ms INTEGER NOT NULL,
     sent_ms INTEGER
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_owner_corrections_status ON owner_corrections(status, created_ms)"
+  "CREATE INDEX IF NOT EXISTS idx_owner_corrections_status ON owner_corrections(status, created_ms)",
+  // H3f: one row per dedup hash, so two simultaneous POSTs of the same correction store one row (INSERT OR IGNORE).
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_owner_corrections_dedup ON owner_corrections(dedup_sha256)",
+  "CREATE INDEX IF NOT EXISTS idx_owner_corrections_created ON owner_corrections(created_ms)"
 ]);
 let ready = false;
 export function resetOwnerCorrectionsSchemaForTests() { ready = false; }
@@ -314,9 +320,22 @@ async function ensureSchema(db) {
 }
 const newCorrectionId = () => "cor_" + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
 
+/** The stored row of a dedup hash, as the reply of a duplicate: its id and its redactions. Null when there is none. */
+async function existingByDedup(db, dedup) {
+  const row = await db.prepare("SELECT correction_id, record_json FROM owner_corrections WHERE dedup_sha256 = ?").bind(dedup).first();
+  if (!row) return null;
+  let redactions = [];
+  try { const r = JSON.parse(row.record_json)?.redactions; if (Array.isArray(r)) redactions = r.filter((x) => CORRECTION_REDACTIONS.includes(x)); } catch { /* the id alone */ }
+  return { ok: true, correction_id: row.correction_id, redactions, deduplicated: true };
+}
+
 /**
- * Store one correction: the original as given (prices included, kept here) and the masked record to send. Refused only
- * as buildCorrection refuses (structure), or when the switch is off. actor is the caller's verified identity.
+ * Store one correction: the original as given (secrets redacted, prices kept here) and the masked record to send. Refused
+ * as buildCorrection refuses (structure), when the switch is off (no D1 access then), or past CORRECTIONS_PER_HOUR in the
+ * rolling hour (rate_limited). The same correction again (its dedup_sha256: actor, target, label, rating, category, text,
+ * refs) stores nothing and answers the stored id with deduplicated: true; the insert is INSERT OR IGNORE on the unique
+ * dedup index with the hour's cap in the same statement, so two simultaneous calls give one row. actor is the caller's
+ * verified identity. The reply never carries the text.
  */
 export async function recordOwnerCorrection(env, input, { actor, owner = false, now = Date.now() } = {}) {
   if (!correctionsEnabled(env)) return { ok: false, error: "disabled" };
@@ -325,12 +344,22 @@ export async function recordOwnerCorrection(env, input, { actor, owner = false, 
   if (typeof actor !== "string" || actor.length < 3 || actor.length > 200) return { ok: false, error: "invalid_actor" };
   const built = await buildCorrection({ ...input, side: "nexus" }, { actor, owner: owner === true, attested_by: "xauusd_nexus_access", now: new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z"), correction_id: newCorrectionId() });
   if (!built.ok) return built;
-  const errors = validateCorrection(built.correction);
+  const c = built.correction;
+  const errors = validateCorrection(c);
   if (errors.length) return { ok: false, error: errors[0] };
   await ensureSchema(db);
-  await db.prepare("INSERT INTO owner_corrections (correction_id, original_json, record_json, dedup_sha256, status, attempts, created_ms) VALUES (?, ?, ?, ?, 'pending', 0, ?)")
-    .bind(built.correction.correction_id, JSON.stringify(input, (_k, v) => (typeof v === "string" ? redactText(v) : v)), JSON.stringify(built.correction), built.correction.dedup_sha256, now).run();
-  return { ok: true, correction_id: built.correction.correction_id, redactions: built.correction.redactions };
+  const dup = await existingByDedup(db, c.dedup_sha256);
+  if (dup) return dup;
+  const since = now - 3_600_000;
+  const recent = Number((await db.prepare("SELECT COUNT(*) AS n FROM owner_corrections WHERE created_ms > ?").bind(since).first())?.n) || 0;
+  if (recent >= CORRECTIONS_PER_HOUR) return { ok: false, error: "rate_limited" };
+  const r = await db.prepare("INSERT OR IGNORE INTO owner_corrections (correction_id, original_json, record_json, dedup_sha256, status, attempts, created_ms) SELECT ?, ?, ?, ?, 'pending', 0, ? WHERE (SELECT COUNT(*) FROM owner_corrections WHERE created_ms > ?) < ?")
+    .bind(c.correction_id, JSON.stringify(input, (_k, v) => (typeof v === "string" ? redactText(v) : v)), JSON.stringify(c), c.dedup_sha256, now, since, CORRECTIONS_PER_HOUR).run();
+  if (Number(r?.meta?.changes) === 0) {
+    // Lost a race: the same correction stored by a simultaneous call, or the hour's cap reached by one.
+    return (await existingByDedup(db, c.dedup_sha256)) ?? { ok: false, error: "rate_limited" };
+  }
+  return { ok: true, correction_id: c.correction_id, redactions: c.redactions, deduplicated: false };
 }
 
 const META_SQL = "CREATE TABLE IF NOT EXISTS owner_corrections_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)";

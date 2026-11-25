@@ -218,7 +218,7 @@ import { readGbm, gbmStatus } from "./model-gbm.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, setTradingMode } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
-import { sendOwnerCorrections } from "./owner-corrections.mjs";
+import { sendOwnerCorrections, recordOwnerCorrection } from "./owner-corrections.mjs";
 import { applyWitnessTuning, readWitnessTuning, witnessTuningMessage, witnessTuningReport } from "./witness-tuning.mjs";
 import { applyRoomTuning, readRoomTuning, roomTuningMessage, roomTuningReport } from "./room-tuning.mjs";
 import { runTuneStep, readTuneRuns } from "./tune-runs.mjs";
@@ -1969,6 +1969,24 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
     const r = await setFeatureSwitch(this.env, { key: input?.key, value: input?.value, reset: input?.reset === true, actor: String(input?.actor ?? "owner"), actor_sub: input?.actor_sub ?? null, send: (t: string) => sendTelegram(this.env, t) });
     if (r.ok === true && r.audit === "settings") this.ctx.waitUntil(runAuditNotify(this.env).then(() => undefined, () => undefined));
     return r as unknown as JsonObject;
+  }
+  /**
+   * HAIC H3f (owner "2. yes", 2026-11-25): the owner's rating or correction of a Nexus output, through the Omega Worker's
+   * owner-only POST /api/correction (which checked the owner and the shape). The owner is checked again here; the record
+   * is stored by recordOwnerCorrection (src/owner-corrections.mjs; off unless OWNER_CORRECTIONS, read from the FS1-resolved
+   * env) and sent by the sweep as nexus-teacher. The reply never carries the text: only the id, the redactions and
+   * whether it was a duplicate. Never changes a parameter, a weight, a gate or a trade.
+   */
+  async recordCorrection(input: { input?: unknown; actor?: string; actor_sub?: string | null }): Promise<JsonObject> {
+    await this.fs();
+    if (ownerCheck(this.env, input?.actor_sub ?? null) !== "owner") return { ok: false, error: "owner_only" } as JsonObject;
+    const subject = String(input?.actor ?? "").trim().toLowerCase().slice(0, 190);
+    if (!subject) return { ok: false, error: "invalid_actor" } as JsonObject;
+    // The shared contract's actor form for the owner (test/fixtures/correction-v1: "owner:<Access email>").
+    const actor = subject.startsWith("owner:") ? subject : `owner:${subject}`;
+    const r = await recordOwnerCorrection(this.env, (input?.input ?? null) as never, { actor, owner: true }) as Record<string, unknown>;
+    if (r?.ok !== true) return { ok: false, error: String(r?.error ?? "correction_failed").slice(0, 120) } as JsonObject;
+    return { ok: true, correction_id: r.correction_id, redactions: Array.isArray(r.redactions) ? r.redactions : [], deduplicated: r.deduplicated === true } as JsonObject;
   }
   /** The owner's manual arm or disarm pins a strategy against the council until the owner unpins it. */
   async unpinStrategy(input: { strategy_id?: string; actor_sub?: string | null }): Promise<JsonObject> {
