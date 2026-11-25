@@ -341,6 +341,14 @@ const patternInside = Object.freeze({
 /** The registry: adding or removing a strategy is one entry here. */
 export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
+/**
+ * Z2b's TP2 helper (src/zone-types.mjs zoneAim, tp_typed): the agents whose targets come from the key levels
+ * (tradeLevels or targetsAhead: the default agent, the sweep and the break-and-retest). Only their TP2 may move to the
+ * next decisive opposing key zone; the agents with their own targets (range_fade, the pattern agents, pattern_inside)
+ * keep theirs.
+ */
+export const KEY_TARGET_AGENTS = Object.freeze([DEFAULT_AGENT, "sweep_reversal", "breakout_retest"]);
+export const keyLevelTargets = (id) => KEY_TARGET_AGENTS.includes(id);
 
 export function strategyAgentsMode(env) {
   return String(env?.STRATEGY_AGENTS_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";

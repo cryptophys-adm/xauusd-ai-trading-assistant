@@ -327,3 +327,192 @@ export function zoneRuleToken(env) {
   const mode = zoneAheadMode(env);
   return mode === "trend" ? ZONE_AHEAD_RULE : mode === "all" ? `${ZONE_AHEAD_RULE}:all` : null;
 }
+
+// ---------------------------------------------------------------- Z2b: execution plans aimed by zone type
+// Owner 2026-11-23, "Langsung prioritaskan" (docs/RFC_DEMAND_SUPPLY_ZONES.md §6). The targets, the stop and the strategy
+// pick read the zone types. Every rule runs on EXECUTION COPIES of the plans (src/decision-engine.mjs: the guardrails'
+// plan in guardrailsFor, the agents' plans where assess attaches them), after agentsConsensus and the quorum, so the
+// STRATEGY_AGENTS witness and the quorum read the plans as before; zoneAhead runs last on every aimed copy.
+//   tp_typed   TP1-KZ's target set (the key zones, zone_rank "candidate"): a decisive opposing TP1 gains its words in
+//              tp1_note, its price never changes ('label'); TP2 is the next decisive opposing key zone at least
+//              tp2_gap_atr beyond TP1 and at least tp2_min_r, else today's TP2. 'qualified' (owner-set only, after the
+//              owner amends TP1-KZ to tp1_kz@2): a decisive opposing qualified zone at or beyond ZONE_NEED, nearer than
+//              TP1, becomes TP1. Inert with TP1_KEY_ZONE_MODE off, and for agents with their own targets.
+//   stop_skip  the zone_pullback geometry's stop sits beyond the first zone at least stop_gap_atr beyond the entry that
+//              is not a decisive opposing-type zone (supply under a long, demand over a short); today's pad, cap and
+//              fallback. Structural stops (sweep, breakout, range, patterns) are unchanged.
+//   factor     pickStrategy's score x zone_factor: factor_own for a decisive own-type entry zone that is fresh or
+//              tested, factor_opposite for a decisive opposite-type one, else 1 (src/decision-engine.mjs pickStrategy).
+// zone_rules = [{ rule, base_tp1_r, base_stop_atr }] on a copy a rule moved a price of (distances from the entry, never a
+// price: Z5 and MS2's base arm rebuild the base from the entry); [{ rule, held: "rrr" }] on the base kept when the aimed
+// copy fails the reward gate its base passed. Record only: never in the council's evidence, a card or a room.
+// Switches: ZONE_PRIORITY (unset "off": none of Z2b), ZONE_AIM_OFF (tokens tp, stop, factor; default ""), ZONE_AIM_TP
+// ("label" default | "qualified").
+
+export const ZONE_AIM_RULE = "zone_aim@1";
+export const ZONE_AIM_TOKENS = Object.freeze(["tp", "stop", "factor"]);
+export const ZONE_AIM_TP_MODES = Object.freeze(["label", "qualified"]);
+export const ZONE_AIM = Object.freeze({
+  tp2_gap_atr: 0.5, tp2_min_r: 1.5,
+  stop_gap_atr: 0.5, stop_pad_atr: 0.2, stop_cap_atr: 2.5, stop_fallback_atr: 1.5,
+  factor_own: 1.2, factor_opposite: 0.85
+});
+
+/** ZONE_AIM_OFF: the ZONE_AIM_TOKENS left off, comma- or space-separated, in token order; unknown tokens are ignored. */
+export function zoneAimOffMode(env) {
+  const given = new Set(String(env?.ZONE_AIM_OFF ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()));
+  return ZONE_AIM_TOKENS.filter((t) => given.has(t));
+}
+/** ZONE_AIM_TP: "label" (default) | "qualified" (owner-set only); an unknown value reads "label". */
+export function zoneAimTpMode(env) {
+  return String(env?.ZONE_AIM_TP ?? "label").trim().toLowerCase() === "qualified" ? "qualified" : "label";
+}
+/**
+ * The Z2b rules in force: { tp: "label" | "qualified" | null, stop, factor } while ZONE_PRIORITY is on and the zones are
+ * typed (KEY_LEVEL_ZONE_TYPES on in env and in the strategy's modes), with at least one rule on; else null (inert).
+ */
+export function zoneAimMode(env, modes = null) {
+  if (zonePriorityMode(env) !== "on" || keyLevelZoneTypesMode(env) === "off" || modes?.zoneTypes === "off") return null;
+  const off = zoneAimOffMode(env);
+  if (off.length === ZONE_AIM_TOKENS.length) return null;
+  return { tp: off.includes("tp") ? null : zoneAimTpMode(env), stop: !off.includes("stop"), factor: !off.includes("factor") };
+}
+/**
+ * The rule_version token of Z2b (src/mode-shadow.mjs ruleVersionOf): ZONE_AIM_RULE, ":qualified" in that TP mode, and
+ * ":no_<token>" for each rule left off; null while Z2b is inert.
+ */
+export function zoneAimRuleToken(env) {
+  const aim = zoneAimMode(env);
+  if (!aim) return null;
+  return `${ZONE_AIM_RULE}${aim.tp === "qualified" ? ":qualified" : ""}${zoneAimOffMode(env).map((t) => `:no_${t}`).join("")}`;
+}
+
+const ownType = (dir) => (dir > 0 ? "demand" : "supply");
+const oppType = (dir) => (dir > 0 ? "supply" : "demand");
+/** Pure: a zone's words ({ type, strength, freshness }, a plan's zone_types entry) decisive and of `type`? */
+const decisiveWords = (w, type) => Boolean(w) && w.type === type && decisive({ zone_type: w.type, zone_strength: w.strength });
+
+/**
+ * Pure: pickStrategy's zone factor for a plan on a side (dir 1 long, -1 short), from its entry zone's words
+ * (plan.zone_types.entry): ZONE_AIM.factor_own for a decisive own-type zone (demand for a long) that is fresh or tested,
+ * ZONE_AIM.factor_opposite for a decisive opposite-type zone, else 1. Null for a plan without zone_types (untyped).
+ */
+export function zoneFactorOf(plan, dir) {
+  if (!plan?.zone_types || typeof plan.zone_types !== "object") return null;
+  const e = plan.zone_types.entry ?? null;
+  if (decisiveWords(e, ownType(dir)) && (e.freshness === "fresh" || e.freshness === "tested")) return ZONE_AIM.factor_own;
+  if (decisiveWords(e, oppType(dir))) return ZONE_AIM.factor_opposite;
+  return 1;
+}
+
+const tpWords = (z) => `(${[z.zone_type, z.zone_freshness].filter(Boolean).join(", ")})`;
+const fresh = (z) => (z.zone_freshness ? ` (${z.zone_freshness})` : "");
+const aroundWords = (z) => ({ type: z.zone_type, strength: z.zone_strength ?? null, freshness: z.zone_freshness ?? null });
+
+/**
+ * Pure (Z2b): the plan's execution copy aimed by zone type, or the plan itself when no rule applies. `around` is the
+ * recorded set (aroundSet: the targets and zoneAhead read only it); ctx = { dir, atrH1, trend, aim (zoneAimMode),
+ * keyZone (TP1-KZ on), typedTargets (the plan's targets come from the key zones), stopFromZones (the tradeLevels
+ * geometry: its stop sits beyond a key-level zone), levels (zoneLevels of every zone, the stop's search set) }.
+ * The entry never moves. A copy a rule moved a price of carries zone_rules and a fresh opposing_ahead (zoneAhead last,
+ * on the final entry and stop); a label alone changes no price and records no rule.
+ */
+export function zoneAim(plan, around, { dir, atrH1, trend = null, aim = null, keyZone = false, typedTargets = false, stopFromZones = false, levels = [] } = {}) {
+  if (!plan || !aim || !(dir === 1 || dir === -1) || ![plan.entry, plan.stop, plan.tp1, plan.tp2, atrH1].every(isNum) || atrH1 <= 0) return plan;
+  if (!typedZones(levels) && !(Array.isArray(around) && around.some((z) => z?.zone_type))) return plan;
+  const entry = plan.entry, baseRisk = Math.abs(entry - plan.stop);
+  if (!(baseRisk > 0)) return plan;
+  const out = { ...plan };
+  const rules = [];
+  const types = plan.zone_types && typeof plan.zone_types === "object" ? { ...plan.zone_types } : null;
+
+  // stop_skip: past a decisive opposing-type zone to the first zone that is not one (today's gap, pad, cap and fallback).
+  if (aim.stop && stopFromZones) {
+    const lo = (z) => (isNum(z.low) ? z.low : z.price), hi = (z) => (isNum(z.high) ? z.high : z.price);
+    const far = (z) => (dir > 0 ? lo(z) : hi(z));
+    const gap = ZONE_AIM.stop_gap_atr * atrH1, pad = ZONE_AIM.stop_pad_atr * atrH1;
+    const against = (z) => z?.ds?.type === oppType(dir) && decisive(z);
+    const behind = (levels || []).filter((z) => isNum(far(z)) && dir * (entry - far(z)) >= gap).sort((a, b) => dir * (far(b) - far(a)));
+    const first = behind[0] ?? null;
+    // Only the plan's own stop zone (today's choice, its stop within a cent): a fallback or a structural stop is kept.
+    if (first && against(first) && Math.abs(r2(far(first) - dir * pad) - plan.stop) < 0.01) {
+      const next = behind.find((z) => !against(z)) ?? null;
+      let stop = next ? far(next) - dir * pad : null, from = next;
+      let note = next ? `beyond ${next.label}` : null;
+      if (!isNum(stop) || Math.abs(entry - stop) > ZONE_AIM.stop_cap_atr * atrH1) { stop = entry - dir * ZONE_AIM.stop_fallback_atr * atrH1; note = "1.5 times the 1H average range"; from = null; }
+      if (r2(stop) !== plan.stop) {
+        out.stop = r2(stop); out.stop_note = note; out.risk = r2(Math.abs(entry - stop));
+        if (types) types.stop = zoneWords(from);
+        // EZ1: the entry zone's stop side stays within ENTRY_ZONE.stop_share (0.5) of the new risk.
+        if (isNum(out.entry_low) && isNum(out.entry_high)) {
+          const toStop = 0.5 * Math.abs(entry - stop);
+          if (dir > 0) out.entry_low = r2(Math.max(out.entry_low, entry - toStop)); else out.entry_high = r2(Math.min(out.entry_high, entry + toStop));
+          if (!(out.entry_high > out.entry_low)) { delete out.entry_low; delete out.entry_high; }
+        }
+        rules.push("stop_skip");
+      }
+    }
+  }
+  const risk = Math.abs(entry - out.stop);
+
+  // tp_typed: TP1-KZ's set (the key zones of the recorded set), only for plans whose targets come from it.
+  if (aim.tp && keyZone && typedTargets) {
+    const edge = (z) => (dir > 0 ? z.low : z.high);
+    const set = (Array.isArray(around) ? around : []).filter((z) => isNum(z?.low) && isNum(z?.high));
+    const opposing = (z) => z.zone_type === oppType(dir) && decisive(z);
+    const keys = set.filter((z) => z.zone_rank === "candidate");
+    let t1 = keys.find((z) => Math.abs(edge(z) - plan.tp1) < 0.005) ?? null;
+    if (aim.tp === "qualified") {
+      const need = zoneNeed(risk, atrH1);
+      const q = set.filter((z) => z.zone_rank === "qualified" && opposing(z) && dir * (edge(z) - entry) >= need - 1e-9 && dir * (edge(z) - plan.tp1) < 0)
+        .sort((a, b) => dir * (edge(a) - edge(b)))[0] ?? null;
+      if (q) {
+        t1 = q;
+        out.tp1 = r2(edge(q)); out.tp1_note = `the nearest ${q.zone_strength} ${q.zone_type} zone ahead${fresh(q)}`;
+        if (types) types.tp1 = aroundWords(q);
+      }
+    }
+    if (t1 && opposing(t1) && out.tp1 === plan.tp1) out.tp1_note = `${plan.tp1_note} ${tpWords(t1)}`;
+    const t2 = keys.filter((z) => opposing(z) && dir * (edge(z) - out.tp1) >= ZONE_AIM.tp2_gap_atr * atrH1 - 1e-9 && Math.abs(edge(z) - entry) / risk >= ZONE_AIM.tp2_min_r)
+      .sort((a, b) => dir * (edge(a) - edge(b)))[0] ?? null;
+    if (t2 && r2(edge(t2)) !== plan.tp2) {
+      out.tp2 = r2(edge(t2)); out.tp2_note = `the next ${t2.zone_strength} ${t2.zone_type} key zone${fresh(t2)}`;
+      if (types) types.tp2 = aroundWords(t2);
+    }
+    if (out.tp1 !== plan.tp1 || out.tp2 !== plan.tp2) rules.push("tp_typed");
+  }
+
+  if (!rules.length) return out.tp1_note === plan.tp1_note ? plan : out;
+  out.rrr = { tp1: r2(Math.abs(out.tp1 - entry) / risk), tp2: r2(Math.abs(out.tp2 - entry) / risk) };
+  if (types) out.zone_types = types;
+  const base = { base_tp1_r: r2(Math.abs(plan.tp1 - entry) / baseRisk), base_stop_atr: r2(baseRisk / atrH1) };
+  out.zone_rules = rules.map((rule) => ({ rule, ...base }));
+  // Z0 last: the opposing zone ahead on the final entry and stop.
+  const oa = zoneAhead(out, around, { dir, atrH1, trend });
+  if (oa) out.opposing_ahead = oa;
+  return out;
+}
+
+/**
+ * Pure (Z2b): the execution copy the side trades: `zoneAim`'s copy, unless it fails `passes` (the reward gate) where the
+ * base passed: then the base, with zone_rules [{ rule, held: "rrr" }]. A base that fails the gate is not aimed (no rule
+ * rescues a plan the gate refuses).
+ */
+export function zoneAimHeld(plan, around, ctx, passes = () => true) {
+  if (!plan || !passes(plan)) return plan;
+  const aimed = zoneAim(plan, around, ctx);
+  if (aimed === plan || !aimed.zone_rules || passes(aimed)) return aimed;
+  return { ...plan, zone_rules: aimed.zone_rules.map(({ rule }) => ({ rule, held: "rrr" })) };
+}
+
+/**
+ * Pure (Z2b, MS2's base arm and Z5): the base plan's stop and first target rebuilt from a recorded plan's entry and its
+ * zone_rules ({ entry, stop, tp1 }; distances only, so the prices are the entry's scale), or null when no rule moved a
+ * price (the plan is its own base). `dir` 1 long, -1 short.
+ */
+export function zoneAimBase(plan, atrH1, dir) {
+  const r = (Array.isArray(plan?.zone_rules) ? plan.zone_rules : []).find((x) => isNum(x?.base_stop_atr) && isNum(x?.base_tp1_r));
+  if (!r || !isNum(plan.entry) || !isNum(atrH1) || !(dir === 1 || dir === -1)) return null;
+  const risk = r.base_stop_atr * atrH1;
+  return { entry: plan.entry, stop: r2(plan.entry - dir * risk), tp1: r2(plan.entry + dir * r.base_tp1_r * risk) };
+}

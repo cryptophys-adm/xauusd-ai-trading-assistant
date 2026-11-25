@@ -23,6 +23,9 @@ export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Rec
 export function agentCatalog(statuses?: Record<string, string>, options?: { suspended?: string[] }): Array<{ id: string; label: string; version: number; status: string; suspended?: boolean; fits: string; family?: string; patterns?: Array<{ id: string; name: string }> }>;
 export function priceActionReading(patterns: unknown, calibration?: unknown): Array<Record<string, any>>;
 export function slimPlan(p: Record<string, any>): Record<string, any>;
+// Z2b: the agents whose targets come from the key levels (tp_typed may move their TP2).
+export const KEY_TARGET_AGENTS: readonly string[];
+export function keyLevelTargets(id: string): boolean;
 export const CONSENSUS_RULES: Readonly<{ silent: number; record_min_setups: number; voice_min: number; voice_max: number }>;
 export function agentVoice(record: unknown): number;
 export function agentsConsensus(plans?: { long?: Record<string, { status: string; plan: Record<string, any> }>; short?: Record<string, { status: string; plan: Record<string, any> }> }, options?: { records?: unknown; passes?: (plan: Record<string, any>) => boolean; statuses?: Record<string, string> | null }): { lean: number | null; live: number; speaking: number; long: Array<{ id: string; name: string; voice: number; pattern?: string }>; short: Array<{ id: string; name: string; voice: number; pattern?: string }>; summary: string };

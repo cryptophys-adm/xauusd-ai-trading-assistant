@@ -24,7 +24,9 @@ import { d1, kv } from "./fixtures/mode-shadow.mjs";
 import { CAPTURE_2026_11_20_22 } from "./fixtures/z2-capture-2026-11-20-22.mjs";
 
 const mods = { se, de, ea, pp, pa, pl };
-const ON = Object.freeze({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "trend" });
+// Z2b (test/zone-aim.test.mjs) shares ZONE_PRIORITY: these tests pin Z2 alone, every Z2b rule left off.
+const Z2B_OFF = "tp,stop,factor";
+const ON = Object.freeze({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "trend" });
 const M15 = 15 * 60_000;
 const KEY = `OANDA:XAUUSD:15:${Date.parse(CLOSE) - M15}`;
 
@@ -63,8 +65,8 @@ test("Z2-1 the switches: ZONE_PRIORITY (unset reads off), ZONE_AHEAD_MODE, untyp
   assert.deepEqual(ZONE_AHEAD_MODES, ["trend", "all", "record", "off"]);
   assert.equal(zoneAheadMode({}), "off");
   assert.equal(zoneAheadMode({ ZONE_PRIORITY: "on" }), "trend", "trend is the mode's default");
-  for (const m of ZONE_AHEAD_MODES) assert.equal(zoneAheadMode({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: m.toUpperCase() }), m);
-  assert.equal(zoneAheadMode({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "nonsense" }), "trend");
+  for (const m of ZONE_AHEAD_MODES) assert.equal(zoneAheadMode({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: m.toUpperCase() }), m);
+  assert.equal(zoneAheadMode({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "nonsense" }), "trend");
   assert.equal(zoneAheadMode({ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "all" }), "off");
   // KEY_LEVEL_ZONE_TYPES off (env or the strategy's modes): untyped zones, so no Z rule acts.
   assert.equal(zoneAheadMode({ ...ON, KEY_LEVEL_ZONE_TYPES: "off" }), "off");
@@ -89,11 +91,11 @@ test("Z2-2 the check: supply 0.5R ahead of a long fails with a neutral or opposi
   assert.deepEqual(check(withTrend), { id: "zone_ahead", pass: true, detail: "the nearest medium fresh supply zone lies 0.35 ATR ahead of the long entry (0.5R), short of the 1.07R it needs, but the trend (lean +0.15) is with the trade: noted only" });
   assert.equal(withTrend.allowed, guard(unitStrategy(0.15)).allowed, "the side is as open as without Z2");
   // 'all' (owner-set only): no trend exemption.
-  const all = guard(unitStrategy(0.3), { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "all" });
+  const all = guard(unitStrategy(0.3), { ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "all" });
   assert.equal(check(all).pass, false);
   assert.match(check(all).detail, /the owner's 'all' mode exempts no trend/);
   // 'record': no check; the plan keeps would_block (Z0's record).
-  const record = guard(unitStrategy(0), { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "record" });
+  const record = guard(unitStrategy(0), { ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "record" });
   assert.equal(check(record), null);
   assert.equal(record.plan.opposing_ahead.would_block, true);
   assert.equal(record.zone_ahead, "record");
@@ -106,7 +108,7 @@ test("Z2-2 the check: supply 0.5R ahead of a long fails with a neutral or opposi
 test("Z2-3 off: ZONE_PRIORITY off, ZONE_AHEAD_MODE off and untyped zones give checks that deep-equal TP1-KZ's (no Z2 key on the side)", () => {
   for (const t of [0, 0.3, -0.3]) {
     const before = guard(unitStrategy(t));
-    for (const env of [{ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "all" }, { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "off" }, { ...ON, KEY_LEVEL_ZONE_TYPES: "off" }]) {
+    for (const env of [{ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "all" }, { ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "off" }, { ...ON, KEY_LEVEL_ZONE_TYPES: "off" }]) {
       const g = guard(unitStrategy(t), env);
       assert.equal(JSON.stringify(g), JSON.stringify(before), JSON.stringify(env));
     }
@@ -233,7 +235,7 @@ test("Z2-9 the council, only when on: plan words, opposing_zone_ahead_atr and wi
   assert.equal(sys(on).replace(` ${de.ZONE_PRIORITY_PROMPT}`, ""), sys(bare(on)), "one sentence");
   assert.ok(off.short.strategies && !on.short.strategies, "the filter: liveAgentPlans leaves the short's plans out");
   // 'record': the words and the sentence stay, the check is gone.
-  const rec = ev({ ...ZONE_ENV, ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "record" });
+  const rec = ev({ ...ZONE_ENV, ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "record" });
   assert.equal(rec.short.checks.some((c) => c.check === "zone_ahead"), false);
   assert.ok(sys(rec).includes(de.ZONE_PRIORITY_PROMPT));
 });
@@ -243,12 +245,12 @@ test("Z2-10 doctrine-facts: guardrailIds with ZONE_PRIORITY off is byte-identica
   assert.deepEqual(today, ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "room", "confidence"]);
   assert.equal(JSON.stringify(guardrailIds({ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "all" })), JSON.stringify(today));
   assert.deepEqual(guardrailIds(ON), ["market_open", "fresh", "quorum", "no_veto", "levels", "reward", "zone_ahead", "room", "confidence"]);
-  assert.deepEqual(guardrailIds({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "record" }), today);
+  assert.deepEqual(guardrailIds({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "record" }), today);
 });
 
 test("Z2-11 no detail reads like a price; the public recap of a zone-blocked decision equals the one without the check", () => {
   const details = [];
-  for (const t of [0, 0.3, -0.3]) for (const m of ["trend", "all"]) details.push(check(guard(unitStrategy(t), { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: m })).detail);
+  for (const t of [0, 0.3, -0.3]) for (const m of ["trend", "all"]) details.push(check(guard(unitStrategy(t), { ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: m })).detail);
   const loaded = bearLoaded();
   const env = { ...ZONE_ENV, ...ON };
   const rec = de.buildDecisionRecord({ key: KEY, barClose: CLOSE, loaded, assessment: de.assess(loaded, { now: NOW, env }), council: SELL, now: NOW, env });
@@ -271,7 +273,7 @@ test("Z2-12 'all' logs one warning line per decision; trend logs none", async ()
   try {
     for (const mode of ["all", "trend"]) {
       de.resetDecisionSchemaCacheForTests();
-      const run = { DB: d1(), SIGNAL_CACHE: kv(), AI: { run: async () => { throw new Error("model down"); } }, ...ZONE_ENV, ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: mode, MODE_SHADOW_EVIDENCE: "off" };
+      const run = { DB: d1(), SIGNAL_CACHE: kv(), AI: { run: async () => { throw new Error("model down"); } }, ...ZONE_ENV, ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: mode, MODE_SHADOW_EVIDENCE: "off" };
       await run.SIGNAL_CACHE.put(de.TRADING_MODE_KEY, "intraday");
       await de.runDecisionEngine(run, { barClose: CLOSE, now: NOW, clock: () => NOW + 5_000, loaded: bearLoaded() });
     }
@@ -288,8 +290,8 @@ test("Z2-13 rule_version gains zone_ahead@1 while the check is in the guardrails
   assert.equal(ruleVersionOf({ ZONE_PRIORITY: "off" }), "tp1_kz:on");
   assert.equal(ruleVersionOf(ON), "tp1_kz:on+zone_ahead@1");
   assert.equal(ruleVersionOf({ ...ON, TP1_KEY_ZONE_MODE: "off" }), "tp1_kz:off+zone_ahead@1");
-  assert.equal(ruleVersionOf({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "all" }), "tp1_kz:on+zone_ahead@1:all");
-  assert.equal(ruleVersionOf({ ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "record" }), "tp1_kz:on");
+  assert.equal(ruleVersionOf({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "all" }), "tp1_kz:on+zone_ahead@1:all");
+  assert.equal(ruleVersionOf({ ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "record" }), "tp1_kz:on");
   assert.equal(zoneRuleToken({ ...ON, KEY_LEVEL_ZONE_TYPES: "off" }), null);
 });
 
@@ -324,7 +326,7 @@ test("Z2-14 MS2's shadow replay reproduces zone_ahead from the record; room-tuni
 
 test("Z2-15 ZONE_PRIORITY off: the whole scenario is byte-identical to TP1-KZ's (the run without the variable)", async () => {
   const base = await zoneScenario(mods, { db: d1, kv });
-  for (const env of [{ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "trend" }, { ZONE_PRIORITY: "on", ZONE_AHEAD_MODE: "off" }]) {
+  for (const env of [{ ZONE_PRIORITY: "off", ZONE_AHEAD_MODE: "trend" }, { ZONE_PRIORITY: "on", ZONE_AIM_OFF: Z2B_OFF, ZONE_AHEAD_MODE: "off" }]) {
     const off = await zoneScenario(mods, { db: d1, kv, env });
     for (const k of ["strategy", "guards", "record", "evidence", "messages", "signal", "management", "recap", "analysis", "stored", "planRows"]) assert.equal(JSON.stringify(off[k]), JSON.stringify(base[k]), `${JSON.stringify(env)} ${k}`);
   }
