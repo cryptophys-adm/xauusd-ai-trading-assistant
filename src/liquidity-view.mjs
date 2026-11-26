@@ -16,8 +16,9 @@
 //            them now: LENS_ROOM_LINE "conditions" and lens B on, above its floor and fresh); null without available facts.
 //   B19      effects.level_moves: the hold readings (a stop moved to a lens B level: SL+ or the ladder's lock), and each
 //            skip's outcome from its skip reading; level_moves is null while LENS_LEVEL_READINGS is "off".
-//            A level move's action is "ladder_lock" (the ladder's lock) or "trail": the SL+ key-level stop move, never
-//            the trailing TP (no target move is recorded). Not called a stop or an SL: the lens report refuses those words.
+//            A level move's action is "ladder_lock" (the ladder's lock) or "key_level_lock" (the reading's what "trail":
+//            the SL+ key-level stop move, never the trailing TP; no target move is recorded). Neither says stop or SL:
+//            the lens report refuses those words and the page forbids order words.
 import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine, liquidityConditions, liquidityConditionsOn } from "./liquidity-lens.mjs";
 import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
 import { activeAccount, lensRoomLine, lensLevelReadings } from "./lens-steps.mjs";
@@ -232,7 +233,7 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
     .map((r) => { const f = parse(r.facts, {}) ?? {}; const side = f.side === "BUY" || f.side === "SELL" ? f.side : null; return { at_ms: Number(r.at_ms), side, mode: typeof f.mode === "string" ? f.mode : null, status: r.status ?? null, choice: r.choice ?? null, rule: r.rule ?? null, outcome: side && finite(Number(f.issued_ms)) ? skipOutcomes.get(`skip:${Number(f.issued_ms)}:${side === "BUY" ? "B" : "S"}`) ?? null : null }; });
   // B19: the stops Omega moved to a lens B level (hold readings), with their outcome; no price.
   const levelMoves = lensLevelReadings(env) === "off" ? null : (await select(db, "SELECT at_ms, mode, side, outcome, detail_json FROM lens_readings WHERE lens = 'liquidity' AND kind = 'hold' AND at_ms > ? ORDER BY at_ms DESC LIMIT ?", since, VIEW_EFFECTS))
-    .map((r) => { const d = parse(r.detail_json, {}) ?? {}; return { at_ms: Number(r.at_ms), side: sideWord(r.side), mode: r.mode ?? null, action: d.what === "ladder" ? "ladder_lock" : "trail", outcome: outcomeOf(r.outcome) }; });
+    .map((r) => { const d = parse(r.detail_json, {}) ?? {}; return { at_ms: Number(r.at_ms), side: sideWord(r.side), mode: r.mode ?? null, action: d.what === "ladder" ? "ladder_lock" : "key_level_lock", outcome: outcomeOf(r.outcome) }; });
   const deferrals = (await select(db, "SELECT ms, detail FROM omega_events WHERE action = 'plan' AND ms > ? AND detail LIKE '%liquidity_modify_deferred%' ORDER BY ms DESC LIMIT ?", since, VIEW_EFFECTS))
     .map((r) => { const d = parse(r.detail, {}) ?? {}; const ids = String(d?.details?.liquidity_modify_deferred ?? "").split(",").filter(Boolean); return { at_ms: Number(r.ms), intents: ids.length }; });
   const pmActions = (await select(db, "SELECT at_ms, side, action, rule, status FROM position_actions WHERE at_ms > ? AND (rule LIKE '%liquidity_sweep_against%' OR why LIKE '%liquidity_sweep_against%') ORDER BY at_ms DESC LIMIT ?", since, VIEW_EFFECTS))

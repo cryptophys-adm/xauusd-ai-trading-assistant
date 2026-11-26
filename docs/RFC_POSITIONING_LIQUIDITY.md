@@ -489,9 +489,10 @@ Each lens is judged on its own readings, so its weight follows its own skill. A 
     is scored over the next eight closed 15m bars of the broker's M1 archive. A close more than 0.1 × ATR(14, 15m) beyond
     the stop is a miss; eight bars without one is a hit.
   - **The word "trail".** A hold's `what` is `"ladder"` (the ladder's lock) or `"trail"`. Here "trail" means the
-    SL+ key-level stop move (`sl_key_level_*`), not the trailing TP: no target move is a hold reading. It is not
-    called a stop or an SL because the lens report's forbidden keys (`forbiddenReportKeys`) refuse "sl" and "stop",
-    and the Nexus page forbids order words.
+    SL+ key-level stop move (`sl_key_level_*`), not the trailing TP: trailing-TP moves get no hold reading (ruling b).
+    It is not called a stop or an SL because the lens report's forbidden keys (`forbiddenReportKeys`) refuse "sl" and
+    "stop", and the Nexus page forbids order words. The liquidity view shows it as `key_level_lock` ("key level lock"
+    on the page, beside "ladder lock"), so nobody reads it as a target move.
   - **Why they stay out of the floor.** A skip cites a sweep that is already a `sweep` reading, so floored on skips the
     same sweep would count twice. A hold measures the stop's level, a different question from the lens's call, so it
     should not floor the call. After 7 days the counts and hit rates per kind go to the orchestrator.
@@ -756,7 +757,7 @@ weight for the lens under another `doctrine_sha`, pulled after the floor.
   byte for byte today's.
 - `lensFloorStep` counts only `FLOOR_KINDS`.
 - The Nexus liquidity view carries each skip's `outcome` and `effects.level_moves` (`{ at_ms, side, mode, action:
-  "ladder_lock" | "trail", outcome }`; no price; null with the switch off).
+  "ladder_lock" | "key_level_lock", outcome }`; no price; null with the switch off).
 - `ENGINE_CODE_HASH` b4077f53… → 20e78488… (`manageIntents` only); `ENGINE_BEHAVIOUR_HASH` ecfe3f90… unchanged.
 
 **Report, health, page.** `cryptophys.lens-report.v1` daily through `AETHER.ingestLensReport` when offered

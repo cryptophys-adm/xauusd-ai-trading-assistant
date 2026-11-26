@@ -146,7 +146,7 @@
         "at_ms": 1795443600000,
         "side": "SELL",
         "mode": "intraday",
-        "action": "trail",
+        "action": "key_level_lock",
         "outcome": "pending"
       },
       {

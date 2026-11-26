@@ -538,7 +538,7 @@ export const VIEWS: Entry[] = [
     name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: liquidity,
     shows: [...PANELS, HINT, "lens B on", "LIQUIDITY", "fresh 13m", "Council only: it never counts toward the quorum.", "0.03", "a tenth of lens B&#x27;s 0.30, at most 0.06", "▲ +0.60 bullish", "▲ sell-side", "3 min ago",
       "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness", "made", "14:47 UTC", "lens B state", "14:46 UTC", "Quorum with liquidity", "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.", "▲ 0.67", "+0.17", "▲ long",
-      "Level moves", "ladder lock", "trail", "past a lens B level", "1 hit", "1 pending", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
+      "Level moves", "ladder lock", "key level lock", "past a lens B level", "1 hit", "1 pending", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
     hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."],
     missing: [NOT_FOUND]
   },

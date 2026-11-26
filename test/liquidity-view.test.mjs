@@ -86,7 +86,7 @@ test("LV1. the fixture is the view's answer: keys and types, the outcomes and st
     assert.ok(Array.isArray(f.effects.level_moves));
     for (const m of f.effects.level_moves) assert.deepEqual(Object.keys(m).sort(), ["action", "at_ms", "mode", "outcome", "side"]);
   }
-  assert.deepEqual(main.effects.level_moves.map((m) => [m.action, m.outcome]), [["trail", "pending"], ["ladder_lock", "hit"]]);
+  assert.deepEqual(main.effects.level_moves.map((m) => [m.action, m.outcome]), [["key_level_lock", "pending"], ["ladder_lock", "hit"]]);
   assert.deepEqual(main.effects.skips.map((x) => x.outcome), ["hit"]);
   assert.equal((await view({ env: { LENS_LEVEL_READINGS: "off" } })).v.effects.level_moves, null, "off: no level moves");
   // B16: the conditions the 15m and 1H rooms read (liquidityConditions), filled from the latest state; none without
