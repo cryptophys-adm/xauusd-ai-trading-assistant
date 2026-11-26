@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { publicRecap, recapLeaks, publicSentences, readPublicProjection, publicDelayHours, DEFAULT_PUBLIC_DELAY_HOURS, PUBLIC_FORBIDDEN_KEYS } from "../src/public-projection.mjs";
+import { publicRecap, recapLeaks, publicSentences, readPublicProjection, recapsLimit, RECAPS_MAX_LIMIT, publicDelayHours, DEFAULT_PUBLIC_DELAY_HOURS, PUBLIC_FORBIDDEN_KEYS } from "../src/public-projection.mjs";
 import { checkContentDraft, CONTENT_CHECKS } from "../src/content-guardian.mjs";
 
 // A decision shaped like production's (2026-11-13): prices in the summary, the reasons, the guardrail details,
@@ -145,4 +145,33 @@ test("the guardian fails each rule on its own", () => {
   assert.deepEqual(only(`${base} Zona permintaan (area beli) dan zona penawaran (area jual).`), [], "a buy or sell zone is information");
   assert.deepEqual(only(`${base} Sistem condong beli.`), []);
   assert.equal(CONTENT_CHECKS.length, 11);
+});
+
+test("RC1 the recaps RPC's limit covers its window (days x 96 + 1, both ends, at most 200): delay 0 and delay 24 return every decision of two days", async () => {
+  assert.equal(recapsLimit({ days: 2 }), 193);
+  assert.equal(recapsLimit({ days: 1 }), 97);
+  assert.equal(recapsLimit({ days: 7 }), RECAPS_MAX_LIMIT, "capped at 200");
+  assert.equal(recapsLimit({ days: 2, limit: 30 }), 30, "the caller's own limit");
+  assert.equal(recapsLimit({ days: 2, limit: 999 }), RECAPS_MAX_LIMIT);
+  assert.equal(recapsLimit({ days: 2, limit: 0 }), 193, "no limit: the window's");
+  assert.equal(recapsLimit({}), 193, "the RPC's default of 2 days");
+  const now = Date.parse("2026-11-26T12:00:00Z");
+  for (const delay of [0, 24]) {
+    const db = d1();
+    // Every 15m decision from 3 days before the window's end: the 2-day window, both ends included, holds 193.
+    const end = now - delay * 3_600_000;
+    for (let t = end - 3 * 86_400_000 + 900_000; t <= end; t += 900_000) {
+      const iso = new Date(t).toISOString(), d = decision(iso, "WAIT");
+      db.raw.prepare("INSERT INTO engine_decisions VALUES (?, ?, ?, ?, ?, ?, ?)").run(iso, d.bar_close, iso, d.stance, d.confidence, "council", d.decision_json);
+    }
+    const kv = { async get() { return JSON.stringify({ candles: [] }); } };
+    const env = { DB: db, SIGNAL_CACHE: kv, PUBLIC_DELAY_HOURS: String(delay) };
+    const before = await readPublicProjection(env, { days: 2, now }); // the old call: the default LIMIT 50
+    assert.equal(before.recaps.length, 50, `delay ${delay}: the old RPC saw only the 50 newest`);
+    const after = await readPublicProjection(env, { days: 2, limit: recapsLimit({ days: 2 }), now });
+    assert.equal(after.recaps.length, 193, `delay ${delay}: the whole two days`);
+    assert.equal(after.recaps.at(-1).bar_close, new Date(end - 2 * 86_400_000).toISOString(), "back to the window's start");
+    assert.equal(after.recaps[0].bar_close, new Date(end).toISOString());
+    assert.deepEqual(after.recaps.flatMap((r) => recapLeaks(r)), [], "the projection itself is unchanged");
+  }
 });

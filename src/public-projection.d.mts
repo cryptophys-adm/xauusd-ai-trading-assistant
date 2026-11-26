@@ -8,4 +8,6 @@ export function publicSentences(text: unknown, options?: { max?: number; len?: n
 export function sessionOfClose(iso: string): string;
 export function publicRecap(row: Record<string, any>, options?: { outcome?: string | null }): Record<string, any>;
 export function recapLeaks(value: unknown, path?: string): string[];
+export const RECAPS_MAX_LIMIT: number;
+export function recapsLimit(options?: { days?: number; limit?: number }): number;
 export function readPublicProjection(env: unknown, options?: { days?: number; limit?: number; now?: number }): Promise<Record<string, any>>;

@@ -103,6 +103,19 @@ export function recapLeaks(value, path = "") {
 }
 
 /** GET /api/public-projection: the recaps of decisions older than the delay, newest first. Read-only. */
+/**
+ * RC1 (orchestrator 2026-11-26, from the CTA session): the PublicProjection.recaps RPC's row limit. It passed only `days`,
+ * so readPublicProjection's default LIMIT 50 applied; with PUBLIC_DELAY_HOURS 0 (RT1, #590) the 50 newest 15m decisions
+ * cover about 12.5 hours, and the CTA recap window found none. Pure: the caller's `limit` when given, else one row per
+ * 15m bar over the window, both ends included (days x 96 + 1), within 1..200. The dashboard's /api/public-projection keeps its default.
+ */
+export const RECAPS_MAX_LIMIT = 200;
+export function recapsLimit({ days = 2, limit = undefined } = {}) {
+  const asked = Number(limit);
+  const n = Number.isFinite(asked) && asked > 0 ? asked : Math.min(14, Math.max(1, Math.round(Number(days) || 2))) * 96 + 1;
+  return Math.min(RECAPS_MAX_LIMIT, Math.max(1, Math.round(n)));
+}
+
 export async function readPublicProjection(env, { days = 7, limit = 50, now = Date.now() } = {}) {
   const delay = publicDelayHours(env);
   const until = new Date(now - delay * 3_600_000).toISOString();

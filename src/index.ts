@@ -255,7 +255,7 @@ import { syncAgentAllocation } from "./agent-allocation.mjs";
 import { scoreMetricShadow, readMetricShadow } from "./metric-shadow.mjs";
 import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.mjs";
 import { pruneModeShadowPlans } from "./mode-shadow.mjs";
-import { readPublicProjection } from "./public-projection.mjs";
+import { readPublicProjection, recapsLimit } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
 import { readPublicWarRoom, readPublicWarRoomScene } from "./public-warroom.mjs";
 import { readPublicTrackRecord } from "./public-track-record.mjs";
@@ -1816,9 +1816,11 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
    * (env itself is never written; without an override it is env itself).
    */
   private async fs(): Promise<void> { this.env = await withFeatureSwitches(this.env); }
-  async recaps(input?: { days?: number }): Promise<JsonObject> {
+  async recaps(input?: { days?: number; limit?: number }): Promise<JsonObject> {
     await this.fs();
-    return readPublicProjection(this.env, { days: Number(input?.days) || 2 }) as Promise<JsonObject>;
+    // RC1: the row limit covers the window (days x 96 + 1, at most 200) unless the caller names one.
+    const days = Number(input?.days) || 2;
+    return readPublicProjection(this.env, { days, limit: recapsLimit({ days, limit: input?.limit }) }) as Promise<JsonObject>;
   }
   /**
    * The real-time public analysis (owner 2026-11-14: "Real-time, hanya analisa"): the Key Level Agent's zones,
