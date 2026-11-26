@@ -7,8 +7,12 @@ label set and side: does price reach the target before the stop from this decisi
 
   - Features known before the council answers only (never the decision's stance, bias, confidence or
     plan), present in at least 20 % of the rows; a missing value stays missing (LightGBM's own handling).
+    A one-hot key (session_*, mode_*, regime_*, w_<witness>_state_*, w_<witness>_phase_*) reads 0 where
+    its group is present and it is not (MA1; src/model-gbm.mjs withOneHotZeros, mirrored exactly).
   - Walk-forward check: trained on the oldest 70 % of the decisive rows, judged on the newest 30 %
-    (Brier score against the base rate, AUC, the mean R of the rows it would pick); then trained on all.
+    (Brier score against the training base rate and against the test period's own, AUC, the mean R of
+    the rows it would pick); training rows whose label window (4 h tight, 12 h wide) reaches the test
+    period are purged from the check (MA1). Then trained on all.
   - The trees are written as compact JSON that the AI Worker evaluates itself (src/model-gbm.mjs); the
     script checks that its own evaluation of that JSON equals LightGBM's on every row before it writes.
 
@@ -29,7 +33,8 @@ VERSION = "cryptophys.model-gbm.v1"
 DECISION_OUTPUTS = re.compile(r"^(stance|bias|confidence|plan_)")
 LABEL_SETS = ("tight", "wide")
 SIDES = ("long", "short")
-RULES = {"min_rows": 150, "min_test": 40, "train_share": 0.7, "feature_presence": 0.2}
+RULES = {"min_rows": 150, "min_test": 40, "train_share": 0.7, "feature_presence": 0.2, "purge_hours": {"tight": 4, "wide": 12}}
+ONE_HOT = re.compile(r"^(session|mode|regime)_|^(w_[a-z0-9]+(?:_[a-z0-9]+)*?_(?:state|phase))_")
 PARAMS = {
     "objective": "binary", "num_leaves": 7, "learning_rate": 0.05, "min_data_in_leaf": 20,
     "feature_fraction": 0.8, "bagging_fraction": 0.8, "bagging_freq": 1, "lambda_l2": 1.0,
@@ -56,23 +61,56 @@ def label(row, label_set, side):
     return y, (r if num(r) else (1.5 if y else -1.0))
 
 
+def one_hot_group(key):
+    m = ONE_HOT.match(str(key))
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def with_one_hot_zeros(features, keys):
+    """src/model-gbm.mjs withOneHotZeros: a missing one-hot key of a present group reads 0."""
+    f = features if isinstance(features, dict) else {}
+    groups = {g for k, v in f.items() if num(v) and (g := one_hot_group(k))}
+    if not groups:
+        return f
+    out = None
+    for k in keys:
+        if num(f.get(k)):
+            continue
+        g = one_hot_group(k)
+        if g and g in groups:
+            if out is None:
+                out = dict(f)
+            out[k] = 0
+    return f if out is None else out
+
+
 def select_features(rows):
+    one_hot = sorted({k for row in rows for k in (row.get("features") or {}) if one_hot_group(k) and not DECISION_OUTPUTS.match(k)})
+    filled = [with_one_hot_zeros(row.get("features"), one_hot) for row in rows]
     count = {}
-    for row in rows:
-        for k, v in (row.get("features") or {}).items():
+    for f in filled:
+        for k, v in f.items():
             if num(v) and not DECISION_OUTPUTS.match(k):
                 count[k] = count.get(k, 0) + 1
     keys = sorted(k for k, n in count.items() if n >= RULES["feature_presence"] * len(rows))
     out = []
     for k in keys:
-        vals = {row["features"][k] for row in rows if num((row.get("features") or {}).get(k))}
+        vals = {f[k] for f in filled if num(f.get(k))}
         if len(vals) > 1:
             out.append(k)
     return out
 
 
 def matrix(rows, features):
-    return np.array([[float(row["features"][k]) if num((row.get("features") or {}).get(k)) else np.nan for k in features] for row in rows], dtype=np.float64)
+    filled = [with_one_hot_zeros(row.get("features"), features) for row in rows]
+    return np.array([[float(f[k]) if num(f.get(k)) else np.nan for k in features] for f in filled], dtype=np.float64)
+
+
+def close_ms(row):
+    try:
+        return datetime.fromisoformat(str(row.get("bar_close")).replace("Z", "+00:00")).timestamp() * 1000
+    except ValueError:
+        return None
 
 
 def compact(node):
@@ -123,10 +161,14 @@ def judge(booster, x, y, r, base):
     ps = booster.predict(x)
     brier = float(np.mean((ps - y) ** 2))
     brier_base = float(np.mean((base - y) ** 2))
+    hit = float(np.mean(y))
+    brier_test = float(np.mean((hit - y) ** 2))
     picked = ps >= 0.5
     return {
         "n": int(len(y)), "hit_rate": round(float(np.mean(y)), 4), "brier": round(brier, 4), "brier_base": round(brier_base, 4),
-        "skill": round(1 - brier / brier_base, 4) if brier_base > 0 else None, "auc": auc(list(ps), list(y)),
+        "skill": round(1 - brier / brier_base, 4) if brier_base > 0 else None,
+        "brier_test_base": round(brier_test, 4), "skill_test_base": round(1 - brier / brier_test, 4) if brier_test > 0 else None,
+        "auc": auc(list(ps), list(y)),
         "picked": int(picked.sum()), "picked_mean_r": round(float(np.mean(r[picked])), 4) if picked.any() else None,
         "all_mean_r": round(float(np.mean(r)), 4),
     }
@@ -147,9 +189,16 @@ def train(rows, now):
             x = matrix([row for row, _ in data], features)
             y = np.array([lab[0] for _, lab in data], dtype=np.float64)
             r = np.array([lab[1] for _, lab in data], dtype=np.float64)
-            base_train = float(np.clip(np.mean(y[:cut]), 0.01, 0.99))
-            check = judge(fit(x[:cut], y[:cut]), x[cut:], y[cut:], r[cut:], base_train)
-            checks[mid] = {"status": "ok", "train": cut, **check}
+            # MA1 purge: training rows whose label window reaches the test period's first close leave the check.
+            test_from = close_ms(data[cut][0])
+            purge = RULES["purge_hours"][label_set] * 3_600_000
+            keep = cut if test_from is None else sum(1 for row, _ in data[:cut] if not ((close_ms(row) or 0) > test_from - purge))
+            if keep < RULES["min_test"]:
+                checks[mid] = {"status": "not_enough_rows", "rows": len(data), "needed": RULES["min_rows"]}
+                continue
+            base_train = float(np.clip(np.mean(y[:keep]), 0.01, 0.99))
+            check = judge(fit(x[:keep], y[:keep]), x[cut:], y[cut:], r[cut:], base_train)
+            checks[mid] = {"status": "ok", "train": keep, "purged": cut - keep, **check}
             booster = fit(x, y)
             trees = [compact(t["tree_structure"]) for t in booster.dump_model()["tree_info"]]
             # The export must score exactly as LightGBM does, or nothing is written.
@@ -178,7 +227,7 @@ def main():
         json.dump(model, fh, separators=(",", ":"))
     # Aggregate scores only (a public log).
     print(json.dumps({"model_id": model["model_id"], "rows": model["rows"], "features": len(model["features"]), "status": model["status"],
-                      "checks": {k: {kk: v.get(kk) for kk in ("status", "n", "skill", "auc", "picked", "picked_mean_r", "all_mean_r")} for k, v in model["checks"].items()}}))
+                      "checks": {k: {kk: v.get(kk) for kk in ("status", "n", "purged", "skill", "skill_test_base", "auc", "picked", "picked_mean_r", "all_mean_r")} for k, v in model["checks"].items()}}))
     return 0 if model["status"] == "ok" else 3
 
 
