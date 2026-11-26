@@ -114,13 +114,12 @@ test("LV1b. B15: the card and the quorum with liquidity from the latest decision
   for (const x of [null, {}, { liquidity: null }, { liquidity: {} }]) assert.deepEqual([viewCard(x), viewQuorumWithLiquidity(x)], [null, null]);
 });
 
-test("LV2. without a known basis the feed's scale is null: low_feed, high_feed, in_key_zone; only lens B's own levels manage", async () => {
+test("LV2. without a known basis the feed's scale is null: low_feed, high_feed, in_key_zone; nothing manages (B17: lens B joins the management set only with a known basis)", async () => {
   const { v } = await view({ feed: false });
   assert.deepEqual(v.scale, { feed_basis: null, feed_basis_known: false, basis_at: null });
   assert.ok(v.levels.length);
   for (const l of v.levels) assert.deepEqual([l.low_feed, l.high_feed, l.in_key_zone], [null, null, null]);
-  assert.ok(v.management.length);
-  for (const z of v.management) { assert.equal(z.source, "liquidity"); assert.deepEqual([z.low_feed, z.high_feed], [null, null]); }
+  assert.deepEqual(v.management, [], "no Key Level zone without a basis, and lens B waits for one (B17)");
   assert.equal(v.atr_m15, null);
   assert.equal(v.price.feed, STRATEGY.price, "the strategy's price without the feed's 5m series");
   // Without the strategy memo, no zone check either (the levels stay).
