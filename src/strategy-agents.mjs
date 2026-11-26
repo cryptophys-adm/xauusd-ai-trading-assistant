@@ -26,6 +26,7 @@ import { planForDirection, zoneLevels, SCALP_TARGET, TP1_MIN_R, tp1KeyZoneOf, en
 import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 import { zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
+import { openingRanges } from "./opening-range.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
@@ -39,7 +40,9 @@ export const AGENT_RULES = Object.freeze({
   breakout: Object.freeze({ bars: 6, base_bars: 3, beyond_atr: 0.1, retest_atr: 0.15 }),
   range: Object.freeze({ bars: 32, min_bars: 24, min_atr: 1, max_atr: 4, zone: 0.35, at: 0.2, entry: 0.15, stop_atr: 0.25, far: 0.1 }),
   pattern: Object.freeze({ charts: Object.freeze(["15", "60"]), retest_atr: 0.15, momentum_atr: 0.35, min_factor: 1, council_max: 6 }),
-  inside: Object.freeze({ family: "lines", min_width_atr: 0.8, zone: 0.25, beyond_atr: 0.1, at_atr: 0.15, entry: 0.05, stop_atr: 0.25, far: 0.1 })
+  inside: Object.freeze({ family: "lines", min_width_atr: 0.8, zone: 0.25, beyond_atr: 0.1, at_atr: 0.15, entry: 0.05, stop_atr: 0.25, far: 0.1 }),
+  // Track A PR 7: the London and New York opening ranges (src/opening-range.mjs), three 15m bars each.
+  orb: Object.freeze({ range_bars: 3, min_width_atr: 0.25, max_width_atr: 3.5 })
 });
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -339,7 +342,51 @@ const patternInside = Object.freeze({
 });
 
 /** The registry: adding or removing a strategy is one entry here. */
-export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside]);
+const toMsOf = (v) => (typeof v === "number" ? v : Date.parse(v));
+/**
+ * Track A PR 7 (rebuilds #507): the opening range breakout, the 14th live agent. A 15m close beyond the London or New
+ * York opening range (the session's first three 15m bars) by the breakout band; entry on the retest of the broken
+ * edge, the stop behind the range's midpoint or the breakout bar, whichever is further; the plan lasts until the
+ * session window ends (valid_until_ms). New York wins on a side where both have a plan. Each session is its own
+ * pattern (orb_london, orb_new_york) for the breaker.
+ */
+const orbBreakout = Object.freeze({
+  id: "orb_breakout", version: 1, label: "Opening range breakout",
+  variants: Object.freeze({ orb_london: "London opening range", orb_new_york: "New York opening range" }),
+  fits: "The first hours of the London or New York session: a 15m close beyond the session's opening range (its first three 15m bars) that has not closed back through the range's middle. Enter on the retest of the broken edge, the stop behind the middle of the range or the breakout bar, the target at the next key level; the plan ends with the session's window. Not when a high-impact release fell inside the range, or the range is too narrow or too wide.",
+  plan(dir, ctx) {
+    if (!isNum(ctx.price) || !isNum(ctx.atr) || ctx.atr <= 0) return null;
+    const O = AGENT_RULES.orb, B = AGENT_RULES.breakout, bars = ctx.bars || [], atr = ctx.atr;
+    const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
+    // New York first: in the overlap it wins on a side where it has a plan.
+    for (const r of openingRanges(bars, { events: ctx.events }).reverse()) {
+      if (r.status !== "ok" || held.includes(`${this.id}:${r.key}`)) continue;
+      if (r.width < O.min_width_atr * atr || r.width > O.max_width_atr * atr) continue;
+      const edge = dir > 0 ? r.high : r.low;
+      const after = bars.filter((b) => toMsOf(b.open_time) >= r.range_end_ms);
+      const i = after.findIndex((b) => dir * (b.close - edge) >= B.beyond_atr * atr);
+      if (i < 0) continue;
+      // A close back through the middle ends the side for the window.
+      if (after.slice(i + 1).some((b) => dir * (b.close - r.mid) < 0)) continue;
+      const back = dir * (ctx.price - edge);
+      if (back < -B.retest_atr * atr) continue;
+      const retesting = back <= B.retest_atr * atr;
+      const barEdge = dir > 0 ? after[i].low : after[i].high;
+      const base = dir > 0 ? Math.min(r.mid, barEdge) : Math.max(r.mid, barEdge);
+      const word = dir > 0 ? "above" : "below", edgeWord = `the ${r.session} opening range ${dir > 0 ? "high" : "low"}`;
+      const plan = finishPlan(this.id, dir, {
+        entry: retesting ? ctx.price : edge, atLevel: retesting, stop: base - dir * AGENT_RULES.pad_atr * atr,
+        entryNote: retesting ? `price retests ${edgeWord} after the break` : `a retest of ${edgeWord} after the break`,
+        stopNote: base === r.mid ? `${dir > 0 ? "below" : "above"} the middle of the ${r.session} opening range` : `${dir > 0 ? "below" : "above"} the breakout bar`,
+        setup: `a 15m close ${word} the ${r.session} opening range`
+      }, ctx);
+      if (plan) return { ...plan, pattern: r.key, chart: "15m", valid_until_ms: r.end_ms };
+    }
+    return null;
+  }
+});
+
+export const STRATEGY_AGENTS = Object.freeze([zonePullback, sweepReversal, breakoutRetest, rangeFade, ...PATTERN_AGENTS, patternInside, orbBreakout]);
 export const AGENT_IDS = Object.freeze(STRATEGY_AGENTS.map((a) => a.id));
 /**
  * Z2b's TP2 helper (src/zone-types.mjs zoneAim, tp_typed): the agents whose targets come from the key levels
@@ -485,8 +532,10 @@ export async function syncAgentBreaker(env, records, { send = null, now = Date.n
 }
 
 /** Pure: the agents' context of a direction from the strategy engine's output and the decision's inputs. */
-export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [], keyZone = false, entryZone = false } = {}) {
+export function agentContext({ strategy = null, bars = [], regime = null, scalp = false, basePlan = undefined, calibration = null, suspendedPatterns = [], keyZone = false, entryZone = false, events = [] } = {}) {
   return {
+    // Track A PR 7: the calendar's events (inputs.calendar.events), for the opening range's release check.
+    events: Array.isArray(events) ? events : [],
     strategy, scalp: scalp === true, regime: typeof regime === "string" ? regime : null, basePlan, ...(keyZone === true ? { keyZone: true } : {}), ...(entryZone === true ? { entryZone: true } : {}),
     // The Projection Agent's reading (owner 2026-11-13: "libatkan Projection Agent karena dia yang punya
     // knowledge terkait price action"): the chart patterns it detected on each chart and each pattern's
