@@ -13,7 +13,9 @@ export const ENGINES: Record<string, string> = Object.freeze({
   prophet: "Prophet R38 + R37",
   gmi: "GMI v12.70",
   prophet_hud: "Prophet HUD",
-  gmi_hud: "GMI HUD"
+  gmi_hud: "GMI HUD",
+  gmi_adopt: "GMI Adoption",
+  prophet_adopt: "Prophet Adoption"
 });
 export const engineName = (base?: string | null) => (base && ENGINES[base]) || String(base ?? "");
 
