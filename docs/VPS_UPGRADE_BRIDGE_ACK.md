@@ -1,7 +1,7 @@
 # VPS runbook: omega-bridge 1.7.1 (lost acks from the results-file race)
 
-> **Fill in before use:** `<MERGED_COMMIT>` is the full SHA of this fix's merge commit on `main`. It is known only
-> after the PR merges. Until someone replaces every `<MERGED_COMMIT>` below with it, do not run this runbook.
+> **Merged commit:** the fix merged into `main` as `bcc43699708e98f9dbf68532bf34b468a39c660a` (PR #603, 2026-11-26). This runbook checks out exactly
+> that commit; its first 12 characters are `bcc43699708e`.
 
 Written for a Claude Code session on the owner's trading VPS. The owner runs it. Follow the steps in order. **Stop and
 report at the first check that fails.** Do not improvise a fix.
@@ -111,10 +111,10 @@ PY
    REPO=$(cat /root/bridge-ack-repo.txt); cd "$REPO" && git status --short
    git rev-parse HEAD | tee /root/bridge-ack-old-commit.txt
    git fetch origin
-   git cat-file -t <MERGED_COMMIT>
-   git merge-base --is-ancestor <MERGED_COMMIT> origin/main && echo "on main"
-   git show -s --format='%H %s' <MERGED_COMMIT>
-   git show <MERGED_COMMIT>:bridge/omega-bridge/src/daemon.mjs | grep -m1 'export const BRIDGE_VERSION'
+   git cat-file -t bcc43699708e98f9dbf68532bf34b468a39c660a
+   git merge-base --is-ancestor bcc43699708e98f9dbf68532bf34b468a39c660a origin/main && echo "on main"
+   git show -s --format='%H %s' bcc43699708e98f9dbf68532bf34b468a39c660a
+   git show bcc43699708e98f9dbf68532bf34b468a39c660a:bridge/omega-bridge/src/daemon.mjs | grep -m1 'export const BRIDGE_VERSION'
    ```
    - `git status --short` must print nothing. If it lists files, **stop and report**. Do not stash, reset or commit.
    - `git cat-file -t` must print `commit`, and the next command must print `on main`.
@@ -122,8 +122,8 @@ PY
 3. **What the upgrade moves over.** Both commands use the commit recorded in step 1.2:
    ```bash
    REPO=$(cat /root/bridge-ack-repo.txt); OLD=$(cat /root/bridge-ack-old-commit.txt); cd "$REPO"
-   git diff --name-only "$OLD" <MERGED_COMMIT> -- bridge/ ea/
-   git diff --name-only "$OLD" <MERGED_COMMIT> -- ea/ bridge/omega-bridge/bin bridge/omega-bridge/omega-bridge.service bridge/omega-bridge/package.json bridge/omega-bridge/env.example
+   git diff --name-only "$OLD" bcc43699708e98f9dbf68532bf34b468a39c660a -- bridge/ ea/
+   git diff --name-only "$OLD" bcc43699708e98f9dbf68532bf34b468a39c660a -- ea/ bridge/omega-bridge/bin bridge/omega-bridge/omega-bridge.service bridge/omega-bridge/package.json bridge/omega-bridge/env.example
    ```
    - The first list should hold only `bridge/omega-bridge/src/daemon.mjs`, `bridge/omega-bridge/src/files.mjs` and
      files under `bridge/omega-bridge/test/`.
@@ -164,7 +164,7 @@ PY
    ```bash
    curl -s https://ai.cryptophys.work/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status"), d.get("commit"))'
    ```
-   Expect `ok` and the first 12 characters of `<MERGED_COMMIT>`, or of a later `main` commit that contains it. If it is
+   Expect `ok` and `bcc43699708e` (the first 12 characters of the merged commit), or of a later `main` commit that contains it. If it is
    older, wait for `deploy-worker.yml` to finish, then check again. Do not deploy anything yourself. (The bridge part
    does not depend on it: a 1.7.1 bridge re-sends nothing after its restart either way.)
 7. **Market window.** Prefer a quiet window: the daily break (22:00-23:00 UTC) or the weekend.
@@ -219,9 +219,9 @@ Follow the bridge's own update steps (docs/OMEGA_BRIDGE.md "Calm mode", **Update
 
 1. Check out the merged commit:
    ```bash
-   cd "$(cat /root/bridge-ack-repo.txt)" && git checkout <MERGED_COMMIT> && git rev-parse HEAD
+   cd "$(cat /root/bridge-ack-repo.txt)" && git checkout bcc43699708e98f9dbf68532bf34b468a39c660a && git rev-parse HEAD
    ```
-   `git rev-parse HEAD` must print `<MERGED_COMMIT>`. A "detached HEAD" notice is expected.
+   `git rev-parse HEAD` must print `bcc43699708e98f9dbf68532bf34b468a39c660a`. A "detached HEAD" notice is expected.
 2. **The bridge's tests (optional; CI already ran them).** They need no `npm install` and no network. They use temp
    directories only and take a few seconds:
    ```bash
@@ -232,7 +232,7 @@ Follow the bridge's own update steps (docs/OMEGA_BRIDGE.md "Calm mode", **Update
    ```bash
    REPO=$(cat /root/bridge-ack-repo.txt)
    sudo cp -r "$REPO/bridge/omega-bridge/src" /opt/omega-bridge/
-   diff -rq "$REPO/bridge/omega-bridge/src" /opt/omega-bridge/src && echo "installed src equals <MERGED_COMMIT>"
+   diff -rq "$REPO/bridge/omega-bridge/src" /opt/omega-bridge/src && echo "installed src equals the merged commit"
    grep -m1 'export const BRIDGE_VERSION' /opt/omega-bridge/src/daemon.mjs
    for f in /opt/omega-bridge/src/*.mjs; do /usr/bin/node --check "$f" || echo "SYNTAX FAIL $f"; done
    ```
@@ -295,7 +295,7 @@ Follow the bridge's own update steps (docs/OMEGA_BRIDGE.md "Calm mode", **Update
    Then run step 4.3 again. Expect no new error. Report what you saw, or "no intent yet" with the time.
 6. **Over the next 24 hours** CA1's `intent_reconciled` close rows should drop toward 0, because the acks now arrive. The
    orchestrator checks that from D1. **This session does not need to.**
-7. Report: `OLD`, `<MERGED_COMMIT>`, the version before and after, the step 4.2 output, the step 4.3 counts, the step
+7. Report: `OLD`, `bcc43699708e98f9dbf68532bf34b468a39c660a`, the version before and after, the step 4.2 output, the step 4.3 counts, the step
    4.4 timestamps, and "no terminal restart, no EA change".
 
 ## 5. Roll back (only if a check failed, or the owner asks)

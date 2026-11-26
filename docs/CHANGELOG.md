@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-26
+- docs(vps): fill the bridge ack runbook's merged commit (bcc43699708e98f9dbf68532bf34b468a39c660a, #603). docs/VPS_UPGRADE_BRIDGE_ACK.md; no code change.
 - docs(zones): Z6 era note. Z6 (#602, 444fb8a60bb91ac0603eaf08d1934890ab71474b) went live at 2026-11-26T03:51:01Z; the era carries (`zone_sd` defaults on, V14 unchanged); v4 parity readers split at that time (first decision with possible `/sd` levels: bar 04:00Z). docs/SSOT.md (Box levels in management).
 - fix(bridge): lost acks from the results-file race (bridge 1.7.1). Owner 2026-11-26, on fixing it in the bridge only: "Ya, bridge saja". No EA change; the case where the EA's FileOpen fails and it writes nothing stays with CA1 (`src/close-reconcile.mjs`).
   - **Cause.** OmegaExecutor's `AppendResult` opens `omega/results.txt` (creating it), seeks to the end, writes, closes. Up to 1.7.0 the bridge woke on the file's creation (or its 5 s period) and at once renamed it to `results.<ms>.done`, then read it (`consumeResults`). Wine's locks do not stop a native rename, so the EA's still-open handle followed the file and its line landed in a `.done` file already read: the ack was lost (2026-11-18 to 2026-11-25: 10 of 28 close intents expired without a result, docs/SSOT.md CA1).
