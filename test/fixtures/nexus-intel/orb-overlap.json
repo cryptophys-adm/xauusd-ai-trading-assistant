@@ -1,0 +1,289 @@
+{
+  "status": "ok",
+  "schema": "cryptophys.orb-view.v1",
+  "mode": "on",
+  "levels_mode": "on",
+  "scale": {
+    "prices": "feed",
+    "symbol": "OANDA:XAUUSD"
+  },
+  "rules": {
+    "range_bars": 3,
+    "min_width_atr": 0.25,
+    "max_width_atr": 3.5,
+    "beyond_atr": 0.1,
+    "retest_atr": 0.15,
+    "pad_atr": 0.1
+  },
+  "price": 4100,
+  "atr_h1": 2.19,
+  "atr_m15": 1.28,
+  "bar_close": "2026-11-23T15:00:00.000Z",
+  "market": {
+    "open": true,
+    "next_range": {
+      "session": "london",
+      "open_ms": 1795507200000
+    }
+  },
+  "decision": {
+    "decision_key": "OANDA:XAUUSD:15:1795445100000",
+    "bar_close": "2026-11-23T15:00:00.000Z",
+    "session_range": {
+      "session": "new_york",
+      "minutes_since_open": 120,
+      "bars_left": 27,
+      "range": {
+        "bars": 3,
+        "width_atr": 1.48,
+        "status": "ok"
+      },
+      "last_bar": {
+        "side": "above",
+        "from_edge_atr": 0.68,
+        "from_mid_atr": 1.42
+      },
+      "breakout": {
+        "way": "up",
+        "bars_since": 1,
+        "held": true,
+        "retesting": false
+      },
+      "invalidated": false
+    }
+  },
+  "overlap": {
+    "long": "new_york",
+    "short": null
+  },
+  "sessions": {
+    "london": {
+      "variant": "orb_london",
+      "date_ny": "2026-11-23",
+      "open_ms": 1795420800000,
+      "range_end_ms": 1795423500000,
+      "end_ms": 1795452300000,
+      "phase": "live",
+      "bars_built": 3,
+      "bars_left": 7,
+      "status": "ok",
+      "status_detail": "the range is formed and inside the width band",
+      "high": 4097.52,
+      "low": 4094.28,
+      "mid": 4095.9,
+      "width": 3.24,
+      "width_atr": 1.48,
+      "breakout": {
+        "side": "long",
+        "bar_ms": 1795426200000,
+        "bars_since": 21,
+        "state": "invalidated"
+      },
+      "invalidated": {
+        "long": true,
+        "short": false
+      },
+      "events_in_range": [],
+      "edges_in_zones": [
+        {
+          "edge": "high",
+          "low": 4097.2,
+          "high": 4097.9,
+          "candidate": false
+        }
+      ],
+      "plans": {
+        "long": null,
+        "short": null
+      }
+    },
+    "new_york": {
+      "variant": "orb_new_york",
+      "date_ny": "2026-11-23",
+      "open_ms": 1795438800000,
+      "range_end_ms": 1795441500000,
+      "end_ms": 1795470300000,
+      "phase": "live",
+      "bars_built": 3,
+      "bars_left": 27,
+      "status": "ok",
+      "status_detail": "the range is formed and inside the width band",
+      "high": 4098.52,
+      "low": 4095.28,
+      "mid": 4096.9,
+      "width": 3.24,
+      "width_atr": 1.48,
+      "breakout": {
+        "side": "long",
+        "bar_ms": 1795444200000,
+        "bars_since": 1,
+        "state": "held"
+      },
+      "invalidated": {
+        "long": false,
+        "short": false
+      },
+      "events_in_range": [],
+      "edges_in_zones": [
+        {
+          "edge": "low",
+          "low": 4095,
+          "high": 4095.6,
+          "candidate": true
+        }
+      ],
+      "plans": {
+        "long": {
+          "entry": 4098.52,
+          "stop": 4096.68,
+          "tp1": 4103.6,
+          "tp2": 4107.6,
+          "rrr": 2.76,
+          "entry_type": "limit",
+          "lapse_ms": 1795470300000,
+          "role": "live",
+          "picked": true
+        },
+        "short": null
+      }
+    }
+  },
+  "records": {
+    "london": {
+      "setups": 38,
+      "mean_r": 0.14,
+      "fill_rate": 0.71,
+      "target_rate": 0.41,
+      "held_by_breaker": false
+    },
+    "new_york": {
+      "setups": 33,
+      "mean_r": 0.06,
+      "fill_rate": 0.64,
+      "target_rate": 0.38,
+      "held_by_breaker": false
+    }
+  },
+  "recent": [
+    {
+      "date_ny": "2026-11-23",
+      "session": "new_york",
+      "side": "long",
+      "opened_at": "2026-11-23T14:45:00.000Z",
+      "entry_type": "limit",
+      "status": "open",
+      "exit": null,
+      "r": null,
+      "filled": null,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-23",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-23T09:30:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "unfilled",
+      "r": 0,
+      "filled": false,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-20",
+      "session": "new_york",
+      "side": "short",
+      "opened_at": "2026-11-20T14:15:00.000Z",
+      "entry_type": "at_level",
+      "status": "resolved",
+      "exit": "target",
+      "r": 1.1,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-20",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-20T09:00:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "stop",
+      "r": -1,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-19",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-19T08:45:00.000Z",
+      "entry_type": "at_level",
+      "status": "resolved",
+      "exit": "lapse",
+      "r": 0.6,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-18",
+      "session": "london",
+      "side": "short",
+      "opened_at": "2026-11-18T09:15:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "target_before_entry",
+      "r": 0,
+      "filled": false,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-17",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-17T09:00:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "target",
+      "r": 1.3,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-16",
+      "session": "new_york",
+      "side": "short",
+      "opened_at": "2026-11-16T14:00:00.000Z",
+      "entry_type": "at_level",
+      "status": "resolved",
+      "exit": "stop",
+      "r": -1,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-16",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-16T09:45:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "time",
+      "r": 0.2,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-13",
+      "session": "new_york",
+      "side": "long",
+      "opened_at": "2026-11-13T14:30:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "invalidated",
+      "r": 0,
+      "filled": false,
+      "arm": "e0@s1"
+    }
+  ]
+}

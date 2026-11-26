@@ -48,16 +48,16 @@ const clean = (html) => assert.doesNotMatch(html, /\bNaN\b|\bundefined\b|\[objec
 const textOf = (html) => html.replace(/<[^>]+>/g, "\n").split("\n").map((t) => t.trim()).filter(Boolean);
 const LIVE = { show: true, dim: false, suffix: "", note: null };
 
-test("CP1 NAV and PAGES: Chart patterns at /#/patterns, key patterns, icon Shapes, between Strategy agents and Liquidity", () => {
+test("CP1 NAV and PAGES: Chart patterns at /#/patterns, key patterns, icon Shapes, between Opening range (C4) and Liquidity", () => {
   const shell = src("components/AppShell.tsx");
   const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf('{ title: "Settings"'));
   const labels = [...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(labels.slice(2, 5), ["Strategy agents", "Chart patterns", "Liquidity"]);
+  assert.deepEqual(labels.slice(2, 6), ["Strategy agents", "Opening range", "Chart patterns", "Liquidity"]);
   assert.match(intel, /\{ label: "Chart patterns", href: "\/#\/patterns", key: "patterns", icon: Shapes \}/);
   assert.match(shell, /import \{[^}]*\bShapes\b[^}]*\} from "lucide-react";/);
   const app = src("App.tsx");
   assert.match(app, /import Patterns from "\.\/pages\/Patterns";/);
-  assert.match(app, /strategy: Strategy, patterns: Patterns, liquidity: Liquidity,/);
+  assert.match(app, /strategy: Strategy, orb: Orb, patterns: Patterns, liquidity: Liquidity,/);
 });
 
 test("CP2 GET only, from the page's allow-list: three reads, one poll each; no /api/ohlcv or /api/engine/decision read", async () => {
@@ -407,7 +407,7 @@ test("CP13 the deploy smoke step; SSOT and the CHANGELOG", () => {
   assert.ok(step.includes(`body?.schema !== "${CP.schema}"`), "the fixture's schema");
   assert.match(step, /Track B9 and C3/);
   const ssot = read("docs/SSOT.md");
-  assert.match(ssot, /Chart patterns \(`#\/patterns`, Track C3, directly after Strategy agents/);
+  assert.match(ssot, /Chart patterns \(`#\/patterns`, Track C3, directly after Opening range/);
   assert.match(ssot, /The Nexus Chart patterns page \(`#\/patterns`, Track C3\) reads it\./);
   const log = read("docs/CHANGELOG.md");
   const i = log.indexOf("feat(nexus): the Chart patterns page in Intelligence (Track C3)");

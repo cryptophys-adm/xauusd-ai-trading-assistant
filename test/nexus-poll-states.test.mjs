@@ -132,7 +132,7 @@ test("PS9 market.tsx keeps the per-read catch and exposes which routes failed; t
 });
 
 test("PS10 the listed pages print the shared error line, never the raw \"Unavailable: HTTP …\"", () => {
-  const pages = ["pages/Performance.tsx", "pages/Calendar.tsx", "pages/Correlations.tsx", "pages/Alerts.tsx", "pages/Audit.tsx", "pages/Status.tsx", "pages/Scorecards.tsx", "pages/Shadow.tsx", "pages/Neurons.tsx", "pages/Strategy.tsx", "pages/Councils.tsx", "pages/Model.tsx", "components/ThreadsPanel.tsx", "pages/Liquidity.tsx", "components/IntelChart.tsx", "pages/Patterns.tsx", "pages/Switches.tsx", "pages/Zones.tsx", "components/PmLines.tsx"];
+  const pages = ["pages/Performance.tsx", "pages/Calendar.tsx", "pages/Correlations.tsx", "pages/Alerts.tsx", "pages/Audit.tsx", "pages/Status.tsx", "pages/Scorecards.tsx", "pages/Shadow.tsx", "pages/Neurons.tsx", "pages/Strategy.tsx", "pages/Councils.tsx", "pages/Model.tsx", "components/ThreadsPanel.tsx", "pages/Liquidity.tsx", "components/IntelChart.tsx", "pages/Patterns.tsx", "pages/Switches.tsx", "pages/Zones.tsx", "components/PmLines.tsx", "pages/Orb.tsx"];
   for (const f of pages) {
     const s = src(f);
     assert.doesNotMatch(s, /Unavailable: HTTP|HTTP \$\{r\.status\}\)? *<|Failed to load: \{/, `${f}: no raw HTTP text`);

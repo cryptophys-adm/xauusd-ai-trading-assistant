@@ -1,0 +1,150 @@
+{
+  "status": "ok",
+  "enabled": true,
+  "decision": {
+    "decision_key": "OANDA:XAUUSD:15:1795445100000",
+    "bar_close": "2026-11-23T15:00:00.000Z",
+    "stance": "BUY",
+    "bias": "BULLISH",
+    "trade": {
+      "side": "BUY",
+      "strategy": "orb_breakout",
+      "pattern": "orb_new_york",
+      "chart": "15m",
+      "entry": 4098.52,
+      "stop": 4096.68
+    },
+    "strategy_plans": {
+      "long": {
+        "orb_breakout": {
+          "status": "live",
+          "agent": "orb_breakout",
+          "setup": "a 15m close above the New York opening range",
+          "at_level": false,
+          "entry": 4098.52,
+          "entry_note": "a retest of the New York opening range high after the break",
+          "stop": 4096.68,
+          "stop_note": "below the middle of the New York opening range",
+          "risk": 1.84,
+          "tp1": 4103.6,
+          "tp1_note": "zone",
+          "tp2": 4107.6,
+          "tp2_note": "zone",
+          "progressive_stop": 4098.52,
+          "rrr": {
+            "tp1": 2.76,
+            "tp2": 4.94
+          },
+          "pattern": "orb_new_york",
+          "chart": "15m",
+          "valid_until_ms": 1795470300000
+        },
+        "zone_pullback": {
+          "status": "live",
+          "agent": "zone_pullback",
+          "entry": 4097.5,
+          "stop": 4095.9,
+          "tp1": 4100.06,
+          "tp2": 4103.6,
+          "at_level": false,
+          "rrr": {
+            "tp1": 1.6,
+            "tp2": 3.81
+          }
+        }
+      },
+      "short": {}
+    },
+    "selection": {
+      "mode": "auto",
+      "agent": "orb_breakout",
+      "trade": {
+        "side": "BUY",
+        "action": "ENTER_LIMIT",
+        "entry": 4098.52,
+        "stop": 4096.68,
+        "target": "tp1",
+        "tp": 4103.6,
+        "tp1": 4103.6,
+        "tp2": 4107.6,
+        "risk": 1.84,
+        "rrr": 2.76,
+        "rrr_all": {
+          "tp1": 2.76,
+          "tp2": 4.94
+        },
+        "progressive_stop": 4098.52,
+        "entry_note": "a retest of the New York opening range high after the break",
+        "stop_note": "below the middle of the New York opening range",
+        "tp_note": "zone",
+        "at_level": false,
+        "trigger_required": false,
+        "strategy": "orb_breakout",
+        "setup": "a 15m close above the New York opening range",
+        "pattern": "orb_new_york",
+        "chart": "15m",
+        "valid_until_ms": 1795470300000
+      },
+      "score": 0.29,
+      "candidates": [
+        {
+          "id": "orb_breakout",
+          "confidence": 0.62,
+          "confluence": 0.47,
+          "score": 0.29,
+          "rrr": 2.76,
+          "eligible": true
+        },
+        {
+          "id": "zone_pullback",
+          "confidence": 0.58,
+          "confluence": 0.47,
+          "score": 0.27,
+          "rrr": 1.6,
+          "eligible": true
+        },
+        {
+          "id": "pattern_lines",
+          "confidence": 0.38,
+          "confluence": 0.47,
+          "score": 0.18,
+          "rrr": null,
+          "eligible": false
+        }
+      ],
+      "reason": null
+    },
+    "armed": {
+      "mode": "armed",
+      "version": 7,
+      "ids": [
+        "orb_breakout"
+      ]
+    },
+    "rules": {
+      "min_confidence": 0.4
+    },
+    "session_range": {
+      "session": "new_york",
+      "minutes_since_open": 120,
+      "bars_left": 27,
+      "range": {
+        "bars": 3,
+        "width_atr": 1.48,
+        "status": "ok"
+      },
+      "last_bar": {
+        "side": "above",
+        "from_edge_atr": 0.68,
+        "from_mid_atr": 1.42
+      },
+      "breakout": {
+        "way": "up",
+        "bars_since": 1,
+        "held": true,
+        "retesting": false
+      },
+      "invalidated": false
+    }
+  }
+}

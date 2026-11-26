@@ -1,8 +1,8 @@
 // The Intelligence pages' shared helpers (Track C2, first used by the Liquidity page; C3 and C4 add to it): the per-page
 // GET allow-list, the price and time formats with their scale and zone, the New York clock of the baseline and the
-// market hours, the feed-scale bands of lens B, the LIQUIDITY card's weight rule, and (C3) the charts' keys, a close
+// market hours, the feed-scale bands of lens B, the LIQUIDITY card's weight rule, (C3) the charts' keys, a close
 // time snapped to its candle, the Projection Agent's seat rules and the measured record's (the pattern agents' rules are
-// lib/patternRules.ts). Pure: no React, no request.
+// lib/patternRules.ts), and (C4) the Opening range page's reads. Pure: no React, no request.
 import { CHART_READ, get, type GetOptions } from "./api";
 import { T } from "./tokens";
 
@@ -50,6 +50,20 @@ export const ZONES_READS = {
   switches: { path: "/api/feature-switches", everyMs: 120_000, chart: false }
 } as const;
 export type ZonesRead = keyof typeof ZONES_READS;
+
+/**
+ * The Opening range page's reads (Track C4, backend B14's GET /api/orb): the view (60 s: a window moves a bar every
+ * 15 minutes), the strategy agents (120 s: orb_breakout's status and variants, the patterns the breaker holds back),
+ * the latest decision (60 s: armed.ids and the selection's candidates) and the feed's 15m candles (CHART_READ, 60 s).
+ * /api/orb carries the ranges, the plans and the records; the other two only what it does not.
+ */
+export const ORB_READS = {
+  orb: { path: "/api/orb", everyMs: 60_000, chart: false },
+  agents: { path: "/api/strategy-agents", everyMs: 120_000, chart: false },
+  decision: { path: "/api/engine/decision", everyMs: 60_000, chart: false },
+  candles: { path: "/api/ohlcv?timeframe=M15&limit=200", everyMs: 60_000, chart: true }
+} as const;
+export type OrbRead = keyof typeof ORB_READS;
 
 /** The allow-list's paths. */
 export const allowedPaths = (reads: Record<string, { path: string }>): string[] => Object.values(reads).map((r) => r.path);

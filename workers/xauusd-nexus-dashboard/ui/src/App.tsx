@@ -13,6 +13,7 @@ import Aether from "./pages/Aether";
 import Omega from "./pages/Omega";
 import Model from "./pages/Model";
 import Strategy from "./pages/Strategy";
+import Orb from "./pages/Orb";
 import Patterns from "./pages/Patterns";
 import Liquidity from "./pages/Liquidity";
 import Zones from "./pages/Zones";
@@ -35,7 +36,7 @@ export default function App() {
       window.removeEventListener("popstate", on);
     };
   }, []);
-  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega, model: Model, strategy: Strategy, patterns: Patterns, liquidity: Liquidity, zones: Zones, neurons: Neurons, councils: Councils, switches: Switches };
+  const PAGES: Record<string, () => JSX.Element> = { shadow: Shadow, scorecards: Scorecards, performance: Performance, correlations: Correlations, calendar: Calendar, alerts: Alerts, audit: Audit, status: Status, aether: Aether, omega: Omega, model: Model, strategy: Strategy, orb: Orb, patterns: Patterns, liquidity: Liquidity, zones: Zones, neurons: Neurons, councils: Councils, switches: Switches };
   const current = route in PAGES ? route : "";
   const Page = PAGES[current] ?? WarRoom;
   return <AppShell current={current}><Page /></AppShell>;
