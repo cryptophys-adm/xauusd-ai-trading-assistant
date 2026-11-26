@@ -407,7 +407,8 @@ test("Z3a-13 the FS1 row: an Omega owner setting read through omega_settings, wr
   const e = switchByKey("zone_mgmt");
   assert.deepEqual([e.group, e.worker, e.write, e.resolve, e.era_switch, e.default_value, e.config_value, [...e.values], e.restarts_mode_evidence, e.emergency_stop, e.read_only],
     ["omega", "omega", "omega-settings", "omega-settings", true, "off", null, ["off", "omega"], false, false, false]);
-  assert.equal(FEATURE_SWITCHES.at(-1).key, "zone_mgmt");
+  // Z6's zone_sd follows it, the last Omega row.
+  assert.deepEqual(FEATURE_SWITCHES.slice(-2).map((x) => x.key), ["zone_mgmt", "zone_sd"]);
   resetFeatureSwitchMemoForTests(); resetOmegaBrokerSchemaForTests();
   const T = Date.parse("2026-11-26T08:00:00Z"), OWNER = "owner-sub";
   const env = { OWNER_ACCESS_SUB: OWNER, SIGNAL_CACHE: kv(), DB: d1() };

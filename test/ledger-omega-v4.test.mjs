@@ -414,7 +414,9 @@ test("V14. the engine's behaviour hash: the committed fingerprint is the fixture
   assert.deepEqual(names.filter((n) => !n.startsWith("market/hand/") && n.endsWith("/records")), ["market/replay/aggressive/records", "market/replay/safe_no_ladder/records", "v4/ladder/records", "v4/breakeven_fallback/records", "v4/cut_loss/records", "v4/cut_loss_silent/records", "v4/tp2_breakeven/records", "gate/retrace/retrace/records", "fast/v4/cut_loss/records", "fast/v4/tp_anticipation/records", "re/v4/breakeven_reentry/records", "ss/limit/today/records"]);
   assert.deepEqual(names.filter((n) => n.startsWith("pm/")), ["pm/facts", "pm/actions", "pm/messages", "pm/schema", "pm/cleaned", "pm/intents", "pm/plans"]);
   // The switch signature: the switches off their defaults, sorted.
-  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt"]);
+  assert.deepEqual(ERA_SWITCHES, ["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd"]);
+  // Z6: zone_sd is on by default (the owner's word): "off" starts a new era.
+  assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, zone_sd: "off" }), ["zone_sd=off"]);
   // The limit supersede (SS1) is on by default: "off" starts a new era.
   assert.deepEqual(eraSwitches({ ...OMEGA_DEFAULTS, limit_supersede: "off" }), ["limit_supersede=off"]);
   // The 1m re-entry (RE1) is on by default: "off" starts a new era.

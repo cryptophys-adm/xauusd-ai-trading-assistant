@@ -36,6 +36,7 @@ export const ZONE_PRIORITY_PROMPT: string;
 // Z2b: a side's agent plans as execution copies aimed by zone type (src/zone-types.mjs zoneAimHeld), or the plans themselves while inert.
 export function aimedAgentPlans(plans: Record<string, { status: string; plan: Record<string, any> | null }> | null | undefined, dir: number, options?: { strategy?: any; aim?: { tp: string | null; stop: boolean; factor: boolean } | null; keyZone?: boolean; passes?: (plan: Record<string, any>) => boolean }): Record<string, { status: string; plan: Record<string, any> | null }> | null | undefined;
 export function zoneBlockedOf(guards: any, decision?: any): { side: "long" | "short"; agent: string; plan: Record<string, any>; opposing_ahead: Record<string, any> | null } | null;
+export function sdRecordOf(strategy: any, guards: any): { sd_levels?: Array<Record<string, any>>; sd_levels_mode?: "record" | "signal"; opposing_ahead_sd?: { long: Record<string, any> | null; short: Record<string, any> | null } };
 export function validateCouncil(o: any): { valid: boolean; errors: string[] };
 export function decide(input: { answer?: any; guards: any; strategy?: any; quorum: any }): Record<string, any>;
 export function loadDecisionInputs(env: any, options?: { now?: number }): Promise<Record<string, any>>;

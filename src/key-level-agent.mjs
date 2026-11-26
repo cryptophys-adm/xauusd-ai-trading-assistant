@@ -35,7 +35,7 @@
 import { readPlane, READERS } from "./level-readers.mjs";
 import { detectPatterns, patternLevels } from "./chart-patterns.mjs";
 import { patternFactor } from "./pattern-calibration.mjs";
-import { zoneTypes as typeZones, dsEvidence } from "./zone-types.mjs";
+import { zoneTypes as typeZones, dsEvidence, sdLevels as sdLevelsOf, sdModeOf } from "./zone-types.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3, "1W": 3 });
@@ -234,14 +234,19 @@ const nearZones = (zones, price, atrH1) => (isNum(price) && isNum(atrH1) ? zones
  * "off" leaves the chart patterns out (CHART_PATTERNS_MODE); `events` are the released figures for the
  * event patterns ([{ time, gold_direction, title }]). `zoneTypes` "off" leaves the zones untyped (Z0,
  * KEY_LEVEL_ZONE_TYPES; src/zone-types.mjs): "on" adds z.ds to each zone near price, an overlay only.
- * `zoneSourcesOff` (Z1a, ZONE_SOURCES_OFF) leaves those evidence sources out of the typing.
+ * `zoneSourcesOff` (Z1a, ZONE_SOURCES_OFF) leaves those evidence sources out of the typing. `sdLevels` (Z6, SD_LEVELS)
+ * "record" or "signal" adds `sd_levels` (src/zone-types.mjs sdLevels, the boxes as their own levels, on the same
+ * evidence after the typing) and `sd_levels_mode`; "off" (default) and untyped zones add neither.
  */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [] } = {}) {
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [], sdLevels = "off" } = {}) {
   const { tolerance, found, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration });
   const near = nearZones(clusterLevels(raw, tolerance, price), price, atrH1);
   limitCandidates(near, price);
   // Z0: demand/supply type, strength and freshness of each zone (z.ds); nothing else of a zone changes.
-  if (zoneTypes !== "off") typeZones(near, dsEvidence({ snapshots, bars15: bars.M15, atrH1, sourcesOff: zoneSourcesOff }));
+  const evidence = zoneTypes !== "off" ? dsEvidence({ snapshots, bars15: bars.M15, atrH1, sourcesOff: zoneSourcesOff }) : null;
+  if (evidence) typeZones(near, evidence);
+  // Z6: the supply and demand boxes as their own levels, once, on the same evidence; nothing above changes.
+  const sdMode = evidence ? sdModeOf(sdLevels) : "off";
   const candidates = near.filter((z) => z.candidate);
   const nearestCandidate = (role) => candidates.filter((z) => z.role === role).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0] ?? null;
   const sup = nearestCandidate("support"), res = nearestCandidate("resistance"), at = candidates.find((z) => z.role === "at price") ?? null;
@@ -256,6 +261,7 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
   return {
     version: KEY_LEVEL_VERSION, price: r2(price), atr_h1: r2(atrH1), tolerance: r2(tolerance),
     raw_count: raw.length, readers, zones: near, candidates, summary,
+    ...(sdMode !== "off" ? { sd_levels: sdLevelsOf(evidence, near, price, atrH1), sd_levels_mode: sdMode } : {}),
     // The Projection Agent's chart patterns, by chart (their levels are among the zones' members).
     patterns: Object.entries(found).flatMap(([tf, list]) => list.map((p) => ({ tf, chart: TF_NAME[tf], ...p })))
   };

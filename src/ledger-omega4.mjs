@@ -28,7 +28,7 @@
 // realised P/L over the risk at the open (|entry − stop| × volume at the open); partials count their share.
 // The parity check (omegaParity) compares it with Omega's real trades on the live USD account.
 
-import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS, zoneMgmtOn } from "./omega-engine.mjs";
+import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS, zoneMgmtOn, zoneSdOn } from "./omega-engine.mjs";
 import { eaSignalFromDecision, managementFields, applyArmGate, blackoutWindow } from "./ea-signal.mjs";
 import { positionFacts, positionAction, brokerLevels, positionReport, PIP } from "./position-manager.mjs";
 import { lastClosedCandle } from "./omega-broker.mjs";
@@ -161,7 +161,9 @@ export function decisionFromRow(r) {
     quorum: parse(r.quorum, null), key_levels: parse(r.key_levels, []),
     agent_confidence: parse(r.conf, null), agent_confidence_prev: parse(r.conf_prev, null),
     trading_mode: typeof r.mode === "string" ? r.mode : null, strategy_execution: r.sx === 1 || r.sx === true,
-    context: { regime_1h: typeof r.regime === "string" ? r.regime : null }, strategy: { atr_h1: r.atr_h1 == null ? null : Number(r.atr_h1) }
+    context: { regime_1h: typeof r.regime === "string" ? r.regime : null }, strategy: { atr_h1: r.atr_h1 == null ? null : Number(r.atr_h1) },
+    // Z6: the decision's box levels and their mode, only when it recorded them (SD_LEVELS "record" or "signal").
+    ...(typeof r.sd_mode === "string" && r.sd_levels != null ? { sd_levels: parse(r.sd_levels, []), sd_levels_mode: r.sd_mode } : {})
   });
 }
 function withTimes(d) {
@@ -171,7 +173,7 @@ function withTimes(d) {
   return { ...d, close_ms: close, decided_ms: finite(decided) ? Math.max(decided, close) : close };
 }
 /** The engine_decisions fields the replay reads (the rest of decision_json is never read by the live functions it calls). */
-export const DECISION_SQL = "SELECT decision_key, stance, decided_at, bar_close, json_extract(decision_json, '$.confidence') AS confidence, json_extract(decision_json, '$.trade') AS trade, json_extract(decision_json, '$.guardrails.long.entry_trigger') AS trig_long, json_extract(decision_json, '$.guardrails.short.entry_trigger') AS trig_short, json_extract(decision_json, '$.quorum') AS quorum, json_extract(decision_json, '$.key_levels') AS key_levels, json_extract(decision_json, '$.agent_confidence') AS conf, json_extract(decision_json, '$.agent_confidence_prev') AS conf_prev, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.strategy_execution') AS sx, json_extract(decision_json, '$.context.regime_1h') AS regime, json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1 FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close";
+export const DECISION_SQL = "SELECT decision_key, stance, decided_at, bar_close, json_extract(decision_json, '$.confidence') AS confidence, json_extract(decision_json, '$.trade') AS trade, json_extract(decision_json, '$.guardrails.long.entry_trigger') AS trig_long, json_extract(decision_json, '$.guardrails.short.entry_trigger') AS trig_short, json_extract(decision_json, '$.quorum') AS quorum, json_extract(decision_json, '$.key_levels') AS key_levels, json_extract(decision_json, '$.agent_confidence') AS conf, json_extract(decision_json, '$.agent_confidence_prev') AS conf_prev, json_extract(decision_json, '$.trading_mode') AS mode, json_extract(decision_json, '$.strategy_execution') AS sx, json_extract(decision_json, '$.context.regime_1h') AS regime, json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.sd_levels') AS sd_levels, json_extract(decision_json, '$.sd_levels_mode') AS sd_mode FROM engine_decisions WHERE bar_close >= ? ORDER BY bar_close";
 
 /** Pure: the profile in force at a time, from the account's omega_profile_changes ({ at_ms, from_profile, to_profile }). */
 export function profileTimeline(changes = [], current = null) {
@@ -456,7 +458,8 @@ export function replayOmega4({
         const pmBar = Math.floor(now / M5);
         const prev = iDec > 0 ? decs[iDec - 1] : null;
         const decision = { ...d, quorum_prev: prev && d.close_ms - prev.close_ms === M15 ? prev.quorum ?? null : null };
-        const levels = brokerLevels(signal);
+        // Z6: the signal's box levels reach the Position Manager only while zone_sd is on, as live.
+        const levels = brokerLevels(signal, { sd: zoneSdOn(S) });
         for (const p of positions) {
           const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
           const council = parseCouncil(text);
@@ -670,7 +673,9 @@ export const ENGINE_CODE = Object.freeze({
     // PM-1M (2026-11-23): Omega's check of the 1m layer's actions.
     "fastIntent",
     // Z3a (2026-11-25): typed zones in SL+ and the trailing TP behind zone_mgmt (the words, the cap, the 3-minute rate).
-    "typedLevels", "typedDecisive", "zoneGiveback", "zoneMgmtOn", "ZONE_MGMT_MODES", "ZONE_GIVEBACK_R", "ZONE_MGMT_RATE_MS"]],
+    "typedLevels", "typedDecisive", "zoneGiveback", "zoneMgmtOn", "ZONE_MGMT_MODES", "ZONE_GIVEBACK_R", "ZONE_MGMT_RATE_MS",
+    // Z6 (2026-11-26): the supply and demand box levels behind zone_sd (the marks, the merge that never loosens, the ladder's far edge).
+    "zoneSdOn", "sdMarks", "sdKeyPlan", "sdLadderLevels", "sdLadderPlan", "ZONE_SD_MODES"]],
   // RE1 (2026-11-23): the 1m re-entry after a profit-lock stop (its table, the setup, the check, the live step).
   "reentry-1m": [reentry1m, ["reentryOn", "reentryId", "isReentryId", "isEntryIntentId", "reentrySetup", "reentryCheck", "liveSetup", "runReentry", "recordReentry", "isLockRule", "REENTRY_1M", "REENTRY_LOCK_PATTERN", "REENTRY_RULE", "REENTRY_MODES", "REENTRY_READ_MIN", "REENTRY_RETRY_MS"]],
   // SS1 (2026-11-23): a newer same-side signal supersedes a resting limit (the switch, the orders it ends, the deletes read back).
@@ -683,7 +688,9 @@ export const ENGINE_CODE = Object.freeze({
   "position-manager": [positionManager, ["positionFacts", "positionAction", "pmBand", "brokerLevels", "latestDecisions", "runPositionManager", "cleanCouncil", "PM_R_BAND", "THRESHOLD_PIPS", "PIP", "SHARE_DROP",
     "ruleAction", "a8Action", "loosenHold", "loosenPlan", "targetPlan", "atrExpanded", "loosenFacts", "loosenInputs", "cleanCouncilA8", "LOOSEN_REASONS", "TP_NEARER_REASONS", "TP_FURTHER_REASONS", "LOOSEN_LOOKBACK_MS", "liquidityOf", "positionCouncilMessages",
     // CH1 (2026-11-23): the rules behind ruleAction and take_profit_weakening's measured reason.
-    "ruleCore", "weakeningReason"]],
+    "ruleCore", "weakeningReason",
+    // Z6 (2026-11-26): the council's key levels with the box levels counted inside its 12.
+    "councilLevels", "COUNCIL_LEVELS_MAX"]],
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields",
     // CH1 (2026-11-23): the signal's decision history.
@@ -738,7 +745,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "709305176abd749b7310b8974142c1926473bdf0a6f6e4e41a057f549d849d91";
+export const ENGINE_CODE_HASH = "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -809,7 +816,12 @@ export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941
 // zone_mgmt (Z3a, owner-set) is "off" by default: at the merge the era is carried (a new code hash, the same behaviour
 // hash, nextEra); the owner's flip to "omega" writes "zone_mgmt=omega" and starts a new era at the settings' updated_ms.
 // It is the owner's switch only: no automatic rule (Z5's breaker included) ever writes it.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt"]);
+// zone_sd (Z6, owner 2026-11-26: "Langsung signal + zone_sd") is "on" by default, the owner's word. It does not move
+// ENGINE_BEHAVIOUR_HASH: the fingerprint's fixtures carry no "/sd" token, so they replay as before (V14). Its management
+// change reaches the live engine only through the signal's "/sd" levels (SD_LEVELS "signal"), which v4 replays from
+// each decision's own record (sd_levels, sd_levels_mode), so live and v4 stay comparable; the owner setting it to "off"
+// writes "zone_sd=off" and starts a new era at the settings' updated_ms. The owner's switch only.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the

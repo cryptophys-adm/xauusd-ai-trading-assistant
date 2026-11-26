@@ -581,3 +581,128 @@ export function zoneAimBase(plan, atrH1, dir) {
   const risk = r.base_stop_atr * atrH1;
   return { entry: plan.entry, stop: r2(plan.entry - dir * risk), tp1: r2(plan.entry + dir * r.base_tp1_r * risk) };
 }
+
+// ---------------------------------------------------------------- Z6: supply and demand boxes as key levels
+// Owner 2026-11-26: "Langsung signal + zone_sd" (straight to the signal, with the Omega setting zone_sd on). The boxes
+// the typing reads (dsEvidence) become levels of their own beside the Key Level Agent's 12 clusters, each box ONE zone
+// [bottom, top], never two points. Clusters, zoneLevels, squeezeOf, aroundSet, the plans and zoneAhead do not change:
+// this reads the same evidence after the typing and returns a separate list (reading.sd_levels, decision.sd_levels).
+//   merge     boxes of one side (demand or supply) that overlap by at least half of the narrower one merge: the higher
+//             timeframe's box (then the heavier, then the lower) keeps its edges and its weight; the others are provenance
+//             only (ds_sources `<source>@<tf>(dup)`, no weight), as Z1b's same-block rule;
+//   exclude   a box the kept clusters (aroundSet, the recorded 12) already cover for at least half of its width, or whose
+//             near edge (both edges when price is inside it) lies within near_edge_atr x ATR(1H) of a kept edge;
+//   window    its distance from price (0 inside it) at most window_atr[tf] x ATR(1H) of its own timeframe;
+//   cap       at most cap_per_side[tf] per side (demand, supply) per timeframe, then at most `max` overall: decisive
+//             (medium or stronger) first, then the nearest, then the higher timeframe;
+//   words     zone_type its side, zone_strength from its own weight (ZONE_RULES medium / strong), zone_freshness as the
+//             typing's (its own touches and its boxes' touches), zone_rank "sd", tf (its timeframe in words), ds_sources.
+// Only decisive boxes reach the signal (src/ea-signal.mjs managementFields, SD_LEVELS "signal"); weak ones are recorded.
+// Switch: SD_LEVELS = "off" (default: nothing computed, nothing recorded) | "record" | "signal", through the strategy modes.
+
+export const SD_LEVELS_MODES = Object.freeze(["off", "record", "signal"]);
+export const SD_RANK = "sd";
+export const SD_RULES = Object.freeze({
+  window_atr: Object.freeze({ "15m": 3, "1H": 4, "4H": 6, daily: 8, weekly: 10 }),
+  cap_per_side: Object.freeze({ "15m": 1, "1H": 2, "4H": 2, daily: 2, weekly: 1 }),
+  max: 8, merge_share: 0.5, cover_share: 0.5, near_edge_atr: 0.3
+});
+
+/** SD_LEVELS: "off" (default) | "record" | "signal"; an unknown value reads "off". */
+export function sdLevelsMode(env) {
+  const v = String(env?.SD_LEVELS ?? "off").trim().toLowerCase();
+  return v === "record" || v === "signal" ? v : "off";
+}
+/** The strategy modes' entry for SD_LEVELS: { sdLevels } when it is not "off", else {} (modes unchanged). */
+export function sdLevelsModes(env) {
+  const m = sdLevelsMode(env);
+  return m === "off" ? {} : { sdLevels: m };
+}
+/** Pure: a modes value read as an SD_LEVELS mode ("off" unless "record" or "signal"). */
+export const sdModeOf = (v) => (v === "record" || v === "signal" ? v : "off");
+
+const sdWidth = (b) => b.top - b.bottom;
+/** Pure: how much of the narrower of two boxes their overlap covers (0..1); a zero-width box inside the other is 1. */
+function overlapShare(a, b) {
+  const ov = Math.min(a.top, b.top) - Math.max(a.bottom, b.bottom);
+  if (ov < 0) return 0;
+  const w = Math.min(sdWidth(a), sdWidth(b));
+  return w > 0 ? ov / w : 1;
+}
+/** Pure: how much of [low, high] the kept zones cover together (0..1); a zero-width box inside one is 1. */
+function coveredShare(low, high, kept) {
+  const parts = kept.map((k) => [Math.max(low, k.low), Math.min(high, k.high)]).filter(([a, b]) => b >= a).sort((x, y) => x[0] - y[0]);
+  if (!(high > low)) return parts.length ? 1 : 0;
+  let total = 0, end = -Infinity;
+  for (const [a, b] of parts) {
+    const from = Math.max(a, end);
+    if (b > from) total += b - from;
+    end = Math.max(end, b);
+  }
+  return total / (high - low);
+}
+
+/**
+ * Pure (Z6): the supply and demand boxes as their own levels (see above), lowest first: [{ low, high, zone_type,
+ * zone_strength, zone_freshness, zone_rank: "sd", tf, ds_sources? }], on the feed's scale. `evidence` is dsEvidence's
+ * output (the same the zones were typed on), `zones` the typed zones near price (their recorded 12, aroundSet, are the
+ * kept clusters). [] without a price or an ATR.
+ */
+export function sdLevels(evidence, zones, price, atrH1) {
+  if (!isNum(price) || !isNum(atrH1) || atrH1 <= 0) return [];
+  const boxes = (Array.isArray(evidence?.boxes) ? evidence.boxes : [])
+    .filter((b) => b && !b.point && !b.at_price && isNum(b.bottom) && isNum(b.top) && b.top >= b.bottom && ZONE_TF_NAME[b.tf] && isNum(b.weight) && (b.side === "demand" || b.side === "supply"))
+    .sort((a, b) => ZONE_TF_WEIGHT[b.tf] - ZONE_TF_WEIGHT[a.tf] || b.weight - a.weight || a.bottom - b.bottom || a.top - b.top || String(a.source).localeCompare(String(b.source)));
+  // Merge: each box joins the first group of its side whose lead it overlaps by half the narrower one, else leads one.
+  const groups = [];
+  for (const b of boxes) {
+    const g = groups.find((x) => x.lead.side === b.side && overlapShare(x.lead, b) >= SD_RULES.merge_share);
+    if (g) g.members.push(b); else groups.push({ lead: b, members: [b] });
+  }
+  const kept = aroundSet(zones, price).filter((k) => isNum(k.low) && isNum(k.high));
+  const nearBand = SD_RULES.near_edge_atr * atrH1;
+  const band = isNum(evidence?.atr_h1) ? ZONE_RULES.touch_band_atr * evidence.atr_h1 : null;
+  const out = [];
+  for (const { lead, members } of groups) {
+    const low = lead.bottom, high = lead.top, tf = ZONE_TF_NAME[lead.tf];
+    const dist = price < low ? low - price : price > high ? price - high : 0;
+    if (dist > SD_RULES.window_atr[tf] * atrH1 + 1e-9) continue;
+    if (kept.length && coveredShare(low, high, kept) >= SD_RULES.cover_share) continue;
+    const edges = price < low ? [low] : price > high ? [high] : [low, high];
+    if (kept.some((k) => edges.some((e) => Math.abs(e - k.low) <= nearBand + 1e-9 || Math.abs(e - k.high) <= nearBand + 1e-9))) continue;
+    const score = r2(lead.weight);
+    const strength = score >= ZONE_RULES.strong ? "strong" : score >= ZONE_RULES.medium ? "medium" : "weak";
+    const own = zoneTouches(low, high, evidence?.bars, band);
+    const boxTouches = members.filter((b) => BOX_TOUCH_SOURCES.has(b.source) && isNum(b.touches)).map((b) => b.touches);
+    const touches = boxTouches.length ? Math.min(ZONE_RULES.touch_cap, Math.max(own ?? 0, ...boxTouches)) : own;
+    const leadLabel = `${lead.source}@${tf}`;
+    const also = [...new Set([
+      ...members.slice(1).map((b) => `${b.source}@${ZONE_TF_NAME[b.tf]}`),
+      ...members.flatMap((b) => (Array.isArray(b.also) ? b.also.map((a) => `${a}@${ZONE_TF_NAME[b.tf]}`) : []))
+    ])].sort();
+    const labels = dsSourceLabels({ sources: [leadLabel], also });
+    out.push({
+      level: { low: r2(low), high: r2(high), zone_type: lead.side, zone_strength: strength, zone_freshness: freshnessOf(touches), zone_rank: SD_RANK, tf, ...(labels ? { ds_sources: labels } : {}) },
+      dist, rank: ZONE_TF_WEIGHT[lead.tf]
+    });
+  }
+  const order = (a, b) => (decisive(a.level) ? 0 : 1) - (decisive(b.level) ? 0 : 1) || a.dist - b.dist || b.rank - a.rank || a.level.low - b.level.low;
+  const count = new Map();
+  const capped = out.sort(order).filter(({ level }) => {
+    const k = `${level.tf}|${level.zone_type}`, n = count.get(k) ?? 0;
+    if (n >= SD_RULES.cap_per_side[level.tf]) return false;
+    count.set(k, n + 1);
+    return true;
+  });
+  return capped.slice(0, SD_RULES.max).map((x) => x.level).sort((a, b) => a.low - b.low || a.high - b.high);
+}
+
+/**
+ * Pure (Z6): opposing_ahead_sd, the counterfactual zoneAhead of a plan over the recorded set AND the decisive sd levels
+ * (zoneAhead itself reads only the recorded set; this is recorded only and nothing reads it for a decision).
+ */
+export function zoneAheadSd(plan, around, sd, ctx) {
+  const extra = (Array.isArray(sd) ? sd : []).filter((z) => decisive(z));
+  if (!extra.length) return null;
+  return zoneAhead(plan, [...(Array.isArray(around) ? around : []), ...extra], ctx);
+}

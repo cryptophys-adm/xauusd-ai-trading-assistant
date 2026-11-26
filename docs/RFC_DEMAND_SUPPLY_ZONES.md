@@ -1,6 +1,6 @@
 # RFC: demand and supply zones (the Z series)
 
-**Status:** Z0 live, recorded only (2026-11-24). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them. Z1b (GMI's Aegis validated order blocks as a source, §4b) is built, not live until its PR merges. Z3a (typed zones in Omega's SL+ and trailing TP, §8) ships behind the owner's Omega setting `zone_mgmt`, default "off" (the owner flips it at merge); Z3b and Z4 follow, each as its own PR.
+**Status:** Z0 live, recorded only (2026-11-24). Z6 (the boxes as key levels, §10) goes straight to the signal with `zone_sd` on (2026-11-26). Z1a (every active Prophet order block as a source, §4) live. Z2 (the zone_ahead check, §5) makes the priority live on the decision side. Z2b (execution plans aimed by zone type, §6) ships inert (`ZONE_AIM_OFF` "tp,stop,factor", orchestrator ruling 2026-11-25): each rule is the owner's to switch on. Z5 (readings, counterfactual tables and the decision-side breaker, §7) measures and brakes them. Z1b (GMI's Aegis validated order blocks as a source, §4b) is built, not live until its PR merges. Z3a (typed zones in Omega's SL+ and trailing TP, §8) ships behind the owner's Omega setting `zone_mgmt`, default "off" (the owner flips it at merge); Z3b and Z4 follow, each as its own PR.
 
 **Owner:** 2026-11-23, "Langsung prioritaskan": demand and supply zones are a live priority in strategy and position management.
 
@@ -398,6 +398,58 @@ test/omega-zone-mgmt.test.mjs Z3a-1 to Z3a-16: the signal (types only when all a
 - **Churn.** Whale churn can flip a type between bars; Z2 reads it at the decision bar only.
 - **Looser SL+ (Z3a).** A stop behind the own zone gives more back: capped at 0.15-0.30R of the position's R, never below the lock, forward only. Unknown R: tighter only.
 - **Era churn (Z3a).** Each flip of `zone_mgmt` is a new era; the recommended flips are "omega" at merge, then straight to "full" after Z4.
+- **Wide boxes (Z6).** A 4H or daily box can be wider than 1.3 ATR: it counts as passed only once wholly passed, so SL+ behind it comes late; it is taken only where tighter than today's.
+- **Signal size (Z6).** Up to 8 more key levels and tokens in the signal (bounded; the EA reads neither key).
+- **Stale higher-timeframe roles (Z6).** A daily "support" whale can sit above price; it is a demand box level all the same, decisive only by its weight.
+- **More modifications (Z6).** More levels mean more stop and target moves where they tighten; the v4 report counts them.
 - **Size.** decision_json grows for two reasons. In the test fixture the total went from 10.8 KB to 13.2 KB, with 3 agent plans:
   - the zone words of `key_levels`: about 95 bytes a zone, so about 1.1 KB for 12 zones;
   - each plan's `zone_types` and `opposing_ahead`, in `strategy_plans` and `trade`: about 0.45 KB a plan.
+
+
+## 10. Z6: the supply and demand boxes as key levels (SD_LEVELS, the Omega setting zone_sd)
+**Owner 2026-11-26:** "Langsung signal + zone_sd": straight to the signal (not record-only), with `zone_sd` on, under the binding safety rules below.
+
+### 10.1 Why
+Until Z6 a box only typed a cluster; it never became a key level by itself, because a key level needs three families and whale, FVG and GABFX are one family (liquidity). On 2026-11-25 at 16:30Z the 12 kept clusters reached only about ±2.4 ATR from price; the 15m and 1H Prophet supply blocks just beyond the 12th were dropped by the cap, and 4H, daily and weekly boxes never showed at all.
+
+### 10.2 The levels (`sdLevels`, `src/zone-types.mjs`)
+Called once in `buildKeyLevels` after the typing, on the same evidence (`dsEvidence`); it returns `reading.sd_levels` and changes nothing else (clusters, `zoneLevels`, `squeezeOf`, `aroundSet`, the plans).
+- **One zone a box.** Each box `[bottom, top]` stays one level; GABFX points and the 15m GMI flags are not boxes.
+- **Merge.** Same-side boxes that overlap by at least half the narrower one merge; the higher timeframe's box (then the heavier, then the lower) keeps its edges and its weight; the others are provenance only (`<source>@<tf>(dup)`).
+- **Exclusion.** A box the kept clusters (`aroundSet`, the recorded 12) cover for half its width or more, or whose near edge is within 0.3 ATR(1H) of a kept edge (both edges when price is inside it).
+- **Window and cap.**
+
+| TF | Window (ATR(1H)) | Cap per side |
+|---|---|---|
+| 15m | 3 | 1 |
+| 1H | 4 | 2 |
+| 4H | 6 | 2 |
+| D1 | 8 | 2 |
+| W (`1W`, ZF2) | 10 | 1 |
+
+  At most 8 overall (decisive first, then the nearest, then the higher timeframe), on top of the 12 clusters. A side is demand or supply.
+- **Words.** `zone_type` (the side), `zone_strength` from the box's own weight (`ZONE_RULES`: 2.0 strong, 1.0 medium), `zone_freshness` (the typing's rule), `zone_rank: "sd"`, `tf` in words, `ds_sources`. A lone 15m box is weak (0.7 to 0.9), so every 15m level is recorded only.
+- **Counterfactual.** `opposing_ahead_sd` on the decision: each side's guardrail plan measured by `zoneAhead` over the recorded set and the decisive box levels. `zoneAhead` itself is unchanged and reads the recorded set only (supply is stacked above price now; feeding it box levels would block more counter-trend entries).
+
+### 10.3 The switch and the signal
+- `SD_LEVELS` (AI Worker; FS1 row in group zones): "off" (code default: nothing computed, recorded or sent; main byte for byte) | "record" (`decision.sd_levels`, `sd_levels_mode`, `opposing_ahead_sd`) | "signal". Production: "signal" (`wrangler.jsonc`, the owner's word). Not an era switch; no mode-evidence restart.
+- `managementFields` (`src/ea-signal.mjs`), only with "signal" and every kept level typed: the decisive box levels after the kept ones in `key_levels`, each with a fourth token part `/sd` in `key_level_types`. No new key, no tp2 or extended_tp key; the EA reads neither key (its needle test holds).
+
+### 10.4 Omega and the Position Manager (`zone_sd`)
+`zone_sd` off/on, default on (owner-only: Aether's policy and its rollback strip it; `settingsFrom` validates it; FS1's Omega row). Off: `brokerKeyLevels` and the PM's `brokerLevels` drop every `/sd` level, so management is main's byte for byte. On:
+- **SL+ (`sdKeyPlan`).** keyLevelPlan runs over today's levels and over today's plus the box levels; a box counts as passed only once wholly passed (beyond the entry and behind price by the buffer). The box plan's stop is taken only where it is tighter than today's (or today's makes none, when it is tighter than the current stop). So a box level never loosens a stop, and no stop sits looser than the giveback cap (Z3a's cap applies within each plan, and the merge never goes looser than today's).
+- **Trailing TP.** The box plan's target only where it is nearer than today's.
+- **Ladder (`sdLadderPlan`, `sdLadderLevels`).** A box rung sits at its far edge in the profit direction; its lock only where tighter than today's lock (a box rung can replace the thirds with a coarser rung); the partials and Amendment 4's TP1 lock keep today's levels.
+- **Position Manager.** TP2 ("the next key level") may be a box level, so nearer. The ladder hold and the bounded loosening (A8) read today's levels only: a box level never unlocks an outward target earlier and never gives a reason to loosen. The Position Council keeps its 12 levels (`councilLevels`): with more than 12, the 12 nearest to price, box levels counted inside them.
+
+### 10.5 Hashes and the era
+- `ENGINE_CODE_HASH` 70930517… → 63e1f4dd…: `managementFields`, `brokerKeyLevels`, `manageIntents`, `settingsFrom`, `OMEGA_DEFAULTS` (its JSON), `brokerLevels`, `positionFacts`, `positionCouncilMessages`, `runPositionManager`; new: `zoneSdOn`, `sdMarks`, `sdKeyPlan`, `sdLadderLevels`, `sdLadderPlan`, `ZONE_SD_MODES`, `councilLevels`, `COUNCIL_LEVELS_MAX`.
+- `ENGINE_BEHAVIOUR_HASH` ecfe3f90… (V14) unchanged: its fixtures carry no `/sd` token.
+- `zone_sd` is in `ERA_SWITCHES`. At its default ("on") it adds nothing to the switch signature, so `nextEra` carries the era at the merge (a new code hash, the same behaviour hash). Management does change live once the signal carries `/sd` levels; v4 replays each decision's recorded `sd_levels` (DECISION_SQL extracts them), so live and v4 stay comparable. The owner's "off" writes `zone_sd=off` and starts a new era at the settings' `updated_ms`.
+
+### 10.6 The v4 report (not a gate)
+`scripts/studies/z6/z6-replay.mjs` (read-only study, no data in the repository): 521 decisions from 2026-11-18 16:00Z to 2026-11-26 03:00Z, the box levels rebuilt from the per-candle 1H, 4H, daily and weekly HUD snapshots and each decision's recorded key levels, under the live Omega settings (`zone_mgmt` off). With the live settings `zone_sd` on and off give the same 34 positions and the same records, because the profit-lock gate holds every lock in this window. With the gate at "legacy" (a sensitivity run only), on gives 44 positions against 43, +2.56R against +2.53R in total, the same worst trade (-1R) and the same drawdown (2.25R), and 1.14 modifications a position against 1.09. In every run no planned stop is looser with the box levels than without them, and none loosens the current stop. The PR body has the table.
+
+### 10.7 Tests
+`test/zone-sd.test.mjs` (ZS-1 to ZS-18): each window and cap, the overall 8, the merge and exclusion rules, decisive only in the signal, SD_LEVELS off byte for byte (hash on main e7c055b), record and signal, `zoneAhead` unchanged, `zone_sd` off byte for byte (hash on main e7c055b), the wide box, never looser and within the giveback cap over a grid, the ladder, the council's 12, v4's replay, the setting, the era and both hashes.

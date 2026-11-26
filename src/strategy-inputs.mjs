@@ -62,12 +62,14 @@ const snapshot = (s) => (s?.huds ? {
 } : null);
 
 const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone", "zoneTypes"]);
-/** The strategy switches that are off, in SLIM_MODES order, or null when all are on. */
+/** The strategy switches that are off, in SLIM_MODES order (and Z6's SD_LEVELS when on), or null when all are at their defaults. */
 const offModes = (modes) => {
   const off = Object.fromEntries(SLIM_MODES.filter((k) => modes?.[k] === "off").map((k) => [k, "off"]));
   // Z1a: the ZONE_SOURCES_OFF tokens, kept only when a source is off.
   const sources = zoneSourcesList(modes?.zoneSourcesOff);
   if (sources.length) off.zoneSourcesOff = sources;
+  // Z6: SD_LEVELS, kept only when it is not "off" (its default), so the replay rebuilds the box levels it recorded.
+  if (modes?.sdLevels === "record" || modes?.sdLevels === "signal") off.sdLevels = modes.sdLevels;
   return Object.keys(off).length ? off : null;
 };
 /** Pure: the inputs buildStrategy reads, without the room texts or other unused fields. */

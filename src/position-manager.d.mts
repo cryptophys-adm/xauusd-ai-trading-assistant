@@ -22,7 +22,9 @@ export function actionMessage(row: Record<string, any>, outcome?: { applied: boo
 export function actionIdOfIntent(intentId: unknown): string | null;
 export function runPositionManager(env: unknown, options?: Record<string, any>): Promise<Record<string, any>>;
 export function latestDecisions(db: unknown): Promise<Record<string, any> | null>;
-export function brokerLevels(signal: unknown): Array<{ low: number; high: number }>;
+export function brokerLevels(signal: unknown, options?: { sd?: boolean }): Array<{ low: number; high: number; sd?: true }>;
+export const COUNCIL_LEVELS_MAX: number;
+export function councilLevels<T extends { low: number; high: number }>(levels: T[] | null | undefined, price: number | null | undefined): T[];
 export function positionReport(rows: Array<Record<string, any>>, bars: Array<Record<string, any>>, options?: { now?: number }): Record<string, any>;
 export function reportMessage(day: string, rep: Record<string, any>): string;
 export function runPositionReport(env: unknown, options?: Record<string, any>): Promise<Record<string, any>>;

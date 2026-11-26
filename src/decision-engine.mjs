@@ -61,7 +61,7 @@ import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-aren
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
 import { roomBreakoutWaiveOf, roomWaiverFor, resolveRoomBreakoutWaive, loadRoomCorridors } from "./room-waive.mjs";
-import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf } from "./zone-types.mjs";
+import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf, zoneAheadSd } from "./zone-types.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
@@ -1463,6 +1463,21 @@ export function keyLevelsAround(strategy, n = KEY_LEVELS_KEPT) {
 }
 
 /**
+ * Pure (Z6): the decision's supply and demand box levels while SD_LEVELS is "record" or "signal" (the strategy's
+ * key_levels.sd_levels and sd_levels_mode, src/zone-types.mjs sdLevels), and opposing_ahead_sd: each side's guardrail plan
+ * measured by zoneAhead over the recorded set and the decisive sd levels, a counterfactual only (the guardrails' own
+ * zone_ahead keeps reading the recorded set). {} while SD_LEVELS is "off": the record as before.
+ */
+export function sdRecordOf(strategy, guards) {
+  const kl = strategy?.key_levels;
+  if (!Array.isArray(kl?.sd_levels) || (kl.sd_levels_mode !== "record" && kl.sd_levels_mode !== "signal")) return {};
+  const around = keyLevelsAround(strategy);
+  const side = (g, dir) => (g?.plan ? zoneAheadSd(g.plan, around, kl.sd_levels, { dir, atrH1: strategy.atr_h1, trend: strategy.trend ?? null }) : null);
+  const oa = { long: side(guards?.long, 1), short: side(guards?.short, -1) };
+  return { sd_levels: kl.sd_levels, sd_levels_mode: kl.sd_levels_mode, ...(oa.long || oa.short ? { opposing_ahead_sd: oa } : {}) };
+}
+
+/**
  * Pure (Z2): decision.zone_blocked, when zone_ahead is a side's only failing check: { side, agent, plan (slim),
  * opposing_ahead }, the guardrails' plan (the default agent's). The side the decision wanted first, else long, then short.
  */
@@ -1556,6 +1571,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
     key_levels: keyLevelsAround(strategy),
+    // Z6 (SD_LEVELS "record" or "signal"): the supply and demand boxes as their own levels; the signal carries the
+    // decisive ones under "signal" (src/ea-signal.mjs managementFields). Absent while SD_LEVELS is "off".
+    ...sdRecordOf(strategy, guards),
     // The corridor price stood in (src/strategy-engine.mjs squeezeOf): the nearest key zones below and
     // above and how far apart they are, kept on every decision so the "room" guardrail can be measured.
     squeeze: squeezeOf(strategy, { corridorAtr: roomAtrOf(env?.ROOM_CORRIDOR_ATR) }),
