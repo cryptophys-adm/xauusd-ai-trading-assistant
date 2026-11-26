@@ -28,7 +28,7 @@ async function ui() {
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, COND_WARN, COND_UNMEASURED, COND_EXCLUDED, COND_OFF, COND_BRIEF, COND_STALE, COND_NO_THRESHOLDS, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LEVEL_MOVES, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, COND_WARN, COND_UNMEASURED, COND_EXCLUDED, COND_OFF, COND_BRIEF, COND_STALE, COND_NO_THRESHOLDS, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -167,6 +167,34 @@ test("LQ5b a pending maker or block is pending (plain, not yet scored), never a 
   const blocks = await page(u.merged(LIQ, { effects: { blocks: [{ at_ms: LIQ.state.at_ms - 60_000, side: "SELL", mode: "scalp", outcome: "pending" }, { at_ms: LIQ.state.at_ms - 120_000, side: "BUY", mode: "scalp", outcome: "hit" }] } }));
   const bp = blocks.slice(blocks.indexOf("What it changed in Omega"));
   assert.match(bp, /<td[^>]*>block<\/td>(?:(?!<\/tr>).)*1 hit(?:(?!<\/tr>).)*1 pending/s, "a block: 1 hit and 1 pending");
+});
+
+test("LQ5c B19's level moves: grouped by action, each move's time in New York, UTC and GMT+7, side in its direction colour, mode, a neutral outcome; one hint with the code's numbers", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  const { LEVEL_HOLD_BARS_15M, LEVEL_HOLD_ATR } = await import("../src/liquidity-lens.mjs");
+  const html = await page(u.merged(LIQ, { effects: { level_moves: u.LEVEL_MOVES } }));
+  clean(html);
+  const start = html.indexOf("Level moves<span");
+  assert.ok(start > 0, "the Level moves heading with its hint");
+  const panel = html.slice(start, html.indexOf("Position Manager actions", start));
+  // One hint, its numbers the scoring's own (scoreLevelHold: 8 closed 15m bars, 0.1 x ATR15), no order word.
+  assert.equal((panel.match(/role="note"/g) ?? []).length, 1);
+  assert.ok(u.LEVEL_MOVES_HINT.includes(`${LEVEL_HOLD_ATR} × ATR15`) && u.LEVEL_MOVES_HINT.includes(`${LEVEL_HOLD_BARS_15M} closed bars`) && u.LEVEL_MOVES_HINT.includes(`${(LEVEL_HOLD_BARS_15M * 15) / 60} hours`));
+  assert.doesNotMatch(u.LEVEL_MOVES_HINT, /\b(stop|stops|sl|tp\d?|take[ -]profit|entry)\b/i);
+  // Grouped by action, newest first; the moves older than 7 days are left out.
+  assert.deepEqual([...panel.matchAll(/<th scope="rowgroup"[^>]*><span[^>]*><span class="mono font-semibold text-fg">([^<]+)<\/span><span class="mono text-fg-2">(\d+)</g)].map((m) => [m[1], Number(m[2])]), [["key level lock", 2], ["ladder lock", 3]]);
+  // Each move: New York first, then UTC and GMT+7; the side in its direction colour; the mode.
+  assert.match(panel, /Mon 09:20 NY<br\/><span class="whitespace-nowrap text-\[11px\] text-muted">14:20 UTC · 21:20 GMT\+7<\/span>(?:(?!<\/tr>).)*<span class="text-bear">▼ short<\/span><br\/><span class="text-muted">intraday</s);
+  assert.match(panel, /Mon 05:00 NY<br\/><span class="whitespace-nowrap text-\[11px\] text-muted">10:00 UTC · 17:00 GMT\+7<\/span>(?:(?!<\/tr>).)*<span class="text-bull">▲ long<\/span>/s);
+  assert.match(panel, /Mon 01:58 NY(?:(?!<\/tr>).)*<span class="text-fg-2">—<\/span><br\/><span class="text-muted">—</s, "no side, no mode: dashes");
+  // Outcomes are neutral: plain chips only, never green, red or cyan; anything unknown is pending.
+  const chips = [...panel.matchAll(/class="chip ([^"]*)">([^<]+)</g)];
+  assert.ok(chips.length >= 9, `chips: ${chips.length}`);
+  for (const [, cls, text] of chips) assert.equal(cls, "border-white/10 bg-white/4 text-fg-2", text);
+  assert.doesNotMatch(panel, /text-ok|text-fault|text-bull">[^▲]|text-bear">[^▼]|emerald|rose/);
+  assert.deepEqual(chips.map((m) => m[2]), ["2 pending", "pending", "pending", "1 hit", "1 miss", "1 neutral", "hit", "miss", "neutral"]);
+  // No price: no number with a decimal point in the panel's text (the hint's 0.1 × ATR15 is in its attributes).
+  for (const t of textOf(panel)) assert.doesNotMatch(t, /\d\.\d/, t);
 });
 
 test("LQ6 no order text or line: no Entry, Stop or TP but the hint and \"management only, never an entry\"", { skip: NO_UI_DEPS }, async () => {

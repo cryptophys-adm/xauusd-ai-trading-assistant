@@ -8,6 +8,7 @@ import type { ChartZone } from "../lib/zones-primitive";
 import { usePoll, type Poll } from "../lib/usePoll";
 import { PLAN_TICK_MS, localNow, markKey, planMark } from "../lib/pollState";
 import { T, rgba, type Tone } from "../lib/tokens";
+import { gmt7ClockOf } from "../lib/entryZone";
 import {
   LIQUIDITY_READS, LENS_MIN_N, ROLE_WORD, SCALE, WEEKDAYS, ZONE_COLOR, ZONE_TEXT, ageText, arr, atrDistance, clockPair, closedHour,
   LIQUIDITY_CARD_MAX, cardSummary, conditionText, conditionTone, levelsText, roomsNote, sessionText, timesText, cardWeightText, feedLevels, intelGet, kindWord, kindsInOrder, knownBasis, leanReasonText, localDayTime, localTime, marketClosedAt, nextOpenMs, num, nyClock,
@@ -23,7 +24,8 @@ import {
 // LiquidityView is pure and null-safe (the page render check renders it over test/fixtures/nexus-intel/liquidity.json
 // and its variants). A field a later backend PR fills (B17 the Position Manager's actions, B18 the management
 // candidates, B19 the skip outcomes and the level moves) is null until then and shows an Empty saying when it fills,
-// never an error. B15's LIQUIDITY card and quorum with liquidity are null when the latest decision has no
+// never an error. Since B19 the level moves are a table per action (ladder lock, key level lock): each move's time in
+// New York, UTC and GMT+7, its side in its direction colour, its mode, and its outcome in a neutral chip; no price. B15's LIQUIDITY card and quorum with liquidity are null when the latest decision has no
 // decision.liquidity (the switch off; lens B off, floored or stale; a decision before B15): an Empty says so.
 //
 // Prices: every one carries its scale (feed or broker). The chart is the feed's, so lens B's bands come only from
@@ -738,6 +740,64 @@ function grouped(rows: any[], key: (r: any) => string, why: string, by: "status"
   }));
 }
 
+/**
+ * B19's level moves: the protective locks Omega moved to a lens B level (src/liquidity-lens.mjs scoreLevelHold:
+ * LEVEL_HOLD_BARS_15M 8 closed 15m bars, LEVEL_HOLD_ATR 0.1). No order word (the page forbids them).
+ */
+export const LEVEL_MOVES_HINT = "Each row is a protective lock Omega moved to a lens B level; hit = no 15m close beyond it by more than 0.1 × ATR15 for 2 hours (8 closed bars), miss = one did, neutral = no ATR or bars missing. Target moves are not recorded.";
+/** "Mon 09:20 NY" and "14:20 UTC · 21:20 GMT+7": New York first, as the Opening range page writes it. */
+export const nyDayTime = (ms: number): string => { const c = nyClock(ms); return `${WEEKDAYS[c.wd] ?? ""} ${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")} NY`.trim(); };
+const utcGmt7 = (ms: number): string => `${utcTime(ms)} UTC · ${gmt7ClockOf(ms)} GMT+7`;
+/** A move's side, the position's: long ▲ bullish, short ▼ bearish (sideWord BUY / SELL). */
+function MoveSide({ side }: { side: unknown }) {
+  if (side === "BUY") return <span className="text-bull">▲ long</span>;
+  if (side === "SELL") return <span className="text-bear">▼ short</span>;
+  return <span className="text-fg-2">—</span>;
+}
+/** An outcome word: hit, miss or neutral, anything else pending (B8's outcomeOf). */
+const outcomeWord = (o: unknown): string => { const s = str(o); return s === "hit" || s === "miss" || s === "neutral" ? s : "pending"; };
+/** The outcome counts of a group, neutral chips only: an outcome is never green or red. */
+function NeutralCounts({ rows }: { rows: any[] }) {
+  const c = outcomeCounts(rows);
+  return <span className="inline-flex flex-wrap gap-1">{(["hit", "miss", "neutral", "pending"] as const).filter((k) => c[k] > 0).map((k) => <Badge key={k} tone="plain">{c[k]} {k}</Badge>)}</span>;
+}
+/** The level moves, grouped by action as they arrive (newest first): the group's count and outcomes, then each move. */
+function LevelMovesTable({ rows }: { rows: any[] }) {
+  const groups = new Map<string, any[]>();
+  for (const r of [...rows].sort((a, b) => b.at_ms - a.at_ms)) { const k = words(r?.action ?? r?.kind ?? "level"); groups.set(k, [...(groups.get(k) ?? []), r]); }
+  const td = "mono border-b border-white/5 px-1.5 py-1.5 align-top text-[12px] text-slate-300 sm:px-2.5";
+  const th = "whitespace-nowrap border-b border-white/10 px-1.5 py-2 text-left align-bottom text-[11px] font-medium text-muted";
+  return (
+    <table className="w-full border-collapse">
+      <thead><tr><th scope="col" className={th}>Time</th><th scope="col" className={th}>Side<br />mode</th><th scope="col" className={th}>Outcome</th></tr></thead>
+      {[...groups.entries()].map(([action, list]) => (
+        <tbody key={action}>
+          <tr>
+            <th scope="rowgroup" colSpan={3} className="border-b border-white/10 px-1.5 pb-1.5 pt-2.5 text-left font-normal sm:px-2.5">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+                <span className="mono font-semibold text-fg">{action}</span>
+                <span className="mono text-fg-2">{list.length}</span>
+                <span className="mono text-muted">past a lens B level</span>
+                <NeutralCounts rows={list} />
+              </span>
+            </th>
+          </tr>
+          {list.map((m, i) => {
+            const t = num(m?.at_ms) ? m.at_ms : null;
+            return (
+              <tr key={`${t}-${i}`}>
+                <td className={td}>{t == null ? "—" : <>{nyDayTime(t)}<br /><span className="whitespace-nowrap text-[11px] text-muted">{utcGmt7(t)}</span></>}</td>
+                <td className={td}><MoveSide side={m?.side} /><br /><Muted>{words(m?.mode)}</Muted></td>
+                <td className={td}><Badge tone="plain">{outcomeWord(m?.outcome)}</Badge></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      ))}
+    </table>
+  );
+}
+
 function EffectsPanel({ d, now }: { d: any; now: number }) {
   const e = obj(d?.effects);
   const blocks = recent(e?.blocks, now), makers = recent(e?.makers, now), skips = recent(e?.skips, now), deferrals = recent(e?.deferrals, now);
@@ -760,7 +820,7 @@ function EffectsPanel({ d, now }: { d: any; now: number }) {
           <EffectsTable rows={rows} />
           <div className="mt-3 flex flex-col gap-2">
             {moves == null ? <Empty when="Fills after backend B19 is deployed.">Level moves</Empty> : (
-              <>{sub("Level moves")}{moves.length ? <EffectsTable rows={grouped(moves, (r) => words(r?.action ?? r?.kind ?? "level"), "past a lens B level", "outcome")} /> : <Empty>No level move in the last 7 days.</Empty>}</>
+              <><div className="mt-1 flex items-center gap-1.5 text-[12px] font-semibold text-fg">Level moves<Hint text={LEVEL_MOVES_HINT} /></div>{moves.length ? <LevelMovesTable rows={moves} /> : <Empty>No level move in the last 7 days.</Empty>}</>
             )}
             {pm == null ? <Empty when="Fills after backend B17 is deployed.">Position Manager actions</Empty> : (
               <>{sub("Position Manager actions")}{pm.length ? <EffectsTable rows={grouped(pm, (r) => PM_ACTION[str(r?.action) ?? ""] ?? words(r?.action), "on a sweep against", "status")} /> : <Empty>No Position Manager action on a sweep in the last 7 days.</Empty>}</>
