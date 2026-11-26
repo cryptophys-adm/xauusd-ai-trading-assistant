@@ -334,22 +334,57 @@ export function parseResultsText(text) {
 }
 
 /**
- * Prune `results.<ms>.done` files in `dir`, keeping only the newest `maxKeep` (default 20).
+ * 1.7.1 (owner 2026-11-26: "Ya, bridge saja"): the results-file race. OmegaExecutor appends a result with
+ * FileOpen (which creates `results.txt`), FileSeek, FileWriteString, FileClose. Wine's file locks do not stop a native
+ * rename, so a rename inside that window moves the file under the EA's open handle and the EA's write lands in the
+ * `.done` file the bridge has already read: the ack is lost (CA1 then reconciles closes from their deals).
+ *
+ * - RESULTS_DEBOUNCE_MS: `results.txt` is renamed only once it has had no write for this long. The EA's open-to-close
+ *   window is one function call (a few ms, more under a loaded Wine); 400 ms is well above that, above the bridge's
+ *   own 250 ms stream throttle, and adds at most 0.4 s to an ack against a 5 s sync period.
+ * - RESULTS_REREAD_MS: every pass also reads again the `.done` files written in the last 60 s (by mtime: a late write
+ *   moves it), so a line the EA appended after the rename is still reported.
+ * - A last line without its newline is not reported yet. A `.done` file whose last line is incomplete stays in the
+ *   re-read set past the 60 s for up to RESULTS_PARTIAL_MAX_MS (10 minutes, and it is never pruned meanwhile); still
+ *   incomplete then, it is logged once and left to CA1.
+ */
+export const RESULTS_DEBOUNCE_MS = 400;
+export const RESULTS_REREAD_MS = 60_000;
+export const RESULTS_PARTIAL_MAX_MS = 10 * 60_000;
+
+const DONE_RE = /^results\.(\d+)\.done$/;
+
+/**
+ * Split text into its complete lines (up to and including the last "\n") and the rest. The rest is a partial line
+ * when it holds anything but NULs and blanks.
+ *
+ * @param {string} text
+ * @returns {{ complete: string, tail: string }}
+ */
+export function splitCompleteLines(text) {
+  const s = typeof text === "string" ? text : "";
+  const cut = s.lastIndexOf("\n");
+  return { complete: cut >= 0 ? s.slice(0, cut + 1) : "", tail: s.slice(cut + 1).replace(/\0/g, "").trim() };
+}
+
+/**
+ * Prune `results.<ms>.done` files in `dir`, keeping only the newest `maxKeep` (default 20) and every file `keep` names.
  *
  * @param {string} dir
- * @param {{ fs?: typeof nodeFs, maxKeep?: number }} [options]
+ * @param {{ fs?: typeof nodeFs, maxKeep?: number, keep?: (name: string) => boolean }} [options]
  */
-export function pruneDoneResults(dir, { fs = nodeFs, maxKeep = 20 } = {}) {
+export function pruneDoneResults(dir, { fs = nodeFs, maxKeep = 20, keep = () => false } = {}) {
   if (!fs.existsSync(dir)) return;
   const entries = [];
   for (const name of fs.readdirSync(dir)) {
-    const m = /^results\.(\d+)\.done$/.exec(name);
+    const m = DONE_RE.exec(name);
     if (m) {
       entries.push({ name, ms: Number(m[1]) });
     }
   }
   entries.sort((a, b) => b.ms - a.ms || b.name.localeCompare(a.name));
   for (const old of entries.slice(maxKeep)) {
+    if (keep(old.name)) continue;
     try {
       fs.unlinkSync(path.join(dir, old.name));
     } catch {
@@ -358,17 +393,13 @@ export function pruneDoneResults(dir, { fs = nodeFs, maxKeep = 20 } = {}) {
   }
 }
 
-/**
- * Read `results.txt` if present, move it to `results.<ms>.done`, and keep only the newest 20 `.done` files.
- *
- * @param {string} [dir]
- * @param {{ fs?: typeof nodeFs, now?: () => number, maxKeep?: number }} [options]
- * @returns {Array<{ id: string, ok: boolean, ticket?: number, error?: string, executed_ms: number }>}
- */
-export function consumeResults(
-  dir = resolveOmegaDir(),
-  { fs = nodeFs, now = () => Date.now(), maxKeep = 20 } = {},
-) {
+/** What a `.done` file holds, cached on its mtime and size: whether its last line is incomplete, and that line's id. */
+function fileFacts(st, text) {
+  const { tail } = splitCompleteLines(text);
+  return { mtimeMs: st.mtimeMs, size: st.size, partial: tail !== "", tailId: tail.split(";")[0].replace(/[^\x20-\x7E]/g, "").slice(0, 40) };
+}
+
+function resultsLocation(dir, fs) {
   let targetDir = dir;
   let resultsPath = path.join(targetDir, "results.txt");
   if (!fs.existsSync(resultsPath) && path.basename(targetDir) !== "omega") {
@@ -379,23 +410,149 @@ export function consumeResults(
       resultsPath = subPath;
     }
   }
+  return { targetDir, resultsPath };
+}
 
-  if (!fs.existsSync(resultsPath)) {
-    return [];
+/**
+ * How long until `results.txt` has been quiet for `debounceMs` (0 when it is settled or absent). Measured on the
+ * file's mtime against the wall clock (`fileNow`), since the kernel stamps the mtime with it.
+ *
+ * @param {string} [dir]
+ * @param {{ fs?: typeof nodeFs, fileNow?: () => number, debounceMs?: number }} [options]
+ */
+export function resultsSettleLeftMs(dir = resolveOmegaDir(), { fs = nodeFs, fileNow = () => Date.now(), debounceMs = RESULTS_DEBOUNCE_MS } = {}) {
+  const { resultsPath } = resultsLocation(dir, fs);
+  try {
+    if (!fs.existsSync(resultsPath)) return 0;
+    const age = Number(fileNow()) - fs.statSync(resultsPath).mtimeMs;
+    // A clock that went back (mtime in the future) counts as a fresh write.
+    return age >= debounceMs ? 0 : Math.max(1, Math.ceil(debounceMs - Math.max(0, age)));
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * One pass over the result files (1.7.1):
+ *   1. `results.txt`, once it has had no write for `debounceMs`, is renamed to `results.<ms>.done` and read
+ *      (`fresh`); before that it is left alone and `waitMs` says how long to wait.
+ *   2. Every other `.done` file modified in the last `rereadMs`, or holding an incomplete last line and modified in the
+ *      last `partialMaxMs`, is read again (`reread`).
+ * Only complete lines are parsed. Entries are deduplicated by intent id within the pass (fresh first); the caller
+ * deduplicates across passes. `.done` files are pruned to the newest `maxKeep`, never one that is still awaited for an
+ * incomplete line. `memo` (optional, kept by the daemon) caches what each old file holds and which incomplete lines
+ * were already reported as dropped.
+ *
+ * @param {string} [dir]
+ * @param {{ fs?: typeof nodeFs, now?: () => number, fileNow?: () => number, debounceMs?: number, rereadMs?: number,
+ *   partialMaxMs?: number, maxKeep?: number, memo?: { files: Map<string, object>, dropped: Set<string> } }} [options]
+ * @returns {{ fresh: Array<object>, reread: Array<object>, waitMs: number | null, dropped: Array<{ file: string, id: string }>, doneFile: string | null }}
+ */
+export function collectResults(
+  dir = resolveOmegaDir(),
+  {
+    fs = nodeFs,
+    now = () => Date.now(),
+    fileNow = () => Date.now(),
+    debounceMs = RESULTS_DEBOUNCE_MS,
+    rereadMs = RESULTS_REREAD_MS,
+    partialMaxMs = RESULTS_PARTIAL_MAX_MS,
+    maxKeep = 20,
+    memo = { files: new Map(), dropped: new Set() },
+  } = {},
+) {
+  const out = { fresh: [], reread: [], waitMs: null, dropped: [], doneFile: null };
+  const { targetDir, resultsPath } = resultsLocation(dir, fs);
+  const seen = new Set();
+  const take = (list, text) => {
+    for (const r of parseResultsText(splitCompleteLines(text).complete)) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      list.push(r);
+    }
+  };
+
+  if (fs.existsSync(resultsPath)) {
+    const left = resultsSettleLeftMs(targetDir, { fs, fileNow, debounceMs });
+    if (left > 0) {
+      out.waitMs = left;
+    } else {
+      let doneMs = Math.trunc(Number(now()));
+      let donePath = path.join(targetDir, `results.${doneMs}.done`);
+      while (fs.existsSync(donePath)) {
+        doneMs += 1;
+        donePath = path.join(targetDir, `results.${doneMs}.done`);
+      }
+      fs.renameSync(resultsPath, donePath);
+      out.doneFile = path.basename(donePath);
+      const text = fs.readFileSync(donePath, "utf8");
+      take(out.fresh, text);
+      // Cache what it holds, so an incomplete last line keeps it awaited (re-read and never pruned).
+      try {
+        const st = fs.statSync(donePath);
+        memo.files.set(out.doneFile, fileFacts(st, text));
+      } catch { /* learnt again next pass */ }
+    }
   }
 
-  let doneMs = Math.trunc(Number(now()));
-  let donePath = path.join(targetDir, `results.${doneMs}.done`);
-  while (fs.existsSync(donePath)) {
-    doneMs += 1;
-    donePath = path.join(targetDir, `results.${doneMs}.done`);
+  if (!fs.existsSync(targetDir)) return out;
+  const awaited = new Set(); // .done files still awaited for an incomplete last line: never pruned
+  const present = new Set();
+  const nowFile = Number(fileNow());
+  for (const name of fs.readdirSync(targetDir)) {
+    if (!DONE_RE.test(name)) continue;
+    present.add(name);
+    if (name === out.doneFile) {
+      // Just read above; an incomplete last line keeps it awaited.
+      if (memo.files.get(name)?.partial) awaited.add(name);
+      continue;
+    }
+    let st;
+    try { st = fs.statSync(path.join(targetDir, name)); } catch { continue; }
+    const age = nowFile - st.mtimeMs;
+    if (age > partialMaxMs) {
+      const cached = memo.files.get(name);
+      if (cached && cached.partial && !memo.dropped.has(name)) {
+        memo.dropped.add(name);
+        out.dropped.push({ file: name, id: cached.tailId });
+      }
+      continue;
+    }
+    // Old files are read only to learn whether their last line is incomplete; that is cached on (mtime, size).
+    let cached = memo.files.get(name);
+    const wasPartial = cached?.partial === true; // an awaited line just completed: read it whatever the mtime says
+    let text = null;
+    if (!cached || cached.mtimeMs !== st.mtimeMs || cached.size !== st.size) {
+      try { text = fs.readFileSync(path.join(targetDir, name), "utf8"); } catch { continue; }
+      cached = fileFacts(st, text);
+      memo.files.set(name, cached);
+    }
+    if (cached.partial) awaited.add(name);
+    if (age <= rereadMs || cached.partial || wasPartial) {
+      if (text === null) {
+        try { text = fs.readFileSync(path.join(targetDir, name), "utf8"); } catch { continue; }
+      }
+      take(out.reread, text);
+    }
   }
+  for (const name of memo.files.keys()) if (!present.has(name)) memo.files.delete(name);
+  for (const name of memo.dropped) if (!present.has(name)) memo.dropped.delete(name);
+  pruneDoneResults(targetDir, { fs, maxKeep, keep: (name) => awaited.has(name) });
+  return out;
+}
 
-  fs.renameSync(resultsPath, donePath);
-  const raw = fs.readFileSync(donePath, "utf8");
-  const parsed = parseResultsText(raw);
-  pruneDoneResults(targetDir, { fs, maxKeep });
-  return parsed;
+/**
+ * One pass of `collectResults` without memory between calls: the results of `results.txt` (once settled) and of the
+ * `.done` files still in the re-read window, deduplicated by id. The daemon uses `collectResults` directly.
+ *
+ * @param {string} [dir]
+ * @param {Parameters<typeof collectResults>[1]} [options]
+ * @returns {Array<{ id: string, ok: boolean, ticket?: number, error?: string, executed_ms: number }>}
+ */
+export function consumeResults(dir = resolveOmegaDir(), options = {}) {
+  const { fresh, reread } = collectResults(dir, options);
+  const ids = new Set(fresh.map((r) => r.id));
+  return [...fresh, ...reread.filter((r) => !ids.has(r.id))];
 }
 
 /**

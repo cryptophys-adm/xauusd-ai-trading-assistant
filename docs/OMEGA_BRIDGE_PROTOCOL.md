@@ -64,6 +64,14 @@ Content-Type: application/json
 switch), with no intent behind them; from 1.22 an ok one carries the reason in `error` (`expired`, `max_life` or
 `dead_man`), which the server shows as the deletion's reason. Every other ok result has no `error`.
 
+How the bridge collects `results` (omega-bridge 1.7.1, owner 2026-11-26: "Ya, bridge saja"; docs/OMEGA_BRIDGE.md
+"Results-file race"): it renames `omega/results.txt` only once the file has had no write for 400 ms, reads complete lines
+only (a last line without its newline waits), reads the `.done` files of the last 60 s again (an awaited incomplete line
+keeps its file for up to 10 minutes) and sends each intent id once (its memory of reported ids: 30 minutes, at most
+5000, kept in `$OMEGA_STATE_DIR/reported-results.json`, so a restart re-sends nothing). Should a result arrive twice
+anyway, the server applies it only to an intent still `pending`, `sent` or `expired`, and only such a result lifts the
+"EA never answered" limit fault: a late line for a done or failed intent changes nothing.
+
 ### Response body (200)
 
 ```json

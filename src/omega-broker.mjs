@@ -985,6 +985,9 @@ export function bridgeStreamMode(env, { executor, intents = [], recovery = null,
   return Array.isArray(intents) && intents.length ? "fast" : "calm";
 }
 
+/** The intent statuses a result still lands on (bridgeSync's UPDATE); only such a result clears the no-answer fault. */
+export const RESULT_OPEN_STATUSES = Object.freeze(["pending", "sent", "expired"]);
+
 export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVersion, corpus = null, corpusMacro = null, calendar = null, bridgeSymbol = null } = {}, { now = Date.now(), signal: signalIn } = {}) {
   await ensureSchema(env.DB);
   const db = env.DB;
@@ -1128,7 +1131,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     await db.prepare("UPDATE omega_intents SET status = ?, result = ?, updated_ms = ? WHERE id = ? AND status IN ('pending', 'sent', 'expired')")
       .bind(result.ok ? "done" : "failed", JSON.stringify(result), now, r.id).run();
     // The EA answers again: a "never answered" fault clears itself (owner 2026-11-21: "until the EA answers again").
-    if (!eaAnswered) { eaAnswered = true; await clearNoAnswerFault(env, db, { now }); }
+    // Only a result for an intent still open at receipt counts (2026-11-26, bridge 1.7.1 review): a line sent again (a
+    // bridge restart, a .done re-read) for an intent already done or failed is not a new answer and clears nothing.
+    if (!eaAnswered && RESULT_OPEN_STATUSES.includes(existing?.status)) { eaAnswered = true; await clearNoAnswerFault(env, db, { now }); }
     // A placement the EA reports as placed without a ticket: the limit fault (fail closed).
     if (p?.kind === "place_limit" && limitFault({ kind: "place_limit", status: result.ok ? "done" : "failed", result: JSON.stringify(result) })) {
       await recordLimitFault(env, db, { intent_id: r.id, kind: "place_limit", why: LIMIT_FAULT_NO_TICKET, created_ms: Number(existing?.created_ms) || now }, { now });
