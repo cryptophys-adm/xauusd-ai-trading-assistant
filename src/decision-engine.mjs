@@ -62,6 +62,7 @@ import { sessionOf } from "./outcome-scoring.mjs";
 import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
 import { roomBreakoutWaiveOf, roomWaiverFor, resolveRoomBreakoutWaive, loadRoomCorridors } from "./room-waive.mjs";
 import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf, zoneAheadSd } from "./zone-types.mjs";
+import { sessionRangeReading, orbMode } from "./opening-range.mjs";
 import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
@@ -773,7 +774,7 @@ export function agentPlanPasses(plan, g) {
 }
 
 /** Pure: the council's evidence (the witnesses, the quorum, both sides' guardrails and plans, the context). */
-export function councilEvidence({ barClose, cards, quorum, guards, context = {}, agentRecords = null, condition = null }) {
+export function councilEvidence({ barClose, cards, quorum, guards, context = {}, agentRecords = null, condition = null, sessionRange = null }) {
   // Z2, only while ZONE_PRIORITY is on (a side carries its zone_ahead mode): each plan adds its zone words, the room to the
   // nearest decisive opposing zone ahead in 1H ranges and whether it is with the trend. Nothing goes to the cautions.
   const zoneOn = Boolean(guards?.long?.zone_ahead || guards?.short?.zone_ahead);
@@ -812,9 +813,17 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
     // The Projection Agent's reading (chart patterns, the way each broke, its record on gold), given with
     // the strategies it helps to choose from.
     ...((strategies(guards.long) || strategies(guards.short)) && Array.isArray(guards.price_action) && guards.price_action.length ? { price_action: guards.price_action } : {}),
+    // Track A PR 9: the open session's opening range (src/opening-range.mjs sessionRangeReading), inside a window only.
+    ...(sessionRange ? { session_range: sessionRange } : {}),
     context
   };
 }
+
+/**
+ * Track A PR 9: how the council reads session_range (src/opening-range.mjs sessionRangeReading). Words only; the
+ * reading holds no price.
+ */
+export const SESSION_RANGE_PROMPT = "session_range is the opening range of the London or New York session open now (its first three 15m bars; width in 1H average ranges; status not_formed, range_event for a high-impact release inside it, or ok): where the last close sits, any 15m breakout (held, retesting the edge, or invalidated back through the middle) and the bars left in the window. It is context for orb_breakout; it never adds a side on its own.";
 
 /** The learned notes' consumer id of the council (Aether items address it in `audience.agents`). */
 export const COUNCIL_AGENT = "council";
@@ -843,6 +852,8 @@ export function councilMessages(evidence, { learned = null } = {}) {
     ...((evidence?.witnesses || []).some((w) => w.key === "LIQUIDITY") ? [LIQUIDITY_PROMPT] : []),
     ...(evidence?.long?.liquidity || evidence?.short?.liquidity ? ["A side may carry liquidity: the broker's own tick volume shows a reclaimed sweep on a volume spike in the last 15 minutes, sweep_with (the reversal is for that side) or sweep_against, with the lens weight to weigh it at. It confirms a pullback the strategy agents already plan; it never creates a plan or a side on its own."] : []),
     ...(zonePriorityIn(evidence) ? [ZONE_PRIORITY_PROMPT] : []),
+    // Track A PR 9: only while a session window is open (the evidence carries session_range).
+    ...(evidence?.session_range ? [SESSION_RANGE_PROMPT] : []),
     ...(evidence?.context?.model ? ["context.model is the platform's own model, trained on this system's past decisions and connected only after it beat the base rate on decisions it had not seen: long_target_first and short_target_first are its chances for each side against their base rates. Weigh it like a witness; it never overrides the guardrails or the levels."] : []),
     "Return only the JSON object."
   ].join(" ") + doctrineSnippet;
@@ -1284,7 +1295,10 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // power, pickStrategy, decision.witnesses) nor the witness weights; quorum_with_liquidity is what the quorum would read
   // with it, informational only. LIQUIDITY_WITNESS = "off": no card and no `liquidity` here.
   const liqCard = liquidityWitnessEnabled(env) ? liquidityCard(loaded?.liquidity ?? null, cards, { now }) : null;
+  // Track A PR 9: the open session's opening range for the council (src/opening-range.mjs), while orb_breakout is on.
+  const sessionRange = orbMode(env) === "on" ? sessionRangeReading(inputs.m15Bars ?? [], { atr: strategy?.atr_h1 ?? null, events: inputs.calendar?.events ?? [] }) : null;
   return { cards, quorum, guards, market, witness_weights: { ...activeWitnessWeights(effectiveEnv) }, witness_weights_source: source, witness_weights_id: tuned?.id ?? null,
+    ...(sessionRange ? { session_range: sessionRange } : {}),
     ...(pos ? { positioning: { weight: pos.weight, source: loaded.positioning.knobs?.weight_source ?? null, mode: loaded.positioning.knobs?.mode ?? null, lean: pos.lean, stale: pos.stale } } : {}),
     ...(liqCard ? { liquidity: { card: liqCard, quorum_with_liquidity: liquidityQuorum(cards, liqCard, { now, analytics, env: effectiveEnv }) } } : {}) };
 }
@@ -1585,6 +1599,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // Every strategy agent's own plan per side (src/strategy-agents.mjs), live or shadow: what each would
     // have traded here, kept so the plan learner can measure each agent on the bars that follow.
     strategy_plans: strategyPlansOf(assessment?.guards ?? guards),
+    // Track A PR 9: the open session's opening range the council read (no price), only inside a session window.
+    ...(assessment?.session_range ? { session_range: assessment.session_range } : {}),
     // The Projection Agent's chart patterns behind those levels (src/chart-patterns.mjs): which pattern, on
     // which chart, and whether it broke out; kept so each pattern's outcome on gold can be measured.
     chart_patterns: (strategy?.key_levels?.patterns || []).slice(0, 16).map((p) => ({ tf: p.tf, id: p.id, status: p.status, direction: p.direction, upper: p.upper, lower: p.lower, target: p.target })),
@@ -1754,7 +1770,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     });
     if (advice) context.model = advice;
     // B15: the council reads lens B's LIQUIDITY card beside the witnesses (counts: false); every gate keeps assessment.cards.
-    const evidence = councilEvidence({ barClose: closeIso, cards: withLiquidity(assessment.cards, assessment.liquidity?.card ?? null), quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode, regime: data.regime }) });
+    const evidence = councilEvidence({ barClose: closeIso, cards: withLiquidity(assessment.cards, assessment.liquidity?.card ?? null), quorum: assessment.quorum, guards: assessment.guards, context, agentRecords, condition: contextOf({ mode: modeThresholds(env?.TRADING_MODE, env?.COUNCIL_KNOBS).mode, regime: data.regime }), sessionRange: assessment.session_range ?? null });
     const councilStarted = clock();
     const council = await askCouncil(env, evidence, { clock });
     const councilMs = clock() - councilStarted;

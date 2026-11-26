@@ -77,3 +77,79 @@ export function openingRanges(bars15, { events = [], now = undefined } = {}) {
     return { ...out, status: "ok", high, low, mid: (high + low) / 2, width: high - low };
   });
 }
+
+// ---------------------------------------------------------------- Track A PR 9: the reading for the council
+/** The breakout and retest bands of the reading, in 1H ATR (the strategy agents' AGENT_RULES.breakout; a test pins them equal). */
+export const ORB_READING_BANDS = Object.freeze({ beyond_atr: 0.1, retest_atr: 0.15 });
+const r2 = (v) => (isNum(v) ? Math.round(v * 100) / 100 : null);
+const sessionWord = (label) => (label === "New York" ? "new_york" : "london");
+
+/**
+ * Pure (Track A PR 9): the opening range of the session window open at the last closed bar of `bars15`, for the
+ * council and the War Room's Technical Analyst, or null outside a window (and for London in the weeks its clock does
+ * not match). New York's when both are open. Distances in `atr` (the 1H ATR) units, never a price:
+ * { session, minutes_since_open, bars_left, range: { bars, width_atr, status }, last_bar: { side, from_edge_atr,
+ * from_mid_atr }, breakout: { way, bars_since, held, retesting }, invalidated }. last_bar, breakout and invalidated
+ * only once the range is formed (status "ok").
+ */
+export function sessionRangeReading(bars15, { atr = null, events = [], bands = ORB_READING_BANDS } = {}) {
+  const bars = (Array.isArray(bars15) ? bars15 : []).filter((b) => b && [b.high, b.low, b.close].every(isNum) && isNum(toMs(b.open_time)) && isNum(toMs(b.close_time)));
+  if (!bars.length) return null;
+  const at = toMs(bars.at(-1).close_time);
+  const open = openingRanges(bars, { events, now: at }).filter((r) => isNum(r.open_ms) && isNum(r.end_ms) && at > r.open_ms && at < r.end_ms && r.status !== "session_clock_mismatch" && r.status !== "window_over");
+  if (!open.length) return null;
+  const r = open.at(-1);
+  const k = isNum(atr) && atr > 0 ? atr : null;
+  const inAtr = (v) => (k && isNum(v) ? r2(v / k) : null);
+  const rangeBars = bars.filter((b) => toMs(b.open_time) >= r.open_ms && toMs(b.open_time) < r.range_end_ms).length;
+  const out = {
+    session: sessionWord(r.session), minutes_since_open: Math.round((at - r.open_ms) / 60_000), bars_left: Math.max(0, Math.round((r.end_ms - at) / BAR_MS)),
+    range: { bars: rangeBars, width_atr: r.status === "ok" ? inAtr(r.width) : null, status: r.status }
+  };
+  if (r.status !== "ok") return out;
+  const c = bars.at(-1).close;
+  const side = c > r.high ? "above" : c < r.low ? "below" : "inside";
+  const fromEdge = side === "above" ? c - r.high : side === "below" ? r.low - c : Math.min(c - r.low, r.high - c);
+  out.last_bar = { side, from_edge_atr: inAtr(fromEdge), from_mid_atr: inAtr(c - r.mid) };
+  // The first 15m close beyond an edge by the breakout band (the agent's trigger); none without the ATR.
+  const after = bars.filter((b) => toMs(b.open_time) >= r.range_end_ms);
+  let way = null, i = -1;
+  if (k) {
+    i = after.findIndex((b) => b.close - r.high >= bands.beyond_atr * k || r.low - b.close >= bands.beyond_atr * k);
+    if (i >= 0) way = after[i].close - r.high >= bands.beyond_atr * k ? "up" : "down";
+  }
+  if (!way) { out.breakout = { way: null, bars_since: null, held: null, retesting: null }; out.invalidated = false; return out; }
+  const dir = way === "up" ? 1 : -1, edge = dir > 0 ? r.high : r.low, since = after.slice(i + 1);
+  out.breakout = {
+    way, bars_since: after.length - 1 - i,
+    // Held: no close back inside the range since the break.
+    held: since.every((b) => dir * (b.close - edge) >= 0),
+    // Retesting: the last close within the retest band of the broken edge.
+    retesting: Math.abs(c - edge) <= bands.retest_atr * k
+  };
+  // Invalidated: a close back through the range's middle since the break (the agent's end of the side).
+  out.invalidated = since.some((b) => dir * (b.close - r.mid) < 0);
+  return out;
+}
+
+/**
+ * Pure (Track A PR 9): the 1H ATR(14) of closed 15m bars, from the hours they make up (an hour of four closed 15m bars,
+ * by its UTC start), the strategy engine's true-range mean; null with fewer than two hours. The War Room reads the 15m
+ * series only.
+ */
+export function h1AtrOf15(bars15, n = 14) {
+  const hours = new Map();
+  for (const b of Array.isArray(bars15) ? bars15 : []) {
+    const o = toMs(b?.open_time);
+    if (!isNum(o) || ![b.high, b.low, b.close].every(isNum)) continue;
+    const h = Math.floor(o / 3_600_000) * 3_600_000, x = hours.get(h);
+    if (!x) hours.set(h, { t: h, high: b.high, low: b.low, close: b.close, last: o, n: 1 });
+    else { x.high = Math.max(x.high, b.high); x.low = Math.min(x.low, b.low); if (o > x.last) { x.last = o; x.close = b.close; } x.n++; }
+  }
+  const c = [...hours.values()].filter((x) => x.n === 4).sort((a, b) => a.t - b.t);
+  if (c.length < 2) return null;
+  const tr = [];
+  for (let i = 1; i < c.length; i++) tr.push(Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close)));
+  const last = tr.slice(-n);
+  return last.reduce((s, v) => s + v, 0) / last.length;
+}

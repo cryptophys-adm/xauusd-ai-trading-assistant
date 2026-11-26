@@ -37,6 +37,8 @@ import { effectiveLearnedPack } from "./learned-live.mjs";
 import { roomWeighting } from "./weighting.mjs";
 import { chartDeskReading, chartDeskLabel } from "./timeframe-desk.mjs";
 import { projectionReading, chartPatternsMode } from "./projection-agent.mjs";
+import { sessionRangeReading, orbMode, h1AtrOf15 } from "./opening-range.mjs";
+import { cachedCalendar } from "./econ-calendar.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import {
   ROOM_STANCES, ensureThreadSchema, isFifteenMinuteClose, liveEvidence, m15KeyForClose, buildLiveRoomTask,
@@ -76,6 +78,11 @@ export const DESK_AGENTS = Object.freeze({
   risk: { name: "Risk Manager", role: "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move" },
   projection: { name: "Projection Agent", role: "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold" }
 });
+/**
+ * Track A PR 9: the Technical Analyst's line while a London or New York session window is open (its data carries
+ * session_opening_range, src/opening-range.mjs sessionRangeReading). Words only; no price in the reading.
+ */
+export const TECHNICAL_RANGE_RULE = "session_opening_range in your data is the London or New York opening range open now: its width in 1H average ranges, where the last close sits, any 15m breakout (held, retesting, or invalidated back through the middle). Read it as price action, not a signal on its own.";
 /** Retired 2026-11-09 (independent rooms): kept only to name the agent in stored rooms. */
 const RETIRED_DESK_NAMES = Object.freeze({ htf: "Higher-Timeframe Desk" });
 
@@ -455,11 +462,14 @@ export function openingRole(agent) {
     : `You are ${HUD_NAMES[agent]}, one agent per Pine HUD, in the XAUUSD Live War Room, which meets at every 15m candle close. You speak only about the ${HUD_NAMES[agent]} HUD on the 15m candle that just closed. Lean on the statements marked verified by parity or computed from verified bars. The readers already see your calibration status once, next to your name: never mention calibration, verification or comparators in your claim. When every statement is not yet calibrated, keep your confidence at or below ${UNCALIBRATED_CONFIDENCE_CAP}.`;
 }
 
-function openingMessages(agent, data, learned = null, note = null) {
+export function openingMessages(agent, data, learned = null, note = null) {
   const riskRule = agent === "risk" ? ["Judge the risk of every possible entry from your data: the 15m volatility, the 15m Prophet R38 confirmation and what would invalidate the move, and say plainly whether you would take it."] : [];
   const who = openingRole(agent);
+  // Track A PR 9: the Technical Analyst also reads the session's opening range, only while its data carries one.
+  const rangeRule = agent === "technical" && data?.session_opening_range ? [TECHNICAL_RANGE_RULE] : [];
   return chatMessages([
     who,
+    ...rangeRule,
     ROOM_RULES_INDEPENDENT,
     ROOM_RULES,
     INDEPENDENCE_RULE,
@@ -536,12 +546,12 @@ async function seriesOf15(env) {
   } catch { return []; }
 }
 
-function agentData(agent, evidence, hud, confirmations, desk15, projection = null, conditions = null) {
+export function agentData(agent, evidence, hud, confirmations, desk15, projection = null, conditions = null) {
   switch (agent) {
     case "projection": return projection ?? { available: false };
     case "m15": return { timeframe: "15 minutes", reading: desk15.reading, approved_by_parity: desk15.approved_by_parity };
     case "news": return evidence.news ? { window: evidence.news.window ?? "the latest hourly batch", consensus: evidence.news.consensus, confidence: evidence.news.confidence, summary: evidence.news.summary, reasons: evidence.news.reasons, counts: evidence.news.counts, headlines: evidence.news.headlines } : { available: false, note: "no news consensus yet" };
-    case "technical": return { candles_15m: evidence.m15.candles };
+    case "technical": return { candles_15m: evidence.m15.candles, ...(evidence.session_range ? { session_opening_range: evidence.session_range } : {}) };
     case "risk": {
       const c = evidence.m15.candles;
       const ranges = c.map(x => Math.round((x.h - x.l) * 100) / 100);
@@ -600,12 +610,22 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     hud = snapshot ? await hudReadings(env, snapshot) : null;
   } catch { hud = null; }
   // The Projection Agent (owner 2026-11-12): the 15m chart's patterns and projection levels, no price.
-  let projection = null;
+  let projection = null, bars15 = [];
   try {
     const closeMs = Date.parse(barTime);
-    const bars15 = (await seriesOf15(env)).filter((b) => Date.parse(b.close_time) <= closeMs);
+    bars15 = (await seriesOf15(env)).filter((b) => Date.parse(b.close_time) <= closeMs);
     projection = projectionReading({ bars: bars15, plane, calibration: await readPatternCalibration(env), timeframe: "15 minutes", patterns: chartPatternsMode(env) });
   } catch { projection = null; }
+  // Track A PR 9: the open session's opening range for the Technical Analyst, while orb_breakout is on; the 1H ATR from
+  // the same 15m bars (src/opening-range.mjs h1AtrOf15) and the calendar's releases. None outside a session window.
+  if (orbMode(env) === "on") {
+    try {
+      let events = [];
+      try { events = (await cachedCalendar(env))?.events ?? []; } catch { events = []; }
+      const range = sessionRangeReading(bars15, { atr: h1AtrOf15(bars15), events });
+      if (range) evidence.session_range = range;
+    } catch { /* no reading this bar */ }
+  }
   // The 15m Desk: the 15m local records of the candle that just closed (owner decision 2026-11-06).
   let desk15 = { available: false, reading: [], approved_by_parity: false };
   try { desk15 = await chartDeskReading(env, m15KeyForClose(barTime)); } catch { /* no desk this bar */ }
