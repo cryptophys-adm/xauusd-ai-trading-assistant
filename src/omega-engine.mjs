@@ -104,7 +104,14 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // §8): "omega", SL+ behind the position's own decisive zones (within a giveback cap) and the trailing TP to a decisive
   // opposing zone at most one zone further; "off" (default), today's engine byte for byte. The owner's switch only;
   // Aether's policy and its rollback never write it (Z3b adds omega_pm, Z4 adds full).
-  zone_mgmt: "off"
+  zone_mgmt: "off",
+  // Z6, the supply and demand box levels in Omega's management (owner 2026-11-26: "Langsung signal + zone_sd"): "on"
+  // (default, the owner's word), the signal's "/sd" key levels join SL+ (only ever tighter than without them, a box
+  // passed only once wholly passed), the trailing TP (only ever nearer) and the ladder's lock (a box's far edge, only
+  // ever tighter; the partials unchanged);
+  // "off", they are dropped and the engine is as before byte for byte. The owner's switch only; Aether's policy and
+  // its rollback never write it.
+  zone_sd: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -239,6 +246,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.zone_mgmt !== undefined) {
     if (typeof body.zone_mgmt !== "string" || !ZONE_MGMT_MODES.includes(body.zone_mgmt)) return { error: "zone_mgmt must be 'off' or 'omega'" };
     out.zone_mgmt = body.zone_mgmt;
+  }
+  if (body.zone_sd !== undefined) {
+    if (typeof body.zone_sd !== "string" || !ZONE_SD_MODES.includes(body.zone_sd)) return { error: "zone_sd must be 'off' or 'on'" };
+    out.zone_sd = body.zone_sd;
   }
   if (body.change_thresholds !== undefined) {
     const v = normalizeChangeThresholds(body.change_thresholds);
@@ -429,6 +440,63 @@ export function typedDecisive(z) {
   return (z?.type === "demand" || z?.type === "supply") && (z.strength === "medium" || z.strength === "strong");
 }
 
+// Z6, the supply and demand box levels (the Omega setting zone_sd; docs/RFC_DEMAND_SUPPLY_ZONES.md §10). A signal's key
+// level whose key_level_types token carries a fourth part "sd" (src/ea-signal.mjs managementFields) is a box level.
+export const ZONE_SD_MODES = Object.freeze(["off", "on"]);
+/** Pure (Z6): whether the signal's "/sd" box levels reach Omega's management (zone_sd "on"; unset reads the default). */
+export function zoneSdOn(settings) {
+  const v = settings?.zone_sd === undefined ? OMEGA_DEFAULTS.zone_sd : settings.zone_sd;
+  return v === "on";
+}
+/**
+ * Pure (Z6): which of the signal's key_levels parts are box levels (key_level_types tokens with a fourth part "sd"),
+ * aligned 1:1 with them, or null when either is absent or the counts differ (then none is).
+ */
+export function sdMarks(signal) {
+  if (typeof signal?.key_level_types !== "string" || !signal.key_level_types || typeof signal.key_levels !== "string" || !signal.key_levels) return null;
+  const tokens = signal.key_level_types.split(",");
+  if (tokens.length !== signal.key_levels.split(",").length) return null;
+  const marks = tokens.map((t) => t.split("/")[3] === "sd");
+  return marks.some(Boolean) ? marks : null;
+}
+/**
+ * Pure (Z6): the key-level plan with the box levels (`withSd`, keyLevelPlan over them) merged into the plan without them
+ * (`base`, today's), so that a box level never loosens anything: SL+ takes the box plan's stop only where it is tighter
+ * than today's (or today's makes none: the box plan's stop is then already tighter than the current one); the trailing
+ * TP takes the box plan's target only where it is nearer than today's (or today's makes none). The close and the band
+ * are today's. `sl_sd` / `tp_sd` mark a price a box level changed.
+ */
+export function sdKeyPlan(base, withSd, { buy, point }) {
+  if (!base || base.close || !withSd || withSd.close) return base;
+  const dir = buy ? 1 : -1, half = (positive(point) ? point : 0.01) / 2;
+  const slSd = withSd.sl != null && (base.sl == null || dir * (withSd.sl - base.sl) > half);
+  const tpSd = withSd.tp != null && (base.tp == null || dir * (base.tp - withSd.tp) > half);
+  const sl = slSd ? withSd.sl : base.sl, tp = tpSd ? withSd.tp : base.tp;
+  const slZone = slSd ? withSd.sl_zone === true : base.sl_zone === true, tpZone = tpSd ? withSd.tp_zone === true : base.tp_zone === true;
+  return { sl, tp, band: base.band, ...(slZone ? { sl_zone: true } : {}), ...(tpZone ? { tp_zone: true } : {}), ...(slSd ? { sl_sd: true } : {}), ...(tpSd ? { tp_sd: true } : {}) };
+}
+/**
+ * Pure (Z6): the ladder's levels for a position: a box level counts at its far edge in the position's profit direction
+ * (its high for a long, its low for a short), so a rung and its lock come only once the whole box is passed.
+ */
+export function sdLadderLevels(levels, side) {
+  if (!Array.isArray(levels) || !levels.some((z) => z?.sd === true)) return levels;
+  return levels.map((z) => (z?.sd === true ? (side === "BUY" ? { low: z.high, high: z.high } : { low: z.low, high: z.low }) : z));
+}
+
+/**
+ * Pure (Z6): the ladder step with the box levels (`withSd`, ladderPlan over sdLadderLevels) merged into today's (`base`):
+ * the lock is the box plan's only where it is tighter than today's (or today's makes none: it is then already tighter
+ * than the current stop); the partial is always today's (its rungs and their count unchanged). A box level can replace
+ * the ladder's thirds with a coarser rung, so its lock alone could sit looser than today's: never taken then.
+ */
+export function sdLadderPlan(base, withSd, { buy, point }) {
+  if (!base || !withSd || withSd.sl == null) return base;
+  const half = (positive(point) ? point : 0.01) / 2;
+  if (base.sl != null && !((buy ? 1 : -1) * (withSd.sl - base.sl) > half)) return base;
+  return { ...base, sl: withSd.sl, sl_rung: withSd.sl_rung };
+}
+
 /** Pure (Z3a): a position's giveback cap in price (ZONE_GIVEBACK_R of its mode x its R at entry), or null when R is unknown. */
 export function zoneGiveback(meta) {
   const rd = Number(meta?.r_dist);
@@ -441,19 +509,24 @@ export function zoneGiveback(meta) {
  * Pure: the signal's key levels on the broker's scale ({ low, high }, lowest first), or null without a known basis.
  * Z3a: with `typed` and a key_level_types whose token count matches the key levels, each key level also carries its
  * words { type, strength, freshness } and lens B's levels type "none"; otherwise (and always without `typed`) today's.
+ * Z6: a box level (a "/sd" token, sdMarks) is dropped unless `sd` (zone_sd on); with `sd` it carries `sd: true`. A
+ * signal without box levels gives today's levels byte for byte either way.
  */
-export function brokerKeyLevels(signal, { typed = false } = {}) {
+export function brokerKeyLevels(signal, { typed = false, sd = false } = {}) {
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4; owner 2026-11-20,
   // "rekomendasi"): sweep extremes, untaken pools and high-volume nodes join the key levels with source "liquidity",
   // already on the broker's scale (no basis added), only while the lens is on (the signal's liquidity_on).
   const liquidity = signalLiquidityLevels(signal);
   const words = typed ? typedLevels(signal) : null;
+  const marks = sdMarks(signal);
   const out = [];
   if (signal?.feed_basis_known === true && finite(signal.feed_basis) && typeof signal.key_levels === "string" && signal.key_levels) {
     const parts = signal.key_levels.split(",");
     for (let i = 0; i < parts.length; i += 1) {
+      if (marks?.[i] && !sd) continue;
       const [lo, hi] = parts[i].split(":").map(Number);
-      if (positive(lo) && positive(hi) && lo <= hi) out.push(words ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...words[i] } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis });
+      const box = marks?.[i] ? { sd: true } : {};
+      if (positive(lo) && positive(hi) && lo <= hi) out.push(words ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...words[i], ...box } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...box });
     }
   }
   out.push(...(words ? liquidity.map((z) => ({ ...z, type: "none", strength: null, freshness: null })) : liquidity));
@@ -762,6 +835,13 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   // (keyLevelPlan's `zone`); null when off or untyped (a missing or mismatched key_level_types), so today's plan.
   const typedLv = zoneMgmtOn(S) ? brokerKeyLevels(signal, { typed: true }) : null;
   const zoneLevels = typedLv && typedLv.some((z) => typeof z.type === "string") ? typedLv : null;
+  // Z6 (zone_sd on): the same levels with the signal's box levels, beside today's (only where today's exist and the
+  // signal carries box levels): SL+ and the trailing TP through sdKeyPlan (never looser, never further), the ladder's
+  // lock through sdLadderPlan (a box rung at its far edge, sdLadderLevels; never looser; the partials today's). The
+  // ladder's TP1 lock (Amendment 4) keeps today's levels. Off, or no box level: null, today's management byte for byte.
+  const sdLv = zoneSdOn(S) && levels ? brokerKeyLevels(signal, { sd: true }) : null;
+  const boxLevels = sdLv && sdLv.some((z) => z.sd === true) ? sdLv : null;
+  const typedSdLv = boxLevels && zoneLevels ? brokerKeyLevels(signal, { typed: true, sd: true }) : null;
   // One modify per position per ZONE_MGMT_RATE_MS across the 1m fast layer and the typing: a fast action of the position
   // (pm1:<ticket>:<bar minute>, decided at the bar's close) in the window leaves its management untyped (today's).
   const fastRecent = (ticket) => [...recent].some((rid) => {
@@ -803,7 +883,10 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     if (levels) {
       // Z3a: typed with the position's giveback cap (its mode and R at entry), unless a fast action is in the window.
       const zone = zoneLevels && !fastRecent(p.ticket) ? { cap: zoneGiveback(positionMeta?.[p.intent_id] ?? null) } : null;
-      const k = keyLevelPlan({ position: p, sym, signal, levels: zone ? zoneLevels : levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone ? { zone } : {}) });
+      const k0 = keyLevelPlan({ position: p, sym, signal, levels: zone ? zoneLevels : levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone ? { zone } : {}) });
+      const k = boxLevels
+        ? sdKeyPlan(k0, keyLevelPlan({ position: p, sym, signal, levels: zone && typedSdLv ? typedSdLv : boxLevels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone && typedSdLv ? { zone } : {}) }), { buy, point: positive(sym.point) ? sym.point : Math.pow(10, -digits) })
+        : k0;
       if (k.close) {
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
@@ -846,7 +929,11 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     // The TP ladder: the SL lock and the progressive partials (ladderPlan). It replaces the single scale-out below.
     if (S.tp_ladder) {
       const partialsDone = [...recent].filter((rid) => String(rid).startsWith(`pl:${p.ticket}:`)).length;
-      const lad = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles, ...(gate ? { beLockPx: gateBe } : {}) });
+      const lad0 = ladderPlan({ position: p, sym, signal, levels, settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles, ...(gate ? { beLockPx: gateBe } : {}) });
+      // Z6: the box levels add a lock only where it is tighter than today's; the partials stay today's.
+      const lad = boxLevels
+        ? sdLadderPlan(lad0, ladderPlan({ position: p, sym, signal, levels: sdLadderLevels(boxLevels, p.side), settings: S, partialsDone, now, meta: positionMeta?.[p.intent_id] ?? null, candles, ...(gate ? { beLockPx: gateBe } : {}) }), { buy, point: positive(sym.point) ? sym.point : Math.pow(10, -digits) })
+        : lad0;
       if (lad.sl != null && held(lad.sl)) lad.sl = null;
       if (lad.sl != null && gateShut(lad.sl)) lad.sl = null;
       if (lad.sl != null) {

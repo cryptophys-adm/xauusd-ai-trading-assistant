@@ -29,7 +29,7 @@ import { recentReleases } from "./econ-releases.mjs";
 import { verifiedM5Confirmation } from "./m5-verification.mjs";
 import { setupType } from "./level-readers.mjs";
 import { orderImbalance } from "./producer/m5-orderbook.mjs";
-import { keyLevelZoneTypesMode, zoneWords, typedZones, withZoneAhead, zoneSourcesList, zoneSourcesOffMode, zoneSourcesModes } from "./zone-types.mjs";
+import { keyLevelZoneTypesMode, zoneWords, typedZones, withZoneAhead, zoneSourcesList, zoneSourcesOffMode, zoneSourcesModes, sdLevelsMode, sdLevelsModes, sdModeOf } from "./zone-types.mjs";
 
 export const STRATEGY_VERSION = "cryptophys.strategy-engine.v1";
 export const TREND_WEIGHTS = Object.freeze({ D1: 0.5, H4: 0.5 });
@@ -404,7 +404,9 @@ function keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1
     // Z0: demand/supply types on the zones (recorded only); KEY_LEVEL_ZONE_TYPES travels in the inputs as modes.zoneTypes.
     zoneTypes: modes?.zoneTypes === "off" ? "off" : keyLevelZoneTypesMode(env),
     // Z1a: ZONE_SOURCES_OFF travels in the inputs as modes.zoneSourcesOff (present only when a source is off).
-    zoneSourcesOff: zoneSourcesList([...zoneSourcesList(modes?.zoneSourcesOff), ...zoneSourcesOffMode(env)])
+    zoneSourcesOff: zoneSourcesList([...zoneSourcesList(modes?.zoneSourcesOff), ...zoneSourcesOffMode(env)]),
+    // Z6: SD_LEVELS travels in the inputs as modes.sdLevels (present only when it is not "off"); env when called with one.
+    sdLevels: modes?.sdLevels ? sdModeOf(modes.sdLevels) : sdLevelsMode(env)
   };
 }
 
@@ -590,7 +592,7 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env), ...sdLevelsModes(env) },
     now
   };
 }

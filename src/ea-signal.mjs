@@ -167,14 +167,24 @@ export function entryZoneFields(t, side) {
  * (Z0's zone_type, KEY_LEVEL_ZONE_TYPES on): "type/strength/freshness" per level ("-" for none), joined by ",", aligned
  * 1:1 with key_levels; Omega reads it only while its setting zone_mgmt is not "off". An untyped decision's signal is
  * byte for byte as before. Not named tp2 or extended_tp.
+ * Z6 (owner 2026-11-26: "Langsung signal + zone_sd"): with the decision's sd_levels_mode "signal" (SD_LEVELS) and every
+ * kept level typed, its decisive (medium or stronger) supply and demand box levels (decision.sd_levels) follow the kept
+ * levels in key_levels, each with a fourth token part "/sd" in key_level_types; no new key. Omega drops a "/sd" level
+ * unless its setting zone_sd is on (src/omega-engine.mjs brokerKeyLevels). Without them the fields are as before.
  * Flat values only: the EA parses a flat JSON object and ignores these.
  */
 export function managementFields(decision, { basis = null } = {}) {
   const close = keyCloseMs(decision?.decision_key);
   const score = decision?.quorum?.score;
-  const levels = (Array.isArray(decision?.key_levels) ? decision.key_levels : []).filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high);
+  const kept = (Array.isArray(decision?.key_levels) ? decision.key_levels : []).filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high);
   const word = (w) => (typeof w === "string" && /^[a-z_]+$/.test(w) ? w : "-");
-  const types = levels.length && levels.every((z) => typeof z.zone_type === "string") ? levels.map((z) => `${word(z.zone_type)}/${word(z.zone_strength)}/${word(z.zone_freshness)}`).join(",") : null;
+  const typed = (z) => typeof z.zone_type === "string";
+  const sd = decision?.sd_levels_mode === "signal" && kept.every(typed) && Array.isArray(decision?.sd_levels)
+    ? decision.sd_levels.filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high && (z.zone_type === "demand" || z.zone_type === "supply") && (z.zone_strength === "medium" || z.zone_strength === "strong"))
+    : [];
+  const levels = sd.length ? [...kept, ...sd] : kept;
+  const token = (z) => `${word(z.zone_type)}/${word(z.zone_strength)}/${word(z.zone_freshness)}`;
+  const types = levels.length && levels.every(typed) ? [...kept.map(token), ...sd.map((z) => `${token(z)}/sd`)].join(",") : null;
   return {
     trading_mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "",
     power: Number.isFinite(score) ? Math.max(-1, Math.min(1, score)) : 0,

@@ -192,6 +192,11 @@
     // decision-side zone breaker (it only holds Z2/Z2b's rules, for the run, and never writes an owner switch); GET
     // /api/zones. "on" | "off" (nothing written, the breaker idle, the route 404).
     "ZONE_READINGS": "on",
+    // Z6 (src/zone-types.mjs sdLevels; docs/RFC_DEMAND_SUPPLY_ZONES.md §10): the supply and demand boxes as their own key
+    // levels beside the 12 clusters: "off" (unset: nothing computed or recorded) | "record" (decision.sd_levels only) |
+    // "signal" (also the decisive ones in the signal's key_levels with a "/sd" token; Omega reads them only while its
+    // setting zone_sd is on). Owner decision 2026-11-26: "Langsung signal + zone_sd".
+    "SD_LEVELS": "signal",
     // MS2 (2026-11-23, src/mode-shadow.mjs): the shadow per-mode evidence (each mode not in force, deterministically, at
     // every 15m decision; the mode selector's evidence only): "on" | "off". "off" writes and derives no shadow row and the
     // selector reads live setups only, as before.

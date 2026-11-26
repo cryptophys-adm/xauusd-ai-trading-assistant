@@ -73,3 +73,14 @@ export interface ZoneAimContext { dir: number; atrH1: number | null; trend?: num
 export function zoneAim<T extends Record<string, any> | null>(plan: T, around: AroundZone[] | null | undefined, ctx: ZoneAimContext): T;
 export function zoneAimHeld<T extends Record<string, any> | null>(plan: T, around: AroundZone[] | null | undefined, ctx: ZoneAimContext, passes?: (plan: Record<string, any>) => boolean): T;
 export function zoneAimBase(plan: { entry?: number; zone_rules?: ZoneRule[] } | null | undefined, atrH1: number | null | undefined, dir: number): { entry: number; stop: number; tp1: number } | null;
+// Z6: supply and demand boxes as key levels.
+export type SdLevelsMode = "off" | "record" | "signal";
+export const SD_LEVELS_MODES: readonly SdLevelsMode[];
+export const SD_RANK: "sd";
+export const SD_RULES: Readonly<{ window_atr: Readonly<Record<string, number>>; cap_per_side: Readonly<Record<string, number>>; max: number; merge_share: number; cover_share: number; near_edge_atr: number }>;
+export function sdLevelsMode(env: unknown): SdLevelsMode;
+export function sdLevelsModes(env: unknown): { sdLevels?: "record" | "signal" };
+export function sdModeOf(v: unknown): SdLevelsMode;
+export interface SdLevel { low: number | null; high: number | null; zone_type: "demand" | "supply"; zone_strength: ZoneStrength; zone_freshness: ZoneFreshness; zone_rank: "sd"; tf: string; ds_sources?: string[] }
+export function sdLevels(evidence: { boxes?: DsBox[]; bars?: unknown[]; atr_h1?: number | null } | null | undefined, zones: unknown[] | null | undefined, price: number | null | undefined, atrH1: number | null | undefined): SdLevel[];
+export function zoneAheadSd(plan: { entry?: number; stop?: number } | null | undefined, around: AroundZone[] | null | undefined, sd: SdLevel[] | null | undefined, options?: { dir?: number; atrH1?: number | null; trend?: number | null }): OpposingAhead | null;

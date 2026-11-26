@@ -2008,7 +2008,8 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
       if (worse) {
         // The owner's A8 switch is carried as stored (Aether never writes it, ADR-0020 Amendment 8), and so are the
         // profit-lock gate's (SLG1), the change thresholds' (CH1), the 1m fast layer's (PM-1M), the 1m re-entry's (RE1),
-        // the limit supersede's (SS1), the confidence-drop gate's (CDG) and zone management's (Z3a, zone_mgmt).
+        // the limit supersede's (SS1), the confidence-drop gate's (CDG), zone management's (Z3a, zone_mgmt) and the box
+        // levels' (Z6, zone_sd).
         const back = { ...current.settings, ...applied.from };
         delete back.pm_loosen_enabled;
         delete back.profit_lock_gate;
@@ -2018,6 +2019,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
         delete back.limit_supersede;
         delete back.cd_gate;
         delete back.zone_mgmt;
+        delete back.zone_sd;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
         record.rolled_back = r.ok === true;
         record.rejected_shas = [...new Set([...(applied.rejected_shas || []), applied.sha])];
@@ -2039,7 +2041,8 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
   // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1)
-  // nor limit_supersede (SS1) nor cd_gate (CDG) nor zone_mgmt (Z3a): the owner's switches are carried as stored.
+  // nor limit_supersede (SS1) nor cd_gate (CDG) nor zone_mgmt (Z3a) nor zone_sd (Z6): the owner's switches are carried
+  // as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
   delete body.profit_lock_gate;
@@ -2049,6 +2052,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   delete body.limit_supersede;
   delete body.cd_gate;
   delete body.zone_mgmt;
+  delete body.zone_sd;
   for (const k of POLICY_FIELDS) {
     if (policy[k] != null && Number.isFinite(Number(policy[k]))) body[k] = clamp(Number(policy[k]), OMEGA_POLICY_BOUNDS[k]);
   }

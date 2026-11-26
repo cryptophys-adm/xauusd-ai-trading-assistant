@@ -238,6 +238,29 @@
       "write": "feature-switch"
     },
     {
+      "key": "SD_LEVELS",
+      "label": "Supply/demand boxes as key levels (Z6)",
+      "description": "Z6: the supply and demand boxes as their own key levels beside the 12 clusters (each box one zone, a window and a cap per timeframe, at most 8); record writes them in the decision only, signal also sends the medium-or-stronger ones in key_levels with a /sd token (Omega reads them only while its zone_sd is on); off computes nothing.",
+      "group": "zones",
+      "worker": "ai",
+      "values": [
+        "off",
+        "record",
+        "signal"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "ENTRY_ZONE_MODE",
       "label": "Entry zone",
       "description": "EZ1: the band beside the plan's entry where Omega may rest its limit; edge also uses the zone's near edge when the plan's level is out of the placement band, on is EZ1 alone, off sends no zone.",
@@ -881,6 +904,28 @@
       "source": "default",
       "config_value": null,
       "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
+    },
+    {
+      "key": "zone_sd",
+      "label": "Supply/demand box levels in management (Z6)",
+      "description": "Z6: on lets the signal's /sd box levels into SL+ (only ever tighter than without them, a box counts as passed once wholly passed), the trailing TP (only ever nearer) and the TP ladder's rungs (at a box's far edge); the Position Council still sees 12 levels. off drops them: the engine as before. The owner's switch only.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
       "set_by": null,
       "set_at": null,
       "era_switch": true,

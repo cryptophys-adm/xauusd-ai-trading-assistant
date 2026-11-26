@@ -13,6 +13,8 @@ export interface OmegaSettings {
   reentry_1m?: "on" | "off";
   limit_supersede?: "on" | "off";
   cd_gate?: "on" | "off";
+  zone_mgmt?: "off" | "omega";
+  zone_sd?: "off" | "on";
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;
@@ -69,3 +71,11 @@ export function pendingRiskAtStops(orders?: Record<string, any>[], sym?: Record<
 export function pendingDeleteReason(input?: Record<string, any>): string | null;
 export function pendingWithoutStop(o: Record<string, any>): boolean;
 export function deleteOrderIntent(ticket: number, reason: string, now?: number): { id: string; kind: "delete_order"; ticket: number; reason: string };
+// Z6: the supply and demand box levels in Omega's management (zone_sd).
+export const ZONE_SD_MODES: readonly ("off" | "on")[];
+export function zoneSdOn(settings: Record<string, any> | null | undefined): boolean;
+export function sdMarks(signal: Record<string, any> | null | undefined): boolean[] | null;
+export function sdKeyPlan<T extends Record<string, any> | null>(base: T, withSd: Record<string, any> | null, options: { buy: boolean; point?: number | null }): T;
+export function sdLadderLevels<T extends Array<Record<string, any>> | null | undefined>(levels: T, side: string): T;
+export function brokerKeyLevels(signal: Record<string, any> | null | undefined, options?: { typed?: boolean; sd?: boolean }): Array<Record<string, any>> | null;
+export function sdLadderPlan<T extends Record<string, any> | null>(base: T, withSd: Record<string, any> | null, options: { buy: boolean; point?: number | null }): T;

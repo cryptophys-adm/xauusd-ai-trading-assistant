@@ -61,7 +61,7 @@ import { eaSignal } from "./ea-signal.mjs";
 import { SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
-import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords, sdMarks, zoneSdOn } from "./omega-engine.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
@@ -130,6 +130,9 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   const share = buy ? decision.quorum.long_share : decision.quorum.short_share;
   const prevShare = buy ? decision.quorum_prev?.long_share : decision.quorum_prev?.short_share;
   const beyond = levels.filter((z) => (buy ? z.low > tp1 + spreadPx : z.high < tp1 - spreadPx)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
+  // Z6 (zone_sd on): box levels (sd) may bring TP2 nearer; the ladder's TP1 lock and the bounded loosening keep today's
+  // levels, so a box level never unlocks an outward target earlier and never gives a reason to loosen a stop.
+  const keyLevels = levels.some((z) => z?.sd === true) ? levels.filter((z) => z?.sd !== true) : levels;
   const band = pmBand(openIntent, decision.trading_mode ?? null);
   const pips = pipsOf(dir * (price - open));
   const out = {
@@ -141,10 +144,10 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
     stance: decision.stance, with_decision: decision.stance === p.side, against_decision: decision.stance === (buy ? "SELL" : "BUY"),
     share: isNum(share) ? share : null, share_prev: isNum(prevShare) ? prevShare : null,
     // Under the TP ladder an outward target waits until the stop locks the ladder's TP1 (ADR-0020 Amendment 4).
-    ladder_hold: ladder === true && !ladderTp1Locked({ position: p, levels: levels.length ? levels : null, sym, signal })
+    ladder_hold: ladder === true && !ladderTp1Locked({ position: p, levels: keyLevels.length ? keyLevels : null, sym, signal })
   };
   // ADR-0020 Amendment 8: only with its switch on (`loosen` given by the runner); otherwise the facts are today's.
-  if (loosen && typeof loosen === "object") out.loosen = loosenFacts(loosen, { openIntent, mode: band.mode, levels });
+  if (loosen && typeof loosen === "object") out.loosen = loosenFacts(loosen, { openIntent, mode: band.mode, levels: keyLevels });
   // The liquidity lens (docs/RFC_POSITIONING_LIQUIDITY.md §6), only while it is on (the signal's liquidity_on: the
   // owner's switch, the weight above its floor, a fresh state); otherwise the facts are today's.
   const liq = liquidityOf(signal, p.side);
@@ -552,13 +555,26 @@ export const POSITION_COUNCIL_SCHEMA_A8 = Object.freeze({
 });
 const A8_SYSTEM = " Since ADR-0020 Amendment 8 you may also ask for ONE change, each with one measured reason, and fixed rules check the reason and set the price: stop \"loosen\" moves a stop that was tightened since entry back toward the original entry stop (never past it, never back into loss from break-even, once per position; reasons atr_expansion, key_level_outside, high_impact_release), only with the thesis intact; target \"nearer\" (momentum_fading, key_level_before, confidence_drop) or \"further\" (atr_expansion_trend, key_level_beyond). Answer \"keep\" and \"none\" when nothing is warranted; a loosening never comes with a target further.";
 
+/** The Position Council's key levels: at most this many (the box levels of Z6 count inside them). */
+export const COUNCIL_LEVELS_MAX = 12;
+/**
+ * Pure: the council's key levels (lowest first), at most COUNCIL_LEVELS_MAX: up to that many, the levels as they are
+ * (today's slice); more (Z6's box levels with zone_sd on, `sd: true`), the nearest to price, lowest first.
+ */
+export function councilLevels(levels, price) {
+  const list = Array.isArray(levels) ? levels : [];
+  if (list.length <= COUNCIL_LEVELS_MAX || !isNum(price)) return list.slice(0, COUNCIL_LEVELS_MAX);
+  const dist = (z) => (price < z.low ? z.low - price : price > z.high ? price - z.high : 0);
+  return [...list].sort((a, b) => dist(a) - dist(b) || a.low - b.low).slice(0, COUNCIL_LEVELS_MAX).sort((a, b) => a.low - b.low);
+}
+
 /** Pure: the council's messages for one position (measured inputs only; never a size, never the council's own confidence). */
 export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
   const evidence = {
     position: { side: f.side, open: f.open, price: f.price, pips: f.pips, r: f.r ?? null, mode: f.mode ?? null, band_pips: f.band_pips ?? null, stop: f.sl, target: f.tp, tp1: f.tp1, tp2: f.tp2, beyond_tp1_pips: f.beyond_tp1_pips },
     measured: { agent: f.agent, agent_confidence_now: f.agent_conf, agent_confidence_15m_ago: f.agent_conf_prev, agent_trend: f.agent_trend, decision_stance: f.stance, quorum_share_with_position: f.share, quorum_share_15m_ago: f.share_prev },
     m5: m5 ? { atr: m5.m5_atr ?? null, swing_low: m5.m5_swing_low ?? null, swing_high: m5.m5_swing_high ?? null, confirmation_buy: m5.m5_buy === true, confirmation_sell: m5.m5_sell === true } : null,
-    key_levels: levels.slice(0, 12)
+    key_levels: councilLevels(levels, f.price)
   };
   const L = f.loosen;
   if (L) {
@@ -643,10 +659,11 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     let signal = signalIn;
     if (signal === undefined) { try { signal = await eaSignal(env, { now }); } catch { signal = null; } }
     const decision = decisionIn !== undefined ? decisionIn : await latestDecisions(db);
-    const levels = brokerLevels(signal);
     // The TP ladder setting (Omega's settings, default on): TP2 waits for its TP1 lock (positionFacts ladder_hold).
-    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false, lockGate = profitLockGateOn(OMEGA_DEFAULTS), changes = changeTokens(OMEGA_DEFAULTS);
-    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); changes = changeTokens({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
+    let ladder = OMEGA_DEFAULTS.tp_ladder === true, a8 = false, lockGate = profitLockGateOn(OMEGA_DEFAULTS), changes = changeTokens(OMEGA_DEFAULTS), sdOn = zoneSdOn(OMEGA_DEFAULTS);
+    try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); changes = changeTokens({ ...OMEGA_DEFAULTS, ...st }); sdOn = zoneSdOn({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
+    // Z6: the signal's box levels only while zone_sd is on (brokerLevels drops them otherwise).
+    const levels = brokerLevels(signal, { sd: sdOn });
     // SLG1 (owner 2026-11-23): with profit_lock_gate "on", each position's profit-lock gate, measured as Omega's sync
     // measures it (src/omega-broker.mjs profitLockGates: the broker's M1 corpus since the fill, the terminal's ATR(14,
     // M15), the decision's ATR(H1)); a position without facts reads as closed. "legacy": none, today's rules.
@@ -757,10 +774,15 @@ export async function latestDecisions(db) {
   } catch { return null; }
 }
 
-/** Pure: the signal's key levels on the broker's scale (as Omega reads them), [] without a known basis. */
-export function brokerLevels(signal) {
+/**
+ * Pure: the signal's key levels on the broker's scale (as Omega reads them), [] without a known basis. Z6: a box level (a
+ * "/sd" token, omega-engine.mjs sdMarks) is dropped unless `sd` (zone_sd on); with `sd` it carries `sd: true`.
+ */
+export function brokerLevels(signal, { sd = false } = {}) {
   if (signal?.feed_basis_known !== true || !isNum(signal?.feed_basis) || typeof signal?.key_levels !== "string") return [];
-  return signal.key_levels.split(",").map((s) => s.split(":").map(Number)).filter(([lo, hi]) => isNum(lo) && isNum(hi) && lo > 0 && lo <= hi).map(([lo, hi]) => ({ low: lo + signal.feed_basis, high: hi + signal.feed_basis })).sort((a, b) => a.low - b.low);
+  const marks = sdMarks(signal);
+  return signal.key_levels.split(",").map((s, i) => [...s.split(":").map(Number), marks?.[i] === true]).filter(([lo, hi, box]) => (sd || !box) && isNum(lo) && isNum(hi) && lo > 0 && lo <= hi)
+    .map(([lo, hi, box]) => (box ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, sd: true } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis })).sort((a, b) => a.low - b.low);
 }
 
 /**

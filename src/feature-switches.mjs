@@ -117,6 +117,14 @@ export const FEATURE_SWITCHES = Object.freeze([
     description: "Z5: the zone readings, the counterfactual tables (zone_blocked_setups, zone_rule_arms) and the decision-side zone breaker, which holds Z2/Z2b's rules back by itself when their own record turns against them; off writes nothing, the breaker is idle and GET /api/zones answers 404.",
     values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
   }),
+  entry({
+    // Z6 (owner 2026-11-26: "Langsung signal + zone_sd"; src/zone-types.mjs sdLevels): not an era switch (Omega's
+    // zone_sd is); no decision, plan or guardrail reads the box levels, so no mode-evidence restart.
+    key: "SD_LEVELS", label: "Supply/demand boxes as key levels (Z6)", group: "zones",
+    description: "Z6: the supply and demand boxes as their own key levels beside the 12 clusters (each box one zone, a window and a cap per timeframe, at most 8); record writes them in the decision only, signal also sends the medium-or-stronger ones in key_levels with a /sd token (Omega reads them only while its zone_sd is on); off computes nothing.",
+    values: ["off", "record", "signal"], default_value: "off", config_value: "signal",
+    read: (raw) => { const v = s(raw); return v === "record" || v === "signal" ? v : "off"; }
+  }),
   // ---- Plans, entries and targets (src/strategy-engine.mjs, src/grid-adapt.mjs, src/projection-agent.mjs)
   entry({
     key: "ENTRY_ZONE_MODE", label: "Entry zone", group: "plans",
@@ -260,6 +268,13 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "zone_mgmt", label: "Zone-typed management (Z3a)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
     description: "Z3a: omega moves SL+ behind the position's own decisive demand or supply zone (at most 0.15-0.30R looser than today's, never below the lock) and the trailing TP to a decisive opposing zone at most one zone further; one modify per position per 3 minutes across this and the 1m fast layer. off: the engine as before (the documented rollback). The owner's switch only.",
     values: ["off", "omega"], default_value: "off", config_value: null, read: (raw) => raw
+  }),
+  entry({
+    // Z6 (owner 2026-11-26: "Langsung signal + zone_sd"; owner-set only: Aether's policy and its rollback never write
+    // it): OMEGA_DEFAULTS.zone_sd, settingsFrom's check and ERA_SWITCHES' entry.
+    key: "zone_sd", label: "Supply/demand box levels in management (Z6)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
+    description: "Z6: on lets the signal's /sd box levels into SL+ (only ever tighter than without them, a box counts as passed once wholly passed), the trailing TP (only ever nearer) and the TP ladder's rungs (at a box's far edge); the Position Council still sees 12 levels. off drops them: the engine as before. The owner's switch only.",
+    values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
   })
 ]);
 

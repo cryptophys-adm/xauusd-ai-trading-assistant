@@ -18,7 +18,7 @@ import {
 } from "../src/feature-switches.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch, resetFeatureSwitchMemoForTests } from "../src/feature-switch-store.mjs";
 import { resolveAgentVetoRule, migrateAgentVetoOwner, runAgentVetoRevert, AGENT_VETO_OWNER_KEY, AGENT_VETO_AUTO_KEY, AGENT_VETO_RULES, agentVetoRuleOf } from "../src/agent-veto.mjs";
-import { zonePriorityMode, zoneAheadMode, keyLevelZoneTypesMode, zoneAimOffMode, zoneAimTpMode, zoneSourcesOffMode, ZONE_AIM_TOKENS, ZONE_SOURCES, ZONE_AHEAD_MODES } from "../src/zone-types.mjs";
+import { zonePriorityMode, zoneAheadMode, keyLevelZoneTypesMode, zoneAimOffMode, zoneAimTpMode, zoneSourcesOffMode, sdLevelsMode, ZONE_AIM_TOKENS, ZONE_SOURCES, ZONE_AHEAD_MODES } from "../src/zone-types.mjs";
 import { entryZoneMode, tp1KeyZoneMode } from "../src/strategy-engine.mjs";
 import { zoneReadingsMode } from "../src/zone-readings.mjs";
 import { chartPatternsMode } from "../src/projection-agent.mjs";
@@ -112,7 +112,7 @@ test("FS-1 the registry: every switch's config_value is wrangler.jsonc's, read f
   // The keys the orchestrator listed, all present; ZONE_SOURCES_OFF, three lens/calendar switches and H3f's OWNER_CORRECTIONS added.
   for (const k of ["ZONE_PRIORITY", "ZONE_AHEAD_MODE", "KEY_LEVEL_ZONE_TYPES", "ZONE_AIM_OFF", "ZONE_AIM_TP", "AGENT_VETO_RULE", "SHADOW_KNOWLEDGE_ENABLED", "KNOWLEDGE_VERDICT_POSTS",
     "MODE_SHADOW_EVIDENCE", "MODE_PROBATION", "GRID_ADAPT_MODE", "ENTRY_ZONE_MODE", "TP1_KEY_ZONE_MODE", "CHART_PATTERNS_MODE", "METRIC_REBUTTAL", "CFC_MODE",
-    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER"]) assert.ok(switchByKey(k), k);
+    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER", "SD_LEVELS", "zone_sd"]) assert.ok(switchByKey(k), k);
   // Excluded: secrets, bindings, the engine switch, the kill switch, arms, LIVE and profile.
   for (const k of ["OMEGA_ENGINE_ENABLED", "EA_SIGNALS_ENABLED", "STRATEGY_ARM_MODE", "STRATEGY_COUNCIL_ARM", "live_armed", "enabled", "OWNER_ACCESS_SUB", "TELEGRAM_BOT_TOKEN", "WEBHOOK_SECRET", "DB", "SIGNAL_CACHE", "AGENTS", "AETHER", "risk_pct", "max_positions"]) assert.equal(switchByKey(k), null, `${k} is not a panel switch`);
   // era_switch: exactly ERA_SWITCHES' members (a parity era starts on change).
@@ -147,6 +147,7 @@ const ACCESSOR = {
   ZONE_SOURCES_OFF: (env) => ZONE_SOURCES.filter((t) => !zoneSourcesOffMode(env).includes(t)),
   ZONE_AIM_TP: (env) => zoneAimTpMode(env),
   ZONE_READINGS: (env) => zoneReadingsMode(env),
+  SD_LEVELS: (env) => sdLevelsMode(env),
   ENTRY_ZONE_MODE: (env) => entryZoneMode(env),
   TP1_KEY_ZONE_MODE: (env) => tp1KeyZoneMode(env),
   CHART_PATTERNS_MODE: (env) => chartPatternsMode(env),
@@ -286,7 +287,7 @@ test("FS-5 no override: decisions, council messages, the EA signal and plans byt
   await store.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify({ ZONE_PRIORITY: { value: "off", actor: "owner", at: "2026-11-25T09:00:00.000Z" } }));
   assert.equal(await hashOf(strip(await withFeatureSwitches(env))), await hashOf({ ...CONFIG_ENV, ZONE_PRIORITY: "off" }));
   // The engine's hashes do not move (V13/V14 recompute them).
-  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "70930517");
+  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "63e1f4dd");
   assert.equal(ENGINE_BEHAVIOUR_HASH.slice(0, 8), "ecfe3f90");
 });
 
