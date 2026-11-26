@@ -27,7 +27,9 @@ const REVIEW_FILES = [
   // H3f: the owner's correction control and its pure model.
   "components/Correction.tsx", "lib/corrections.ts",
   // C5: the Position Manager lines on the Omega page and their pure model.
-  "components/PmLines.tsx", "lib/pmLines.ts"
+  "components/PmLines.tsx", "lib/pmLines.ts",
+  // C4: the Opening range page and the charts' boxes.
+  "pages/Orb.tsx", "lib/boxes-primitive.ts"
 ];
 
 test("NR1 the model's edge: a favoured short is red, a favoured long green (both rows by their own side)", () => {

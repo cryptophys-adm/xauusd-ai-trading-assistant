@@ -53,9 +53,9 @@ test("FSU1 NAV: Settings › Feature switches is the last group, at /#/switches,
   assert.deepEqual([...settings.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Feature switches"], "one item in the group");
   assert.match(settings, /\{ title: "Settings", items: \[\{ label: "Feature switches", href: "\/#\/switches", key: "switches", icon: ToggleRight \}\] \}\n\];/);
   assert.match(shell, /import \{[^}]*\bToggleRight\b[^}]*\} from "lucide-react";/);
-  // The Intelligence group still ends with Alerts (ZN1 added Zones after Liquidity).
+  // The Intelligence group still ends with Alerts (ZN1 added Zones after Liquidity, C4 Opening range after Strategy agents).
   const intel = nav.slice(nav.indexOf('{ title: "Intelligence"'), nav.indexOf('{ title: "Settings"'));
-  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
+  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Opening range", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
   const app = src("App.tsx");
   assert.match(app, /import Switches from "\.\/pages\/Switches";/);
   assert.match(app, /neurons: Neurons, councils: Councils, switches: Switches \};/);

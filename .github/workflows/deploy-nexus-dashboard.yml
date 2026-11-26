@@ -233,6 +233,48 @@ jobs:
           console.log(JSON.stringify({ zones: { schema: body.schema, readings: Array.isArray(body.readings) ? body.readings.length : null, breaker: body.breaker ? { checked_at: body.breaker.checked_at ?? null, held: Array.isArray(body.breaker.held) ? body.breaker.held.map((h) => h?.rule) : null } : null, stances: Array.isArray(body.stances) ? body.stances.length : null } }));
           NODE
 
+      - name: Smoke test the Opening range view
+        # Track B14 and C4 (the Intelligence Opening range page, #/orb, and its read): GET /api/orb through the Nexus proxy
+        # answers 200 JSON with no-store under the CI service token (cryptophys.orb-view.v1, the schema of
+        # test/fixtures/nexus-intel/orb.json, every price the feed's), and the Access login redirect without it.
+        # INTEL_VIEWS is an AI Worker switch: its 404 { status: "not_found", reason: "intel_views_off" } is the page's off
+        # state, a pass.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
+          const URL_ = "https://nexus.cryptophys.work/api/orb";
+          const token = accessToken();
+          if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
+          // Without the token: Cloudflare Access answers with its login redirect, never the view.
+          const bare = await fetch(URL_, { redirect: "manual", signal: AbortSignal.timeout(20000) });
+          if (!isAccessLogin(bare)) { console.error(`/api/orb without the token: expected the Access login redirect, got ${bare.status}`); process.exit(1); }
+          console.log(`/api/orb without the token: Access login redirect (${bare.status})`);
+          // With the token: 200 JSON, no-store, the view's schema, or the 404 of INTEL_VIEWS off (the AI Worker may still be
+          // deploying: retry for up to 5 minutes, 30 x 10 s, as the other views).
+          let r = null, body = null;
+          const off = () => r?.status === 404 && body?.status === "not_found" && body?.reason === "intel_views_off";
+          for (let i = 0; i < 30; i++) {
+            try {
+              r = await fetch(URL_, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+              body = await r.json().catch(() => null);
+              if (r.status === 200 || off()) break;
+              console.log("orb view not ready:", r.status, JSON.stringify(body).slice(0, 200));
+            } catch (e) { console.log("orb view error:", e?.name); }
+            await new Promise((res) => setTimeout(res, 10000));
+          }
+          if (off()) { console.log(JSON.stringify({ orb: { status: 404, reason: body.reason } })); process.exit(0); }
+          if (!r || r.status !== 200) { console.error(`/api/orb: HTTP ${r?.status ?? "no answer"} ${JSON.stringify(body).slice(0, 200)}`); process.exit(1); }
+          if (!/\bjson\b/i.test(r.headers.get("content-type") ?? "")) { console.error(`/api/orb: not JSON (${r.headers.get("content-type")})`); process.exit(1); }
+          if (!/no-store/i.test(r.headers.get("cache-control") ?? "")) { console.error(`/api/orb: cache-control ${r.headers.get("cache-control")}, expected no-store`); process.exit(1); }
+          if (body?.schema !== "cryptophys.orb-view.v1") { console.error(`/api/orb: schema ${body?.schema}`); process.exit(1); }
+          if (body?.scale?.prices !== "feed") { console.error(`/api/orb: scale.prices ${body?.scale?.prices}, expected feed`); process.exit(1); }
+          const card = (s) => (s ? { phase: s.phase ?? null, status: s.status ?? null, breakout: s.breakout?.side ?? null } : null);
+          console.log(JSON.stringify({ orb: { schema: body.schema, mode: body.mode ?? null, levels_mode: body.levels_mode ?? null, market_open: body.market?.open ?? null, london: card(body.sessions?.london), new_york: card(body.sessions?.new_york), recent: Array.isArray(body.recent) ? body.recent.length : null } }));
+          NODE
+
       - name: Smoke test the Position Manager lines
         # C5 (the Omega page's Position Manager lines, B5's read): GET /api/omega/position-manager?limit=1 through the Nexus
         # proxy answers 200 JSON with no-store under the CI service token, with the 17 lines of PM_LINES, each with B5's

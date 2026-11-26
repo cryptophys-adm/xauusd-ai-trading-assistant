@@ -3,7 +3,8 @@
 // it with renderToStaticMarkup over the fixture, the routes' not_found bodies, each path nulled in turn and each array
 // emptied, and fails on a throw, "NaN", "undefined" or "[object Object]" in the markup. A page that joins Intelligence
 // (Track C) adds its view and its test/fixtures/nexus-intel/*.json here (C2: the Liquidity page's LiquidityView; C3: the
-// Chart patterns page's PatternsView; ZN1: the Zones page's ZonesView over test/fixtures/nexus-zones/*.json).
+// Chart patterns page's PatternsView; ZN1: the Zones page's ZonesView over test/fixtures/nexus-zones/*.json; C4: the
+// Opening range page's OrbView over orb*.json).
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import lens from "../../../../test/fixtures/nexus-intel/lens.json";
@@ -55,6 +56,16 @@ import { Post } from "../src/components/Post";
 import { VerdictLine } from "../src/pages/Strategy";
 import { CorrectionControl, CorrectionFooter, CorrectionPanel, GateOverride, ROW, type Phase } from "../src/components/Correction";
 import { OpinionCard } from "../src/pages/Councils";
+import orb from "../../../../test/fixtures/nexus-intel/orb.json";
+import orbCandles from "../../../../test/fixtures/nexus-intel/orb-candles.json";
+import orbDecision from "../../../../test/fixtures/nexus-intel/orb-decision.json";
+import orbAgents from "../../../../test/fixtures/nexus-intel/orb-agents.json";
+import orbOverlap from "../../../../test/fixtures/nexus-intel/orb-overlap.json";
+import orbOverlapCandles from "../../../../test/fixtures/nexus-intel/orb-overlap-candles.json";
+import orbOverlapDecision from "../../../../test/fixtures/nexus-intel/orb-overlap-decision.json";
+import orbOverlapAgents from "../../../../test/fixtures/nexus-intel/orb-overlap-agents.json";
+import orbMismatch from "../../../../test/fixtures/nexus-intel/orb-mismatch.json";
+import { OrbUnread, OrbView } from "../src/pages/Orb";
 import pmOn from "../../../../test/fixtures/nexus-pm-lines/lines-on.json";
 import pmOff from "../../../../test/fixtures/nexus-pm-lines/lines-off.json";
 import pmHandOff from "../../../../test/fixtures/nexus-pm-lines/lines-hand-off.json";
@@ -165,6 +176,46 @@ const unread = (code: string): Poll => ({ data: null, error: code, loading: fals
 const PATTERN_PANELS = ["Lines on the chart", "Patterns on this chart", "Measured targets, every chart", "Measured record per chart", "Projection seat", "Pattern agents"];
 const PATTERN_HINT = "A plan&#x27;s TP1 is the nearest key zone at 1R or more; its TP2 is the measured target when that lies beyond TP1.";
 const patternsView = (props: Record<string, unknown> = {}) => ({ d }: { d: any }) => <PatternsView d={d} agents={strategyAgents} alloc={neuronAllocation} now={PATTERNS_NOW} {...props} />;
+
+/**
+ * The Opening range page (Track C4) over its reads. /api/orb is backend B14's contract (test/fixtures/nexus-intel/
+ * orb.json, byte for byte: Tue 24 Nov 10:00 UTC, London live, broken up and retesting, its long plan picked; New York of
+ * the day before over, a release inside its range). The other files are the real routes' answers on seeded environments
+ * (test/support/nexus-orb-seed.mjs): orb-overlap*.json the mockup's hour (Mon 23 Nov 15:00 UTC, both windows live, New
+ * York holding the long side, London's long side invalidated, armed), orb-mismatch.json 16 March 2026 (London silent:
+ * the clock mismatch; New York formed, no breakout). The ORB_* variants below are derived from them for the states no
+ * seeded hour shows at once; they are not contracts.
+ */
+const O = orb as any, OV = orbOverlap as any;
+const NY_24 = Date.parse("2026-11-24T13:00:00Z");
+const NO_PLANS = { long: null, short: null };
+const NO_BREAKOUT = { side: null, bar_ms: null, bars_since: null, state: "none" };
+/** Tue 24 Nov 08:32 UTC: London's range building (2 of 3 bars), New York's not yet; no plan anywhere. */
+export const ORB_FORMING = merged(O, {
+  bar_close: "2026-11-24T08:30:00.000Z", overlap: { long: null, short: null },
+  sessions: {
+    london: { phase: "forming", bars_built: 2, bars_left: 33, status: "not_formed", status_detail: "the first three 15m bars of the session are still coming", high: null, low: null, mid: null, width: null, width_atr: null, breakout: NO_BREAKOUT, edges_in_zones: [], plans: NO_PLANS },
+    new_york: { date_ny: "2026-11-24", open_ms: NY_24, range_end_ms: NY_24 + 2_700_000, end_ms: NY_24 + 31_500_000, phase: "forming", bars_built: 0, bars_left: 0, status: "not_formed", status_detail: "the first three 15m bars of the session are still coming", events_in_range: [] }
+  }
+});
+/** The weekend: the market closed, the next range London's on Monday 30 Nov. */
+export const ORB_CLOSED = merged(O, { market: { open: false, next_range: { session: "london", open_ms: Date.parse("2026-11-30T08:00:00Z") } } });
+/** The agent off (STRATEGY_AGENTS_OFF orb_breakout): no range read, the ORB levels off with it. */
+export const ORB_OFF = merged(O, { mode: "off", levels_mode: "off" });
+/** The mockup's hour with New York's breakout invalidated too: both sides off, no plan (the UI's state; one range breaks one way). */
+export const ORB_BOTH_INVALIDATED = merged(OV, { overlap: { long: null }, sessions: { london: { invalidated: { long: true, short: true } }, new_york: { breakout: { state: "invalidated" }, invalidated: { long: true, short: true }, plans: NO_PLANS } } });
+/** London's window over with no breakout: "none by 11:45 NY", "no plan: no breakout". */
+export const ORB_NO_BREAKOUT = merged(OV, { overlap: { long: null }, sessions: { london: { phase: "over", bars_left: 0, breakout: NO_BREAKOUT, invalidated: { long: false, short: false } }, new_york: { breakout: NO_BREAKOUT, plans: NO_PLANS } } });
+/** New York live with a release inside its range (orb.json's New York is the same state, its window over). */
+export const ORB_RANGE_EVENT = merged(OV, { overlap: { long: null }, sessions: { new_york: { status: "range_event", status_detail: "a high-impact release fell inside the range, so the session is not traded", high: null, low: null, mid: null, width: null, width_atr: null, breakout: NO_BREAKOUT, edges_in_zones: [], plans: NO_PLANS, events_in_range: [{ title: "Retail sales", time: "2026-11-23T13:30:00.000Z" }] } } });
+/** London's range narrower than the band. */
+export const ORB_TOO_NARROW = merged(OV, { sessions: { london: { status: "too_narrow", status_detail: "the range is narrower than the width band", width_atr: 0.2, breakout: NO_BREAKOUT, invalidated: { long: false, short: false } } } });
+/** New York broken down and held, its short plan an order at price: the bear side. */
+export const ORB_SHORT = merged(OV, { overlap: { long: null, short: "new_york" }, sessions: { new_york: { breakout: { side: "short", state: "held" }, plans: { long: null, short: { entry: 4095.28, stop: 4097.12, tp1: 4090.5, tp2: 4088.1, rrr: 2.6, entry_type: "at_level", lapse_ms: OV.sessions.new_york.end_ms, role: "shadow", picked: false } } } } });
+const orbView = (props: Record<string, unknown> = {}) => ({ d }: { d: any }) => <OrbView d={d} agents={orbAgents} decision={orbDecision} candles={orbCandles} {...props} />;
+const overlapView = (props: Record<string, unknown> = {}) => ({ d }: { d: any }) => <OrbView d={d} agents={orbOverlapAgents} decision={orbOverlapDecision} candles={orbOverlapCandles} {...props} />;
+const ORB_PANELS = ["Sessions", "Ranges on the chart", "Records per session", "Recent sessions", "Where it counted"];
+const orbUnread = (code: string): Poll => ({ data: null, error: code, loading: false, refresh: () => {}, lastOk: null, lastFail: 1, failures: 1, stale: false, intervalMs: 60_000 });
 
 const PANELS = ["Positioning &amp; Liquidity analyst", "Score against the floor", "Levels on the chart", "Facts, last 24 hours", "Sweeps and outcomes", "Baseline per New York hour of the week", "What it changed in Omega", "In the latest decision"];
 const HINT = "Liquidity never opens, sizes or prices an entry.";
@@ -554,6 +605,36 @@ export const VIEWS: Entry[] = [
   { name: "PatternsViewSeat", View: ({ d }) => <PatternsView d={chartPatterns} agents={strategyAgents} alloc={d} now={PATTERNS_NOW} />, fixture: neuronAllocation, shows: ["shadow", "n 4 / 60"] },
   { name: "PatternsUnread500", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { status: "error", error: "chart_patterns_unavailable" }, shows: ["/api/chart-patterns 500 chart_patterns_unavailable"] },
   { name: "PatternsUnread404", View: ({ d }) => <PatternsUnread poll={unread(`/api/chart-patterns 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/chart-patterns 404 Not found"] },
+  {
+    name: "OrbView", View: orbView(), fixture: orb,
+    shows: [...ORB_PANELS, "Opening range", "Intelligence · ORB agent · London and New York · 15m", ">live<", "ORB levels on", "feed scale · ATR (1H) 8.00", "window · 27 bars left", "03:00–03:45 NY", "08:00–08:45 UTC · 15:00–15:45 GMT+7", "11:45 NY",
+      "1.25 ATR", "retesting", "2,605.50", "at price", "picked", "range event (high-impact USD 08:30 NY)", "not traded: an event inside the range", "held back", "−0.20R", "stop", "target before entry", "Charts by TradingView", "No strategy pick in the latest decision", "London high", "candidate"],
+    hides: ["sample data", "provisional", "armed<", "No ORB setup yet", "undefined"],
+    missing: [NOT_FOUND]
+  },
+  {
+    name: "OrbViewOverlap", View: overlapView(), fixture: orbOverlap,
+    shows: [...ORB_PANELS, ">armed<", "window · 7 bars left", "window · 27 bars left", "13:00–13:45 UTC · 20:00–20:45 GMT+7", "16:45 NY", "limit at the edge", "4,098.52", "4,096.68", "4,103.60", "4,107.60", "2.8", "holds the side", "▲ long</span> invalidated · no plan", "New York holds the long side",
+      "Overlap 08:00–11:45 NY", "invalidated", "no ▼ breakout", "▲ up", "1 bar ago", "held", "Opening range · New York", "62%", "0.47", "0.29", ">chosen<", "under 40%", "Zone pullback", "London high", "New York low", "TP1", "lapsed in profit", "time limit", "lapsed, no fill", "+1.1R", "open", "decision 15:00 UTC · 22:00 GMT+7"],
+    hides: ["sample data", "No ORB setup yet", "text-bull\">+", "text-bear\">−"]
+  },
+  { name: "OrbViewMismatch", View: orbView({ decision: null, candles: null }), fixture: orbMismatch, shows: ["clock mismatch (New York on summer time, London not)", "07:00–07:45 UTC · 14:00–14:45 GMT+7", "ended", "not traded: clock mismatch", "no plan: no breakout yet", "No ORB setup yet", "No session range in the latest decision"] },
+  { name: "OrbViewForming", View: orbView(), fixture: ORB_FORMING, shows: ["No ORB setup yet", "London&#x27;s range is building; New York&#x27;s sets at 08:45 NY (13:45 UTC).", "building 2 of 3 bars", "no plan until the range sets at 03:45 NY", "forming"] },
+  { name: "OrbViewMarketClosed", View: orbView(), fixture: ORB_CLOSED, shows: ["market closed", "Market closed", "The London range sets Monday 03:45 New York (08:45 UTC, 15:45 GMT+7)."], hides: ["window · 27 bars left"] },
+  { name: "OrbViewModeOff", View: orbView(), fixture: ORB_OFF, shows: ["ORB off", "Opening range off", "Switched off by the owner: no range is read and the ORB agent makes no plan.", "ORB levels off", "Records per session"], hides: ["Ranges on the chart"] },
+  { name: "OrbViewBothInvalidated", View: overlapView(), fixture: ORB_BOTH_INVALIDATED, shows: ["invalidated · no plan", "No ORB setup yet"] },
+  { name: "OrbViewNoBreakout", View: overlapView(), fixture: ORB_NO_BREAKOUT, shows: ["none by 11:45 NY", "no plan: no breakout", "no plan: no breakout yet"] },
+  { name: "OrbViewRangeEvent", View: overlapView(), fixture: ORB_RANGE_EVENT, shows: ["range event (high-impact USD 08:30 NY)", "not traded: an event inside the range", "Neither session holds a side yet"] },
+  { name: "OrbViewTooNarrow", View: overlapView(), fixture: ORB_TOO_NARROW, shows: ["too narrow", "0.20 ATR", "not traded: the range is too narrow"] },
+  { name: "OrbViewShort", View: overlapView(), fixture: ORB_SHORT, shows: ["▼ down", "New York holds the short side", "at price", "4,095.28", "holds the side"] },
+  { name: "OrbViewNotArmed", View: ({ d }) => <OrbView d={orbOverlap} agents={orbOverlapAgents} decision={d} candles={orbOverlapCandles} />, fixture: merged(orbOverlapDecision, { decision: { armed: { ids: ["zone_pullback"] } } }), shows: ["not armed: plans are recorded, not traded"], hides: [">armed<"] },
+  { name: "OrbViewAuto", View: ({ d }) => <OrbView d={orbOverlap} agents={orbOverlapAgents} decision={d} candles={orbOverlapCandles} />, fixture: merged(orbOverlapDecision, { decision: { armed: { mode: "auto", ids: [] } } }), shows: ["no strategy armed: the best plan of all is picked"] },
+  { name: "OrbViewAgents", View: ({ d }) => <OrbView d={orb} agents={d} decision={orbDecision} candles={orbCandles} />, fixture: orbAgents, shows: [">live<"] },
+  { name: "OrbViewCandles", View: ({ d }) => <OrbView d={orbOverlap} agents={orbOverlapAgents} decision={orbOverlapDecision} candles={d} />, fixture: orbOverlapCandles, shows: ["last closed bar Mon 23 Nov 15:00 UTC · 22:00 GMT+7"] },
+  { name: "OrbViewStale", View: overlapView({ mark: { show: true, dim: true, suffix: " · stale 7m", note: null } }), fixture: orbOverlap, shows: ["Sessions"] },
+  { name: "OrbViewIntelOff", View: orbView(), fixture: NOT_FOUND, shows: ["intel_views_off", "The Intelligence views are off on the AI Worker."] },
+  { name: "OrbUnread500", View: ({ d }) => <OrbUnread poll={orbUnread(`/api/orb 500 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { status: "error", error: "orb_unavailable" }, shows: ["/api/orb 500 orb_unavailable", "Retry now"] },
+  { name: "OrbUnread404", View: ({ d }) => <OrbUnread poll={orbUnread(`/api/orb 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/orb 404 Not found"] },
   { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] },
   ...PM_VIEWS,
   ...H3F_VIEWS
