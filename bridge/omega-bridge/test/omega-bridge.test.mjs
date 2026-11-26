@@ -326,6 +326,9 @@ test("files: intents.txt format & atomic write, state.json parse handling, and r
         "",
       ].join("\n"),
     );
+    // 1.7.1: results.txt is taken only once it has had no write for RESULTS_DEBOUNCE_MS (the EA is done with it).
+    const settled = new Date(Date.now() - 5000);
+    fs.utimesSync(path.join(omegaDir, "results.txt"), settled, settled);
 
     const results = consumeResults(omegaDir, { now: () => 2000 });
     assert.deepEqual(results, [
@@ -482,7 +485,7 @@ test("daemon: applies new connection once, restarts terminal once, skips same ve
       cmd: "systemctl",
       args: ["restart", "mt5-terminal.service"],
     });
-    assert.equal(syncBodies[0].bridge_version, "1.7.0");
+    assert.equal(syncBodies[0].bridge_version, "1.7.1");
     assert.equal(syncBodies[0].kid, daemon.keys.kid);
     assert.equal(syncBodies[0].public_key, daemon.keys.publicKeyBase64);
     assert.equal(syncBodies[0].results.length, 1);

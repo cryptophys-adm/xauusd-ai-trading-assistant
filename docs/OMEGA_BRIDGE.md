@@ -121,7 +121,7 @@ Default directory: `/opt/mt5-ingestion-gateway/prefix/drive_c/Program Files/Meta
 | `state.json` | `OmegaExecutor.mq5` (via `state.tmp` + `FileMove(..., FILE_REWRITE)` every `StateEverySeconds=2`) | `omega-bridge` | JSON object with `connected`, `server`, `account` (`trade_mode`, `currency`, `balance`, `equity`, `day_start_balance`, `day_realized_pl`), `symbol` spec, `positions` (only `MagicNumber=920200`), and `received_ms` (UTC ms). Parse errors are treated as `state: null`. Never contains login. |
 | `intents.txt` | `omega-bridge` (atomic `intents.txt.tmp.*` + `rename`) | `OmegaExecutor.mq5` | ASCII text. Line 1: `#v1;<written_ms>`. Subsequent lines: `id;kind;side;volume;sl;tp;ticket` (`kind` is `open`, `close`, or `close_all`). |
 | `processed.txt` | `OmegaExecutor.mq5` | `OmegaExecutor.mq5` | One executed intent `id` per line. Loaded at `OnInit` and appended after each intent is handled so no intent `id` is ever executed twice across restarts. |
-| `results.txt` | `OmegaExecutor.mq5` (append) | `omega-bridge` | ASCII lines: `id;ok(1\|0);ticket;error;executed_ms` (the error field is empty on ok lines, except the EA's own deletions `ea:del:<ticket>` from 1.22, which carry their reason). On each cycle, `omega-bridge` atomically renames `results.txt` to `results.<ms>.done`, reads and reports the results, and prunes `.done` files keeping only the newest 20. |
+| `results.txt` | `OmegaExecutor.mq5` (append) | `omega-bridge` | ASCII lines: `id;ok(1\|0);ticket;error;executed_ms` (the error field is empty on ok lines, except the EA's own deletions `ea:del:<ticket>` from 1.22, which carry their reason). Since 1.7.1, `omega-bridge` renames `results.txt` to `results.<ms>.done` only once it has had no write for 400 ms, reads and reports its complete lines, reads the `.done` files written in the last 60 s again, deduplicates by intent id, and prunes `.done` files to the newest 20 (see "Results-file race" below). |
 
 ---
 
@@ -298,6 +298,45 @@ versions`, `wrangler secret put` or an `npm run deploy` there, and keep wrangler
 2026-11-21 an old checkout on the VPS uploaded an old build of the AI Worker and of the platform kernel twice; production
 reaches Cloudflare only through the deploy workflows on `main` (docs/SSOT.md §5), and the deploy drift guard reports a
 live Worker that is not a build of `main`.
+
+## Results-file race (omega-bridge 1.7.1, 2026-11-26)
+
+Owner 2026-11-26: "Ya, bridge saja". A bridge-only fix: the EA is unchanged.
+
+**The race.** OmegaExecutor appends each result in `AppendResult`: `FileOpen(results.txt, FILE_READ|FILE_WRITE)` (which
+creates the file), `FileSeek` to the end, `FileWriteString`, `FileClose`. Up to 1.7.0 the bridge woke on the file's
+creation (`fs.watch`) or on its 5 s period and at once renamed `results.txt` to `results.<ms>.done`, then read it.
+Wine's file locks do not stop a native rename, so a rename between the EA's open and its write moved the file under the
+EA's open handle: the EA's line landed in a `.done` file the bridge had already read, and the ack was lost. CA1
+(`src/close-reconcile.mjs`) reconciles such closes from their deals after the fact.
+
+**What 1.7.1 does** (`collectResults` in `src/files.mjs`, the tick in `src/daemon.mjs`):
+
+- **Debounce (400 ms, `RESULTS_DEBOUNCE_MS`).** A watcher event on `results.txt`, or a write into a `.done` file, wakes
+  a sync only after 400 ms without a further event. Whatever wakes a tick, `results.txt` is renamed only once its mtime
+  is at least 400 ms old; a tick waits for that (at most 1 s, `RESULTS_SETTLE_MAX_WAIT_MS`) and otherwise syncs without
+  it and takes it on the next tick, never early. The EA's open-to-close window is one function call (milliseconds, more
+  under a loaded Wine); 400 ms is well above that and above the bridge's 250 ms stream throttle, and it delays an ack
+  by at most 0.4 s against the 5 s sync period. An append to a `results.txt` that already exists does not change its
+  mtime at the open, so the debounce narrows the race; the re-read below closes it.
+- **Re-read window (60 s, `RESULTS_REREAD_MS`).** Every pass also reads again each `.done` file whose mtime is within the
+  last 60 s. A late write moves the mtime, so a line the EA appended after the rename is picked up at the next pass and
+  logged as `result_recovered` (its intent id only). A file the late write reaches is never pruned first: each pass
+  makes at most one `.done` file, and 20 are kept.
+- **Partial last line.** Only lines ending in a newline are read; a last line without one waits. A `.done` file whose
+  last line is incomplete is read again on every pass even after its 60 s, for up to 10 minutes
+  (`RESULTS_PARTIAL_MAX_MS`), and is never pruned meanwhile, so the line is taken once the EA completes it. Still
+  incomplete after 10 minutes, it is logged once (`result_partial_line_dropped`, the file and the id) and left to CA1.
+- **Dedupe by intent id.** The bridge's existing dedupe (results waiting to be sent by id, and the ids already reported)
+  now also covers the re-reads: a line seen in the original file and again in a re-read is sent once. Within one pass
+  the first copy of an id wins. The memory of reported ids is bounded by age (30 minutes, `RESULT_IDS_TTL_MS`, three
+  times the longest a line can be read again) and by count (5000, `RESULT_IDS_MAX`, the oldest first).
+- **After a restart** the memory is empty, so results in `.done` files from the last 60 s are sent once more. The server
+  applies a result only to an intent still `pending`, `sent` or `expired` and says it on Telegram only for a `pending`
+  or `sent` one (and `ea:del:` lines once, by KV), so a repeat changes nothing.
+
+`daemon_started` shows `"bridge_version":"1.7.1"`, `"results_debounce_ms":400` and `"results_reread_ms":60000`. The
+VPS upgrade runbook is docs/VPS_UPGRADE_BRIDGE_ACK.md.
 
 ## Troubleshooting
 

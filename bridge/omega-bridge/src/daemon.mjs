@@ -5,7 +5,11 @@ import { openEnvelope } from "./envelope.mjs";
 import { goldClosedAt } from "./market-hours.mjs";
 import {
   DEFAULT_OMEGA_FILES_DIR,
-  consumeResults,
+  RESULTS_DEBOUNCE_MS,
+  RESULTS_PARTIAL_MAX_MS,
+  RESULTS_REREAD_MS,
+  collectResults,
+  resultsSettleLeftMs,
   readState,
   readTerminalLastError,
   resolveOmegaDir,
@@ -31,7 +35,7 @@ import {
 } from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.7.0";
+export const BRIDGE_VERSION = "1.7.1";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
@@ -43,6 +47,18 @@ export const MAX_SYNC_BODY_BYTES = 65536;
 export const FORBIDDEN_403_LOG_INTERVAL_MS = 60000;
 export const FORBIDDEN_403_HINT = "check OMEGA_BRIDGE_CLIENT_ID / the Access service token";
 export const RECOVERY_COOLDOWN_MS = 180000;
+/**
+ * 1.7.1: the longest a tick waits for `results.txt` to settle (RESULTS_DEBOUNCE_MS without a write) before it syncs
+ * without it; the file is then taken on a later tick, never renamed early.
+ */
+export const RESULTS_SETTLE_MAX_WAIT_MS = 1000;
+/**
+ * 1.7.1: the memory of reported result ids (dedupe by intent id). An id is kept RESULT_IDS_TTL_MS after it was reported,
+ * three times the longest a line can be read again (a `.done` file awaited for an incomplete last line,
+ * RESULTS_PARTIAL_MAX_MS, 10 minutes); RESULT_IDS_MAX caps it by count (the oldest go first).
+ */
+export const RESULT_IDS_TTL_MS = 3 * RESULTS_PARTIAL_MAX_MS;
+export const RESULT_IDS_MAX = 5000;
 
 const REDACTED_KEYS = new Set([
   "login",
@@ -133,6 +149,45 @@ export function resolveConfig(options = {}) {
     syncMs,
     streamMinMs,
     calmMode,
+  };
+}
+
+/**
+ * 1.7.1: whether a file event is a result-file event, which wakes a sync only after RESULTS_DEBOUNCE_MS without a
+ * further event: `results.txt` (created, written or renamed), or a write into a `results.<ms>.done` file (the EA's late
+ * append through a handle the rename moved; the bridge's own rename is a "rename" event, not a "change").
+ */
+export function isResultsEvent(filename, eventType = "change") {
+  if (filename === "results.txt") return true;
+  return eventType === "change" && /^results\.\d+\.done$/.test(String(filename || ""));
+}
+
+/**
+ * 1.7.1: the ids of the results already reported, so a result read twice (the original file and a `.done` re-read,
+ * or two re-reads) is sent once. Bounded by age (`ttlMs`) and by count (`max`, the oldest first).
+ *
+ * @param {{ now?: () => number, ttlMs?: number, max?: number }} [options]
+ */
+export function createResultIdMemory({ now = () => Date.now(), ttlMs = RESULT_IDS_TTL_MS, max = RESULT_IDS_MAX } = {}) {
+  const ids = new Map(); // id -> reported ms, in insertion order (oldest first)
+  function prune() {
+    const cutoff = now() - ttlMs;
+    for (const [id, ms] of ids) {
+      if (ms >= cutoff && ids.size <= max) break;
+      ids.delete(id);
+    }
+  }
+  return {
+    has: (id) => ids.has(id),
+    add(id) {
+      ids.delete(id);
+      ids.set(id, now());
+      prune();
+    },
+    prune,
+    get size() {
+      return ids.size;
+    },
   };
 }
 
@@ -318,6 +373,7 @@ export function createDaemon(options = {}) {
 
   let pendingTimer = null;
   let wakeTimer = null;
+  let resultsTimer = null; // 1.7.1: the debounce of result-file events
   let sleepResolve = null;
   let fileWatcher = null;
   let lastTickCompletedMs = 0;
@@ -340,6 +396,15 @@ export function createDaemon(options = {}) {
       sleepResolve = null;
       resolve();
     }
+  }
+
+  /** 1.7.1: a result-file event wakes a sync once RESULTS_DEBOUNCE_MS passed without another one. */
+  function debounceResultsWake() {
+    if (resultsTimer) clearTimeout(resultsTimer);
+    resultsTimer = setTimeout(() => {
+      resultsTimer = null;
+      requestWake();
+    }, resultsDebounceMs);
   }
 
   function requestWake() {
@@ -372,6 +437,12 @@ export function createDaemon(options = {}) {
       : typeof options.sleep === "function"
         ? options.sleep
         : defaultSleep;
+
+  // 1.7.1: the wall clock the result files' mtimes are compared with (the kernel stamps them with it); tests may set it.
+  const fileNow = typeof options.fileNow === "function" ? options.fileNow : () => Date.now();
+  const resultsDebounceMs = Number.isFinite(options.resultsDebounceMs) && options.resultsDebounceMs >= 0 ? options.resultsDebounceMs : RESULTS_DEBOUNCE_MS;
+  const resultsMemo = { files: new Map(), dropped: new Set() };
+  const realDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const stdout = options.stdout || process.stdout;
   const extraSecrets = [];
@@ -566,8 +637,7 @@ export function createDaemon(options = {}) {
   let running = false;
   let stopRequested = false;
   const pendingResultsById = new Map();
-  const reportedResultIds = new Set();
-  const REPORTED_IDS_MAX = 5000;
+  const reportedResultIds = createResultIdMemory({ now });
   let lastFailedVersion = null;
 
   function computeBackoffMs(failures) {
@@ -661,12 +731,28 @@ export function createDaemon(options = {}) {
         /* ignore log read errors */
       }
     }
-    const freshResults = consumeResults(config.omegaFilesDir, { fs, now });
-    for (const r of freshResults) {
-      if (r && r.id && !reportedResultIds.has(r.id) && !pendingResultsById.has(r.id)) {
-        pendingResultsById.set(r.id, r);
+    // 1.7.1: results.txt is renamed only after RESULTS_DEBOUNCE_MS without a write; a tick waits for that (at most
+    // RESULTS_SETTLE_MAX_WAIT_MS), then the recent .done files are read again for lines the EA appended late.
+    const settleDeadline = Date.now() + RESULTS_SETTLE_MAX_WAIT_MS;
+    for (;;) {
+      const left = resultsSettleLeftMs(config.omegaFilesDir, { fs, fileNow, debounceMs: resultsDebounceMs });
+      if (left <= 0 || Date.now() + left > settleDeadline) break;
+      await realDelay(left + 5);
+    }
+    const collected = collectResults(config.omegaFilesDir, { fs, now, fileNow, debounceMs: resultsDebounceMs, memo: resultsMemo });
+    for (const [list, recovered] of [[collected.fresh, false], [collected.reread, true]]) {
+      for (const r of list) {
+        if (r && r.id && !reportedResultIds.has(r.id) && !pendingResultsById.has(r.id)) {
+          pendingResultsById.set(r.id, r);
+          // A line found only on a re-read: the EA wrote it after the rename (the race this version closes).
+          if (recovered) log({ level: "warn", event: "result_recovered", id: String(r.id).slice(0, 40) });
+        }
       }
     }
+    for (const d of collected.dropped) {
+      log({ level: "error", event: "result_partial_line_dropped", file: d.file, id: d.id, waited_ms: RESULTS_PARTIAL_MAX_MS });
+    }
+    const settleRetryMs = collected.waitMs;
 
     const resultsToSend = Array.from(pendingResultsById.values());
     // Corpus Oracle: only the bars after the server's cursor (none until the server answers one).
@@ -761,10 +847,9 @@ export function createDaemon(options = {}) {
       pendingResultsById.delete(r.id);
       reportedResultIds.add(r.id);
     }
-    // Bounded: the EA never re-reports an id (processed.txt), this set only guards a re-read file.
-    if (reportedResultIds.size > REPORTED_IDS_MAX) {
-      for (const id of Array.from(reportedResultIds).slice(0, reportedResultIds.size - REPORTED_IDS_MAX)) reportedResultIds.delete(id);
-    }
+    // Bounded by age and count (createResultIdMemory): the EA never re-reports an id (processed.txt); this memory guards
+    // the .done re-reads.
+    reportedResultIds.prune();
 
     const intents = Array.isArray(payload?.intents) ? payload.intents : [];
     writeIntents(config.omegaFilesDir, intents, { fs, now });
@@ -893,13 +978,14 @@ export function createDaemon(options = {}) {
     }
 
     calm = config.calmMode && payload?.stream_mode === "calm" && !appliedConnection && !symbolTrialBusy
-      && pendingResultsById.size === 0 && intents.length === 0 && !localBusy(state);
+      && pendingResultsById.size === 0 && intents.length === 0 && !localBusy(state) && settleRetryMs == null;
 
     return {
       ok: true,
       status: 200,
       calm,
-      delayMs: currentBackoffMs,
+      // 1.7.1: a results.txt still being written is taken as soon as it settles, not at the next period.
+      delayMs: settleRetryMs != null ? Math.min(currentBackoffMs, Math.max(50, settleRetryMs + 5)) : currentBackoffMs,
       intentsCount: intents.length,
       appliedConnection,
       settingsVersion: payload?.settings_version ?? 0,
@@ -920,6 +1006,10 @@ export function createDaemon(options = {}) {
     if (wakeTimer) {
       clearTimeout(wakeTimer);
       wakeTimer = null;
+    }
+    if (resultsTimer) {
+      clearTimeout(resultsTimer);
+      resultsTimer = null;
     }
     if (pendingTimer) {
       clearTimeout(pendingTimer);
@@ -955,8 +1045,10 @@ export function createDaemon(options = {}) {
     ) {
       try {
         fs.mkdirSync(config.omegaFilesDir, { recursive: true });
-        fileWatcher = fs.watch(config.omegaFilesDir, (_eventType, filename) => {
-          if (wakesOn(filename, { calm, readStateNow: () => readState(config.omegaFilesDir, { fs }) })) requestWake();
+        fileWatcher = fs.watch(config.omegaFilesDir, (eventType, filename) => {
+          // 1.7.1: a result file wakes only once it is quiet (the EA's open-to-write window must not be cut).
+          if (isResultsEvent(filename, eventType)) debounceResultsWake();
+          else if (wakesOn(filename, { calm, readStateNow: () => readState(config.omegaFilesDir, { fs }) })) requestWake();
         });
         if (fileWatcher && typeof fileWatcher.on === "function") {
           fileWatcher.on("error", () => {});
@@ -975,6 +1067,8 @@ export function createDaemon(options = {}) {
       sync_ms: config.syncMs,
       stream_min_ms: config.streamMinMs,
       calm_mode: config.calmMode,
+      results_debounce_ms: resultsDebounceMs,
+      results_reread_ms: RESULTS_REREAD_MS,
     });
 
     try {
