@@ -77,7 +77,7 @@ jobs:
           const admitted = await nativeFetch(DOMAIN + "/", { redirect: "manual", headers: TOKEN, signal: AbortSignal.timeout(20000) });
           if (isAccessLogin(admitted)) { console.error(`Cloudflare Access refused the CI service token (${token.shape}). Set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to the cryptophys-ci Client ID and its current Client Secret`); process.exit(1); }
           console.log(`service token admitted by Access (HTTP ${admitted.status})`);
-          const get = async (u) => { for (let i = 0; i < 10; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
+          const get = async (u, tries = 10) => { for (let i = 0; i < tries; i++) { try { const r = await fetch(u, { signal: AbortSignal.timeout(20000) }); if (r.ok) return r; } catch {} await new Promise(r => setTimeout(r, 3000)); } return null; };
           let front = null;
           for (let i = 0; i < 10 && !front; i++) { try { front = await nativeFetch(DOMAIN + "/", { redirect: "manual", signal: AbortSignal.timeout(20000) }); } catch { await new Promise(r => setTimeout(r, 3000)); } }
           if (!front) { console.error("custom domain did not answer"); process.exit(1); }
@@ -89,7 +89,8 @@ jobs:
           const html = page ? await page.text() : "";
           if (!/<!doctype html>/i.test(html) || !html.includes('id="root"')) { console.error(`dashboard page not served (HTTP ${page?.status ?? "no answer"}, ${page?.headers.get("content-type") ?? "-"}, final URL ${page ? new URL(page.url).origin + new URL(page.url).pathname : "-"})`); process.exit(1); }
           const script = html.match(/src="(\/assets\/[^"]+\.js)"/);
-          if (!script || !(await get(ORIGIN + script[1]))) { console.error("dashboard bundle not served"); process.exit(1); }
+          // The hashed bundle can lag the page by a minute at the edge right after a deploy (run 227, 2026-11-26): wait up to ~2 min.
+          if (!script || !(await get(ORIGIN + script[1], 40))) { console.error("dashboard bundle not served"); process.exit(1); }
           const status = await get(ORIGIN + "/api/status");
           if (!status) { console.error("/api/status proxy failed"); process.exit(1); }
           console.log(JSON.stringify(await status.json(), null, 2).slice(0, 2000));
