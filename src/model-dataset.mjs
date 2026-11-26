@@ -14,7 +14,7 @@
 // Never feeds a room, a decision or Omega: it only records. Switch: MODEL_DATASET_MODE = "on" (default) | "off".
 import { ledgerSeries, atrAt, toMs, sessionAt } from "./signal-ledger.mjs";
 import { WITNESS_PRIORS } from "./witness-weighting.mjs";
-import { readBaseline, shadowPredictions, predict } from "./model-baseline.mjs";
+import { readBaseline, shadowPredictions, predict, modelGateMode } from "./model-baseline.mjs";
 import { readGbm, gbmPredictions } from "./model-gbm.mjs";
 
 export const MODEL_DATASET_VERSION = "cryptophys.model-dataset.v1";
@@ -347,6 +347,8 @@ export async function loadLabeledRows(env, { limit = 4000 } = {}) {
  */
 export async function modelAdvice(env, { barClose, witnesses, quorum, guardrails, structure = null, context = null, feed = null, tradingMode = null, series = null } = {}) {
   try {
+    // MA1: the owner's MODEL_AUTO_CONNECT "off" disconnects at once, not only at the next hourly retrain.
+    if (modelGateMode(env) === "off") return null;
     const baseline = await readBaseline(env);
     const gate = baseline?.promotion;
     if (gate?.status !== "promoted") return null;

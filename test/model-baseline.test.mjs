@@ -226,3 +226,118 @@ test("B9. the dataset stores the decision model's shadow predictions beside the 
   assert.equal(s.gbm.model_id, "gbm@x");
   assert.ok(s.gbm.tight.long > 0.5);
 });
+
+// ---------------------------------------------------------------- MA1 (orchestrator 2026-11-26)
+
+/** Rows whose label follows a one-hot session (rare London rows win long) and nothing else. */
+function sessionRows(n = 400, seed = 11) {
+  const r = rng(seed);
+  const SESSIONS = ["asia", "asia", "asia", "asia", "london", "new_york", "new_york", "new_york", "new_york", "new_york"];
+  return Array.from({ length: n }, (_, i) => {
+    const s = SESSIONS[Math.floor(r() * SESSIONS.length)];
+    const up = r() < (s === "london" ? 0.9 : 0.25);
+    return {
+      bar_close: new Date(T0 + i * 900_000).toISOString(),
+      features: { [`session_${s}`]: 1, noise: r() * 2 - 1, ...(i % 3 === 0 ? {} : i % 3 === 1 ? { w_h1_state_ready: 1 } : { w_h1_state_wait: 1 }) },
+      labels: { tight: { long: { outcome: up ? "target" : "stop", r: up ? 1.5 : -1 }, short: { outcome: up ? "stop" : "target", r: up ? -1 : 1.5 } } }
+    };
+  });
+}
+
+test("MA1-1 one-hot groups: a missing value of a present group reads 0, an absent group stays missing; the selector keeps them", async () => {
+  const { oneHotGroup, withOneHotZeros } = await import("../src/model-gbm.mjs");
+  const { selectFeatures } = await import("../src/model-baseline.mjs");
+  assert.deepEqual(["session_london", "mode_intraday", "regime_trend_up", "w_h1_state_ready", "w_strategy_agents_phase_late", "w_h1_lean", "w_h1_available", "noise", "plan_action_limit"].map(oneHotGroup),
+    ["session", "mode", "regime", "w_h1_state", "w_strategy_agents_phase", null, null, null, null]);
+  const keys = ["session_asia", "session_london", "regime_range", "w_h1_lean"];
+  assert.deepEqual(withOneHotZeros({ session_london: 1, w_h1_lean: 0.3 }, keys), { session_london: 1, w_h1_lean: 0.3, session_asia: 0 }, "regime absent: stays missing");
+  const f = { w_h1_lean: 0.3 };
+  assert.equal(withOneHotZeros(f, keys), f, "no group present: the same object");
+  // Before MA1 the 10 % London rows fell under the 20 % presence rule and every kept one-hot was constant (1).
+  const scale = selectFeatures(sessionRows());
+  assert.ok(["session_asia", "session_london", "session_new_york", "w_h1_state_ready", "w_h1_state_wait"].every((k) => k in scale), Object.keys(scale).join(","));
+  // A group with one value is constant where present (always 1): it carries nothing and stays out.
+  assert.ok(!("regime_up" in selectFeatures(sessionRows().map((r) => ({ ...r, features: { ...r.features, regime_up: 1 } })))));
+  assert.ok(scale.session_london[0] > 0 && scale.session_london[0] < 0.2, "a 0/1 feature: its mean is its share");
+  assert.ok(!Object.keys(scale).some((k) => k.startsWith("plan_")), "decision outputs stay out");
+});
+
+test("MA1-2 the baseline learns from a one-hot: the London rows get the higher long probability", () => {
+  const b = trainBaseline(sessionRows(), { now: T0 });
+  const m = b.models.tight_long;
+  assert.ok(m.keys.includes("session_london"));
+  assert.ok(predict(m, { session_london: 1 }) > predict(m, { session_new_york: 1 }) + 0.2, "London 0.9 against New York 0.25");
+  assert.equal(predict(m, { session_london: 1 }), predict(m, { session_london: 1, session_asia: 0, session_new_york: 0 }), "the live row (one key) reads as the training row (zeros)");
+});
+
+test("MA1-3 the gbm evaluator reads one-hot groups as the trainer does", async () => {
+  const { predictGbm } = await import("../src/model-gbm.mjs");
+  // One tree: split on session_asia (index 0) at 0.5 with NaN going right; 0 must go left.
+  const model = { trees: [[0, 0.5, 0, 2, -1, 1]] };
+  const names = ["session_asia"];
+  assert.ok(predictGbm(model, { session_london: 1 }, names) < 0.5, "London row: session_asia reads 0, left");
+  assert.ok(predictGbm(model, { session_asia: 1 }, names) > 0.5);
+  assert.ok(predictGbm(model, { noise: 1 }, names) > 0.5, "no session at all: missing, NaN goes right");
+});
+
+test("MA1-4 walk-forward: the training rows whose label window reaches the test period are purged (4 h tight, 12 h wide)", () => {
+  assert.deepEqual(BASELINE.purge_ms, { tight: 4 * 3_600_000, wide: 12 * 3_600_000 });
+  const rows = syntheticRows();
+  const b = trainBaseline(rows, { now: T0 });
+  // 15-minute rows: the 15 rows less than 4 h before the test's first close go, 47 for 12 h (a row exactly 4 h
+  // before it is kept: its label window ends where the test period's first one starts).
+  const cut = Math.floor(400 * BASELINE.train_share);
+  assert.equal(b.checks.tight_long.purged, 15);
+  assert.equal(b.checks.tight_long.train, cut - 15);
+  const wideLong = decisiveRows(rows, "wide", "long");
+  assert.ok(b.checks.wide_long.purged > 15 && b.checks.wide_long.purged <= 47, String(b.checks.wide_long.purged));
+  assert.equal(b.checks.wide_long.train, Math.floor(wideLong.length * BASELINE.train_share) - b.checks.wide_long.purged);
+  assert.equal(b.models.tight_long.n, 400, "the final model trains on every row");
+  // Without the purge the check is today's.
+  const unpurged = trainBaseline(rows, { now: T0, rules: { ...BASELINE, purge_ms: { tight: 0, wide: 0 } } });
+  assert.equal(unpurged.checks.tight_long.purged, 0);
+  assert.equal(unpurged.checks.tight_long.train, cut);
+});
+
+test("MA1-5 skill against the test period's own base rate sits beside the training-base skill; the gate and Aether's report are unchanged", () => {
+  const model = { keys: [], scale: {}, weights: [], bias: 0, base_rate: 0.3 };
+  // A constant model at the training base rate 0.3 on a test period whose hit rate is 0.6.
+  const flat = { ...model, keys: ["x"], scale: { x: [0, 1] }, weights: [0], bias: Math.log(0.3 / 0.7) };
+  const rows = Array.from({ length: 10 }, (_, i) => ({ features: { x: 0 }, y: i < 6 ? 1 : 0, r: 0 }));
+  const j = judge(flat, rows);
+  assert.equal(j.skill, 0, "the training base rate itself: no skill against it");
+  assert.equal(j.brier_test_base, 0.24);
+  assert.ok(j.skill_test_base < 0, "worse than the test period's own rate");
+  const b = trainBaseline(syntheticRows(), { now: T0 });
+  b.promotion = null;
+  const rep = modelReport(b, {});
+  for (const scores of Object.values(rep.walk_forward)) {
+    assert.ok(!("skill_test_base" in scores) && !("brier_test_base" in scores) && !("purged" in scores), "Aether's schema refuses other scores");
+    assert.ok("skill" in scores && "train" in scores);
+  }
+  assert.ok("skill_test_base" in baselineStatus(b).checks.tight_long, "the API shows it");
+});
+
+test("MA1-6 MODEL_AUTO_CONNECT off disconnects the advice at once, before the next retrain", async () => {
+  const { modelAdvice } = await import("../src/model-dataset.mjs");
+  const b = trainBaseline(syntheticRows(), { now: T0 });
+  const M = 15 * 60_000;
+  const bars = Array.from({ length: 120 }, (_, i) => ({ open_time: new Date(T0 + i * M).toISOString(), close_time: new Date(T0 + (i + 1) * M).toISOString(), open: 4000, high: 4006, low: 3994, close: 4001 }));
+  const args = { barClose: bars[100].close_time, witnesses: [{ key: "H1", available: true, lean: 0.8 }], quorum: { score: 0.5 }, guardrails: {}, context: {}, series: { m15: bars } };
+  const env = { SIGNAL_CACHE: kv() };
+  env.SIGNAL_CACHE.m.set(MODEL_BASELINE_KEY, JSON.stringify({ ...b, promotion: { status: "promoted", set: "tight", since: "2026-11-20T00:00:00Z" } }));
+  assert.ok(await modelAdvice(env, args), "promoted, the switch on (default)");
+  assert.equal(await modelAdvice({ ...env, MODEL_AUTO_CONNECT: "off" }, args), null, "the stored promotion is ignored while off");
+  assert.ok(await modelAdvice({ ...env, MODEL_AUTO_CONNECT: "on" }, args));
+});
+
+test("MA1-7 the trainer mirrors the one-hot groups, the purge and the test-base skill", () => {
+  const py = readFileSync(new URL("../scripts/train_gbm.py", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../src/model-gbm.mjs", import.meta.url), "utf8");
+  const jsRe = js.match(/const ONE_HOT = \/(.+)\/;/)[1];
+  const pyRe = py.match(/ONE_HOT = re\.compile\(r"(.+)"\)/)[1];
+  assert.equal(pyRe, jsRe, "the same one-hot rule");
+  assert.match(py, /"purge_hours": \{"tight": 4, "wide": 12\}/);
+  assert.match(py, /"skill_test_base"/);
+  assert.match(py, /matrix\(rows, features\):\n    filled = \[with_one_hot_zeros/);
+});

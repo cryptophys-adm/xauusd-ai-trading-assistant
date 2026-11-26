@@ -12,12 +12,17 @@
 // Deterministic (batch gradient descent, fixed steps), a few hundred milliseconds of CPU. Its report goes
 // to Aether as knowledge (src/aether-push.mjs pushModelReport). KV `model:baseline:v1`; switch
 // MODEL_BASELINE_MODE = "on" (default) | "off".
-import { gbmReport } from "./model-gbm.mjs";
+import { gbmReport, oneHotGroup, withOneHotZeros } from "./model-gbm.mjs";
 
 export const MODEL_BASELINE_VERSION = "cryptophys.model-baseline.v1";
 export const MODEL_BASELINE_KEY = "model:baseline:v1";
 export const MODEL_REPORT_SCHEMA = "cryptophys.model-report.v1";
-export const BASELINE = Object.freeze({ min_rows: 150, min_test: 40, train_share: 0.7, feature_presence: 0.2, steps: 300, learning_rate: 0.3, l2: 0.02, retrain_ms: 55 * 60_000, top_features: 12 });
+// purge_ms (MA1): the walk-forward check drops the training rows whose label window (the label set's horizon,
+// src/model-dataset.mjs LABEL_RULES 4 h, WIDE_RULES 12 h) reaches into the test period, so no test outcome leaks
+// into training. The final model still trains on every row.
+export const BASELINE = Object.freeze({ min_rows: 150, min_test: 40, train_share: 0.7, feature_presence: 0.2, steps: 300, learning_rate: 0.3, l2: 0.02, retrain_ms: 55 * 60_000, top_features: 12, purge_ms: Object.freeze({ tight: 4 * 3_600_000, wide: 12 * 3_600_000 }) });
+/** The walk-forward scores Aether's model report accepts (cryptophys-aether src/model.mjs SCORE_KEYS); the rest stay in KV and the API. */
+export const REPORT_SCORE_KEYS = Object.freeze(["n", "train", "hit_rate", "brier", "brier_base", "skill", "p_value", "auc", "picked", "picked_hit_rate", "picked_mean_r", "all_mean_r"]);
 /** The label sets a model learns: the dataset's columns for each. */
 export const LABEL_SETS = Object.freeze(["tight", "wide"]);
 const SIDES = Object.freeze(["long", "short"]);
@@ -50,23 +55,29 @@ export function modelBaselineMode(env) {
  */
 export const DECISION_OUTPUTS = /^(stance|bias|confidence|plan_)/;
 
-/** Pure: the features a model uses: known before the decision, present in at least `presence` of the rows, not constant. */
+/**
+ * Pure: the features a model uses: known before the decision, present in at least `presence` of the rows, not
+ * constant. A one-hot key counts as present wherever its group is (withOneHotZeros), so it is kept as a 0/1 feature.
+ */
 export function selectFeatures(rows, { presence = BASELINE.feature_presence } = {}) {
+  const oneHot = [...new Set(rows.flatMap((r) => Object.keys(r.features || {}).filter((k) => oneHotGroup(k) && !DECISION_OUTPUTS.test(k))))];
+  const filled = rows.map((r) => withOneHotZeros(r.features, oneHot));
   const count = new Map();
-  for (const r of rows) for (const [k, v] of Object.entries(r.features || {})) if (num(v) && !DECISION_OUTPUTS.test(k)) count.set(k, (count.get(k) || 0) + 1);
+  for (const f of filled) for (const [k, v] of Object.entries(f)) if (num(v) && !DECISION_OUTPUTS.test(k)) count.set(k, (count.get(k) || 0) + 1);
   const keys = [...count.entries()].filter(([, n]) => n >= presence * rows.length).map(([k]) => k).sort();
   const scale = {};
   for (const k of keys) {
-    const xs = rows.map((r) => r.features?.[k]).filter(num);
+    const xs = filled.map((f) => f[k]).filter(num);
     const m = mean(xs), sd = Math.sqrt(mean(xs.map((x) => (x - m) ** 2)));
     if (sd > 1e-9) scale[k] = [r4(m), r4(sd)];
   }
   return scale;
 }
 
-/** Pure: a row's standardised feature vector (a missing feature reads as its mean). */
+/** Pure: a row's standardised feature vector (a missing feature reads as its mean; a missing one-hot of a present group as 0). */
 function vector(features, keys, scale) {
-  return keys.map((k) => { const v = features?.[k]; const [m, sd] = scale[k]; return num(v) ? Math.max(-6, Math.min(6, (v - m) / sd)) : 0; });
+  const f = withOneHotZeros(features, keys);
+  return keys.map((k) => { const v = f[k]; const [m, sd] = scale[k]; return num(v) ? Math.max(-6, Math.min(6, (v - m) / sd)) : 0; });
 }
 
 /** Pure: fit a logistic regression on `rows` ({ features, y }) with fixed steps. */
@@ -112,14 +123,19 @@ export function auc(ps, ys) {
   return r4(s / (pos.length * neg.length));
 }
 
-/** Pure: the model's scores on held-out rows ({ features, y, r }) against the base rate it was trained with. */
+/**
+ * Pure: the model's scores on held-out rows ({ features, y, r }) against the base rate it was trained with
+ * (`skill`, what the gate reads), and (MA1) against the test period's own hit rate (`skill_test_base`): a model
+ * whose skill comes only from a base rate that moved between the periods shows skill but no test-base skill.
+ */
 export function judge(model, rows) {
   const ps = rows.map((r) => predict(model, r.features)), ys = rows.map((r) => r.y);
   const brier = mean(ps.map((p, i) => (p - ys[i]) ** 2)), brierBase = mean(ys.map((y) => (model.base_rate - y) ** 2));
+  const hit = mean(ys), brierTest = mean(ys.map((y) => (hit - y) ** 2));
   const picked = rows.filter((r, i) => ps[i] >= 0.5);
   return {
     n: rows.length, hit_rate: r4(mean(ys)), brier: r4(brier), brier_base: r4(brierBase),
-    skill: brierBase > 0 ? r4(1 - brier / brierBase) : null, auc: auc(ps, ys),
+    skill: brierBase > 0 ? r4(1 - brier / brierBase) : null, brier_test_base: r4(brierTest), skill_test_base: brierTest > 0 ? r4(1 - brier / brierTest) : null, auc: auc(ps, ys),
     picked: picked.length, picked_hit_rate: picked.length ? r4(mean(picked.map((r) => r.y))) : null,
     picked_mean_r: picked.length ? r4(mean(picked.map((r) => r.r))) : null, all_mean_r: r4(mean(rows.map((r) => r.r)))
   };
@@ -141,8 +157,12 @@ export function trainBaseline(rows, { now = Date.now(), rules = BASELINE } = {})
     const data = decisiveRows(rows, set, side);
     const cut = Math.floor(data.length * rules.train_share);
     if (data.length < rules.min_rows || data.length - cut < rules.min_test) { checks[id] = { status: "not_enough_rows", rows: data.length, needed: rules.min_rows }; continue; }
-    const check = fitLogistic(data.slice(0, cut));
-    checks[id] = { status: "ok", train: cut, train_from: data[0].bar_close, test_from: data[cut].bar_close, ...judge(check, data.slice(cut)) };
+    // MA1 purge: a training row whose label window reaches the test period's first close is left out of the check.
+    const testFrom = Date.parse(data[cut].bar_close), purge = rules.purge_ms?.[set] ?? 0;
+    const train = Number.isFinite(testFrom) ? data.slice(0, cut).filter((r) => !(Date.parse(r.bar_close) > testFrom - purge)) : data.slice(0, cut);
+    if (train.length < rules.min_test) { checks[id] = { status: "not_enough_rows", rows: data.length, needed: rules.min_rows }; continue; }
+    const check = fitLogistic(train);
+    checks[id] = { status: "ok", train: train.length, purged: cut - train.length, train_from: data[0].bar_close, test_from: data[cut].bar_close, ...judge(check, data.slice(cut)) };
     const model = fitLogistic(data);
     const top = model.keys.map((k, j) => ({ feature: k, weight: model.weights[j] })).sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight)).slice(0, rules.top_features);
     models[id] = { ...model, top_features: top };
@@ -238,7 +258,7 @@ export function modelReport(baseline, prospective, { now = Date.now(), liveNotes
   const models = {};
   for (const [id, check] of Object.entries(baseline.checks || {})) {
     if (check.status !== "ok") continue;
-    const { train_from, test_from, status, ...scores } = check;
+    const scores = Object.fromEntries(REPORT_SCORE_KEYS.filter((k) => k in check).map((k) => [k, check[k]]));
     models[id] = { ...scores, top_features: (baseline.models[id]?.top_features || []).map((f) => ({ feature: f.feature, weight: f.weight })) };
   }
   // For Cerebrum (owner 2026-11-13: "Pastikan Modul training ini punya visualisasi di cerebrum"): whether the

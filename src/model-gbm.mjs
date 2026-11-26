@@ -20,6 +20,35 @@ const num = (x) => typeof x === "number" && Number.isFinite(x);
 const r4 = (x) => Math.round(x * 10_000) / 10_000;
 const sigmoid = (z) => (z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z)));
 
+/**
+ * One-hot indicators (MA1, orchestrator 2026-11-26): the dataset writes a categorical as `<group>_<value>` = 1 and
+ * leaves the group's other values out (src/model-dataset.mjs: session_*, mode_*, regime_*, w_<witness>_state_*,
+ * w_<witness>_phase_*). Read alone, such a key is present only where it is 1, so the 20 % presence rule dropped
+ * the rarer ones and every kept one was constant: no one-hot ever reached a model. Both selectors and both
+ * evaluators therefore read a group as a whole: where any value of its group is present, a missing value reads
+ * 0; where none is (the field was unknown), it stays missing. scripts/train_gbm.py mirrors this exactly.
+ */
+const ONE_HOT = /^(session|mode|regime)_|^(w_[a-z0-9]+(?:_[a-z0-9]+)*?_(?:state|phase))_/;
+/** Pure: the one-hot group of a feature name, or null. */
+export function oneHotGroup(key) {
+  const m = ONE_HOT.exec(String(key));
+  return m ? (m[1] ?? m[2]) : null;
+}
+/** Pure: `features` with each one-hot key of `keys` that is missing but whose group is present read as 0 (a copy only when needed). */
+export function withOneHotZeros(features, keys) {
+  const f = features && typeof features === "object" ? features : {};
+  const groups = new Set();
+  for (const [k, v] of Object.entries(f)) if (num(v)) { const g = oneHotGroup(k); if (g) groups.add(g); }
+  if (!groups.size) return f;
+  let out = null;
+  for (const k of keys) {
+    if (num(f[k])) continue;
+    const g = oneHotGroup(k);
+    if (g && groups.has(g)) { out ??= { ...f }; out[k] = 0; }
+  }
+  return out ?? f;
+}
+
 export function modelGbmMode(env) {
   return String(env?.MODEL_GBM_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
 }
@@ -38,10 +67,11 @@ export function walkTree(node, x) {
   return num(n) ? n : 0;
 }
 
-/** Pure: a model's probability for a feature set (named features; a missing one is NaN). */
+/** Pure: a model's probability for a feature set (named features; a missing one is NaN, a missing one-hot of a present group 0). */
 export function predictGbm(model, features, names) {
   if (!Array.isArray(model?.trees) || !model.trees.length || !Array.isArray(names)) return null;
-  const x = names.map((k) => (num(features?.[k]) ? features[k] : NaN));
+  const f = withOneHotZeros(features, names);
+  const x = names.map((k) => (num(f[k]) ? f[k] : NaN));
   let z = 0;
   for (const t of model.trees) z += walkTree(t, x);
   return r4(sigmoid(z));
@@ -96,6 +126,8 @@ export function gbmStatus(gbm, prospective = null) {
  */
 export function gbmReport(gbm, prospective = {}) {
   if (!gbm || !gbm.model_id) return null;
+  // Aether's model-report schema (cryptophys-aether src/model.mjs SCORE_KEYS) refuses any other score, so the
+  // trainer's newer measures (skill_test_base, brier_test_base, purged) stay in KV and /api/model/gbm only.
   const SCORES = ["train", "n", "hit_rate", "brier", "brier_base", "skill", "auc", "picked", "picked_mean_r", "all_mean_r"];
   const walk_forward = {};
   for (const [id, check] of Object.entries(gbm.checks || {})) {
