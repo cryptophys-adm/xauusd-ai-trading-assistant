@@ -717,6 +717,9 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
     trigger_required: market,
     // The strategy agent whose plan this is, when it is not the default agent's.
     ...(plan.agent && plan.agent !== DEFAULT_AGENT ? { strategy: plan.agent, setup: plan.setup ?? null, ...(plan.pattern ? { pattern: plan.pattern } : {}) } : {}),
+    // Track A PR 5: a pattern plan's chart and, once a plan carries it, the time its setup lapses (recorded only).
+    ...(plan.agent && plan.agent !== DEFAULT_AGENT && plan.pattern && typeof plan.chart === "string" ? { chart: plan.chart } : {}),
+    ...(isNum(plan.valid_until_ms) ? { valid_until_ms: plan.valid_until_ms } : {}),
     // Z0 (recorded only): the plan's zone type words and its nearest decisive opposing zone ahead, when it has them.
     ...(plan.zone_types ? { zone_types: plan.zone_types } : {}), ...(plan.opposing_ahead ? { opposing_ahead: plan.opposing_ahead } : {}),
     // Z2b (record only): the zone rules that moved a price of this copy, as distances from the entry.

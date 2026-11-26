@@ -745,7 +745,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8";
+export const ENGINE_CODE_HASH = "12cdf5a54d2fdd389d29780a142b1f3e0eb3844d210259131bdee5bc0f33e81b";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -1259,14 +1259,20 @@ export async function runOmega4(env, { now = Date.now(), bars = null, maxMinutes
       const part = keys.slice(i, i + 50);
       for (const r of (await env.DB.prepare(`SELECT * FROM ledger_omega4 WHERE decision_key IN (${part.map(() => "?").join(", ")})`).bind(...part).all()).results ?? []) stored.set(r.decision_key, r);
     }
+    // Track A PR 5: the decision trade's pattern and chart on its row (recorded only).
+    const patternOf = new Map(decisions.filter((d) => typeof d.trade?.pattern === "string" && d.trade.pattern).map((d) => [d.decision_key, { pattern: d.trade.pattern, chart: typeof d.trade.chart === "string" ? d.trade.chart : null }]));
     const writes = [];
     for (const key of keys) {
       const r = run.records[key], s = stored.get(key);
-      if (s && FIELDS.every((f) => (s[f] ?? null) === (r[f] ?? null))) continue;
-      writes.push(env.DB.prepare(UPSERT_SQL).bind(r.decision_key, r.side, r.issued_ms, r.trading_mode, r.agent, r.omega4_status, r.omega4_gate, r.omega4_filled_at, r.omega4_closed_at, r.omega4_exit, r.r_omega4, r.omega4_size, r.omega4_json, iso(now)));
-      writes.push(env.DB.prepare("UPDATE signal_ledger SET omega4_status = ?, omega4_exit = ?, r_omega4 = ?, omega4_size = ?, omega4_filled_at = ?, omega4_closed_at = ?, omega4_json = ? WHERE id = ?")
-        .bind(r.omega4_status, r.omega4_exit, r.r_omega4, r.omega4_size, r.omega4_filled_at, r.omega4_closed_at, r.omega4_json, `decision:${key}`));
-      written += 1;
+      const pc = patternOf.get(key);
+      if (!(s && FIELDS.every((f) => (s[f] ?? null) === (r[f] ?? null)))) {
+        writes.push(env.DB.prepare(UPSERT_SQL).bind(r.decision_key, r.side, r.issued_ms, r.trading_mode, r.agent, r.omega4_status, r.omega4_gate, r.omega4_filled_at, r.omega4_closed_at, r.omega4_exit, r.r_omega4, r.omega4_size, r.omega4_json, iso(now)));
+        writes.push(env.DB.prepare("UPDATE signal_ledger SET omega4_status = ?, omega4_exit = ?, r_omega4 = ?, omega4_size = ?, omega4_filled_at = ?, omega4_closed_at = ?, omega4_json = ? WHERE id = ?")
+          .bind(r.omega4_status, r.omega4_exit, r.r_omega4, r.omega4_size, r.omega4_filled_at, r.omega4_closed_at, r.omega4_json, `decision:${key}`));
+        written += 1;
+      }
+      // After the upsert, so a new row gets it in the same batch; once set it is not written again.
+      if (pc && (s?.pattern ?? null) !== pc.pattern) writes.push(env.DB.prepare("UPDATE ledger_omega4 SET pattern = ?, chart = ? WHERE decision_key = ?").bind(pc.pattern, pc.chart, key));
     }
     for (let i = 0; i < writes.length; i += 50) {
       const part = writes.slice(i, i + 50);

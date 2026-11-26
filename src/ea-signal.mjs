@@ -198,6 +198,14 @@ export function managementFields(decision, { basis = null } = {}) {
     // ("id:long:short" joined by ","). Omega closes a winner on a drop and extends only on a stable or rising one.
     strategy_execution: decision?.strategy_execution === true,
     trade_agent: typeof decision?.trade?.agent === "string" ? decision.trade.agent : "",
+    // Track A PR 5 (recorded only): a pattern trade's pattern, its chart and the plan's TP2 on the feed scale, for
+    // Omega to stamp on its entry intents. Only when the trade has a pattern: every other signal is byte for byte as
+    // before. No key named tp2 (manageIntents reads that name).
+    ...(typeof decision?.trade?.pattern === "string" && decision.trade.pattern ? {
+      trade_pattern: decision.trade.pattern,
+      ...(typeof decision.trade.chart === "string" && decision.trade.chart ? { trade_chart: decision.trade.chart } : {}),
+      ...(isPrice(decision.trade.tp2) ? { trade_tp2_plan: decision.trade.tp2 } : {})
+    } : {}),
     agent_conf: flatConfidences(decision?.agent_confidence),
     agent_conf_prev: flatConfidences(decision?.agent_confidence_prev),
     // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §4, ADR-0020 Amendment 7): the quorum's share on each side and the
