@@ -36,8 +36,11 @@ import { readPlane, READERS } from "./level-readers.mjs";
 import { detectPatterns, patternLevels } from "./chart-patterns.mjs";
 import { patternFactor } from "./pattern-calibration.mjs";
 import { zoneTypes as typeZones, dsEvidence, sdLevels as sdLevelsOf, sdModeOf } from "./zone-types.mjs";
+import { openingRanges } from "./opening-range.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
+/** Track A PR 8: an opening-range edge's weight (the session family, the 15m chart). */
+export const ORB_LEVEL_WEIGHT = 0.5;
 export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3, "1W": 3 });
 const TF_NAME = { "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly", "1W": "weekly" };
 const CAMARILLA_WEIGHT = { h3: 0.6, l3: 0.6, h4: 1, l4: 1, h5: 0.8, l5: 0.8 };
@@ -72,7 +75,7 @@ export function swings(bars, { lookback = SWING_LOOKBACK, perSide = SWINGS_PER_S
  * 2026-11-06: the D1 snapshot still held the 5 November set beside the current one, and both were
  * counted as two sources). The freshest snapshot wins; "1D" is the daily set ("D").
  */
-export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = null, factorOf = () => 1 } = {}) {
+export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = null, factorOf = () => 1, orbLevels = "on" } = {}) {
   const out = [], seen = new Set();
   const add = (p, kind, tf, label, weight, { unique = true, reader = null } = {}) => {
     if (!isNum(p)) return;
@@ -134,6 +137,15 @@ export function rawLevels({ snapshots = {}, bars = {}, price = null, atrH1 = nul
   for (const [tf, list] of Object.entries(patterns || {})) {
     if (!TF_NAME[tf]) continue;
     for (const l of patternLevels(list, { factorOf })) add(l.price, l.kind, tf, `${TF_NAME[tf]} ${l.label}`, l.weight, { unique: false, reader: "projection" });
+  }
+  // Track A PR 8: the London and New York opening-range edges while their window is live (src/opening-range.mjs), in
+  // the session family on the 15m chart: they can add the session family to a zone, never make a candidate alone.
+  if (orbLevels !== "off") {
+    for (const r of openingRanges(bars.M15 || [])) {
+      if (r.status !== "ok") continue;
+      add(r.high, "open", "15", `${r.session} opening range high`, ORB_LEVEL_WEIGHT, { unique: false, reader: "session" });
+      add(r.low, "open", "15", `${r.session} opening range low`, ORB_LEVEL_WEIGHT, { unique: false, reader: "session" });
+    }
   }
   const pd = (bars.D1 || []).at(-1);
   if (pd) {
@@ -210,11 +222,11 @@ export function chartPatterns(bars = {}, { events = [] } = {}) {
  * Pure: the agent's tolerance (0.3 x the 1H ATR, at least 1 dollar), the chart patterns of each chart's closed bars
  * and every raw level, as buildKeyLevels and keyLevelsByChart both read them.
  */
-function keyLevelRaw({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
+function keyLevelRaw({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, orbLevels = "on" } = {}) {
   const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
   const found = patterns === "off" ? {} : chartPatterns(bars, { events });
   // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
-  const raw = rawLevels({ snapshots: levelSnapshots(snapshots), bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
+  const raw = rawLevels({ snapshots: levelSnapshots(snapshots), bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id), orbLevels });
   return { tolerance, found, raw };
 }
 
@@ -238,8 +250,8 @@ const nearZones = (zones, price, atrH1) => (isNum(price) && isNum(atrH1) ? zones
  * "record" or "signal" adds `sd_levels` (src/zone-types.mjs sdLevels, the boxes as their own levels, on the same
  * evidence after the typing) and `sd_levels_mode`; "off" (default) and untyped zones add neither.
  */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [], sdLevels = "off" } = {}) {
-  const { tolerance, found, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration });
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [], sdLevels = "off", orbLevels = "on" } = {}) {
+  const { tolerance, found, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration, orbLevels });
   const near = nearZones(clusterLevels(raw, tolerance, price), price, atrH1);
   limitCandidates(near, price);
   // Z0: demand/supply type, strength and freshness of each zone (z.ds); nothing else of a zone changes.
@@ -295,8 +307,8 @@ export function chartOfLevel(level) {
  * family independence, candidate rule (3+ families, at least medium) and cap per side (limitCandidates), and the same
  * window around price. Nothing buildKeyLevels returns changes: this is a second, separate reading of the same inputs.
  */
-export function keyLevelsByChart({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null } = {}) {
-  const { tolerance, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration });
+export function keyLevelsByChart({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, orbLevels = "on" } = {}) {
+  const { tolerance, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration, orbLevels });
   const out = {};
   for (const chart of KEY_LEVEL_CHARTS) {
     const near = nearZones(clusterLevels(raw.filter((l) => chartOfLevel(l) === chart), tolerance, price), price, atrH1);

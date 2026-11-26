@@ -131,9 +131,10 @@ both. It is also not the council's `shadow_arm` (an experimental arm in a measur
 ## 1. What exists today
 
 - **Strategy agents** (`src/strategy-agents.mjs`):
-  - 13 agents in `STRATEGY_AGENTS`, each with a status `live`, `shadow` or `off` (`agentStatuses`).
+  - 14 agents in `STRATEGY_AGENTS` (13 when this RFC was written; `orb_breakout` joined in Track A PR 7, 2026-11-26), each
+    with a status `live`, `shadow` or `off` (`agentStatuses`).
   - The status comes from `STRATEGY_AGENTS_LIVE`, `STRATEGY_AGENTS_OFF` and `STRATEGY_AGENTS_MODE`. In production
-    all 13 are live.
+    all 14 are live.
   - `zone_pullback` (`DEFAULT_AGENT`) is always live.
   - The breaker (`suspendedAgents`, `AGENT_BREAKER.min_setups` 30) turns a live agent with a negative record back
     to shadow. `syncAgentBreaker` (KV `strategy-agents:suspended:v1`) tells Telegram.

@@ -20,7 +20,10 @@ import {
   zoneAim, zoneAimHeld, zoneAimBase, zoneAimMode, zoneAimOffMode, zoneAimTpMode, zoneAimRuleToken, zoneFactorOf, zoneAhead, zoneAheadFails, zoneNeed, aroundSet,
   ZONE_AIM, ZONE_AIM_RULE, ZONE_AIM_TOKENS, ZONE_NEED
 } from "../src/zone-types.mjs";
-import { zoneScenario, zoneInputs, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
+import { zoneScenario, zoneInputs as zoneInputsWithOrb, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
+// Track A PR 8: the opening-range edges off (the scenario's live London window would add them), so the pins below stay
+// those of their main commits, as zoneScenario does; ORB-10 runs the scenario with them on.
+const zoneInputs = (modes, opts) => { const b = zoneInputsWithOrb(modes, opts); return { ...b, modes: { ...(b.modes ?? {}), orbLevels: "off" } }; };
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
 import { inertOutputs, wranglerVars, withoutDsSources, withoutAtrRangeRatio } from "./support/zone-aim-inert.mjs";
 import { CAPTURE_2026_11_20_22 } from "./fixtures/z2-capture-2026-11-20-22.mjs";
