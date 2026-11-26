@@ -341,3 +341,116 @@ test("MA1-7 the trainer mirrors the one-hot groups, the purge and the test-base 
   assert.match(py, /"skill_test_base"/);
   assert.match(py, /matrix\(rows, features\):\n    filled = \[with_one_hot_zeros/);
 });
+
+// ---------------------------------------------------------------- MA1 (b) (orchestrator 2026-11-26)
+
+const GBM_NOW = Date.parse("2026-11-26T06:00:00Z");
+async function gbmFixture({ trainedAt = "2026-11-26T04:20:00Z", longLeaf = 0.8, shortLeaf = -0.8 } = {}) {
+  const { MODEL_GBM_VERSION } = await import("../src/model-gbm.mjs");
+  // One split on w_h1_lean (index 0) at 0: above, the leaf; below, its opposite.
+  const tree = (leaf) => [0, 0, 0, 2, -leaf, leaf];
+  return {
+    version: MODEL_GBM_VERSION, model_id: "gbm@2026-11-26T04:20Z", trained_at: trainedAt, rows: 900, features: ["w_h1_lean"], status: "ok",
+    models: { tight_long: { base_rate: 0.35, n: 600, trees: [tree(longLeaf)] }, tight_short: { base_rate: 0.35, n: 600, trees: [tree(shortLeaf)] } },
+    checks: {}
+  };
+}
+const passing = (skill = 0.06) => ({ tight_long: { n: 320, skill, p_value: 0.01, auc: 0.6 }, tight_short: { n: 310, skill: skill + 0.01, p_value: 0.02, auc: 0.58 } });
+
+test("MA1b-1 the GBM's gate: the baseline's rules on its own record; stale, invalid or MODEL_AUTO_CONNECT off never pass; without the owner's switch a pass is would_promote", async () => {
+  const { gbmGate } = await import("../src/model-baseline.mjs");
+  const gbm = await gbmFixture();
+  const off = gbmGate(gbm, passing(), { now: GBM_NOW });
+  assert.equal(off.status, "would_promote", "MODEL_GBM_CONNECT defaults off");
+  assert.equal(off.set, "tight");
+  assert.equal(off.skill, 0.06, "the worse side's skill");
+  assert.match(off.reason, /MODEL_GBM_CONNECT is off/);
+  const on = gbmGate(gbm, passing(), { now: GBM_NOW, connect: "on" });
+  assert.equal(on.status, "promoted");
+  assert.deepEqual(on.record.long, { decisions: 320, skill: 0.06, auc: 0.6 });
+  assert.equal(gbmGate(gbm, passing(), { now: GBM_NOW + 3_600_000, connect: "on", previous: on }).since, on.since, "since holds while the status and set hold");
+  assert.equal(gbmGate(gbm, passing(), { now: GBM_NOW, autoConnect: "off", connect: "on" }).status, "not_promoted");
+  const stale = gbmGate(await gbmFixture({ trainedAt: "2026-11-24T05:00:00Z" }), passing(), { now: GBM_NOW, connect: "on" });
+  assert.equal(stale.status, "not_promoted");
+  assert.match(stale.reason, /older than 48 hours/);
+  const invalid = gbmGate({ ...gbm, version: "other" }, passing(), { now: GBM_NOW, connect: "on" });
+  assert.equal(invalid.status, "not_promoted");
+  assert.match(invalid.reason, /invalid decision model/);
+  assert.equal(gbmGate(null, passing(), { now: GBM_NOW, connect: "on" }).status, "not_promoted");
+  const few = { ...passing(), tight_short: { n: 120, skill: 0.2, p_value: 0.001, auc: 0.7 } };
+  assert.equal(gbmGate(gbm, few, { now: GBM_NOW, connect: "on" }).status, "not_promoted", "both sides need 300");
+  const { tight_short, ...oneSide } = gbm.models;
+  assert.equal(gbmGate({ ...gbm, models: oneSide }, passing(), { now: GBM_NOW, connect: "on" }).status, "not_promoted", "a set needs both side models");
+});
+
+test("MA1b-2 the hourly run writes the AI Worker's own key and never model:gbm:v1", async () => {
+  const { MODEL_GBM_KEY, MODEL_GBM_PROMOTION_KEY } = await import("../src/model-gbm.mjs");
+  const gbm = await gbmFixture();
+  const store = kv();
+  const puts = [];
+  const put = store.put.bind(store);
+  store.put = async (k, v, o) => { puts.push(k); return put(k, v, o); };
+  const stored = JSON.stringify(gbm);
+  store.m.set(MODEL_GBM_KEY, stored);
+  const out = await runModelBaseline({ SIGNAL_CACHE: store }, { now: GBM_NOW, loadRows: async () => syntheticRows(), loadGbm: async () => gbm });
+  assert.equal(out.status, "ok");
+  assert.deepEqual([...new Set(puts)].sort(), [MODEL_BASELINE_KEY, MODEL_GBM_PROMOTION_KEY].sort());
+  assert.equal(store.m.get(MODEL_GBM_KEY), stored, "the training workflow's key is untouched");
+  const p = JSON.parse(store.m.get(MODEL_GBM_PROMOTION_KEY));
+  assert.equal(p.status, "not_promoted", "no prospective record yet");
+  assert.equal(p.model_id, gbm.model_id);
+  assert.equal(out.gbm_promotion, "not_promoted");
+  assert.equal(out.report.gbm.connected, false, "Aether's schema: always false in the report");
+});
+
+test("MA1b-3 one advice: the GBM only with the owner's switch, a promoted key and a fresh model; both promoted, the higher worse-side skill wins and a tie goes to the baseline", async () => {
+  const { modelAdvice } = await import("../src/model-dataset.mjs");
+  const { MODEL_GBM_KEY, MODEL_GBM_PROMOTION_KEY, resetGbmCacheForTests } = await import("../src/model-gbm.mjs");
+  const { gbmGate } = await import("../src/model-baseline.mjs");
+  const b = trainBaseline(syntheticRows(), { now: T0 });
+  const M = 15 * 60_000;
+  const bars = Array.from({ length: 120 }, (_, i) => ({ open_time: new Date(T0 + i * M).toISOString(), close_time: new Date(T0 + (i + 1) * M).toISOString(), open: 4000, high: 4006, low: 3994, close: 4001 }));
+  const args = { barClose: bars[100].close_time, witnesses: [{ key: "H1", available: true, lean: 0.8 }], quorum: { score: 0.5 }, guardrails: {}, context: {}, series: { m15: bars }, now: GBM_NOW };
+  const gbm = await gbmFixture();
+  const setup = ({ baselineSkill = null, gbmSkill = 0.06, gbmModel = gbm } = {}) => {
+    resetGbmCacheForTests();
+    const env = { SIGNAL_CACHE: kv() };
+    env.SIGNAL_CACHE.m.set(MODEL_GBM_KEY, JSON.stringify(gbmModel));
+    env.SIGNAL_CACHE.m.set(MODEL_GBM_PROMOTION_KEY, JSON.stringify(gbmGate(gbmModel, passing(gbmSkill), { now: GBM_NOW, connect: "on" })));
+    env.SIGNAL_CACHE.m.set(MODEL_BASELINE_KEY, JSON.stringify({ ...b, prospective: baselineSkill == null ? {} : passing(baselineSkill), promotion: baselineSkill == null ? { status: "not_promoted" } : { status: "promoted", set: "tight", since: "2026-11-20T00:00:00Z" } }));
+    return env;
+  };
+  // The GBM alone: nothing without the owner's switch; with it, the GBM's probabilities.
+  assert.equal(await modelAdvice(setup(), args), null, "MODEL_GBM_CONNECT off (default)");
+  const g = await modelAdvice({ ...setup(), MODEL_GBM_CONNECT: "on" }, args);
+  assert.equal(g.source, "gbm");
+  assert.equal(g.reason, "gbm: the only model connected");
+  assert.ok(g.long_target_first > 0.5 && g.short_target_first < 0.5, "the H1 lean up: the long leaf");
+  assert.equal(g.long_base_rate, 0.35);
+  assert.equal(g.record.long.decisions, 320);
+  assert.equal(await modelAdvice({ ...setup(), MODEL_GBM_CONNECT: "on", MODEL_AUTO_CONNECT: "off" }, args), null);
+  assert.equal(await modelAdvice({ ...setup({ gbmModel: await gbmFixture({ trainedAt: "2026-11-23T00:00:00Z" }) }), MODEL_GBM_CONNECT: "on" }, args), null, "stale at advice time");
+  // Both promoted.
+  const base = await modelAdvice({ ...setup({ baselineSkill: 0.05, gbmSkill: 0.05 }), MODEL_GBM_CONNECT: "on" }, args);
+  assert.equal(base.source, "baseline", "a tie goes to the baseline");
+  assert.match(base.reason, /a tie goes to the baseline/);
+  assert.equal((await modelAdvice({ ...setup({ baselineSkill: 0.05, gbmSkill: 0.09 }), MODEL_GBM_CONNECT: "on" }, args)).source, "gbm");
+  assert.equal((await modelAdvice({ ...setup({ baselineSkill: 0.09, gbmSkill: 0.05 }), MODEL_GBM_CONNECT: "on" }, args)).source, "baseline");
+  assert.equal((await modelAdvice(setup({ baselineSkill: 0.05, gbmSkill: 0.09 }), args)).source, "baseline", "the GBM's switch off: the baseline alone");
+  assert.ok(!/"(entry|stop|tp1|tp2|price)"/.test(JSON.stringify(g)));
+});
+
+test("MA1b-4 the owner hears only of a real connection; /api/model/gbm shows the gate; the FS1 row defaults off", async () => {
+  const { gbmGateMessage } = await import("../src/model-baseline.mjs");
+  const { gbmStatus } = await import("../src/model-gbm.mjs");
+  const { switchByKey } = await import("../src/feature-switches.mjs");
+  assert.equal(gbmGateMessage({ status: "not_promoted" }, { status: "would_promote", set: "tight" }), null, "would_promote is no connection");
+  assert.match(gbmGateMessage({ status: "would_promote", set: "tight" }, { status: "promoted", set: "tight", reason: "r" }), /Decision model \(GBM\) connected/);
+  assert.match(gbmGateMessage({ status: "promoted", set: "tight" }, { status: "not_promoted", reason: "stale" }), /disconnected/);
+  const st = gbmStatus(await gbmFixture(), {}, { status: "would_promote", set: "tight", reason: "x", since: "2026-11-26T06:00:00.000Z", checked_at: "2026-11-26T06:00:00.000Z", record: {}, skill: 0.06 });
+  assert.deepEqual(st.promotion, { status: "would_promote", set: "tight", reason: "x", since: "2026-11-26T06:00:00.000Z", checked_at: "2026-11-26T06:00:00.000Z" });
+  assert.ok(!JSON.stringify(st).includes("trees"));
+  const row = switchByKey("MODEL_GBM_CONNECT");
+  assert.equal(row.default_value, "off");
+  assert.doesNotMatch(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"), /MODEL_GBM_CONNECT/, "off until the owner turns it on in FS1");
+});

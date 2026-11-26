@@ -53,6 +53,32 @@ export function modelGbmMode(env) {
   return String(env?.MODEL_GBM_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
 }
 
+/**
+ * MA1 (b) (orchestrator 2026-11-26): the GBM behind the council gate. The gate's state is the AI Worker's own key
+ * (never `model:gbm:v1`, which only the training workflow writes): { status, set, reason, since, model_id, checked_at,
+ * skill, record }. status "promoted" | "would_promote" | "not_promoted". Without the owner's MODEL_GBM_CONNECT "on" a
+ * passing gate is recorded as "would_promote" and nothing reaches the council.
+ */
+export const MODEL_GBM_PROMOTION_KEY = "model:gbm:promotion:v1";
+/** A model trained longer ago than this (the daily run missed) is never promoted nor used for advice. */
+export const GBM_STALE_MS = 48 * 3_600_000;
+/** Switch of the GBM's connection to the council: MODEL_GBM_CONNECT = "off" (default) | "on" (the owner's word, FS1). */
+export function modelGbmConnectMode(env) {
+  return String(env?.MODEL_GBM_CONNECT ?? "off").trim().toLowerCase() === "on" ? "on" : "off";
+}
+/** Pure: why a stored gbm may not be promoted or advise now (null when it may). */
+export function gbmUnusable(gbm, { now = Date.now() } = {}) {
+  if (!gbm) return "no decision model";
+  const problems = gbmProblems(gbm);
+  if (problems.length) return `invalid decision model (${problems.slice(0, 3).join(", ")})`;
+  if (now - Date.parse(gbm.trained_at) > GBM_STALE_MS) return `decision model trained ${gbm.trained_at}, older than 48 hours`;
+  return null;
+}
+/** The GBM's gate state (the AI Worker's key), or null. Never throws. */
+export async function readGbmPromotion(env) {
+  try { return JSON.parse((await env?.SIGNAL_CACHE?.get?.(MODEL_GBM_PROMOTION_KEY)) || "null"); } catch { return null; }
+}
+
 /** Pure: one compact tree's leaf for the feature vector `x` (NaN = missing). */
 export function walkTree(node, x) {
   let n = node;
@@ -113,16 +139,19 @@ export function gbmPredictions(gbm, features) {
 }
 
 /** The status for the API: the trainer's walk-forward checks and top features (never the trees). */
-export function gbmStatus(gbm, prospective = null) {
+export function gbmStatus(gbm, prospective = null, promotion = null) {
   if (!gbm) return null;
   const top = Object.fromEntries(Object.entries(gbm.models || {}).map(([id, m]) => [id, m.top_features ?? []]));
-  return { version: gbm.version, model_id: gbm.model_id, trained_at: gbm.trained_at, rows: gbm.rows, features: (gbm.features || []).length, status: gbm.status, checks: gbm.checks, top_features: top, prospective: prospective ?? {} };
+  const p = promotion && typeof promotion === "object" ? { status: promotion.status ?? "not_promoted", set: promotion.set ?? null, reason: String(promotion.reason ?? "").slice(0, 400), since: promotion.since ?? null, checked_at: promotion.checked_at ?? null } : null;
+  return { version: gbm.version, model_id: gbm.model_id, trained_at: gbm.trained_at, rows: gbm.rows, features: (gbm.features || []).length, status: gbm.status, checks: gbm.checks, top_features: top, prospective: prospective ?? {}, promotion: p };
 }
 
 /**
  * Pure: the gbm's block in the model report for Aether (owner 2026-11-13: "lanjutkan perluas model report gbm
  * ke Aether"): the trainer's walk-forward checks, the prospective record and the features it split on by gain;
- * never a tree, a threshold or a leaf. Shadow only, so `connected` is always false. Null without a model.
+ * never a tree, a threshold or a leaf. `connected` stays false even once MA1 (b) connects it: Aether's schema refuses
+ * any other value (cryptophys-aether src/model.mjs gbmProblems); the real state is in KV MODEL_GBM_PROMOTION_KEY and
+ * /api/model/gbm (an Aether follow-up). Null without a model.
  */
 export function gbmReport(gbm, prospective = {}) {
   if (!gbm || !gbm.model_id) return null;

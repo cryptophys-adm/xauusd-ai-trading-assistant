@@ -12,7 +12,7 @@
 // Deterministic (batch gradient descent, fixed steps), a few hundred milliseconds of CPU. Its report goes
 // to Aether as knowledge (src/aether-push.mjs pushModelReport). KV `model:baseline:v1`; switch
 // MODEL_BASELINE_MODE = "on" (default) | "off".
-import { gbmReport, oneHotGroup, withOneHotZeros } from "./model-gbm.mjs";
+import { gbmReport, oneHotGroup, withOneHotZeros, gbmUnusable, modelGbmConnectMode, readGbmPromotion, MODEL_GBM_PROMOTION_KEY } from "./model-gbm.mjs";
 
 export const MODEL_BASELINE_VERSION = "cryptophys.model-baseline.v1";
 export const MODEL_BASELINE_KEY = "model:baseline:v1";
@@ -244,6 +244,42 @@ export function promotionGate(prospective, { gate = GATE } = {}) {
   return { status: "promoted", set: best.set, reason: `${best.set}: both sides beat the base rate on ${gate.min_n}+ decisions it had not seen` };
 }
 
+/** Pure: a prospective record's sides for the advice and the promotion key (decisions, skill, AUC; no price). */
+function recordOf(prospective, set) {
+  const rec = (side) => prospective?.[`${set}_${side}`] ?? {};
+  return { long: { decisions: rec("long").n ?? null, skill: rec("long").skill ?? null, auc: rec("long").auc ?? null }, short: { decisions: rec("short").n ?? null, skill: rec("short").skill ?? null, auc: rec("short").auc ?? null } };
+}
+
+/**
+ * Pure (MA1 (b), orchestrator 2026-11-26): the GBM's gate. The same promotionGate and GATE as the baseline, on the
+ * GBM's own prospective record (its shadow predictions, `shadow_json.gbm`). A stored model that is stale (48 h) or
+ * invalid, a set without both side models, or MODEL_AUTO_CONNECT off: not_promoted. A pass while MODEL_GBM_CONNECT is
+ * not "on" (the owner's word) is recorded as "would_promote" and reaches no council. `since` carries over while the
+ * status and set hold.
+ */
+export function gbmGate(gbm, prospective, { now = Date.now(), previous = null, autoConnect = "on", connect = "off", gate = GATE } = {}) {
+  const at = new Date(now).toISOString();
+  const base = { model_id: gbm?.model_id ?? null, checked_at: at, set: null, skill: null, record: null, since: null };
+  if (autoConnect === "off") return { ...base, status: "not_promoted", reason: "MODEL_AUTO_CONNECT is off" };
+  const unusable = gbmUnusable(gbm, { now });
+  if (unusable) return { ...base, status: "not_promoted", reason: unusable };
+  const g = promotionGate(prospective, { gate });
+  if (g.status !== "promoted") return { ...base, status: "not_promoted", reason: g.reason };
+  if (!gbm.models?.[`${g.set}_long`] || !gbm.models?.[`${g.set}_short`]) return { ...base, status: "not_promoted", reason: `${g.set}: no trained model` };
+  const status = connect === "on" ? "promoted" : "would_promote";
+  const skill = Math.min(prospective[`${g.set}_long`].skill, prospective[`${g.set}_short`].skill);
+  const since = previous?.status === status && previous?.set === g.set && previous?.since ? previous.since : at;
+  return { ...base, status, set: g.set, skill, record: recordOf(prospective, g.set), since, reason: status === "promoted" ? g.reason : `${g.reason}; MODEL_GBM_CONNECT is off (the owner's word connects it)` };
+}
+
+/** Pure: the owner's Telegram line when the GBM's connection changed (null otherwise; would_promote is not a connection). */
+export function gbmGateMessage(previous, next) {
+  const was = previous?.status === "promoted" ? previous.set : null, now = next?.status === "promoted" ? next.set : null;
+  if (was === now) return null;
+  if (now) return `🤖 Decision model (GBM) connected (autonomous): its ${now} probabilities can now go to the Decision Engine council as advice. ${next.reason}. The guardrails still decide what can trade.`;
+  return `🤖 Decision model (GBM) disconnected: the council no longer receives its advice. ${next?.reason ?? ""}`.trim();
+}
+
 /** Pure: the owner's Telegram line when the gate changed (null otherwise). */
 export function gateMessage(previous, next) {
   const was = previous?.status === "promoted" ? previous.set : null, now = next?.status === "promoted" ? next.set : null;
@@ -268,12 +304,12 @@ export function modelReport(baseline, prospective, { now = Date.now(), liveNotes
   return { schema: MODEL_REPORT_SCHEMA, generated_at: new Date(now).toISOString(), model_id: baseline.model_id, rows: baseline.rows, label_sets: LABEL_SETS, walk_forward: models, prospective: prospective || {}, promotion, gate: { ...GATE }, live_notes, ...(gbm ? { gbm } : {}) };
 }
 
-/** The daily decision model's block for the report (src/model-gbm.mjs), scored on the same rows; null without one. */
-async function gbmBlock(rows, loadGbm) {
+/** The daily decision model and its prospective record on the same rows ({ gbm: null } without one). */
+async function gbmOf(rows, loadGbm) {
   try {
     const gbm = await loadGbm();
-    return gbm ? gbmReport(gbm, prospectiveRecord(rows.map((r) => ({ ...r, shadow: r.shadow?.gbm ?? null })))) : null;
-  } catch { return null; }
+    return gbm ? { gbm, prospective: prospectiveRecord(rows.map((r) => ({ ...r, shadow: r.shadow?.gbm ?? null }))) } : { gbm: null, prospective: {} };
+  } catch { return { gbm: null, prospective: {} }; }
 }
 
 /** The stored baseline, or null (mode off, none yet, unreadable). */
@@ -308,6 +344,17 @@ export async function runModelBaseline(env, { now = Date.now(), loadRows, loadLi
     baseline.promotion = gate.status === "promoted" && !baseline.models[`${gate.set}_long`] ? { status: "not_promoted", set: null, reason: `${gate.set}: no trained model` } : { ...gate, since: gate.status === "promoted" && current?.promotion?.set === gate.set ? current.promotion.since : gate.status === "promoted" ? baseline.trained_at : null };
     await env.SIGNAL_CACHE.put(MODEL_BASELINE_KEY, JSON.stringify(baseline), { expirationTtl: 7 * 86_400 });
     const skills = Object.fromEntries(Object.entries(baseline.checks).map(([id, c]) => [id, c.status === "ok" ? c.skill : c.status]));
-    return { status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, promotion: baseline.promotion.status, gate_message: gateMessage(current?.promotion, baseline.promotion), report: modelReport(baseline, baseline.prospective, { now, liveNotes: await loadLiveNotes().catch(() => []), gbm: await gbmBlock(rows, loadGbm) }) };
+    // MA1 (b): the GBM's gate, in the AI Worker's own key (never model:gbm:v1, which only the training workflow writes).
+    const { gbm, prospective: gbmProspective } = await gbmOf(rows, loadGbm);
+    const gbmPrevious = await readGbmPromotion(env);
+    const gbmPromotion = gbmGate(gbm, gbmProspective, { now, previous: gbmPrevious, autoConnect: modelGateMode(env), connect: modelGbmConnectMode(env) });
+    await env.SIGNAL_CACHE.put(MODEL_GBM_PROMOTION_KEY, JSON.stringify(gbmPromotion), { expirationTtl: 7 * 86_400 });
+    const gateLines = [gateMessage(current?.promotion, baseline.promotion), gbmGateMessage(gbmPrevious, gbmPromotion)].filter(Boolean);
+    return {
+      status: baseline.status, model_id: baseline.model_id, rows: rows.length, skills, promotion: baseline.promotion.status, gbm_promotion: gbmPromotion.status,
+      gbm_would_promote_first: gbmPromotion.status === "would_promote" && gbmPrevious?.status !== "would_promote",
+      gate_message: gateLines.length ? gateLines.join("\n") : null,
+      report: modelReport(baseline, baseline.prospective, { now, liveNotes: await loadLiveNotes().catch(() => []), gbm: gbm ? gbmReport(gbm, gbmProspective) : null })
+    };
   } catch (e) { return { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; }
 }

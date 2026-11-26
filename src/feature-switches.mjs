@@ -228,6 +228,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     description: "SB1: the news shadow comparison's two daily readings asked of Reflection's Beam (free Beta, its own caps: 100k input and 20k output tokens, 20 requests a day, 2 a minute) instead of the Workers AI agent model; no other call routes. Any limit, error, timeout, paid sign, missing retention terms, invalid answer or a platform router status other than on falls back to Workers AI for that call. off: as before.",
     values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
   }),
+  entry({
+    key: "MODEL_GBM_CONNECT", label: "Decision model (GBM) to the council (MA1 b)", group: "knowledge",
+    description: "MA1 (b): the daily decision model (LightGBM) may reach the Decision Engine council as advice once its own prospective record passes the baseline's gate (300 decisions per side, p < 0.05, AUC ≥ 0.55; a model older than 48 hours never). off: the gate still runs and records would_promote, nothing reaches the council. With both models connected, the one with the higher worse-side skill advises (a tie: the baseline). The guardrails still decide what can trade.",
+    values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
+  }),
   // ---- Omega engine, the owner's settings (D1 omega_settings; the Omega settings page's write path)
   entry({
     key: "profit_lock_gate", label: "Profit-lock gate", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,

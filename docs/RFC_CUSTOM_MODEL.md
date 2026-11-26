@@ -61,7 +61,7 @@ A model only advises until it has earned more:
 ## 6. Steps
 
 1. Dataset builder — built (this RFC's PR).
-2. Baseline logistic regression in the Worker, retrained every hour, judged walk-forward and prospectively, recorded in shadow, reported to Aether — built. MA1 (2026-11-26): one-hot groups read as a whole by both selectors and evaluators, a 4 h / 12 h purge in the walk-forward check, the test period's own base rate beside the training one (docs/SSOT.md, Baseline model).
+2. Baseline logistic regression in the Worker, retrained every hour, judged walk-forward and prospectively, recorded in shadow, reported to Aether — built. MA1 (2026-11-26): one-hot groups read as a whole by both selectors and evaluators, a 4 h / 12 h purge in the walk-forward check, the test period's own base rate beside the training one (docs/SSOT.md, Baseline model). MA1 (b) (2026-11-26): the decision model behind the same gate, its state in the AI Worker's own key `model:gbm:promotion:v1`, connected only with the owner's FS1 switch `MODEL_GBM_CONNECT` (default off; `would_promote` until then); one advice, the higher worse-side skill winning, a tie the baseline.
 3. Training workflow (GitHub Actions, LightGBM), stored in Cloudflare KV as compact trees the Worker evaluates, judged in shadow — built 2026-11-13 (`train-model.yml`). The ONNX export moves to step 4 with the EA (the ONNX converter's dependencies did not resolve cleanly on the pinned Python).
 4. ONNX export of the decision model and the EA reads it (advice only until promoted).
 5. LoRA for the language model on Kaggle, once the scored rooms suffice.
