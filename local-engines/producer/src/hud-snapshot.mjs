@@ -1,5 +1,5 @@
 // Phase C2: HUD snapshot for one closed chart bar (M15, H1, H4 or D1; H4 and D1 for the
-// timeframe War Rooms, owner decision 2026-11-06).
+// timeframe War Rooms, owner decision 2026-11-06; W1 for the zone typing only, ZF2 2026-11-26).
 //
 // One snapshot carries the data of each Pine HUD section (RFC_HUD_AGENTS §1.2) as
 // numbers, booleans and small enum tokens, never rendered *_txt strings. It is built
@@ -26,7 +26,7 @@ import { CHART_TICKERID, prophetR38TEnc, prophetConsensusDir } from "./h1-produc
 import { computeMacroAether } from "./macro-aether.mjs";
 import { supertrendFields } from "./supertrend.mjs";
 import { gridBotFields } from "./grid-bot.mjs";
-import { buildChartPlane } from "./chart-plane.mjs";
+import { buildChartPlane, buildWeeklyPlane } from "./chart-plane.mjs";
 import { prophetZones } from "./adopt/prophet-ob.mjs";
 import { aegisBoxes } from "./adopt/gmi-zone.mjs";
 
@@ -36,8 +36,16 @@ const CHART = Object.freeze({
   M15: { minutes: 15, period: "15", minBars: 320 },
   // H4 and D1 (Pine v6 timeframe.period "240" and "1D"); GMI on them runs on gmi-core-htf.mjs.
   H4: { minutes: 240, period: "240", minBars: 320, htf: true, own: "240" },
-  D1: { minutes: 1440, period: "1D", minBars: 320, htf: true, own: "D" }
+  D1: { minutes: 1440, period: "1D", minBars: 320, htf: true, own: "D" },
+  // ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): the weekly chart (Pine v6 timeframe.period "1W"), for the zone
+  // typing's weekly boxes only. Without GMI: the bundle carries 260 closed weekly bars (market-data-ingestion SERIES
+  // retain 260), fewer than GMI's 320 (vp_lookback 300 + 20), and GMI has no weekly chart (gmi-core.mjs
+  // GMI_CHART_MINUTES, hashed, not edited). The Prophet R38 core, R37 and the Mizan rows need no more than 200 bars.
+  // Its chart plane is the weekly subset (chart-plane.mjs buildWeeklyPlane: the whale map) plus zones.prophet.
+  W1: { minutes: 10080, period: "1W", minBars: 200, htf: true, own: "W", gmi: false, plane: "weekly" }
 });
+/** ZF2: gmi_error of a weekly snapshot, whose GMI is never run (see CHART.W1). */
+export const GMI_NOT_ON_WEEKLY = "gmi_not_on_weekly";
 const WINDOW = 1000;
 const NY = "America/New_York";
 
@@ -101,7 +109,7 @@ function macroAether(chartBars, bundle, chart, mintick) {
 }
 
 /**
- * buildHudSnapshot(bundle, { chart: "H1" | "M15" | "H4" | "D1", now, mintick })
+ * buildHudSnapshot(bundle, { chart: "H1" | "M15" | "H4" | "D1" | "W1", now, mintick })
  */
 export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), mintick = 0.001 } = {}) {
   const spec = CHART[chart];
@@ -128,7 +136,8 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
   const prophetDir37 = prophetConsensusDir({ proFast: r37.pro_fast.at(-1), dEnc: s37.d_enc, subtype: s37.subtype });
 
   let gmi = null, gmiError = null;
-  try {
+  if (spec.gmi === false) gmiError = GMI_NOT_ON_WEEKLY;
+  else try {
     gmi = spec.htf ? computeGmiOnHtfChart(bundle, { chart, mintick }) : computeGmiOnChart(bundle, { chart, mintick });
     if (gmi.open_time !== last.open_time) { gmi = null; gmiError = "gmi_bar_mismatch"; }
   } catch (error) { gmiError = typeof error?.code === "string" ? error.code : "gmi_failed"; }
@@ -242,9 +251,10 @@ export function buildHudSnapshot(bundle, { chart = "H1", now = Date.now(), minti
     // beside it, GMI's active Aegis validated order blocks (the 4 nearest per side, adopt/gmi-zone.mjs), on the bars and
     // mintick the GMI run used and only on a chart where it ran; a failure leaves the plane without `aegis`, and
     // `prophet` as it was.
+    // ZF2: the weekly chart's plane is buildWeeklyPlane's subset (no GMI drawing needs fewer than 320 bars).
     chart_plane: (() => {
       let plane;
-      try { plane = buildChartPlane(bundle, { chart, chartBars, mintick }); } catch { return null; }
+      try { plane = spec.plane === "weekly" ? buildWeeklyPlane({ chartBars, mintick }) : buildChartPlane(bundle, { chart, chartBars, mintick }); } catch { return null; }
       if (!plane || typeof plane !== "object") return plane ?? null;
       let prophet = null;
       try { prophet = prophetZones(ob, chartBars, { perSide: 4, atr: sensors.atr14 }); } catch { prophet = null; }

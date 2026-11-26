@@ -364,17 +364,23 @@ export async function publishHtfLocalComputation(env, { now = Date.now(), force 
 // cut at its own close so the snapshot is the one it would have been at the close. The room of
 // that bar then re-convenes once with the HUD agents (src/timeframe-threads.mjs). D1 covers the
 // weekend (Friday's close stays the latest until Monday's). H1 and M15 rooms move on every bar.
+// ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): W1, the weekly chart, for the AI Worker's zone typing only (no room).
+// Its native bar closes when the next week opens (Sunday's session start) and the series is pulled about an hour later
+// (production 2026-11-22: closed 22:00, fetched 23:00 UTC), so it is on time for 12 hours and caught up while it is
+// still the latest close (6 days). Its marker lives 8 days, longer than that window (markerTtlS; the other charts keep
+// HUD_MARKER_TTL_S).
 const HUD_CHARTS = Object.freeze({
   H1: { maxDelayMs: 25 * 60 * 1000 }, M15: { maxDelayMs: 9 * 60 * 1000 },
-  H4: { maxDelayMs: 30 * 60 * 1000, catchUpMs: 4 * 60 * 60 * 1000 }, D1: { maxDelayMs: 60 * 60 * 1000, catchUpMs: 72 * 60 * 60 * 1000 }
+  H4: { maxDelayMs: 30 * 60 * 1000, catchUpMs: 4 * 60 * 60 * 1000 }, D1: { maxDelayMs: 60 * 60 * 1000, catchUpMs: 72 * 60 * 60 * 1000 },
+  W1: { maxDelayMs: 12 * 60 * 60 * 1000, catchUpMs: 6 * 24 * 60 * 60 * 1000, markerTtlS: 60 * 60 * 24 * 8 }
 });
-const HUD_PERIOD = Object.freeze({ H1: "60", M15: "15", H4: "240", D1: "1D" });
-// Longer than the longest catch-up window, so a caught-up bar is never sent twice.
+const HUD_PERIOD = Object.freeze({ H1: "60", M15: "15", H4: "240", D1: "1D", W1: "1W" });
+// Longer than the longest catch-up window of H1 to D1, so a caught-up bar is never sent twice (W1 has its own).
 const HUD_MARKER_TTL_S = 60 * 60 * 24 * 4;
 export const LAST_HUD_PUBLISH_KEY = "market-data:v2:hud-last-publish";
 
 /**
- * Phase C2: publishes the HUD snapshot of the latest closed H1 and M15 bar to the AI
+ * Phase C2: publishes the HUD snapshot of the latest closed H1 and M15 bar (and H4, D1, and W1 since ZF2) to the AI
  * Worker (LocalComputationIngress.submitHud). HUD agents only; never decision evidence.
  * Enabled only when HUD_SNAPSHOT_PUBLISH is "true". One snapshot per chart bar.
  */
@@ -385,7 +391,7 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
   if (typeof env.AI_WORKER?.submitHud !== "function") return { status: "publisher_not_configured" };
   const resolvedBundle = bundle || await buildBundle(env, now);
   const results = {};
-  for (const [chart, { maxDelayMs, catchUpMs = 0 }] of Object.entries(HUD_CHARTS)) {
+  for (const [chart, { maxDelayMs, catchUpMs = 0, markerTtlS = HUD_MARKER_TTL_S }] of Object.entries(HUD_CHARTS)) {
     const last = resolvedBundle.timeframes?.[chart]?.candles?.at(-1);
     if (!last) { results[chart] = { status: "no_data" }; continue; }
     const closeMs = Date.parse(last.close_time);
@@ -406,7 +412,7 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
     try {
       const { status, body } = await env.AI_WORKER.submitHud(snapshot);
       const ok = status < 300;
-      if (ok) { await kv.put(markerKey, "1", { expirationTtl: HUD_MARKER_TTL_S }); remember(kv, markerKey); }
+      if (ok) { await kv.put(markerKey, "1", { expirationTtl: markerTtlS }); remember(kv, markerKey); }
       results[chart] = { status: ok ? "published" : "rejected", ...(late ? { catch_up: true } : {}), candle_key: snapshot.candle_key, chart_plane: snapshot.chart_plane?.version ?? null, http_status: status, error: ok ? null : asString(body?.error) || "ai_worker_rejected" };
     } catch (error) {
       results[chart] = { status: "post_failed", candle_key: snapshot.candle_key, error: asString(error?.name) || "post_failed" };
