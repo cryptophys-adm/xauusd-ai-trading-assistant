@@ -109,7 +109,11 @@ export function zoneInputs(modes = undefined, { prophet = false, aegis = false }
 
 const row = (key, lean, action = "WAIT") => ({ key, label: key, role: key, available: true, lean, action, confidence: 0.6, summary: `${key} reads the chart.`, at: CLOSE, stale: false });
 const global = () => ({ timeframes: [row("D1", 0.5), row("H4", 0.45), row("H1", 0.4), row("M15", 0.35, "BUY"), row("NEWS", 0.2), row("MACRO", 0.1)] });
-export const ZONE_ENV = Object.freeze({ MODEL_RATE_LIMIT_RETRY_MS: "0", TRADING_MODE: "intraday", STRATEGY_EXECUTION: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade" });
+/** The scenario's global conclusion (ORB-8 builds the decision with its own calendar). */
+export const zoneGlobal = global;
+// Track A PR 7: the scenario's 15m bars hold a London opening range breakout, so orb_breakout is off here and the pins
+// stay those of before it (test/opening-range.test.mjs ORB-8 runs the same scenario with it on).
+export const ZONE_ENV = Object.freeze({ MODEL_RATE_LIMIT_RETRY_MS: "0", TRADING_MODE: "intraday", STRATEGY_EXECUTION: "off", STRATEGY_AGENTS_LIVE: "sweep_reversal,breakout_retest,range_fade", STRATEGY_AGENTS_OFF: "orb_breakout" });
 export const PLAN_COLUMNS = "setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, source, rule_version";
 
 /**

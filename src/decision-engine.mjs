@@ -1234,7 +1234,7 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
   const plansOf = (dir) => {
-    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone, entryZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone, entryZone }), statuses); } catch { return {}; }
+    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone, entryZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone, entryZone, events: inputs.calendar?.events ?? [] }), statuses); } catch { return {}; }
   };
   const plans = { long: plansOf(1), short: plansOf(-1) };
   let consensus = null;

@@ -133,8 +133,10 @@ test("SR4b a Telegram failure loses no notice: the stored value is unchanged and
 });
 
 test("SR5 variants: an agent's own label first, then the catalogue pattern's name", () => {
-  // No agent declares variants yet (PR 7's opening ranges will); the catalogue path is unchanged.
-  assert.ok(STRATEGY_AGENTS.every((a) => a.variants === undefined));
+  // Track A PR 7: the opening range breakout declares the two opening ranges; no other agent declares variants.
+  assert.deepEqual(STRATEGY_AGENTS.filter((a) => a.variants !== undefined).map((a) => a.id), ["orb_breakout"]);
+  assert.equal(variantName("orb_breakout", "orb_london"), "London opening range");
+  assert.equal(variantName("orb_breakout", "orb_new_york"), "New York opening range");
   assert.equal(variantName("pattern_peaks", "triple_top"), "triple top");
   assert.equal(variantName("pattern_peaks", "no_such_pattern"), null);
   assert.equal(variantName("no_such_agent", "triple_top"), "triple top");

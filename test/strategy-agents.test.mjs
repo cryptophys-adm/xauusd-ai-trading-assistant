@@ -16,7 +16,7 @@ const flat = (n, low, high, close) => Array.from({ length: n }, () => [low, high
 
 test("the registry: one interface, the default agent always live, the others in shadow until the switches move them", () => {
   const FAMILIES = ["peaks", "lines", "curve", "bars", "pole", "gaps", "legs", "event"];
-  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade", ...FAMILIES.map((f) => `pattern_${f}`), "pattern_inside"]);
+  assert.deepEqual(AGENT_IDS, ["zone_pullback", "sweep_reversal", "breakout_retest", "range_fade", ...FAMILIES.map((f) => `pattern_${f}`), "pattern_inside", "orb_breakout"]);
   assert.equal(agentCatalog().find((a) => a.id === "breakout_retest").label, "Break and retest", "a break is upward or downward");
   for (const a of STRATEGY_AGENTS) assert.ok(a.id && a.label && a.fits.length > 40 && typeof a.plan === "function" && a.version >= 1, a.id);
   const others = (status) => Object.fromEntries(AGENT_IDS.slice(1).map((id) => [id, status]));

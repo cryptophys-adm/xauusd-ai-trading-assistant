@@ -71,6 +71,15 @@ formation, a wide triangle, wedge or diamond): from one line toward the other, a
 or a short from the upper one, the stop 0.25 ATR beyond the line, the targets the middle and the far line.
 Its record is kept apart from the same pattern's breaks.
 
+The opening range breakout (`orb_breakout`, Track A PR 7; owner 2026-11-26: "nyalakan saja langsung aktif dan
+kontribusi") trades the London and New York opening ranges (each session's first three 15m bars,
+`src/opening-range.mjs`): a 15m close beyond the range, not closed back through its middle since, entered on the
+retest of the broken edge (at price within the retest band, else a limit at the edge; never a stop entry), the stop
+behind the middle or the breakout bar, the targets from the key levels, the plan ending with the session's window
+(`valid_until_ms`). It is silent with a high-impact USD release inside the range, a range too narrow (under 0.25 ATR)
+or too wide (over 3.5 ATR), and London in the weeks the US and the UK change clocks on different dates. Each session is
+its own pattern for the record and the breaker; New York wins on a side where both plan.
+
 When the council has strategies to choose from, the evidence also carries the Projection Agent's reading
 (`price_action`: each pattern on the 15m, 1H and 4H charts, whether it broke upward or downward, its record on
 gold; no price), so the choice of strategy leans on the price action it sees.
