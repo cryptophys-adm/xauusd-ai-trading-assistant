@@ -1,7 +1,7 @@
 # VPS runbook: ZF2 (weekly HUD snapshot)
 
-> **Fill in before use:** `<MERGED_COMMIT>` is the full SHA of ZF2's merge commit on `main`. It is known only after the
-> PR merges. Until someone replaces `<MERGED_COMMIT>` below with it, do not run this runbook.
+> **Merged commit:** ZF2 merged into `main` as `e7c055b428eab917deb9c5d00553aa3dae0c4054` (PR #600, 2026-11-26). This runbook checks out exactly that
+> commit; its first 12 characters are `e7c055b428ea`.
 
 Written for a Claude Code session on the owner's trading VPS. The owner runs it ("Lanjutkan dan beri panduan claude di
 VPS untuk upgrade", 2026-11-26). Follow the steps in order. Stop and report at the first check that fails.
@@ -73,7 +73,7 @@ VPS untuk upgrade", 2026-11-26). Follow the steps in order. Stop and report at t
    ```bash
    curl -s https://ai.cryptophys.work/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status"), d.get("commit"))'
    ```
-   Expect `ok` and the first 12 characters of `<MERGED_COMMIT>`, or of a later `main` commit that contains it. If the
+   Expect `ok` and `e7c055b428ea` (the first 12 characters of the merged commit), or of a later `main` commit that contains it. If the
    commit is older, wait for `deploy-worker.yml` to finish, then check again. Do not deploy anything yourself.
 
 ## 2. Record the current state
@@ -105,14 +105,14 @@ ls -la "$B"
    ```bash
    cd "$REPO"
    git fetch origin
-   git checkout <MERGED_COMMIT>
+   git checkout e7c055b428eab917deb9c5d00553aa3dae0c4054
    git rev-parse HEAD
    ```
-   `git rev-parse HEAD` must print `<MERGED_COMMIT>`. A "detached HEAD" notice is expected.
+   `git rev-parse HEAD` must print `e7c055b428eab917deb9c5d00553aa3dae0c4054`. A "detached HEAD" notice is expected.
 2. Confirm that no file the VPS runs has changed (both commands must print nothing):
    ```bash
-   git diff --name-only "$(cat /root/zf2-old-commit.txt)" <MERGED_COMMIT> -- bridge/ ea/
-   git diff --name-only "$(cat /root/zf2-old-commit.txt)" <MERGED_COMMIT> -- package-lock.json bridge/omega-bridge/package.json
+   git diff --name-only "$(cat /root/zf2-old-commit.txt)" e7c055b428eab917deb9c5d00553aa3dae0c4054 -- bridge/ ea/
+   git diff --name-only "$(cat /root/zf2-old-commit.txt)" e7c055b428eab917deb9c5d00553aa3dae0c4054 -- package-lock.json bridge/omega-bridge/package.json
    ```
    If the first command lists files, the checkout moved over other changes as well, made by other PRs since `OLD`.
    **Stop and report** them: those changes need their own runbook. If the second lists files, do not run `npm`: the
@@ -130,15 +130,21 @@ ls -la "$B"
 
 You need no Cloudflare token for any of these checks.
 
-1. **The pull adapter's health.** The pull adapter `xauusd-tradingview-pull-adapter` serves `GET /health` on its
-   `workers.dev` URL. The repository does not write that URL down. Read it from the latest successful run of
-   **Deploy market data ingestion** (`deploy-market-data-ingestion.yml`) in GitHub Actions: its summary prints
-   "Deployed URL". With the GitHub CLI signed in on this host:
+1. **The pull adapter's health.** The pull adapter `xauusd-tradingview-pull-adapter` serves a public `GET /health`
+   (no token) on its `workers.dev` URL, written here as `<PULL_ADAPTER_URL>`. This public repository does not write
+   the URL down, because it names the owner's Cloudflare account. Get it one of two ways, and never guess it:
+   - **Ask the owner** for the pull adapter's workers.dev URL.
+   - **Or read it from the deploy run's summary.** The latest successful run of **Deploy market data ingestion**
+     (`deploy-market-data-ingestion.yml`) prints it only there, as "Deployed URL" in the run's summary. With the
+     GitHub CLI signed in on this host:
+     ```bash
+     gh run list --repo cryptophys-adm/xauusd-ai-trading-assistant --workflow deploy-market-data-ingestion.yml --status success --limit 1
+     gh run view <run id> --repo cryptophys-adm/xauusd-ai-trading-assistant --log | grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' | head -n1
+     ```
+   Then set it once, and do not paste it into any file, issue or chat outside this VPS session:
    ```bash
-   gh run list --repo cryptophys-adm/xauusd-ai-trading-assistant --workflow deploy-market-data-ingestion.yml --limit 1
-   gh run view <run id> --repo cryptophys-adm/xauusd-ai-trading-assistant --log | grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' | head -n1
+   PULL=<PULL_ADAPTER_URL>
    ```
-   Without the CLI, ask the owner for the URL. Do not guess it. Then (`PULL` = that URL):
    ```bash
    curl -s "$PULL/health" | python3 -c '
    import json,sys
@@ -147,7 +153,7 @@ You need no Cloudflare token for any of these checks.
    for c,r in sorted((h.get("charts") or {}).items()): print(c, r)'
    ```
    What to look for:
-   - `commit` is the first 12 characters of `<MERGED_COMMIT>` (or a later `main` commit).
+   - `commit` is `e7c055b428ea` (the first 12 characters of the merged commit) (or a later `main` commit).
    - `published_at` is within the last few minutes. The summary is rewritten every minute.
    - **W1:** `status` is `published` or `already_published`, the `candle_key` starts with `OANDA:XAUUSD:1W:`, and
      `chart_plane` is `cryptophys.chart-plane.weekly.v1` on the run that published it. The first publish comes at the
@@ -176,7 +182,7 @@ You need no Cloudflare token for any of these checks.
    ```
    Both must be `active`. The log must show the usual sync lines, with no new errors since the step 4 checkout.
    Do not paste log lines that contain an account or a login.
-5. Report: `OLD`, `<MERGED_COMMIT>`, the W1 line, the four other charts' lines, both health statuses, and "no
+5. Report: `OLD`, `e7c055b428eab917deb9c5d00553aa3dae0c4054`, the W1 line, the four other charts' lines, both health statuses, and "no
    restart".
 
 ## 6. Roll back (only if a check failed and the owner asks)
