@@ -12,7 +12,7 @@ import { positioningNow, scorePositioning, cotFreshness, positioningLine, positi
 import {
   LIQUIDITY_BASELINE_WEEKS, LIQUIDITY_STATE_KEY, LIQUIDITY_SPIKE_KEY, baselineKey, baselineIdentity, buildBaseline, finishBaseline, hourBaseline, eligibleMinutes,
   nyHourOfWeek, readBrokerBars, backfillBrokerBars, markBackfillRebuilt, SWEEP_SCORE_BARS_15M, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine,
-  liquidityConditions, liquidityConditionsOn, levelsOnFeed
+  liquidityConditions, liquidityConditionsOn, levelsOnFeed, scoreLevelHold
 } from "./liquidity-lens.mjs";
 
 const M1 = 60_000, HOUR = 3_600_000, DAY = 86_400_000, WEEK = 7 * DAY;
@@ -231,9 +231,10 @@ export async function recordSpikeBlock(db, signal, { now = Date.now() } = {}) {
  * Scores the block and maker readings from the v4 rows of their decision (ledger_omega4: r_omega4 the taker, r_limit
  * the maker). Block: v4 lost (hit) or won (miss). Maker: the maker's R above the taker's (hit) or below (miss).
  */
-export async function scoreLedgerReadings(env, { now = Date.now() } = {}) {
+export async function scoreLedgerReadings(env, { now = Date.now(), skip = false } = {}) {
   const db = env.DB;
-  const rows = (await db.prepare("SELECT id, kind, at_ms, side FROM lens_readings WHERE lens = 'liquidity' AND kind IN ('block', 'maker') AND outcome IS NULL AND at_ms > ? LIMIT 100").bind(now - 14 * DAY).all()).results ?? [];
+  // B19: the skip readings (`skip`, LENS_LEVEL_READINGS on) are scored as blocks: a v4 loss avoided is a hit.
+  const rows = (await db.prepare(`SELECT id, kind, at_ms, side FROM lens_readings WHERE lens = 'liquidity' AND kind IN ('block', 'maker'${skip ? ", 'skip'" : ""}) AND outcome IS NULL AND at_ms > ? LIMIT 100`).bind(now - 14 * DAY).all()).results ?? [];
   let n = 0;
   for (const r of rows) {
     const key = `OANDA:XAUUSD:15:${Number(r.at_ms) - 15 * M1}`;
@@ -241,7 +242,7 @@ export async function scoreLedgerReadings(env, { now = Date.now() } = {}) {
     try { v = await db.prepare("SELECT omega4_status, r_omega4, limit_status, r_limit FROM ledger_omega4 WHERE decision_key = ? AND side = ?").bind(key, Number(r.side) > 0 ? "BUY" : "SELL").first(); } catch { v = null; }
     if (!v) { if (now - Number(r.at_ms) > 7 * DAY) { await db.prepare("UPDATE lens_readings SET outcome = 'neutral', scored_ms = ? WHERE id = ?").bind(now, r.id).run(); n += 1; } continue; }
     let outcome = null;
-    if (r.kind === "block") {
+    if (r.kind === "block" || r.kind === "skip") {
       if (v.omega4_status === "skipped") outcome = "neutral";
       else if (v.omega4_status === "closed" && finite(Number(v.r_omega4))) outcome = Number(v.r_omega4) < 0 ? "hit" : Number(v.r_omega4) > 0 ? "miss" : "neutral";
     } else if (v.omega4_status === "closed" && finite(Number(v.r_omega4))) {
@@ -251,6 +252,75 @@ export async function scoreLedgerReadings(env, { now = Date.now() } = {}) {
     if (outcome) { await db.prepare("UPDATE lens_readings SET outcome = ?, scored_ms = ? WHERE id = ? AND outcome IS NULL").bind(outcome, now, r.id).run(); n += 1; }
   }
   return n;
+}
+
+// ---------------------------------------------------------------- lens B: the skips and the held levels (B19)
+
+/** B19: LENS_LEVEL_READINGS "off" stops the skip and hold readings (recording and scoring); "on" (default) otherwise. */
+export function lensLevelReadings(env) {
+  return String(env?.LENS_LEVEL_READINGS ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
+
+/** Pure (B19): a hold reading's id: one per ticket and stop price, hashed (FNV-1a), so the id carries no price. */
+export function holdReadingId(ticket, sl) {
+  let h = 0x811c9dc5;
+  for (const ch of `${ticket}:${Math.round(Number(sl) * 100)}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `hold:${h.toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * B19: the limit council's skips with lens B's reason (a rule naming liquidity_sweep_against; a bare council_skip names
+ * no reason and is left out), one reading per signal and side (skip:<issued_ms>:B|S), from the last 14 days' entry
+ * rows. Scored as blocks (scoreLedgerReadings). Returns the readings added.
+ */
+export async function recordSkipReadings(env, { now = Date.now(), mode = null } = {}) {
+  const db = env.DB;
+  let rows = [];
+  try { rows = (await db.prepare("SELECT rule, facts FROM limit_council WHERE kind = 'entry' AND choice = 'skip' AND at_ms > ? LIMIT 500").bind(now - 14 * DAY).all()).results ?? []; } catch { return { added: 0, rows: 0 }; }
+  let added = 0;
+  for (const r of rows) {
+    if (!String(r.rule ?? "").split(/[+:]/).includes("liquidity_sweep_against")) continue;
+    const req = parse(r.facts, null);
+    const issued = Number(req?.issued_ms), side = req?.side === "BUY" ? 1 : req?.side === "SELL" ? -1 : null;
+    if (!finite(issued) || !side) continue;
+    if (await recordLensReading(db, { id: `skip:${issued}:${side > 0 ? "B" : "S"}`, lens: "liquidity", kind: "skip", at_ms: issued, mode: typeof req?.mode === "string" ? req.mode : mode, side }, { now })) added += 1;
+  }
+  return { added, rows: rows.length };
+}
+
+/**
+ * B19: the stop moves Omega made to a lens B level (omega_intents with level_source "liquidity": SL+ and the ladder's
+ * lock, done and applied, the last 3 days), one hold reading per ticket and stop price (holdReadingId: retries and a
+ * key-level and ladder lock at one price are one), scored by scoreLevelHold on the broker's M1 archive. The side is the
+ * position's, from where the stop sits against the price at the move. The detail carries no price. Returns counts.
+ */
+export async function lensHoldStep(env, { now = Date.now(), mode = null } = {}) {
+  const db = env.DB;
+  const acct = await activeAccount(env);
+  if (!acct) return { status: "no_account" };
+  let rows = [];
+  try {
+    rows = (await db.prepare("SELECT payload, created_ms FROM omega_intents WHERE created_ms > ? AND kind IN ('modify_sl', 'modify_sltp') AND status = 'done' AND json_extract(payload, '$.level_source') = 'liquidity' AND json_extract(result, '$.ok') = 1 ORDER BY created_ms LIMIT 200").bind(now - 3 * DAY).all()).results ?? [];
+  } catch { return { status: "no_intents", seen: 0 }; }
+  const out = { status: "ok", seen: rows.length, added: 0, scored: 0 };
+  // Readings already scored are final: their bars are not read again.
+  const done = new Set();
+  try { for (const r of (await db.prepare("SELECT id FROM lens_readings WHERE lens = 'liquidity' AND kind = 'hold' AND outcome IS NOT NULL AND at_ms > ?").bind(now - 4 * DAY).all()).results ?? []) done.add(r.id); } catch { /* none yet */ }
+  for (const r of rows) {
+    const p = parse(r.payload, null), t = Number(r.created_ms), sl = Number(p?.sl);
+    if (!p || !finite(t) || !finite(sl) || sl <= 0 || p.ticket == null) continue;
+    const id = holdReadingId(p.ticket, sl);
+    if (done.has(id)) continue;
+    done.add(id);
+    const bars = await readBrokerBars(db, { accountRef: acct.accountRef, source: acct.source, fromMs: t - 17 * 15 * M1, toMs: t + 10 * 15 * M1, digits: acct.digits ?? undefined });
+    const at = bars.filter((b) => b.t <= t).at(-1);
+    const side = at ? (sl < at.c ? 1 : sl > at.c ? -1 : null) : null;
+    const outcome = side ? scoreLevelHold({ level: sl, side, created_ms: t, bars, now }) : "neutral";
+    const what = String(p.reason ?? "").startsWith("ladder_lock") ? "ladder" : "trail";
+    if (await recordLensReading(db, { id, lens: "liquidity", kind: "hold", at_ms: t, mode, side, outcome, detail: { what } }, { now })) out.added += 1;
+    else if (outcome) { const u = await db.prepare("UPDATE lens_readings SET outcome = ?, scored_ms = ? WHERE id = ? AND outcome IS NULL").bind(outcome, now, id).run(); if (Number(u?.meta?.changes) > 0) out.scored += 1; }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the ledger step (both lenses)
@@ -275,7 +345,13 @@ export async function runLensStep(env, { now = Date.now(), notify = null } = {})
       out.positioning = await scorePositioning(env, { now, knobs, mode, record: (r, m) => (known.has(r.id) && (known.get(r.id) != null || r.outcome == null) ? "same" : upsertReading(env.DB, { ...r, detail: { lean: r.lean, series: r.series } }, { lens: "positioning", kind: "h4", mode: m, now })) });
       await env.SIGNAL_CACHE.put("lens:positioning:scored", new Date(now).toISOString(), { expirationTtl: 2 * HOUR });
       await ensureLensReadingsSchema(env.DB);
-      out.ledger_readings = await scoreLedgerReadings(env, { now });
+      // B19 (LENS_LEVEL_READINGS, on by default): the limit council's liquidity skips and the stop moves to lens B levels.
+      const levelReadings = lensLevelReadings(env) === "on";
+      if (levelReadings) {
+        try { out.skip_readings = await recordSkipReadings(env, { now, mode }); } catch (e) { out.skip_readings = { status: "failed", error: String(e?.message ?? e).slice(0, 120) }; }
+        try { out.hold_readings = await lensHoldStep(env, { now, mode }); } catch (e) { out.hold_readings = { status: "failed", error: String(e?.message ?? e).slice(0, 120) }; }
+      }
+      out.ledger_readings = await scoreLedgerReadings(env, { now, skip: levelReadings });
     }
   } catch (e) { out.positioning = { status: "failed", error: String(e?.message ?? e).slice(0, 160) }; }
   out.floor = await lensFloorStep(env, { now, notify, log: (action, detail) => omegaEvent(env.DB, now, action, detail) });

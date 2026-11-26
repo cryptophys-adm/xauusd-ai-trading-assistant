@@ -103,8 +103,8 @@ export function merged(base: any, add: any): any {
 /**
  * The Liquidity page (Track C2) over its reads. /api/liquidity is the contract (test/fixtures/nexus-intel/
  * liquidity.json, and liquidity-unavailable.json: no recent broker bar). Since B15 the fixture carries the LIQUIDITY
- * card and the quorum with liquidity (the latest decision's decision.liquidity), and since B16 lens B's conditions;
- * effects.level_moves is still null. LATER is the page's own stand-in for the level moves until backends B17-B19
+ * card and the quorum with liquidity (the latest decision's decision.liquidity), since B16 lens B's conditions, and
+ * since B19 the skips' outcomes and effects.level_moves. LATER is the page's own stand-in for the level moves until backends B17-B19
  * publish theirs (the mockup's "all backend PRs deployed" board); it is not a contract. The clock is the fixture's
  * (lens B's state 2 minutes old, the card 13 minutes old).
  */
@@ -152,6 +152,8 @@ export const LENS_OFF = merged(lens, { switches: { liquidity_enabled: false }, l
  * The live mix of 2026-11-23 (the reviewer's 14-day D1 count after B8 went live): every effects list empty but makers,
  * one row whose outcome is "pending" (B8's outcomeOf reads anything not hit/miss/neutral, NULL included, as pending).
  */
+/** Before B19: no level moves (null) and a skip without an outcome, so both B19 placeholders show. */
+export const PRE_B19 = { effects: { level_moves: null, skips: ((liquidity as any).effects.skips ?? []).map((x: any) => ({ ...x, outcome: null })) } };
 export const LIVE_EFFECTS = { effects: { blocks: [], makers: [{ at_ms: (liquidity as any).state.at_ms - 5_400_000, side: "BUY", mode: "scalp", outcome: "pending" }], skips: [], deferrals: [], level_moves: null, pm_actions: [] } };
 /**
  * The Chart patterns page (Track C3) over its reads. /api/chart-patterns is backend B9's contract
@@ -536,8 +538,8 @@ export const VIEWS: Entry[] = [
     name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: liquidity,
     shows: [...PANELS, HINT, "lens B on", "LIQUIDITY", "fresh 13m", "Council only: it never counts toward the quorum.", "0.03", "a tenth of lens B&#x27;s 0.30, at most 0.06", "▲ +0.60 bullish", "▲ sell-side", "3 min ago",
       "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness", "made", "14:47 UTC", "lens B state", "14:46 UTC", "Quorum with liquidity", "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.", "▲ 0.67", "+0.17", "▲ long",
-      "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
-    hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted"],
+      "Level moves", "ladder lock", "key level lock", "past a lens B level", "1 hit", "1 pending", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
+    hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."],
     missing: [NOT_FOUND]
   },
   {
@@ -576,6 +578,11 @@ export const VIEWS: Entry[] = [
     name: "LiquidityViewLater", View: ({ d }) => <LiquidityView d={d} lens={LENS_AETHER} decision={decision} now={LIQUIDITY_NOW} />, fixture: LIQUIDITY_FULL,
     shows: [...PANELS, HINT, "LIQUIDITY", "Quorum with liquidity", "Level moves"],
     missing: [NOT_FOUND]
+  },
+  {
+    name: "LiquidityViewPreB19", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, PRE_B19),
+    shows: ["Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Not scored yet"],
+    hides: ["ladder lock", "past a lens B level"]
   },
   {
     name: "LiquidityViewPendingMaker", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, LIVE_EFFECTS),

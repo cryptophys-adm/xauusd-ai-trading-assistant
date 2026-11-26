@@ -597,6 +597,28 @@
       "write": "feature-switch"
     },
     {
+      "key": "LENS_LEVEL_READINGS",
+      "label": "Lens B skip and hold readings",
+      "description": "B19: on records and scores lens B's skip readings (a limit-council skip on liquidity_sweep_against) and hold readings (a stop moved to a lens B level); reported only, never in the automatic floor. Off stops both; no trading behaviour changes either way.",
+      "group": "lens",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "CALENDAR_CONTRARIAN",
       "label": "Calendar contrarian drift",
       "description": "The Calendar Agent: a release kind whose gold drifted against the consensus significantly leans the other way; off holds it at 0.",

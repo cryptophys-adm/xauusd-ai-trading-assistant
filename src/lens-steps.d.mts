@@ -8,5 +8,7 @@ export function modeNow(env: unknown): Promise<string>;
 /** B16: what the 15m and 1H rooms read of lens B (env LENS_ROOM_LINE): "conditions" (default) or "brief". */
 export const LENS_ROOM_LINES: readonly ["conditions", "brief"];
 export function lensRoomLine(env: unknown): "conditions" | "brief";
+/** B19: LENS_LEVEL_READINGS: "on" (default) records and scores lens B's skip and hold readings; "off" stops both. */
+export function lensLevelReadings(env: unknown): "on" | "off";
 export const LIQUIDITY_ROOM_CHARTS: readonly ["M15", "H1"];
 export function roomConditionsLine(env: unknown, chart: string, context: unknown): string | null;

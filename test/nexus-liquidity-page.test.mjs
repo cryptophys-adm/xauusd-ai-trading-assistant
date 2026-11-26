@@ -131,14 +131,16 @@ test("LQ5 the B16-B19 fields null: the not-yet Empties; filled: the level moves;
   // B16 filled conditions (lens B's liquidity conditions, the rooms' line, no price); the unavailable case keeps it null.
   assert.ok(LIQ.conditions && typeof LIQ.conditions.line === "string", "conditions filled since B16");
   assert.equal(UNAV.conditions, null);
-  assert.equal(LIQ.effects.level_moves, null);
+  // B19 filled the level moves (the hold readings) and the skips' outcomes.
+  assert.ok(Array.isArray(LIQ.effects.level_moves) && LIQ.effects.level_moves.length, "level moves filled since B19");
   // B15 filled the card and the quorum with liquidity in the contract (the latest decision's decision.liquidity);
   // /api/liquidity answers both null for a decision without decision.liquidity.
   assert.ok(LIQ.card && LIQ.quorum_with_liquidity, "card and quorum_with_liquidity filled since B15");
   assert.deepEqual([UNAV.card, UNAV.quorum_with_liquidity], [null, null]);
   const launch = await page({ ...LIQ, ...u.NO_CARD });
   clean(launch);
-  for (const t of ["No LIQUIDITY card in the latest decision", "None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).", "Level moves", "Fills after backend B19 is deployed.", "Not scored yet", "Scored after backend B19 is deployed."]) assert.ok(launch.includes(t), t);
+  for (const t of ["No LIQUIDITY card in the latest decision", "None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).", "Level moves"]) assert.ok(launch.includes(t), t);
+  for (const t of ["Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."]) assert.ok(!launch.includes(t), `B19 is live: no "${t}"`);
   assert.ok(!launch.includes("Quorum with liquidity"), "no quorum with liquidity without decision.liquidity");
   assert.ok(!launch.includes("Fills after backend B15"), "B15 is live: no not-yet wording for it");
   assert.ok(launch.includes("Quorum") && launch.includes("WAIT"), "the quorum beside it is unchanged");

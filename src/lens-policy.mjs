@@ -240,6 +240,12 @@ export function floorLine(lens, score, floorShare) {
 }
 
 /**
+ * B19: the reading kinds the automatic floor reads, per lens (null: every kind). Lens B's hold and skip readings (B19)
+ * are recorded and reported only; bringing them into the floor is a separate decision (orchestrator 2026-11-26).
+ */
+export const FLOOR_KINDS = Object.freeze({ liquidity: Object.freeze(["sweep", "block", "maker"]), positioning: null });
+
+/**
  * The scoring step's rollback (RFC §7.3), after each scoring run: per lens, the score over its last score_window
  * readings; below score_floor (with LENS_SCORE_MIN_N decisive readings) the lens's weight drops to the floor of its
  * bound in every mode at once, with an omega_events row (lens_weight_floor) and one line to the owner's private chat
@@ -257,7 +263,9 @@ export async function lensFloorStep(env, { now = Date.now(), notify = null, log 
     let changed = false;
     for (const lens of LENSES) {
       const k = lensKnobs(lens, "intraday", { policy: state.policy, floor });
-      const rows = (await db.prepare("SELECT kind, outcome FROM lens_readings WHERE lens = ? AND outcome IN ('hit', 'miss') ORDER BY at_ms DESC LIMIT ?").bind(lens, k.score_window).all()).results ?? [];
+      // B19: only FLOOR_KINDS count toward the floor (hold and skip are reported, not floored; orchestrator 2026-11-26).
+      const kinds = FLOOR_KINDS[lens];
+      const rows = (await db.prepare(`SELECT kind, outcome FROM lens_readings WHERE lens = ? AND outcome IN ('hit', 'miss')${kinds ? ` AND kind IN (${kinds.map(() => "?").join(", ")})` : ""} ORDER BY at_ms DESC LIMIT ?`).bind(lens, ...(kinds ?? []), k.score_window).all()).results ?? [];
       const score = lensScore(rows, { window: k.score_window });
       out[lens] = { score, floored: k.floored };
       if (k.floored || !belowFloor(score, { floor: k.score_floor })) continue;

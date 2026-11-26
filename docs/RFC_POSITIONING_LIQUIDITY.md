@@ -481,6 +481,21 @@ Each lens is judged on its own readings, so its weight follows its own skill. A 
   - The Position Manager's liquidity reasons are scored through their sweep, the event they cite.
   - Day one: the sweep readings of the archive's bars are replayed at once. The other two kinds start with live use.
 - Stored in D1 `lens_readings` (`lens`, `kind`, `at_ms`, `mode`, `outcome`; no price).
+- **Reported only, never in the floor** (Track B, B19, 2026-11-26). Lens B has two more kinds. Neither counts in §7.3's
+  floor. The floor reads `FLOOR_KINDS` (`sweep`, `block`, `maker`) and nothing else.
+  - **skip:** each limit-council skip whose rule names `liquidity_sweep_against`. It is scored as a decision outcome, the
+    way a block is scored: the v4 result of that signal and side. A v4 loss avoided is a hit; a v4 winner missed is a miss.
+  - **hold:** each stop Omega moved to a lens B level (SL+, or the ladder's lock tagged `level_source: "liquidity"`). It
+    is scored over the next eight closed 15m bars of the broker's M1 archive. A close more than 0.1 × ATR(14, 15m) beyond
+    the stop is a miss; eight bars without one is a hit.
+  - **The word "trail".** A hold's `what` is `"ladder"` (the ladder's lock) or `"trail"`. Here "trail" means the
+    SL+ key-level stop move (`sl_key_level_*`), not the trailing TP: trailing-TP moves get no hold reading (ruling b).
+    It is not called a stop or an SL because the lens report's forbidden keys (`forbiddenReportKeys`) refuse "sl" and
+    "stop", and the Nexus page forbids order words. The liquidity view shows it as `key_level_lock` ("key level lock"
+    on the page, beside "ladder lock"), so nobody reads it as a target move.
+  - **Why they stay out of the floor.** A skip cites a sweep that is already a `sweep` reading, so floored on skips the
+    same sweep would count twice. A hold measures the stop's level, a different question from the lens's call, so it
+    should not floor the call. After 7 days the counts and hit rates per kind go to the orchestrator.
 
 ### 7.3 Automatic rollback
 
@@ -726,6 +741,25 @@ last `score_window` decisive readings (at least 20) the lens is floored in every
 `omega_events` `lens_weight_floor` and one line through `sendOmegaTelegram`. It lifts only when Aether's policy brings a
 weight for the lens under another `doctrine_sha`, pulled after the floor.
 
+**Skip and hold readings** (Track B, B19, 2026-11-26; §7.2). Each hourly lens step does two things, behind the switch
+`LENS_LEVEL_READINGS` (default "on"; "off" stops both recording and scoring):
+- `recordSkipReadings` keeps the limit council's entry skips of the last 14 days whose rule, split on `+` and `:`, names
+  `liquidity_sweep_against`. It records one `skip:<issued_ms>:B|S` per signal and side. `scoreLedgerReadings` scores
+  them as blocks.
+- `lensHoldStep` reads `omega_intents` of the last 3 days: `modify_sl`/`modify_sltp`, done and applied, with
+  `level_source: "liquidity"`. It records one `hold` reading per ticket and stop price, with id `holdReadingId`, an
+  FNV-1a hash, so the id carries no price. The detail is `{ what: "ladder" | "trail" }` ("trail" is the SL+
+  key-level stop move, never the trailing TP; §7.2). The side comes from the stop
+  against the archive's last close at the move. `scoreLevelHold` scores only closed 15m bars, on the broker scale, so
+  no feed basis is needed.
+- The ladder's lock carries `level_source: "liquidity"` only when its rung is lens B's exact edge and no other level
+  shares that edge (`manageIntents`; the only engine change). With the lens off, or no lens B rung, the payload is
+  byte for byte today's.
+- `lensFloorStep` counts only `FLOOR_KINDS`.
+- The Nexus liquidity view carries each skip's `outcome` and `effects.level_moves` (`{ at_ms, side, mode, action:
+  "ladder_lock" | "key_level_lock", outcome }`; no price; null with the switch off).
+- `ENGINE_CODE_HASH` b4077f53… → 20e78488… (`manageIntents` only); `ENGINE_BEHAVIOUR_HASH` ecfe3f90… unchanged.
+
 **Report, health, page.** `cryptophys.lens-report.v1` daily through `AETHER.ingestLensReport` when offered
 (`pushLensReport`); `forbiddenReportKeys` refuses any key matching `price|entry|stop|sl|tp|target|level|zone|bid|ask`.
 Doctrine facts: `positioning.*` and `liquidity.*` in the Nexus seat, each with `<lens>.enabled` (Aether keeps the Omega seat to `omega.*`: #505 first put `liquidity.*` there and every facts report was refused until the fix). Health:
@@ -812,4 +846,10 @@ replays without lens B's gate and deferral, and `omegaParity` treats a v4-only t
     Manager's TP2 and A8 reasons among `brokerKeyLevels`' readers, but `runPositionManager` reads `brokerLevels`, so
     lens B reached the Position Manager only as the measured sweep reason of §6. B17 (built 2026-11-26) brings lens B
     into its management set without showing the council a lens B price (§4.4).
+16. **Two reported-only kinds** (Track B, B19, orchestrator 2026-11-26). `skip` and `hold` are recorded and scored but
+    left out of the floor (`FLOOR_KINDS`). §7.2 named only sweeps, blocks and maker preferences. A skip is scored as a
+    decision outcome (the v4 result it avoided), not on price.
+17. **Hold readings start from B17.** The back-fill reads 3 days of `omega_intents`. Before B17 no stop move carried
+    `level_source: "liquidity"`, and before B19 the ladder's lock never did. So the first run records only the SL+ moves
+    since B17 was deployed (2026-11-26 13:15Z).
 

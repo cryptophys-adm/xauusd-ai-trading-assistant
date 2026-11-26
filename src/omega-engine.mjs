@@ -987,7 +987,12 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
         const planned = i >= 0 ? out[i].sl : null;
         if (planned == null || (buy ? lad.sl > planned : lad.sl < planned)) {
           if (i >= 0) out.splice(i, 1);
-          out.push({ id: `ms:${p.ticket}:lad:${Math.round(lad.sl * 100)}`.slice(0, INTENT_ID_MAX), kind: "modify_sl", ticket: p.ticket, sl: lad.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `ladder_lock_tp${lad.sl_rung}`, ...(lad.sl_sd ? { sd: true } : {}) });
+          // B19: the lock carries level_source "liquidity" only when its rung is a lens B level's near edge (no other
+          // level shares that edge); a key-level, box, thirds or break-even rung adds no key (today's payload).
+          const rungLevels = lad.sl_sd ? sdLadderLevels(boxLevels, p.side) : levels;
+          const edgeOf = (z) => roundTo(buy ? z.low : z.high, digits);
+          const lensRung = lensB && lad.sl_rung > 0 && (rungLevels ?? []).some((z) => z.source === "liquidity" && edgeOf(z) === lad.sl) && !(rungLevels ?? []).some((z) => z.source !== "liquidity" && edgeOf(z) === lad.sl);
+          out.push({ id: `ms:${p.ticket}:lad:${Math.round(lad.sl * 100)}`.slice(0, INTENT_ID_MAX), kind: "modify_sl", ticket: p.ticket, sl: lad.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `ladder_lock_tp${lad.sl_rung}`, ...(lensRung ? { level_source: "liquidity" } : {}), ...(lad.sl_sd ? { sd: true } : {}) });
         }
       }
       if (lad.partial) out.push({ id: `pl:${p.ticket}:${lad.partial.rung}`, kind: "partial_close", ticket: p.ticket, volume: lad.partial.volume, reason: `ladder_tp${lad.partial.rung}_${Math.round(lad.partial.share * 100)}pct` });
