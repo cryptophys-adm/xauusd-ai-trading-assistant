@@ -111,25 +111,34 @@ export function sessionRangeReading(bars15, { atr = null, events = [], bands = O
   const side = c > r.high ? "above" : c < r.low ? "below" : "inside";
   const fromEdge = side === "above" ? c - r.high : side === "below" ? r.low - c : Math.min(c - r.low, r.high - c);
   out.last_bar = { side, from_edge_atr: inAtr(fromEdge), from_mid_atr: inAtr(c - r.mid) };
-  // The first 15m close beyond an edge by the breakout band (the agent's trigger); none without the ATR.
-  const after = bars.filter((b) => toMs(b.open_time) >= r.range_end_ms);
-  let way = null, i = -1;
-  if (k) {
-    i = after.findIndex((b) => b.close - r.high >= bands.beyond_atr * k || r.low - b.close >= bands.beyond_atr * k);
-    if (i >= 0) way = after[i].close - r.high >= bands.beyond_atr * k ? "up" : "down";
-  }
-  if (!way) { out.breakout = { way: null, bars_since: null, held: null, retesting: null }; out.invalidated = false; return out; }
-  const dir = way === "up" ? 1 : -1, edge = dir > 0 ? r.high : r.low, since = after.slice(i + 1);
-  out.breakout = {
-    way, bars_since: after.length - 1 - i,
-    // Held: no close back inside the range since the break.
-    held: since.every((b) => dir * (b.close - edge) >= 0),
-    // Retesting: the last close within the retest band of the broken edge.
-    retesting: Math.abs(c - edge) <= bands.retest_atr * k
-  };
-  // Invalidated: a close back through the range's middle since the break (the agent's end of the side).
-  out.invalidated = since.some((b) => dir * (b.close - r.mid) < 0);
+  const b = rangeBreakout(r, bars, { atr: k, bands });
+  if (!b) { out.breakout = { way: null, bars_since: null, held: null, retesting: null }; out.invalidated = false; return out; }
+  out.breakout = { way: b.way, bars_since: b.bars_since, held: b.held, retesting: b.retesting };
+  out.invalidated = b.invalidated;
   return out;
+}
+
+/**
+ * Pure (Track A PR 9, shared with GET /api/orb): the first 15m close beyond a formed range's edge by the breakout band
+ * (the agent's trigger) among `bars` after the range, or null (none, or no ATR): { way ("up"|"down"), bar_ms (its
+ * open), bars_since, held (no close back inside the range since), retesting (the last close within the retest band of
+ * the broken edge), invalidated (a close back through the middle since: the agent's end of the side) }.
+ */
+export function rangeBreakout(r, bars15, { atr = null, bands = ORB_READING_BANDS } = {}) {
+  const k = isNum(atr) && atr > 0 ? atr : null;
+  if (!k || r?.status !== "ok" || ![r.high, r.low, r.mid, r.range_end_ms].every(isNum)) return null;
+  const bars = (Array.isArray(bars15) ? bars15 : []).filter((b) => b && isNum(b.close) && isNum(toMs(b.open_time)));
+  const after = bars.filter((b) => toMs(b.open_time) >= r.range_end_ms);
+  const i = after.findIndex((b) => b.close - r.high >= bands.beyond_atr * k || r.low - b.close >= bands.beyond_atr * k);
+  if (i < 0) return null;
+  const way = after[i].close - r.high >= bands.beyond_atr * k ? "up" : "down";
+  const dir = way === "up" ? 1 : -1, edge = dir > 0 ? r.high : r.low, since = after.slice(i + 1), c = after.at(-1).close;
+  return {
+    way, bar_ms: toMs(after[i].open_time), bars_since: after.length - 1 - i,
+    held: since.every((b) => dir * (b.close - edge) >= 0),
+    retesting: Math.abs(c - edge) <= bands.retest_atr * k,
+    invalidated: since.some((b) => dir * (b.close - r.mid) < 0)
+  };
 }
 
 /**

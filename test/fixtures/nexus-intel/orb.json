@@ -1,0 +1,191 @@
+{
+  "status": "ok",
+  "schema": "cryptophys.orb-view.v1",
+  "mode": "on",
+  "levels_mode": "on",
+  "scale": {
+    "prices": "feed",
+    "symbol": "OANDA:XAUUSD"
+  },
+  "rules": {
+    "range_bars": 3,
+    "min_width_atr": 0.25,
+    "max_width_atr": 3.5,
+    "beyond_atr": 0.1,
+    "retest_atr": 0.15,
+    "pad_atr": 0.1
+  },
+  "price": 2605.5,
+  "atr_h1": 8,
+  "atr_m15": 5.21,
+  "bar_close": "2026-11-24T10:00:00.000Z",
+  "market": {
+    "open": true,
+    "next_range": {
+      "session": "new_york",
+      "open_ms": 1795525200000
+    }
+  },
+  "decision": {
+    "decision_key": "OANDA:XAUUSD:15:1795513500000",
+    "bar_close": "2026-11-24T10:00:00.000Z",
+    "session_range": {
+      "session": "london",
+      "minutes_since_open": 120,
+      "bars_left": 27,
+      "range": {
+        "bars": 3,
+        "width_atr": 1.25,
+        "status": "ok"
+      }
+    }
+  },
+  "overlap": {
+    "long": "london",
+    "short": null
+  },
+  "sessions": {
+    "london": {
+      "variant": "orb_london",
+      "date_ny": "2026-11-24",
+      "open_ms": 1795507200000,
+      "range_end_ms": 1795509900000,
+      "end_ms": 1795538700000,
+      "phase": "live",
+      "bars_built": 3,
+      "bars_left": 27,
+      "status": "ok",
+      "status_detail": "the range is formed and inside the width band",
+      "high": 2605,
+      "low": 2595,
+      "mid": 2600,
+      "width": 10,
+      "width_atr": 1.25,
+      "breakout": {
+        "side": "long",
+        "bar_ms": 1795509900000,
+        "bars_since": 4,
+        "state": "retesting"
+      },
+      "invalidated": {
+        "long": false,
+        "short": false
+      },
+      "events_in_range": [],
+      "edges_in_zones": [
+        {
+          "edge": "high",
+          "low": 2604.5,
+          "high": 2606,
+          "candidate": true
+        }
+      ],
+      "plans": {
+        "long": {
+          "entry": 2605.5,
+          "stop": 2599.2,
+          "tp1": 2629,
+          "tp2": 2635.3,
+          "rrr": 3.73,
+          "entry_type": "at_level",
+          "lapse_ms": 1795538700000,
+          "role": "live",
+          "picked": true
+        },
+        "short": null
+      }
+    },
+    "new_york": {
+      "variant": "orb_new_york",
+      "date_ny": "2026-11-23",
+      "open_ms": 1795438800000,
+      "range_end_ms": 1795441500000,
+      "end_ms": 1795470300000,
+      "phase": "over",
+      "bars_built": 3,
+      "bars_left": 0,
+      "status": "range_event",
+      "status_detail": "a high-impact release fell inside the range, so the session is not traded",
+      "high": null,
+      "low": null,
+      "mid": null,
+      "width": null,
+      "width_atr": null,
+      "breakout": {
+        "side": null,
+        "bar_ms": null,
+        "bars_since": null,
+        "state": "none"
+      },
+      "invalidated": {
+        "long": false,
+        "short": false
+      },
+      "events_in_range": [
+        {
+          "title": "Retail sales",
+          "time": "2026-11-23T13:30:00.000Z"
+        }
+      ],
+      "edges_in_zones": [],
+      "plans": {
+        "long": null,
+        "short": null
+      }
+    }
+  },
+  "records": {
+    "london": {
+      "setups": 16,
+      "mean_r": -0.2,
+      "fill_rate": 0.5,
+      "target_rate": 0.1,
+      "held_by_breaker": true
+    },
+    "new_york": {
+      "setups": 4,
+      "mean_r": 0.3,
+      "fill_rate": 0.25,
+      "target_rate": 1,
+      "held_by_breaker": false
+    }
+  },
+  "recent": [
+    {
+      "date_ny": "2026-11-24",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-24T09:00:00.000Z",
+      "entry_type": "at_level",
+      "status": "open",
+      "exit": null,
+      "r": null,
+      "filled": null,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-23",
+      "session": "london",
+      "side": "long",
+      "opened_at": "2026-11-23T09:00:00.000Z",
+      "entry_type": "at_level",
+      "status": "resolved",
+      "exit": "stop",
+      "r": -1,
+      "filled": true,
+      "arm": "e0@s1"
+    },
+    {
+      "date_ny": "2026-11-20",
+      "session": "new_york",
+      "side": "short",
+      "opened_at": "2026-11-20T14:00:00.000Z",
+      "entry_type": "limit",
+      "status": "resolved",
+      "exit": "target_before_entry",
+      "r": 0,
+      "filled": false,
+      "arm": "e0@s1"
+    }
+  ]
+}
