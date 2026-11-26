@@ -20,7 +20,7 @@ import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
 import { activeAccount, lensRoomLine } from "./lens-steps.mjs";
 import { feedBasis } from "./feed-basis.mjs";
 import { managementFields } from "./ea-signal.mjs";
-import { brokerKeyLevels } from "./omega-engine.mjs";
+import { brokerKeyLevels, managementSpread } from "./omega-engine.mjs";
 import { atr } from "./strategy-engine.mjs";
 import { DECISION_LATEST_KEY } from "./decision-engine.mjs";
 
@@ -184,9 +184,11 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
 
   const zones = Array.isArray(strategy?.key_levels?.zones) ? strategy.key_levels.zones.filter((z) => (z?.candidate || z?.qualified) && finite(z.low) && finite(z.high) && z.low <= z.high) : null;
   const levels = available ? viewLevels(state.levels, { basis, zones }) : [];
-  // Today's management level set (brokerKeyLevels over the decision's key zones and lens B's levels while it is on).
+  // The management level set Omega and the Position Manager read (B17: brokerKeyLevels' management mode over the
+  // decision's key zones and lens B's levels while it is on: lens B only with a known basis, merged into a zone within
+  // two spreads of the hour's median, on the account's point).
   const signal = { ...managementFields(decision ?? {}, { basis }), ...fields };
-  const management = (brokerKeyLevels(signal) ?? []).map((z) => ({ ...bothScales(z.low, z.high, basis), source: z.source === "liquidity" ? "liquidity" : "key_level", kind: z.kind ?? null }));
+  const management = (brokerKeyLevels(signal, { spread: managementSpread(signal, { point: Number.isInteger(digits) ? Math.pow(10, -digits) : null }) }) ?? []).map((z) => ({ ...bothScales(z.low, z.high, basis), source: z.source === "liquidity" ? "liquidity" : "key_level", kind: z.kind ?? null }));
 
   // The baseline and the backfill (KV, the current account only).
   const stored = ref ? await kvJson(kv, baselineKey(ref)) : null;
