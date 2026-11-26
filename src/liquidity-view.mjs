@@ -14,10 +14,11 @@
 //   conditions B16: lens B's liquidity conditions (liquidityConditions, the line the 15m and 1H risk desks and moderators
 //            read, no sweep, no price) from the latest state at the mode's knobs, with `in_rooms` (whether the rooms read
 //            them now: LENS_ROOM_LINE "conditions" and lens B on, above its floor and fresh); null without available facts.
-//   later    B17/B19 (effects.level_moves) are null until merged.
+//   B19      effects.level_moves: the hold readings (a stop moved to a lens B level: SL+ or the ladder's lock), and each
+//            skip's outcome from its skip reading; level_moves is null while LENS_LEVEL_READINGS is "off".
 import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine, liquidityConditions, liquidityConditionsOn } from "./liquidity-lens.mjs";
 import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
-import { activeAccount, lensRoomLine } from "./lens-steps.mjs";
+import { activeAccount, lensRoomLine, lensLevelReadings } from "./lens-steps.mjs";
 import { feedBasis } from "./feed-basis.mjs";
 import { managementFields } from "./ea-signal.mjs";
 import { brokerKeyLevels, managementSpread } from "./omega-engine.mjs";
@@ -34,7 +35,7 @@ export const VIEW_EFFECTS_MS = 14 * 86_400_000;
 /** The New York hours of the week (0 = Sunday 00:00 to 167). */
 export const BASELINE_HOURS = 168;
 const SYMBOL = "OANDA:XAUUSD";
-const M1 = 60_000;
+const M1 = 60_000, DAY_MS = 86_400_000;
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const r2 = (v) => (finite(v) ? Math.round(v * 100) / 100 : null);
@@ -223,8 +224,13 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
   const since = now - VIEW_EFFECTS_MS;
   const scoredKind = async (kind) => (await select(db, "SELECT at_ms, mode, side, outcome FROM lens_readings WHERE lens = 'liquidity' AND kind = ? ORDER BY at_ms DESC LIMIT ?", kind, VIEW_EFFECTS))
     .map((r) => ({ at_ms: Number(r.at_ms), side: sideWord(r.side), mode: r.mode ?? null, outcome: outcomeOf(r.outcome) }));
+  // B19: each skip's outcome from its skip reading (skip:<issued_ms>:B|S), pending until scored; null when none recorded.
+  const skipOutcomes = new Map((await select(db, "SELECT id, outcome FROM lens_readings WHERE lens = 'liquidity' AND kind = 'skip' AND at_ms > ? LIMIT ?", since - DAY_MS, 4 * VIEW_EFFECTS)).map((r) => [r.id, outcomeOf(r.outcome)]));
   const skips = (await select(db, "SELECT at_ms, status, choice, rule, facts FROM limit_council WHERE kind = 'entry' AND at_ms > ? AND rule LIKE '%liquidity_sweep_against%' ORDER BY at_ms DESC LIMIT ?", since, VIEW_EFFECTS))
-    .map((r) => { const f = parse(r.facts, {}) ?? {}; return { at_ms: Number(r.at_ms), side: f.side === "BUY" || f.side === "SELL" ? f.side : null, mode: typeof f.mode === "string" ? f.mode : null, status: r.status ?? null, choice: r.choice ?? null, rule: r.rule ?? null }; });
+    .map((r) => { const f = parse(r.facts, {}) ?? {}; const side = f.side === "BUY" || f.side === "SELL" ? f.side : null; return { at_ms: Number(r.at_ms), side, mode: typeof f.mode === "string" ? f.mode : null, status: r.status ?? null, choice: r.choice ?? null, rule: r.rule ?? null, outcome: side && finite(Number(f.issued_ms)) ? skipOutcomes.get(`skip:${Number(f.issued_ms)}:${side === "BUY" ? "B" : "S"}`) ?? null : null }; });
+  // B19: the stops Omega moved to a lens B level (hold readings), with their outcome; no price.
+  const levelMoves = lensLevelReadings(env) === "off" ? null : (await select(db, "SELECT at_ms, mode, side, outcome, detail_json FROM lens_readings WHERE lens = 'liquidity' AND kind = 'hold' AND at_ms > ? ORDER BY at_ms DESC LIMIT ?", since, VIEW_EFFECTS))
+    .map((r) => { const d = parse(r.detail_json, {}) ?? {}; return { at_ms: Number(r.at_ms), side: sideWord(r.side), mode: r.mode ?? null, action: d.what === "ladder" ? "ladder_lock" : "trail", outcome: outcomeOf(r.outcome) }; });
   const deferrals = (await select(db, "SELECT ms, detail FROM omega_events WHERE action = 'plan' AND ms > ? AND detail LIKE '%liquidity_modify_deferred%' ORDER BY ms DESC LIMIT ?", since, VIEW_EFFECTS))
     .map((r) => { const d = parse(r.detail, {}) ?? {}; const ids = String(d?.details?.liquidity_modify_deferred ?? "").split(",").filter(Boolean); return { at_ms: Number(r.ms), intents: ids.length }; });
   const pmActions = (await select(db, "SELECT at_ms, side, action, rule, status FROM position_actions WHERE at_ms > ? AND (rule LIKE '%liquidity_sweep_against%' OR why LIKE '%liquidity_sweep_against%') ORDER BY at_ms DESC LIMIT ?", since, VIEW_EFFECTS))
@@ -240,7 +246,7 @@ export async function readLiquidityView(env, { now = Date.now(), strategy = null
     facts, line: facts ? liquidityLine(state.facts ?? { available: false, reason: "no_bars" }) : null,
     conditions: viewConditions(state, { knobs, now, roomLine: lensRoomLine(env) }),
     levels, readings, sweeps, score,
-    effects: { blocks: await scoredKind("block"), makers: await scoredKind("maker"), skips, deferrals, level_moves: null, pm_actions: pmActions },
+    effects: { blocks: await scoredKind("block"), makers: await scoredKind("maker"), skips, deferrals, level_moves: levelMoves, pm_actions: pmActions },
     card: viewCard(decision, now), quorum_with_liquidity: viewQuorumWithLiquidity(decision),
     baseline, management
   };

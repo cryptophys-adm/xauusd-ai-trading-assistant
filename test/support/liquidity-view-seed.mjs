@@ -49,8 +49,8 @@ export const STRATEGY = Object.freeze({
  * The seeded environment. `available: false` gives the state of an archive with no recent bar (facts.available false,
  * reason archive_stale, no levels); `feed: false` leaves the feed's series out (no basis is known).
  */
-export async function seedLiquidityEnv({ available = true, feed = true } = {}) {
-  const env = { DB: d1(), SIGNAL_CACHE: kv() };
+export async function seedLiquidityEnv({ available = true, feed = true, env: extra = {} } = {}) {
+  const env = { DB: d1(), SIGNAL_CACHE: kv(), ...extra };
   const raw = env.DB.raw;
   raw.exec("CREATE TABLE omega_bridge (id INTEGER PRIMARY KEY, kid TEXT, public_key TEXT, bridge_version TEXT, state TEXT, synced_ms INTEGER)");
   raw.exec("CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, status TEXT NOT NULL, server TEXT, kid TEXT, envelope TEXT, updated_by TEXT, updated_ms INTEGER)");
@@ -126,6 +126,10 @@ export async function seedLiquidityEnv({ available = true, feed = true } = {}) {
   other("maker", 8, -1, "miss");
   other("maker", 9, 1, "neutral");
   lr.run("h4:x", "positioning", "h4", NOW - 4 * HOUR, 1, "hit", null, NOW);
+  // B19: the entry council's skip scored (skip:<issued_ms>:B), and two hold readings (a ladder lock held, a trailed stop pending).
+  lr.run(`skip:${NOW - 3 * HOUR}:B`, "liquidity", "skip", NOW - 3 * HOUR, 1, "hit", null, NOW);
+  lr.run("hold:0a1b2c3d", "liquidity", "hold", NOW - 5 * HOUR, 1, "hit", JSON.stringify({ what: "ladder" }), NOW);
+  lr.run("hold:4e5f6071", "liquidity", "hold", NOW - 40 * M1, -1, null, JSON.stringify({ what: "trail" }), null);
 
   // The entry council's skip on a sweep against, the deferred modifications, the Position Manager's action citing a sweep.
   raw.prepare("INSERT INTO limit_council (id, kind, open_id, at_ms, status, choice, rule, price, reason, facts, updated_ms) VALUES (?, 'entry', ?, ?, 'decided', 'skip', 'council_skip:liquidity_sweep_against', 4101.5, 'a reclaimed buy-side sweep argues against the long', ?, ?)")

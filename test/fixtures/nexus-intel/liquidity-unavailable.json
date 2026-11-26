@@ -131,7 +131,8 @@
         "mode": "intraday",
         "status": "decided",
         "choice": "skip",
-        "rule": "council_skip:liquidity_sweep_against"
+        "rule": "council_skip:liquidity_sweep_against",
+        "outcome": "hit"
       }
     ],
     "deferrals": [
@@ -140,7 +141,22 @@
         "intents": 2
       }
     ],
-    "level_moves": null,
+    "level_moves": [
+      {
+        "at_ms": 1795443600000,
+        "side": "SELL",
+        "mode": "intraday",
+        "action": "trail",
+        "outcome": "pending"
+      },
+      {
+        "at_ms": 1795428000000,
+        "side": "BUY",
+        "mode": "intraday",
+        "action": "ladder_lock",
+        "outcome": "hit"
+      }
+    ],
     "pm_actions": [
       {
         "at_ms": 1795441800000,

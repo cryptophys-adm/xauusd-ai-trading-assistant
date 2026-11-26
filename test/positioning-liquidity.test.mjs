@@ -257,6 +257,14 @@ test("PL7. the lens report carries no price key at any depth, and a forbidden ke
   assert.ok(walk(report));
   assert.deepEqual(forbiddenReportKeys({ a: [{ entry_price: 1 }] }), [".a[0].entry_price"]);
   assert.equal(lensReport({ state, scores: { positioning: { sl: 1 } } }), null, "a report with a price key is refused");
+  // B19: lens B's score kinds (sweep, block, maker and the new skip and hold) pass; a kind named "level" is refused.
+  const kinds = Object.fromEntries(["sweep", "block", "maker", "skip", "hold"].map((k) => [k, { hits: 2, misses: 1, share: 0.667 }]));
+  const withKinds = lensReport({ state, scores: { positioning: { hits: 3, misses: 1, n: 4, share: 0.75 }, liquidity: { hits: 10, misses: 5, n: 15, share: 0.667, kinds } }, positioning: { series: "disaggregated", age_days: 3, stale: false }, liquidity: { baseline: "sufficient", baseline_weeks: 4 } });
+  assert.ok(withKinds, "the five kinds pass");
+  assert.match(JSON.stringify(withKinds), /"hold"/, "the kinds are in the report");
+  assert.deepEqual(forbiddenReportKeys(withKinds), []);
+  assert.ok(walk(withKinds));
+  assert.equal(lensReport({ state, scores: { liquidity: { hits: 1, misses: 0, n: 1, share: 1, kinds: { level: { hits: 1, misses: 0, share: 1 } } } } }), null, "a kind named level is refused");
   const names = lensFactNames();
   assert.equal(names.length, Object.keys(LENS_KNOBS).length * 4 + 4);
   for (const n of names) assert.doesNotMatch(n, PROHIBITED_FACT, n);

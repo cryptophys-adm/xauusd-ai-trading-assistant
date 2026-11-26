@@ -197,6 +197,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["conditions", "brief"], default_value: "conditions", config_value: "conditions", read: (raw) => (s(raw) === "brief" ? "brief" : "conditions")
   }),
   entry({
+    key: "LENS_LEVEL_READINGS", label: "Lens B skip and hold readings", group: "lens",
+    description: "B19: on records and scores lens B's skip readings (a limit-council skip on liquidity_sweep_against) and hold readings (a stop moved to a lens B level); reported only, never in the automatic floor. Off stops both; no trading behaviour changes either way.",
+    values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
+  }),
+  entry({
     key: "CALENDAR_CONTRARIAN", label: "Calendar contrarian drift", group: "lens",
     description: "The Calendar Agent: a release kind whose gold drifted against the consensus significantly leans the other way; off holds it at 0.",
     values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn

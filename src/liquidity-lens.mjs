@@ -693,6 +693,31 @@ export function scoreSweep(sweep, after, { atr, now = Date.now() } = {}) {
   return now >= end ? "neutral" : null;
 }
 
+/** B19: a hold reading's window (closed 15m bars after the stop move) and its tolerance beyond the level (x ATR15). */
+export const LEVEL_HOLD_BARS_15M = 8;
+export const LEVEL_HOLD_ATR = 0.1;
+/**
+ * Pure (B19): a stop moved to a lens B level, scored on the broker's M1 bars (the stop's own scale). `side` is the
+ * position's (1 long: the stop below, -1 short). The window is the LEVEL_HOLD_BARS_15M closed 15m bars from the first
+ * quarter-hour at or after the move; ATR15 over the bars before it. A close more than LEVEL_HOLD_ATR x ATR beyond the
+ * level against the position is a miss; all the window's bars without one is a hit; no ATR, or a window with bars
+ * missing once it is over, is neutral; null while the window is open.
+ */
+export function scoreLevelHold({ level, side, created_ms, bars = [], now = Date.now() } = {}) {
+  if (!finite(level) || (side !== 1 && side !== -1) || !finite(created_ms)) return "neutral";
+  const start = Math.ceil(created_ms / M15) * M15, end = start + LEVEL_HOLD_BARS_15M * M15;
+  const list = Array.isArray(bars) ? bars : [];
+  const atr = atr15(list.filter((b) => b.t < start));
+  if (!finite(atr) || atr <= 0) return "neutral";
+  // Closed 15m bars only: a bar still forming at `now` is not read (closed-candle rule).
+  const closedTo = Math.min(end, Math.floor(now / M15) * M15);
+  const after = aggregate(list.filter((b) => b.t >= start && b.t < closedTo), 15);
+  const tol = LEVEL_HOLD_ATR * atr;
+  for (const b of after) if (side > 0 ? b.c < level - tol - 1e-9 : b.c > level + tol + 1e-9) return "miss";
+  if (now < end) return null;
+  return after.length >= LEVEL_HOLD_BARS_15M ? "hit" : "neutral";
+}
+
 // ---------------------------------------------------------------- the state the readers share
 
 /** The stored state (KV liquidity:state:v1), or null. */
