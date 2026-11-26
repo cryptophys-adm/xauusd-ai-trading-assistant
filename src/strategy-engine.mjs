@@ -21,7 +21,9 @@ import { readTimeframeThread } from "./timeframe-threads.mjs";
 import { readWarRoom } from "./war-room.mjs";
 import { readNewsDaily } from "./news-daily.mjs";
 import { loadHudSnapshot } from "./hud-store.mjs";
-import { buildKeyLevels, keyLevelsByChart } from "./key-level-agent.mjs";
+import { buildKeyLevels, keyLevelsByChart, keyLevelFamiliesModes, BROKER_LIQUIDITY_FAMILY } from "./key-level-agent.mjs";
+import { readLiquidityState, liquidityConditionsOn } from "./liquidity-lens.mjs";
+import { readLensState, lensKnobs } from "./lens-policy.mjs";
 import { chartPatternsMode } from "./projection-agent.mjs";
 import { readPatternCalibration } from "./pattern-calibration.mjs";
 import { eventRisk, eventCaution, gatedEvents } from "./econ-calendar.mjs";
@@ -391,7 +393,7 @@ export function strategyPrice({ m5Price = null, m15Bars = [], m15Snapshot = null
 }
 
 /** Pure: the Key Level Agent's arguments from the strategy's inputs (buildStrategy's reading and KM1's per-chart one). */
-function keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1Snapshot = null, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1 }) {
+function keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1Snapshot = null, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1, brokerLiquidity = null }) {
   return {
     // ZF2: the weekly snapshot, when there is one, types the zones only (key-level-agent.mjs levelSnapshots).
     snapshots: { "15": m15Snapshot, "60": h1Snapshot, "240": h4Snapshot, "1D": d1Snapshot, ...(w1Snapshot ? { "1W": w1Snapshot } : {}) },
@@ -409,7 +411,10 @@ function keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1
     // Z6: SD_LEVELS travels in the inputs as modes.sdLevels (present only when it is not "off"); env when called with one.
     sdLevels: modes?.sdLevels ? sdModeOf(modes.sdLevels) : sdLevelsMode(env),
     // Track A PR 8: ORB_LEVELS (and orb_breakout's switch) travels in the inputs as modes.orbLevels (present only when off).
-    orbLevels: modes?.orbLevels === "off" ? "off" : orbLevelsMode(env)
+    orbLevels: modes?.orbLevels === "off" ? "off" : orbLevelsMode(env),
+    // B18: lens B's members (given only under rule 3's gates, loadStrategyInputs) and KEY_LEVEL_FAMILIES_OFF, from the
+    // inputs only (modes.keyLevelFamiliesOff, present only when a family is off; never env, rule 5).
+    ...(brokerLiquidity ? { brokerLiquidity, familiesOff: Array.isArray(modes?.keyLevelFamiliesOff) ? modes.keyLevelFamiliesOff : [] } : {})
   };
 }
 
@@ -439,7 +444,7 @@ export function keyLevelChartsOf({ env = null, h1Snapshot = null, m15Snapshot = 
  * Pure: the strategy from the four War Rooms (every agent's bias), News Daily, the 1H and 15m HUD
  * snapshots, the latest confirmations and the closed 1H and 15m bars.
  */
-export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, w1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, releases = [], m5Price = null, patternCalibration = null, modes = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
+export function buildStrategy({ rooms = {}, news = null, macro = null, macroScore = null, mode = null, tradingMode = null, env = null, h1Snapshot = null, m15Snapshot = null, h4Snapshot = null, d1Snapshot = null, w1Snapshot = null, confirmations = null, h1Bars = [], m15Bars = [], h4Bars = [], d1Bars = [], w1Bars = [], h1Chain = null, calendar = null, releases = [], m5Price = null, patternCalibration = null, modes = null, brokerLiquidity = null, now = Date.now() } = {}, params = STRATEGY_PARAMS) {
   const P = params === STRATEGY_PARAMS ? params : { ...STRATEGY_PARAMS, ...params };
   const LEAN = P.lean, MIN_RRR = P.min_rrr, MIN_CONFIDENCE = P.min_confidence;
   const layers = Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, roomLayer(k, rooms[k], now)]));
@@ -466,7 +471,7 @@ export function buildStrategy({ rooms = {}, news = null, macro = null, macroScor
   const atrH1 = atr(h1Bars);
   const price = strategyPrice({ m5Price, m15Bars, m15Snapshot, h1Snapshot });
   // Key Level Agent (owner decision 2026-11-06): the zones where the key levels of every chart stack.
-  const keyLevelReading = buildKeyLevels(keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1 }));
+  const keyLevelReading = buildKeyLevels(keyLevelArgs({ env, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, w1Snapshot, h1Bars, m15Bars, h4Bars, d1Bars, w1Bars, releases, patternCalibration, modes, price, atrH1, brokerLiquidity }));
   const levels = zoneLevels(keyLevelReading.zones);
   const zones = { ...(m15Snapshot?.huds?.aegis_footprint?.fields || {}), ...(m15Snapshot?.huds?.gabfx_price_action?.fields || {}) };
   const inZone = dir > 0 ? zones.in_bull_order_block === true || zones.in_bull_mitigation === true || zones.in_qm_buy === true || zones.in_rbs === true
@@ -579,6 +584,10 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     safe(() => loadHudSnapshot(env, { timeframe: "1W" }))
   ]);
   const live = await safe(() => liveM5Inputs(env, { now, context: m5Context }));
+  const familyModes = keyLevelFamiliesModes(env);
+  // B18: lens B's levels on the feed's scale, only under rule 3's gates (the lens on and above its floor for the mode in
+  // force, a fresh state and a known feed basis) and with KEY_LEVEL_FAMILIES_OFF not naming the family; else absent.
+  const brokerLiquidity = (familyModes.keyLevelFamiliesOff ?? []).includes(BROKER_LIQUIDITY_FAMILY) ? null : await safe(() => brokerLiquidityInputs(env, { now }));
   return {
     rooms: { D1: d1, H4: h4, H1: h1, M15: m15 }, news, h1Snapshot, m15Snapshot, h4Snapshot, d1Snapshot, ...(w1Snapshot ? { w1Snapshot } : {}),
     // The H1 confirmation from the latest 15m room; the 5m one from the latest closed 5m bar when fresh.
@@ -595,9 +604,23 @@ export async function loadStrategyInputs(env, { now = Date.now(), m5Context = nu
     // The chart patterns' calibration on gold (src/pattern-calibration.mjs), or null for the default weights.
     patternCalibration: await safe(() => readPatternCalibration(env)),
     // The owner's switches the pure build reads (it never reads env for them).
-    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env), ...sdLevelsModes(env), ...orbLevelsModes(env) },
+    modes: { chartPatterns: chartPatternsMode(env), tp1KeyZone: tp1KeyZoneMode(env), entryZone: entryZoneMode(env), zoneTypes: keyLevelZoneTypesMode(env), ...zoneSourcesModes(env), ...sdLevelsModes(env), ...orbLevelsModes(env), ...familyModes },
+    ...(brokerLiquidity ? { brokerLiquidity } : {}),
     now
   };
+}
+
+/**
+ * B18: lens B's members for the Key Level Agent ({ levels, at_ms }, the feed's scale), or null. Rule 3's gates: the
+ * lens on and above its floor for the mode in force (lensKnobs("liquidity").active), a state fresher than
+ * LIQUIDITY_STATE_FRESH_MS with its facts available (liquidityConditionsOn), and a known feed basis (the ledger step's).
+ */
+export async function brokerLiquidityInputs(env, { now = Date.now() } = {}) {
+  const state = await readLiquidityState(env);
+  if (!state || state.feed_basis_known !== true || !Array.isArray(state.levels_feed) || !state.levels_feed.length) return null;
+  const lens = await readLensState(env, { now });
+  const knobs = lensKnobs("liquidity", await strategyMode(env), { policy: lens.policy, floor: lens.floor, enabled: lens.switches.liquidity, baseline: state.baseline ?? null });
+  return liquidityConditionsOn(state, knobs, now) ? { levels: state.levels_feed, at_ms: state.at_ms } : null;
 }
 
 /** The Projection Agent's chart patterns: CHART_PATTERNS_MODE = "on" (default) | "off" (src/projection-agent.mjs). */

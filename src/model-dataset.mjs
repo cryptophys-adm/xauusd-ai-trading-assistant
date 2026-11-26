@@ -100,7 +100,8 @@ export function datasetFeatures(decision, { atr = null, bars = {} } = {}) {
     const g = d.guardrails?.[side];
     if (!g) continue;
     put(`g_${side}_allowed`, g.allowed ? 1 : 0);
-    for (const c of Array.isArray(g.checks) ? g.checks : []) if (c?.id) put(`g_${side}_${slug(c.id)}`, c.pass ? 1 : 0);
+    // B18: lens B's room_liquidity stays out of the features, so the feature set is as before.
+    for (const c of Array.isArray(g.checks) ? g.checks : []) if (c?.id && c.id !== "room_liquidity") put(`g_${side}_${slug(c.id)}`, c.pass ? 1 : 0);
     put(`g_${side}_trigger_fired`, g.entry_trigger?.fired ? 1 : 0);
   }
   // The plan the decision traded (none on a WAIT): its side, entry kind, reward and risk in ATR.

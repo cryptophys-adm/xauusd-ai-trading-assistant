@@ -54,6 +54,51 @@ const FAMILY = Object.freeze({
 });
 export const familyOf = (kind) => FAMILY[kind] ?? kind;
 
+/**
+ * B18 (Track B PR 18; owner 2026-11-22): lens B's members as management candidates. The family `broker_liquidity` is
+ * the Positioning & Liquidity analyst's lens B levels (sweep extremes, untaken pools, high-volume nodes, on the feed's
+ * scale) under rule 3's gates (src/strategy-engine.mjs loadStrategyInputs). They never join the zones: a member only
+ * names the zone it would promote (key_levels.management), read by the room_liquidity guard, Omega's management mode
+ * and the Nexus view; never by plans, entries, the squeeze guard's inputs or the candidates.
+ */
+export const BROKER_LIQUIDITY_FAMILY = "broker_liquidity";
+export const BROKER_LIQUIDITY_WEIGHT = 1;
+/** The Key Level families an owner switch can leave out (KEY_LEVEL_FAMILIES_OFF). */
+export const KEY_LEVEL_FAMILIES = Object.freeze([BROKER_LIQUIDITY_FAMILY]);
+/** KEY_LEVEL_FAMILIES_OFF: the known family tokens, comma- or space-separated; [] (default) leaves every family in. */
+export function keyLevelFamiliesOffMode(env) {
+  const given = new Set(String(env?.KEY_LEVEL_FAMILIES_OFF ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()));
+  return KEY_LEVEL_FAMILIES.filter((f) => given.has(f));
+}
+/** The strategy modes' entry: { keyLevelFamiliesOff: [...] } when a family is off, else {} (modes unchanged). */
+export function keyLevelFamiliesModes(env) {
+  const off = keyLevelFamiliesOffMode(env);
+  return off.length ? { keyLevelFamiliesOff: off } : {};
+}
+
+/**
+ * Pure (B18): the zones lens B's members would promote to candidate, at most one per side (support, resistance), the
+ * strongest then the nearest. A member counts for a zone when the zone and the member together stay within the
+ * tolerance; it adds the family once at BROKER_LIQUIDITY_WEIGHT. Only zones neither candidate nor qualified (capped)
+ * are eligible, and one promotes when its families + 1 and its score + the weight reach the candidate rule. Each entry
+ * is a copy with the zone's own edges and `candidate_by: "broker_liquidity"`; the zones are not touched. [] for none.
+ */
+export function withBrokerLiquidity(zones, brokerLiquidity, { price = null, tolerance = 1 } = {}) {
+  const members = (Array.isArray(brokerLiquidity?.levels) ? brokerLiquidity.levels : []).filter((m) => isNum(m?.low) && isNum(m?.high) && m.low <= m.high);
+  if (!members.length || !Array.isArray(zones)) return [];
+  const dist = (z) => (isNum(price) ? Math.abs(z.price - price) : 0);
+  const out = [];
+  for (const role of ["support", "resistance"]) {
+    const eligible = zones.filter((z) => z.role === role && !z.candidate && !z.qualified && !(z.families ?? []).includes(BROKER_LIQUIDITY_FAMILY)).map((z) => {
+      const hit = members.filter((m) => Math.max(z.high, m.high) - Math.min(z.low, m.low) <= tolerance + 1e-9);
+      return hit.length && (z.sources ?? 0) + 1 >= CANDIDATE_MIN_SOURCES && (z.score ?? 0) + BROKER_LIQUIDITY_WEIGHT >= CANDIDATE_MIN_SCORE ? { z, kinds: [...new Set(hit.map((m) => m.kind))].sort() } : null;
+    }).filter(Boolean).sort((a, b) => b.z.score - a.z.score || dist(a.z) - dist(b.z));
+    const best = eligible[0];
+    if (best) out.push({ low: best.z.low, high: best.z.high, price: best.z.price, role, score: r2(best.z.score + BROKER_LIQUIDITY_WEIGHT), families: [...best.z.families, BROKER_LIQUIDITY_FAMILY], kinds: best.kinds, candidate_by: BROKER_LIQUIDITY_FAMILY });
+  }
+  return out;
+}
+
 const isNum = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 const r2 = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 
@@ -248,9 +293,11 @@ const nearZones = (zones, price, atrH1) => (isNum(price) && isNum(atrH1) ? zones
  * KEY_LEVEL_ZONE_TYPES; src/zone-types.mjs): "on" adds z.ds to each zone near price, an overlay only.
  * `zoneSourcesOff` (Z1a, ZONE_SOURCES_OFF) leaves those evidence sources out of the typing. `sdLevels` (Z6, SD_LEVELS)
  * "record" or "signal" adds `sd_levels` (src/zone-types.mjs sdLevels, the boxes as their own levels, on the same
- * evidence after the typing) and `sd_levels_mode`; "off" (default) and untyped zones add neither.
+ * evidence after the typing) and `sd_levels_mode`; "off" (default) and untyped zones add neither. `brokerLiquidity` (B18,
+ * { levels } on the feed scale, given only under rule 3's gates) adds `management` (withBrokerLiquidity) when non-empty,
+ * unless `familiesOff` names broker_liquidity (KEY_LEVEL_FAMILIES_OFF); without it the reading is as before.
  */
-export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [], sdLevels = "off", orbLevels = "on" } = {}) {
+export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 = null, patterns = "on", events = [], calibration = null, zoneTypes = "on", zoneSourcesOff = [], sdLevels = "off", orbLevels = "on", brokerLiquidity = null, familiesOff = [] } = {}) {
   const { tolerance, found, raw } = keyLevelRaw({ snapshots, bars, price, atrH1, patterns, events, calibration, orbLevels });
   const near = nearZones(clusterLevels(raw, tolerance, price), price, atrH1);
   limitCandidates(near, price);
@@ -260,6 +307,8 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
   // Z6: the supply and demand boxes as their own levels, once, on the same evidence; nothing above changes.
   const sdMode = evidence ? sdModeOf(sdLevels) : "off";
   const candidates = near.filter((z) => z.candidate);
+  // B18: lens B's management candidates, only when given (rule 3's gates) and the family is on; nothing above changes.
+  const management = brokerLiquidity && !(Array.isArray(familiesOff) && familiesOff.includes(BROKER_LIQUIDITY_FAMILY)) ? withBrokerLiquidity(near, brokerLiquidity, { price, tolerance }) : [];
   const nearestCandidate = (role) => candidates.filter((z) => z.role === role).sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0] ?? null;
   const sup = nearestCandidate("support"), res = nearestCandidate("resistance"), at = candidates.find((z) => z.role === "at price") ?? null;
   const fmt = (z) => `${z.low === z.high ? z.low.toFixed(2) : `${z.low.toFixed(2)}–${z.high.toFixed(2)}`} (${z.strength}, ${z.sources} sources: ${z.label})`;
@@ -274,6 +323,7 @@ export function buildKeyLevels({ snapshots = {}, bars = {}, price = null, atrH1 
     version: KEY_LEVEL_VERSION, price: r2(price), atr_h1: r2(atrH1), tolerance: r2(tolerance),
     raw_count: raw.length, readers, zones: near, candidates, summary,
     ...(sdMode !== "off" ? { sd_levels: sdLevelsOf(evidence, near, price, atrH1), sd_levels_mode: sdMode } : {}),
+    ...(management.length ? { management } : {}),
     // The Projection Agent's chart patterns, by chart (their levels are among the zones' members).
     patterns: Object.entries(found).flatMap(([tf, list]) => list.map((p) => ({ tf, chart: TF_NAME[tf], ...p })))
   };

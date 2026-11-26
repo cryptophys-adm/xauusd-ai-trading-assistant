@@ -662,6 +662,16 @@ export function guardrailsFor(dir, { cards, quorum, strategy, inputs = {}, macro
     const waiver = sq?.squeezed && roomCorridors && roomBreakoutWaiveOf(env) === "on" ? roomWaiverFor(dir, { checks, price: strategy?.price ?? null, cards, corridors: roomCorridors }) : null;
     if (waiver) roomWaived = waiver.tag;
     add("room", !sq?.squeezed || Boolean(waiver), waiver ? `${roomDetail}; ${waiver.words}` : roomDetail);
+    // B18 (Track B PR 18): lens B's own block, only with management candidates (key_levels.management: rule 3's gates).
+    // It fails only when lens B makes the squeeze (squeezed with the candidates beside the zones, not without), so it
+    // never repeats "room", the RM1b waiver never lifts it, and it can only add a WAIT. The detail is in ATR only.
+    const mgmt = Array.isArray(strategy?.key_levels?.management) ? strategy.key_levels.management : null;
+    if (mgmt?.length) {
+      let sqB = null;
+      try { sqB = squeezeOf({ ...strategy, key_levels: { ...strategy.key_levels, zones: [...(strategy.key_levels.zones || []), ...mgmt.map((z) => ({ ...z, candidate: true }))] } }, { corridorAtr: roomAtr }); } catch { sqB = null; }
+      const lensSqueeze = Boolean(sqB?.squeezed) && !sq?.squeezed;
+      add("room_liquidity", !lensSqueeze, lensSqueeze ? `lens B's liquidity squeezes price: with its candidates the key zones are ${sqB.corridor_atr} times the 1H average range apart (at least ${roomAtr} needed)` : "lens B's liquidity adds no squeeze");
+    }
   }
   const cautions = [...risk.cautions, ...contextCautions(dir, inputs.market ?? null)];
   return { side, allowed: checks.every((c) => c.pass), checks, plan, vetoes: risk.vetoes, cautions, supports: risk.supports ?? [], min_rrr: MIN_RRR, target_rule: nearest ? "nearest" : "rrr", entry_trigger: entryTrigger,
@@ -1588,6 +1598,9 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // The Key Level Agent's candidate zones around price, on the feed's scale (owner 2026-11-12): Omega's
     // stop and target follow them while a position is open (src/omega-engine.mjs).
     key_levels: keyLevelsAround(strategy),
+    // B18: lens B's management candidates ({ low, high }, the feed's scale), only when present (rule 3's gates); read
+    // only by the signal's management_levels (src/ea-signal.mjs managementFields) for Omega's management mode.
+    ...(Array.isArray(strategy?.key_levels?.management) && strategy.key_levels.management.length ? { management_levels: strategy.key_levels.management.map((z) => ({ low: z.low, high: z.high })) } : {}),
     // Z6 (SD_LEVELS "record" or "signal"): the supply and demand boxes as their own levels; the signal carries the
     // decisive ones under "signal" (src/ea-signal.mjs managementFields). Absent while SD_LEVELS is "off".
     ...sdRecordOf(strategy, guards),

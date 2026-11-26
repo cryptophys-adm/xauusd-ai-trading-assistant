@@ -185,12 +185,16 @@ export function managementFields(decision, { basis = null } = {}) {
   const levels = sd.length ? [...kept, ...sd] : kept;
   const token = (z) => `${word(z.zone_type)}/${word(z.zone_strength)}/${word(z.zone_freshness)}`;
   const types = levels.length && levels.every(typed) ? [...kept.map(token), ...sd.map((z) => `${token(z)}/sd`)].join(",") : null;
+  // B18: lens B's management candidates (the decision's management_levels, the feed's scale), its own flat field, read
+  // only by Omega's management mode (src/omega-engine.mjs brokerKeyLevels with `spread`); absent without one.
+  const mgmt = (Array.isArray(decision?.management_levels) ? decision.management_levels : []).filter((z) => isPrice(z?.low) && isPrice(z?.high) && z.low <= z.high);
   return {
     trading_mode: typeof decision?.trading_mode === "string" ? decision.trading_mode : "",
     power: Number.isFinite(score) ? Math.max(-1, Math.min(1, score)) : 0,
     power_ms: Number.isFinite(close) && Number.isFinite(score) ? close : 0,
     key_levels: levels.map((z) => `${z.low}:${z.high}`).join(","),
     ...(types ? { key_level_types: types } : {}),
+    ...(mgmt.length ? { management_levels: mgmt.map((z) => `${z.low}:${z.high}`).join(",") } : {}),
     feed_basis: Number.isFinite(basis) ? basis : 0,
     feed_basis_known: Number.isFinite(basis),
     // Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): whether the rules run,

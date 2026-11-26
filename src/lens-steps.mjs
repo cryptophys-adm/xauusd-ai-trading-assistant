@@ -3,6 +3,7 @@
 // the bridge sync's spike clock and block readings, the report to Aether and the page's read. D1 and KV only; no model
 // call; no price leaves the Worker (the levels stay in KV for Omega's own planner).
 import { corpusSource } from "./corpus-oracle.mjs";
+import { feedBasis } from "./feed-basis.mjs";
 import { goldPausedAt } from "./market-hours.mjs";
 import {
   LENS_MODES, LENS_NAME, LENS_SWITCHES, lensKnobs, lensWeights, readLensState, recordLensReading, ensureLensReadingsSchema, lensReadingStatements, lensScore, lensFloorStep, lensReport, lensReportDraft, forbiddenReportKeys, floorHolds, LENS_FLOOR_KEY
@@ -11,7 +12,7 @@ import { positioningNow, scorePositioning, cotFreshness, positioningLine, positi
 import {
   LIQUIDITY_BASELINE_WEEKS, LIQUIDITY_STATE_KEY, LIQUIDITY_SPIKE_KEY, baselineKey, baselineIdentity, buildBaseline, finishBaseline, hourBaseline, eligibleMinutes,
   nyHourOfWeek, readBrokerBars, backfillBrokerBars, markBackfillRebuilt, SWEEP_SCORE_BARS_15M, liquidityFacts, detectSweeps, scoreSweep, atr15, readLiquidityState, ensureLiquiditySchema, BASELINE_MIN_BARS, liquidityLine,
-  liquidityConditions, liquidityConditionsOn
+  liquidityConditions, liquidityConditionsOn, levelsOnFeed
 } from "./liquidity-lens.mjs";
 
 const M1 = 60_000, HOUR = 3_600_000, DAY = 86_400_000, WEEK = 7 * DAY;
@@ -21,6 +22,15 @@ const MODES = new Set(LENS_MODES);
 export const LIQUIDITY_REPLAY_KEY = "liquidity:replay:v1";
 /** B2: the sweep replay of the minutes a backfill added, once per backfill identity. */
 export const liquidityReplayKey = (identity) => `liquidity:replay:v2:${identity}`;
+
+/** B18: the feed's last 24 closed 5m bars (KV market-data series), oldest first; [] when unreadable. */
+async function feedSeries5m(kv, now) {
+  try {
+    const rec = parse(await kv.get("market-data:v2:series:OANDA:XAUUSD|5m"), null);
+    return (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => finite(c?.close) && c.close > 0 && Date.parse(String(c?.close_time ?? "")) <= now)
+      .sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).slice(-24);
+  } catch { return []; }
+}
 
 /** The trading mode in force for the lenses' knobs: the configured TRADING_MODE, else KV trading:mode, else intraday. */
 export async function modeNow(env) {
@@ -133,7 +143,12 @@ export async function runLiquidityStep(env, { now = Date.now(), log = null } = {
     if (new Date(now).getUTCMinutes() < 5) await db.prepare("DELETE FROM liquidity_readings WHERE at_ms < ?").bind(now - 30 * DAY).run();
     const medians = mediansOf(baseline);
     const vals = Object.values(medians).sort((a, b) => a - b);
-    const state = { at_ms: now, identity: baseline.identity, mode, facts, levels, medians, median_any: vals.length ? vals[Math.floor(vals.length / 2)] : null, baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, baseline_at: hourly ? now : prev?.baseline_at ?? now, archive_last_ms: bars.at(-1)?.t ?? null };
+    // B18: the broker's basis against the feed (feedBasis over the archive's M1 bars and the feed's last 24 closed 5m
+    // bars, as readLiquidityView takes it) and lens B's levels on the feed's scale; none without a known basis.
+    const feed5 = await feedSeries5m(kv, now);
+    const basis = feed5.length ? feedBasis(bars.map((b) => ({ t: b.t, c: b.c })), feed5) : null;
+    const known = finite(basis);
+    const state = { at_ms: now, identity: baseline.identity, mode, facts, levels, levels_feed: known ? levelsOnFeed(levels, basis) : [], feed_basis: known ? basis : null, feed_basis_known: known, medians, median_any: vals.length ? vals[Math.floor(vals.length / 2)] : null, baseline: baseline.baseline, baseline_weeks: baseline.baseline_weeks, baseline_at: hourly ? now : prev?.baseline_at ?? now, archive_last_ms: bars.at(-1)?.t ?? null };
     await kv.put(LIQUIDITY_STATE_KEY, JSON.stringify(state), { expirationTtl: 2 * DAY });
     // Sweeps: each detected sweep (not excluded) is a reading; scored on the bars after it (eight 15m bars).
     const atr = atr15(bars);
