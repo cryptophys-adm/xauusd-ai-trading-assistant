@@ -9,6 +9,12 @@ import { setupsFrom, setupOutcome, agentRecords, decisionPlans, CONTROL_ARM } fr
 import * as se from "../src/strategy-engine.mjs";
 import * as de from "../src/decision-engine.mjs";
 import { zoneInputs, zoneGlobal, ZONE_ENV, CLOSE, NOW } from "./support/zone-types-fixture.mjs";
+import { execFileSync } from "node:child_process";
+import { orbLevelsMode, orbLevelsModes } from "../src/opening-range.mjs";
+import { rawLevels, buildKeyLevels, clusterLevels, familyOf, ORB_LEVEL_WEIGHT } from "../src/key-level-agent.mjs";
+import { slimInputs } from "../src/strategy-inputs.mjs";
+import { pickStrategy } from "../src/decision-engine.mjs";
+import { applyRangeMode, RANGE_GATED_AGENTS } from "../src/htf-cells.mjs";
 
 const M15 = 15 * 60_000;
 const orb = STRATEGY_AGENTS.find((a) => a.id === "orb_breakout");
@@ -186,4 +192,101 @@ test("ORB-8 the Decision Engine: the scenario's London breakout is an orb_breako
   // Everything but the new agent's plan is the same with it on or off.
   const strip = (r) => JSON.stringify({ ...r, strategy_plans: { long: r.strategy_plans.long, short: Object.fromEntries(Object.entries(r.strategy_plans.short).filter(([k]) => k !== "orb_breakout")) } });
   assert.equal(strip(on), strip(off));
+});
+
+// ---------------------------------------------------------------- Track A PR 7 acceptance, completed in PR 8
+
+test("ORB-9 the window's end: a plan at the 11:30 and 16:30 New York closes, none at 11:45 or 16:45", () => {
+  // London: its window's last close is 11:30 New York (16:30Z in standard time); New York's 16:30 New York (21:30Z).
+  const long = londonBreak({ until: Date.UTC(2026, 10, 24, 17, 0) });
+  const upTo = (bars, t) => bars.filter((b) => Date.parse(b.close_time) <= t);
+  assert.equal(orb.plan(1, ctx(upTo(long, Date.UTC(2026, 10, 24, 16, 30))))?.pattern, "orb_london");
+  assert.equal(orb.plan(1, ctx(upTo(long, Date.UTC(2026, 10, 24, 16, 45)))), null);
+  const at = { [NYO]: [2605, 2597, 2600], [NYO + M15]: [2604, 2595, 2601], [NYO + 2 * M15]: [2603, 2596, 2602], [NYO + 3 * M15]: [2610, 2603, 2609] };
+  for (let t = NYO + 4 * M15; t < Date.UTC(2026, 10, 24, 22, 0); t += M15) at[t] = [2608, 2604, 2606];
+  const ny = series(NYO - 4 * M15, Date.UTC(2026, 10, 24, 22, 0), at);
+  assert.equal(orb.plan(1, ctx(upTo(ny, Date.UTC(2026, 10, 24, 21, 30))))?.pattern, "orb_new_york");
+  assert.equal(orb.plan(1, ctx(upTo(ny, Date.UTC(2026, 10, 24, 21, 45)))), null);
+});
+
+test("ORB-10 the spring weeks too: 2026-03-16, London's 03:00 New York is 07:00 in London (session_clock_mismatch)", () => {
+  const open = Date.UTC(2026, 2, 16, 7, 0);
+  const bars = series(open - 4 * M15, open + 8 * M15, { [open + 3 * M15]: [2610, 2603, 2609] });
+  assert.deepEqual([openingRanges(bars)[0].status, openingRanges(bars)[0].open_ms], ["session_clock_mismatch", open]);
+  assert.equal(orb.plan(1, ctx(bars)), null);
+});
+
+test("ORB-11 the gates: pickStrategy can pick orb_breakout; the range mode keeps it out (not a range agent)", () => {
+  const plan = orb.plan(1, ctx(londonBreak()));
+  const picked = pickStrategy({ side: "long", speakers: [{ id: "orb_breakout" }], plans: { orb_breakout: { status: "live", plan } }, agentConfidence: { orb_breakout: { long: 0.7 } }, quorum: { long_share: 0.8 }, stance: "BUY", opts: { minRrr: 1 } });
+  assert.deepEqual([picked.agent, picked.trade?.strategy, picked.trade?.pattern, picked.trade?.chart], ["orb_breakout", "orb_breakout", "orb_london", "15m"]);
+  assert.equal(RANGE_GATED_AGENTS.includes("orb_breakout"), false);
+  const sig = { trading_mode: "range", side: "BUY", trade_agent: "orb_breakout", signal_id: "s1", action: "ENTER_LIMIT", entry: 1, stop: 1, tp1: 1 };
+  assert.deepEqual([applyRangeMode(sig, { regime: "normal-ranging" }).side, applyRangeMode(sig, { regime: "normal-ranging" }).awaiting_reason], ["NONE", "range_mode_agent"]);
+});
+
+test("ORB-12 words only: no three-to-five-digit number in the agent's fits, setup or notes; a fresh process imports either module first", () => {
+  const p = orb.plan(1, ctx(londonBreak()));
+  for (const text of [orb.fits, orb.label, ...Object.values(orb.variants), p.setup, p.entry_note, p.stop_note]) assert.ok(!/\d{3,5}/.test(text), text);
+  for (const first of ["opening-range", "strategy-agents"]) {
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", `const a = await import(${JSON.stringify(new URL(`../src/${first}.mjs`, import.meta.url).href)}); const m = await import(${JSON.stringify(new URL("../src/strategy-agents.mjs", import.meta.url).href)}); console.log(m.AGENT_IDS.length, m.AGENT_IDS.includes("orb_breakout"), typeof a.openingRanges === "function" || typeof a.agentContext === "function");`], { encoding: "utf8" }).trim();
+    assert.equal(out, "14 true true", first);
+  }
+});
+
+// ---------------------------------------------------------------- Track A PR 8: the edges as key levels
+
+test("ORB-13 rawLevels: the live range's edges in the session family on the 15m chart, words only; none outside the window or off", () => {
+  const bars = londonBreak();
+  const edges = rawLevels({ bars: { M15: bars } }).filter((l) => /opening range/.test(l.label));
+  assert.deepEqual(edges.map((l) => [l.label, l.price, l.kind, l.tf, l.weight, l.reader]), [
+    ["London opening range low", 2595, "open", "15", ORB_LEVEL_WEIGHT, "session"],
+    ["London opening range high", 2605, "open", "15", ORB_LEVEL_WEIGHT, "session"]
+  ]);
+  assert.equal(ORB_LEVEL_WEIGHT, 0.5);
+  assert.equal(familyOf("open"), "session");
+  assert.ok(edges.every((l) => !/\d/.test(l.label)), "labels in words");
+  const none = (b, opts = {}) => rawLevels({ bars: { M15: b }, ...opts }).filter((l) => /opening range/.test(l.label)).length;
+  assert.equal(none(bars, { orbLevels: "off" }), 0, "off");
+  assert.equal(none(series(LDN - 4 * M15, LDN + 2 * M15)), 0, "not formed");
+  // At 17:00Z London's window is over; New York's range (13:00 to 13:45Z) is live, so only its edges are there.
+  const late = rawLevels({ bars: { M15: londonBreak({ until: Date.UTC(2026, 10, 24, 17, 0) }) } }).filter((l) => /opening range/.test(l.label)).map((l) => l.label);
+  assert.deepEqual(late, ["New York opening range low", "New York opening range high"], "London after its window");
+  assert.equal(none(bars.filter((b) => b.open_time !== iso(LDN + M15))), 0, "a range bar missing");
+});
+
+test("ORB-14 the edges never make a candidate alone: one family, weight 0.5, beside other levels or not", () => {
+  // Alone: a zone of the two edges' session family only.
+  const lone = clusterLevels(rawLevels({ bars: { M15: londonBreak() } }).filter((l) => /opening range/.test(l.label)), 3, 2600);
+  assert.ok(lone.length >= 1 && lone.every((z) => !z.candidate && z.sources === 1));
+  // Beside two other families at the same price: three families, the session family's 0.5 the only addition.
+  const others = [{ price: 2605, kind: "swing", tf: "60", label: "1H swing high", weight: 1.35 }, { price: 2605.2, kind: "pivot", tf: "D", label: "daily pivot", weight: 2.5 }];
+  const edge = rawLevels({ bars: { M15: londonBreak() } }).filter((l) => l.label === "London opening range high");
+  const [withEdge] = clusterLevels([...others, ...edge].sort((a, b) => a.price - b.price), 1, 2590);
+  const [without] = clusterLevels(others, 1, 2590);
+  assert.deepEqual([withEdge.sources, without.sources, Math.round((withEdge.score - without.score) * 100) / 100], [3, 2, 0.5]);
+});
+
+test("ORB-15 the switch: ORB_LEVELS and orb_breakout's switch; it travels in the inputs only when off; buildKeyLevels honours it", async () => {
+  assert.deepEqual([orbLevelsMode({}), orbLevelsMode({ ORB_LEVELS: "OFF" }), orbLevelsMode({ STRATEGY_AGENTS_OFF: "orb_breakout" }), orbLevelsMode({ STRATEGY_AGENTS_MODE: "off" })], ["on", "off", "off", "off"]);
+  assert.deepEqual([orbLevelsModes({}), orbLevelsModes({ ORB_LEVELS: "off" })], [{}, { orbLevels: "off" }]);
+  assert.equal("orbLevels" in (await se.loadStrategyInputs({}, { now: NOW })).modes, false, "the default inputs are as before");
+  assert.equal((await se.loadStrategyInputs({ ORB_LEVELS: "off" }, { now: NOW })).modes.orbLevels, "off");
+  assert.deepEqual(slimInputs({ ...zoneInputs(), modes: { orbLevels: "off" } }).modes, { orbLevels: "off" }, "the capture keeps it");
+  assert.equal("modes" in slimInputs({ ...zoneInputs(), modes: { orbLevels: "on" } }), false);
+  const args = { bars: { M15: londonBreak() }, price: 2600, atrH1: 8 };
+  const has = (r) => r.zones.some((z) => (z.members ?? []).some((m) => /opening range/.test(m.label)));
+  assert.equal(has(buildKeyLevels(args)), true);
+  assert.equal(has(buildKeyLevels({ ...args, orbLevels: "off" })), false);
+});
+
+test("ORB-16 the zone scenario with the edges on: only the zones they join change (wider, the session family added), the candidates do not", () => {
+  const on = se.buildStrategy(zoneInputs()), off = se.buildStrategy({ ...zoneInputs(), modes: { orbLevels: "off" } });
+  const cand = (s) => JSON.stringify(s.key_levels.zones.filter((z) => z.candidate).map((z) => [z.low, z.high, z.score, z.role]));
+  assert.equal(cand(on), cand(off), "the candidates are those of off");
+  const touched = on.key_levels.zones.filter((z) => (z.members ?? []).some((m) => /opening range/.test(m.label)));
+  assert.deepEqual(touched.map((z) => [z.candidate, z.families.includes("session")]), [[false, true], [false, true]]);
+  assert.equal(on.key_levels.zones.length, off.key_levels.zones.length);
+  // The public reading carries the words only.
+  assert.ok(!JSON.stringify(on.key_levels.summary ?? "").match(/opening range (high|low)[^,;]*\d{3,5}/));
 });

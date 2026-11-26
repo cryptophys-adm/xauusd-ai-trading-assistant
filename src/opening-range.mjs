@@ -27,6 +27,16 @@ export function orbMode(env) {
   return mode === "off" || off.includes("orb_breakout") ? "off" : "on";
 }
 
+/**
+ * Track A PR 8: the opening-range edges as key levels (src/key-level-agent.mjs rawLevels). Off with ORB_LEVELS "off" or
+ * while orbMode is off; on otherwise.
+ */
+export function orbLevelsMode(env) {
+  return String(env?.ORB_LEVELS ?? "on").trim().toLowerCase() === "off" || orbMode(env) === "off" ? "off" : "on";
+}
+/** The modes entry the strategy inputs carry: { orbLevels: "off" } while off, nothing while on (the inputs as before). */
+export const orbLevelsModes = (env) => (orbLevelsMode(env) === "off" ? { orbLevels: "off" } : {});
+
 /** Pure: a high-impact USD release ({ time, impact, currency }, src/econ-calendar.mjs) whose time falls in [from, to). */
 const eventInside = (events, from, to) => (Array.isArray(events) ? events : []).some((e) => {
   const t = toMs(e?.time ?? e?.at ?? e?.release_ms);

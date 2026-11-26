@@ -61,7 +61,8 @@ const snapshot = (s) => (s?.huds ? {
   ...(s.chart_plane ? { chart_plane: s.chart_plane } : {})
 } : null);
 
-const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone", "zoneTypes"]);
+// Track A PR 8: orbLevels (ORB_LEVELS or orb_breakout off) last, so a capture with it on is as before.
+const SLIM_MODES = Object.freeze(["chartPatterns", "tp1KeyZone", "entryZone", "zoneTypes", "orbLevels"]);
 /** The strategy switches that are off, in SLIM_MODES order (and Z6's SD_LEVELS when on), or null when all are at their defaults. */
 const offModes = (modes) => {
   const off = Object.fromEntries(SLIM_MODES.filter((k) => modes?.[k] === "off").map((k) => [k, "off"]));

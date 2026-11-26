@@ -123,7 +123,10 @@ export const PLAN_COLUMNS = "setup_key, decision_key, agent, pattern, opened_at,
  */
 export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes = undefined, env: extraEnv = {}, extraColumns = "", prophet = false, aegis = false } = {}) {
   const env = { ...ZONE_ENV, ...extraEnv };
-  const inputs = zoneInputs(modes, { prophet, aegis });
+  // Track A PR 8: the scenario's live London window adds its opening-range edges to the key levels, so they are off here
+  // (as orb_breakout is, ZONE_ENV) and the pins stay those of before; ORB-10 runs the scenario with them on.
+  const base = zoneInputs(modes, { prophet, aegis });
+  const inputs = { ...base, modes: { ...(base.modes ?? {}), orbLevels: "off" } };
   const strategy = se.buildStrategy(inputs);
   const loaded = { inputs, strategy, global: global(), correlations: null, regime: "normal-trending" };
   const assessment = de.assess(loaded, { now: NOW, env });
