@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import {
   routeShadowCall, shadowModelRouterMode, modelRouterConfig, routerCounters, routerLimitReached, readRouterEvents, resetModelRouterForTests,
   MODEL_ROUTER_DEFAULTS, MODEL_ROUTER_LIMITS, MODEL_ROUTER_MAX_TOKENS, MODEL_ROUTER_TIMEOUT_MS, MODEL_ROUTER_BREAKER, MODEL_ROUTER_AGENT,
-  MODEL_ROUTER_CAPABILITIES, MODEL_ROUTER_PAID_KEY, MODEL_ROUTER_REASONS, MODEL_ROUTER_STATUS_CACHE_MS
+  MODEL_ROUTER_CAPABILITIES, MODEL_ROUTER_PAID_KEY, MODEL_ROUTER_REASONS, MODEL_ROUTER_STATUS_CACHE_MS, readKernelStatus, paidSignalOf
 } from "../src/model-router.mjs";
 import { runNewsShadowCompare, cleanReading, NEWS_COMPARE_METER, MODEL_ROUTER_ALLOW } from "../src/news-shadow-compare.mjs";
 import { shadowSpendToday, checkShadowBudget } from "../src/shadow-switch.mjs";
@@ -49,9 +49,23 @@ function kv() {
   const m = new Map();
   return { m, reads: [], async get(k) { this.reads.push(k); return m.has(k) ? m.get(k) : null; }, async put(k, v) { m.set(k, v); }, async delete(k) { m.delete(k); } };
 }
-function kernel(status = () => ({ outcome: "succeeded", result: { status: "on" } })) {
+/** A model_router.status result as the kernel returns it (control-plane-shared/src/model-router.ts modelRouterStatus, 982971c). */
+const statusResult = (state = "on", mode = "free_only") => ({
+  schema: "model_router.status.v1", available: state !== null, system: "cryptophys", provider: "reflection", model: "Beam-1.0-501B-A23B", tasks: ["shadow"],
+  configured: { var_on: false, key_present: false, base_url_valid: true },
+  state: state === null ? null : { state, mode, paid_cap_usd: mode === "paid_capped" ? 5 : null, spent_usd: 0, updated_by: "agent:test", updated_at: "2026-11-25T20:00:00Z", reason: null },
+  effective: "disabled", health: null, limits: {}, today: { day: "2026-11-25", requests: 0, in_tokens: 0, out_tokens: 0, this_minute: 0 }, ledger: [], fallbacks: {}, generated_at: "2026-11-25T21:10:00Z"
+});
+const kOn = () => ({ outcome: "succeeded", capability: "model_router.status", tier: 0, decision_id: null, result: statusResult("on", "free_only") });
+/** report_paid as the kernel checks it (syscall.ts reportModelRouterPaid): only { signal }, one of the five; anything else throws. */
+function reportPaidAnswer(payload) {
+  const extra = Object.keys(payload ?? {}).filter((k) => k !== "signal");
+  if (extra.length || !["http_402", "billing_error", "cost_field", "plan_change", "reported"].includes(payload?.signal)) return { outcome: "failed", reason: "model_router_report_invalid" };
+  return { outcome: "succeeded", capability: "model_router.report_paid", tier: 2, decision_id: "d1", result: { changed: true } };
+}
+function kernel(status = kOn) {
   const calls = [];
-  return { calls, async syscall(agent, capability, payload) { calls.push({ agent, capability, payload }); return capability === MODEL_ROUTER_CAPABILITIES.status ? status() : { outcome: "succeeded", result: {} }; } };
+  return { calls, async syscall(agent, capability, payload) { calls.push({ agent, capability, payload }); return capability === MODEL_ROUTER_CAPABILITIES.status ? status() : reportPaidAnswer(payload); } };
 }
 const reportPaidCalls = (k) => k.calls.filter((c) => c.capability === MODEL_ROUTER_CAPABILITIES.report_paid);
 function fresh(over = {}) {
@@ -264,7 +278,7 @@ test("SB1-3d paid signs (402, a billing error, a cost above 0) fall back and cal
     fellBackWith(await route(env, { fetcher: f }), reason);
     const paid = reportPaidCalls(env.AGENTS);
     assert.equal(paid.length, 1, reason);
-    assert.deepEqual(paid[0], { agent: "xauusd-model-router", capability: "model_router.report_paid", payload: { reason, model: BEAM, host: "api.reflection.ai", source: NEWS_COMPARE_METER } });
+    assert.deepEqual(paid[0], { agent: "xauusd-model-router", capability: "model_router.report_paid", payload: { signal: { paid_402: "http_402", paid_billing: "billing_error", paid_cost: "cost_field" }[reason] } });
     assert.equal(JSON.parse(env.SIGNAL_CACHE.m.get(MODEL_ROUTER_PAID_KEY)).reason, reason);
     // The next call is held: no request, no second report.
     fellBackWith(await route(env, { fetcher: f, at: NIGHT + 1_000 }), "paid_hold");
@@ -274,11 +288,15 @@ test("SB1-3d paid signs (402, a billing error, a cost above 0) fall back and cal
 
 test("SB1-3e the kernel's model_router.status not on: off, refused, failed, unreachable or unreadable all fall back (60 s cache)", async () => {
   const answers = [
-    ["kernel_off", () => ({ outcome: "succeeded", result: { status: "off" } })],
+    ["kernel_off", () => ({ outcome: "succeeded", result: statusResult("off_paid", "free_only") })],
+    ["kernel_off", () => ({ outcome: "succeeded", result: statusResult("off", "free_only") })],
+    ["kernel_paid_capped", () => ({ outcome: "succeeded", result: statusResult("on", "paid_capped") })],
+    ["kernel_unknown", () => ({ outcome: "succeeded", result: statusResult(null) })],
+    ["kernel_unknown", () => ({ outcome: "succeeded", result: { status: "on" } })],
     ["kernel_unknown", () => ({ outcome: "denied", reason: "capability_not_granted" })],
     ["kernel_unknown", () => ({ outcome: "failed", reason: "unknown_capability" })],
     ["kernel_unknown", () => { throw new Error("rpc down"); }],
-    ["kernel_unknown", () => ({ outcome: "succeeded", result: { status: "maybe" } })],
+    ["kernel_unknown", () => ({ outcome: "succeeded", result: { ...statusResult(), state: { state: "maybe", mode: "free_only" } } })],
     ["kernel_unknown", () => ({ outcome: "succeeded" })]
   ];
   for (const [reason, status] of answers) {
@@ -292,7 +310,7 @@ test("SB1-3e the kernel's model_router.status not on: off, refused, failed, unre
   // The 60 s cache: one status read per minute per isolate.
   assert.equal(MODEL_ROUTER_STATUS_CACHE_MS, 60_000);
   let state = "off";
-  const env = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: { status: state } })) });
+  const env = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: statusResult(state === "off" ? "off_paid" : state, "free_only") })) });
   fellBackWith(await route(env, { at: NIGHT }), "kernel_off");
   state = "on";
   fellBackWith(await route(env, { at: NIGHT + 59_000 }), "kernel_off");
@@ -335,7 +353,7 @@ test("SB1-3h on, a reading that falls back runs the Workers AI call of today, un
 
 test("SB1-4 a paid sign turns routing off until the kernel's status reads on again (in this isolate and in a new one)", async () => {
   let state = "on";
-  const env = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: { status: state } })) });
+  const env = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: statusResult(state === "off" ? "off_paid" : state, "free_only") })) });
   let paid = true;
   const f = beam(() => (paid ? beamResponse({ error: { code: "payment_required" } }, { status: 402 }) : beamResponse()));
   fellBackWith(await route(env, { fetcher: f, at: NIGHT }), "paid_402");
@@ -353,7 +371,7 @@ test("SB1-4 a paid sign turns routing off until the kernel's status reads on aga
   assert.equal(env.SIGNAL_CACHE.m.has(MODEL_ROUTER_PAID_KEY), false);
   assert.equal(reportPaidCalls(env.AGENTS).length, 1, "reported once");
   // Another isolate (a fresh cache) sees the stored hold and reads the kernel before routing.
-  const env2 = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: { status: state } })) });
+  const env2 = fresh({ AGENTS: kernel(() => ({ outcome: "succeeded", result: statusResult(state === "off" ? "off_paid" : state, "free_only") })) });
   env2.SIGNAL_CACHE.m.set(MODEL_ROUTER_PAID_KEY, JSON.stringify({ at: NIGHT - 1, reason: "paid_cost", reported: true }));
   state = "off";
   fellBackWith(await route(env2, { at: NIGHT }), "paid_hold");
@@ -425,7 +443,7 @@ test("SB1-4b a paid sign whose report_paid failed holds routing, even with the k
   const calls = [];
   const AGENTS = { calls, async syscall(agent, capability, payload) {
     calls.push({ agent, capability, payload });
-    if (capability === MODEL_ROUTER_CAPABILITIES.status) return { outcome: "succeeded", result: { status: "on" } };
+    if (capability === MODEL_ROUTER_CAPABILITIES.status) return kOn();
     return reportOk ? { outcome: "succeeded", result: {} } : { outcome: "failed", reason: "unreachable" };
   } };
   const env = fresh({ AGENTS });
@@ -446,4 +464,39 @@ test("SB1-4b a paid sign whose report_paid failed holds routing, even with the k
   assert.equal(reportPaidCalls(AGENTS).length, 4);
   assert.equal((await route(env, { fetcher: f, at: NIGHT + 480_000 })).via, "beam");
   assert.equal(reportPaidCalls(AGENTS).length, 4, "no report once it landed");
+});
+
+// ---------------------------------------------------------------- 8. the kernel's real shapes (platform 982971c)
+
+test("SB1-8a model_router.status: only state on with mode free_only routes; paid_capped, off_* and a null state never do; effective is not read", () => {
+  assert.deepEqual(readKernelStatus(statusResult("on", "free_only")), { status: "on", detail: null });
+  assert.equal(statusResult("on", "free_only").effective, "disabled", "the kernel's own var and key say disabled: ignored");
+  assert.equal(readKernelStatus(statusResult("on", "paid_capped")).status, "paid_capped");
+  for (const st of ["off", "off_paid", "off_owner", "off_retention"]) assert.equal(readKernelStatus(statusResult(st, "free_only")).status, "off", st);
+  assert.deepEqual(readKernelStatus(statusResult(null)), { status: "unknown", detail: "no_state" });
+  for (const bad of [null, undefined, {}, { status: "on" }, { schema: "model_router.status.v1", state: "on" }, { ...statusResult(), schema: "other" }, { ...statusResult(), state: { state: "on", mode: "free" } }])
+    assert.equal(readKernelStatus(bad).status, "unknown", JSON.stringify(bad));
+});
+
+test("SB1-8b model_router.report_paid sends { signal } only, mapped from the paid reason; a refused report keeps routing held", async () => {
+  assert.deepEqual(["paid_402", "paid_billing", "paid_cost", "paid_plan", "anything"].map(paidSignalOf), ["http_402", "billing_error", "cost_field", "plan_change", "reported"]);
+  // The kernel's own rule (the fixture copies syscall.ts): an extra key is refused, { signal } accepted.
+  assert.equal(reportPaidAnswer({ signal: "http_402", model: BEAM }).outcome, "failed");
+  assert.equal(reportPaidAnswer({ signal: "paid_cap_reached" }).outcome, "failed");
+  assert.equal(reportPaidAnswer({ signal: "cost_field" }).outcome, "succeeded");
+  // Accepted: the stored hold reads reported, and the payload has the one key.
+  const env = fresh();
+  fellBackWith(await route(env, { fetcher: beam(() => beamResponse({ error: { code: "payment_required" } }, { status: 402 })), at: NIGHT }), "paid_402");
+  const [sent] = reportPaidCalls(env.AGENTS);
+  assert.deepEqual(Object.keys(sent.payload), ["signal"]);
+  assert.equal(JSON.parse(env.SIGNAL_CACHE.m.get(MODEL_ROUTER_PAID_KEY)).reported, true);
+  // Refused (a kernel that rejects every report): never reported, held even with the kernel on, retried each call.
+  const refusing = { calls: [], async syscall(agent, capability, payload) { this.calls.push({ agent, capability, payload }); return capability === MODEL_ROUTER_CAPABILITIES.status ? kOn() : { outcome: "failed", reason: "model_router_report_invalid" }; } };
+  const env2 = fresh({ AGENTS: refusing });
+  const f = beam(() => beamResponse({ error: { code: "payment_required" } }, { status: 402 }));
+  fellBackWith(await route(env2, { fetcher: f, at: NIGHT }), "paid_402");
+  assert.equal(JSON.parse(env2.SIGNAL_CACHE.m.get(MODEL_ROUTER_PAID_KEY)).reported, false);
+  fellBackWith(await route(env2, { fetcher: f, at: NIGHT + 120_000 }), "paid_hold");
+  assert.equal(f.calls.length, 1);
+  assert.equal(reportPaidCalls(refusing).length, 2);
 });

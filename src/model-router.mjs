@@ -28,9 +28,14 @@
 //   - an invalid answer: the same parse (parseModelObject) and the call site's own validation as the Workers AI path.
 // The kernel (platform AIR1, 982971c: the ADR-0007 amendment; XAUUSD_CEILING grants xauusd-model-router these two
 // capabilities; organism.json declares the agent so the census proposes register_agent). The two capabilities are
-// called like every other kernel capability: kernelSyscall over the AGENTS binding as MODEL_ROUTER_AGENT. Assumed shape
-// of the status answer: { outcome: "succeeded", result: { status: "on" | "off" } }. Until the kernel deploy and the
-// agent's registration land, a refused, failed or unknown call reads as not "on" and every call falls back.
+// called like every other kernel capability: kernelSyscall over the AGENTS binding as MODEL_ROUTER_AGENT, whose answer is
+// { outcome: "succeeded", result } (workers/ai-kernel/src/syscall.ts). model_router.status's result is
+// modelRouterStatus() (control-plane-shared/src/model-router.ts): { schema: "model_router.status.v1", available,
+// state: { state, mode, paid_cap_usd, spent_usd, ... } | null, effective, health, limits, today, ... }. Routing needs
+// state.state "on" AND state.mode "free_only" (the amendment: never under paid_capped, where only the kernel counts
+// spend); `effective` is not read (it also reflects the kernel's own var and key). model_router.report_paid takes only
+// { signal } (http_402, billing_error, cost_field, plan_change or reported); any other key is refused. Anything else
+// (refused, failed, unknown, null state) reads as not "on" and every call falls back.
 import { recordAiUsage } from "./ai-usage.mjs";
 import { parseModelObject } from "./model-call.mjs";
 
@@ -56,10 +61,13 @@ export const MODEL_ROUTER_PAID_KEY = "model-router:paid:v1";
 /** Every fallback reason code. */
 export const MODEL_ROUTER_REASONS = Object.freeze([
   "not_allowed", "no_key", "breaker_open", "limit_tokens_in", "limit_tokens_out", "limit_requests_day", "limit_rpm",
-  "kernel_off", "kernel_unknown", "paid_hold", "timeout", "unreachable", "rate_limited", "paid_402", "paid_billing", "paid_cost",
+  "kernel_off", "kernel_paid_capped", "kernel_unknown", "paid_hold", "timeout", "unreachable", "rate_limited", "paid_402", "paid_billing", "paid_cost",
   "http_5xx", "http_4xx", "retention_missing", "retention_contributor", "invalid_answer"
 ]);
 const PAID = new Set(["paid_402", "paid_billing", "paid_cost"]);
+/** The kernel's paid signal for each of this router's paid reasons (report_paid takes { signal } only). */
+export const MODEL_ROUTER_PAID_SIGNAL = Object.freeze({ paid_402: "http_402", paid_billing: "billing_error", paid_cost: "cost_field", paid_plan: "plan_change" });
+export const paidSignalOf = (reason) => MODEL_ROUTER_PAID_SIGNAL[reason] ?? "reported";
 const BILLING = /billing|credit|payment|insufficient[_ ]?(funds|balance)|prepaid|paid[_ ]?plan|upgrade|subscription/i;
 const EVENTS_SQL = [
   `CREATE TABLE IF NOT EXISTS model_router_events (id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, day TEXT NOT NULL,
@@ -121,14 +129,28 @@ async function ensureEvents(db) {
   schemaReady.add(db);
 }
 
-/** The kernel's router status: "on", "off" or "unknown" (refused, failed, unreachable or unreadable). Never throws. */
+/**
+ * Pure: the router's reading of a model_router.status result. "on" only for state.state "on" with state.mode "free_only";
+ * "paid_capped" for on under a paid cap (never routed here); "off" for any other known state (off, off_paid, off_owner,
+ * off_retention); "unknown" when the result or its state is missing or unreadable.
+ */
+export function readKernelStatus(result) {
+  const st = result && typeof result === "object" && result.schema === "model_router.status.v1" ? result.state : undefined;
+  if (!st || typeof st !== "object") return { status: "unknown", detail: st === null ? "no_state" : "unreadable" };
+  const state = String(st.state ?? ""), mode = String(st.mode ?? "");
+  if (state === "on" && mode === "free_only") return { status: "on", detail: null };
+  if (state === "on" && mode === "paid_capped") return { status: "paid_capped", detail: "paid_capped" };
+  if (["off", "off_paid", "off_owner", "off_retention"].includes(state)) return { status: "off", detail: word(`${state}:${mode}`) };
+  return { status: "unknown", detail: "unreadable" };
+}
+
+/** The kernel's router status: "on", "paid_capped", "off" or "unknown" (refused, failed, unreachable or unreadable). Never throws. */
 export async function routerKernelStatus(env, { now = Date.now(), fresh = false } = {}) {
   if (!fresh && statusMemo && now >= statusMemo.at && now - statusMemo.at < MODEL_ROUTER_STATUS_CACHE_MS) return statusMemo;
   const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.status, {});
   const ok = r?.outcome === "succeeded" || r?.outcome === "success";
-  const said = ok ? String(r?.result?.status ?? r?.result?.state ?? "").trim().toLowerCase() : "";
-  const status = said === "on" ? "on" : said === "off" ? "off" : "unknown";
-  statusMemo = { at: now, status, detail: ok ? (status === "unknown" ? "unreadable" : null) : word(`${r?.outcome ?? "failed"}:${r?.reason ?? ""}`, 80) };
+  const read = ok ? readKernelStatus(r?.result) : { status: "unknown", detail: word(`${r?.outcome ?? "failed"}:${r?.reason ?? ""}`, 80) };
+  statusMemo = { at: now, ...read };
   return statusMemo;
 }
 
@@ -184,7 +206,7 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   // A paid sign whose report_paid did not land: the org-wide switch-off is not in force, so a kernel "on" proves nothing.
   // Hold, and report again on each call until the kernel takes it.
   if (paid && paid.reported !== true) {
-    const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { reason: word(paid.reason), model: cfg.model, host: new URL(cfg.base).host, source: word(meterSource, 64) });
+    const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { signal: paidSignalOf(paid.reason) });
     if (r?.outcome === "succeeded" || r?.outcome === "success") {
       try { await env?.SIGNAL_CACHE?.put?.(MODEL_ROUTER_PAID_KEY, JSON.stringify({ ...paid, at: clock(), reported: true })); } catch { /* reported; the next call reads the kernel again */ }
       statusMemo = { at: clock(), status: "off", detail: "paid" };
@@ -193,7 +215,7 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
     return back("paid_hold");
   }
   const k = await routerKernelStatus(env, { now, fresh: Boolean(paid && (!statusMemo || statusMemo.at < Number(paid.at))) });
-  if (k.status !== "on") return back(paid ? "paid_hold" : k.status === "off" ? "kernel_off" : "kernel_unknown");
+  if (k.status !== "on") return back(paid ? "paid_hold" : k.status === "off" ? "kernel_off" : k.status === "paid_capped" ? "kernel_paid_capped" : "kernel_unknown");
   if (paid) { try { await env.SIGNAL_CACHE.delete(MODEL_ROUTER_PAID_KEY); } catch { /* the next status read decides again */ } }
 
   const meter = (outcome, usage = { prompt: 0, completion: 0 }) => recordAiUsage(db, { source: meterSource, model: cfg.model, outcome, prompt: usage.prompt, completion: usage.completion, now: clock() });
@@ -224,7 +246,7 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   await meter(res.ok ? "ok" : "failed", usage);
   if (paidSign) {
     // Routing off org-wide, once, and held off here until the kernel's status reads "on" again.
-    const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { reason: paidSign, model: cfg.model, host: new URL(cfg.base).host, source: word(meterSource, 64) });
+    const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { signal: paidSignalOf(paidSign) });
     const reported = r?.outcome === "succeeded" || r?.outcome === "success";
     try { await env?.SIGNAL_CACHE?.put?.(MODEL_ROUTER_PAID_KEY, JSON.stringify({ at: clock(), reason: paidSign, reported })); } catch { /* the memo below still holds this isolate */ }
     statusMemo = { at: clock(), status: "off", detail: "paid" };

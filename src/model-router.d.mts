@@ -16,7 +16,11 @@ export function modelRouterConfig(env?: unknown): { base: string; model: string;
 export function routerCounters(rows: unknown, model?: string): RouterCounters | null;
 export function routerLimitReached(c: { tokens_in?: number; tokens_out?: number; requests?: number } | null, options?: { maxTokens?: number }): string | null;
 export function resetModelRouterForTests(): void;
-export function routerKernelStatus(env: unknown, options?: { now?: number; fresh?: boolean }): Promise<{ at: number; status: "on" | "off" | "unknown"; detail: string | null }>;
+export type KernelRouterStatus = "on" | "paid_capped" | "off" | "unknown";
+export function readKernelStatus(result: unknown): { status: KernelRouterStatus; detail: string | null };
+export const MODEL_ROUTER_PAID_SIGNAL: Readonly<Record<string, "http_402" | "billing_error" | "cost_field" | "plan_change">>;
+export function paidSignalOf(reason: string): "http_402" | "billing_error" | "cost_field" | "plan_change" | "reported";
+export function routerKernelStatus(env: unknown, options?: { now?: number; fresh?: boolean }): Promise<{ at: number; status: KernelRouterStatus; detail: string | null }>;
 export function routeShadowCall<T>(env: unknown, options: {
   site: string;
   allow: readonly string[];
