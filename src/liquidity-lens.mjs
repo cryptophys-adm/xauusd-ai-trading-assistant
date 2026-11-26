@@ -622,6 +622,13 @@ export function liquidityFields(state, { now = Date.now(), knobs = null } = {}) 
   };
 }
 
+/** Pure (B18): lens B's levels on the feed's scale (broker − basis, cents), the same order; [] without a finite basis. */
+export function levelsOnFeed(levels, basis) {
+  if (!finite(basis) || !Array.isArray(levels)) return [];
+  const r2 = (v) => Math.round(v * 100) / 100;
+  return levels.filter((z) => finite(z?.low) && finite(z?.high) && z.low <= z.high).map((z) => ({ low: r2(z.low - basis), high: r2(z.high - basis), kind: z.kind }));
+}
+
 /** Pure: the liquidity levels of a signal ([{ low, high, kind, source: "liquidity" }], broker scale), or []. */
 export function signalLiquidityLevels(signal) {
   if (signal?.liquidity_on !== true || typeof signal.liquidity_levels !== "string" || !signal.liquidity_levels) return [];

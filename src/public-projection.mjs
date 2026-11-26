@@ -52,7 +52,8 @@ export function sessionOfClose(iso) {
 }
 
 /** Checks a recap never names (Z2's zone_ahead reads the plan's zones: publicRecap stays as it was before it). */
-const HELD_BACK_HIDDEN = Object.freeze(["zone_ahead"]);
+// B18 (errata E4): room_liquidity, lens B's own block, never reaches public output; its WAIT does, as any WAIT.
+const HELD_BACK_HIDDEN = Object.freeze(["zone_ahead", "room_liquidity"]);
 /** Pure: the guardrail checks that failed on one side, by name only. */
 function heldBack(guardrails, side) {
   const g = guardrails?.[side];

@@ -71,6 +71,9 @@ const offModes = (modes) => {
   if (sources.length) off.zoneSourcesOff = sources;
   // Z6: SD_LEVELS, kept only when it is not "off" (its default), so the replay rebuilds the box levels it recorded.
   if (modes?.sdLevels === "record" || modes?.sdLevels === "signal") off.sdLevels = modes.sdLevels;
+  // B18: KEY_LEVEL_FAMILIES_OFF, kept only when a family is off (the capture keeps no lens B input, so it never builds
+  // key_levels.management; the switch is kept for the record).
+  if (Array.isArray(modes?.keyLevelFamiliesOff) && modes.keyLevelFamiliesOff.length) off.keyLevelFamiliesOff = [...modes.keyLevelFamiliesOff];
   return Object.keys(off).length ? off : null;
 };
 /** Pure: the inputs buildStrategy reads, without the room texts or other unused fields. */

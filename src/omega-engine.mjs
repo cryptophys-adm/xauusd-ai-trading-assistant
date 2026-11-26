@@ -515,6 +515,9 @@ export function zoneGiveback(meta) {
  * Position Manager's management set; managementSpread, a price or null when unknown), lens B's levels join only with a
  * known feed basis (feed_basis_known), and one within two spreads of a Key Level zone merges into it (the zone stays as
  * it is; the duplicate goes). An unknown spread merges nothing. Without `spread` (the limit council, the views): today's.
+ * B18 (Track B PR 18): in the management mode only, with the lens on and a known basis, the signal's management_levels
+ * (lens B's management candidates, the feed's scale) join as zones with source "liquidity" and kind "zone"; lens B's
+ * own levels merge into them as into any zone. A signal without the field gives B17's set byte for byte.
  */
 export function brokerKeyLevels(signal, { typed = false, sd = false, spread = undefined } = {}) {
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4; owner 2026-11-20,
@@ -533,6 +536,15 @@ export function brokerKeyLevels(signal, { typed = false, sd = false, spread = un
       const [lo, hi] = parts[i].split(":").map(Number);
       const box = marks?.[i] ? { sd: true } : {};
       if (positive(lo) && positive(hi) && lo <= hi) out.push(words ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...words[i], ...box } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...box });
+    }
+  }
+  if (management && known && signal?.liquidity_on === true && typeof signal.management_levels === "string" && signal.management_levels) {
+    for (const part of signal.management_levels.split(",")) {
+      const [lo, hi] = part.split(":").map(Number);
+      if (positive(lo) && positive(hi) && lo <= hi) {
+        const z = { low: lo + signal.feed_basis, high: hi + signal.feed_basis, source: "liquidity", kind: "zone" };
+        out.push(words ? { ...z, type: "none", strength: null, freshness: null } : z);
+      }
     }
   }
   const near = management && positive(spread) ? 2 * spread : null;

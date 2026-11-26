@@ -559,6 +559,8 @@ test("PL21. the ledger step end to end on D1 and KV: the active account's archiv
   const state = JSON.parse(await e.SIGNAL_CACHE.get(LIQUIDITY_STATE_KEY));
   assert.equal(state.facts.baseline, "insufficient");
   assert.ok(Array.isArray(state.levels));
+  // B18: no feed series in KV here, so no basis: lens B's levels stay off the feed's scale.
+  assert.deepEqual([state.feed_basis, state.feed_basis_known, state.levels_feed], [null, false, []]);
   assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS n FROM liquidity_readings").get().n, 1);
   const st = await lensStatus(e, { now });
   assert.deepEqual(st.switches, { positioning_enabled: true, liquidity_enabled: true, setting: { positioning: "positioning_enabled", liquidity: "liquidity_enabled" } });
@@ -901,4 +903,28 @@ test("PL26. runLensStep end to end over a backfill: the replayed readings reach 
   assert.deepEqual([out.floor.status, out.floor.lenses.liquidity.floored], ["floored", true]);
   assert.ok(JSON.parse(await store.get(FLOOR)).liquidity);
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM omega_events WHERE action = 'lens_weight_floor'").get().n, 1);
+});
+
+test("PL27. B18: the ledger step writes the feed basis (feedBasis over the archive and the feed's 5m series) and lens B's levels on the feed's scale", async () => {
+  reset();
+  const { runLiquidityStep } = await import("../src/lens-steps.mjs");
+  const { LIQUIDITY_STATE_KEY } = await import("../src/liquidity-lens.mjs");
+  const e = env({ CORPUS_ORACLE_MODE: "shadow" });
+  const now = T0 + 200 * M1;
+  e.DB.raw.exec("CREATE TABLE omega_bridge (id INTEGER PRIMARY KEY, state TEXT); CREATE TABLE omega_connection (id INTEGER PRIMARY KEY, version INTEGER, status TEXT, server TEXT); CREATE TABLE omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER, actor TEXT, action TEXT, detail TEXT); CREATE TABLE omega_settings (id INTEGER PRIMARY KEY, settings TEXT, version INTEGER)");
+  const ref = "acct_00112233aabbccdd";
+  e.DB.raw.prepare("INSERT INTO omega_bridge (id, state) VALUES (1, ?)").run(JSON.stringify({ account_ref: ref, server: "Demo-MT5", connected: true, received_ms: now - 1000, account: { login_hash: "f".repeat(64) }, symbol: { name: "XAUUSD", digits: 2, spread_points: 20 } }));
+  e.DB.raw.prepare("INSERT INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'Demo-MT5')").run();
+  const price = (i) => 4100 + Math.sin(i / 5);
+  await archiveBrokerBars(e.DB, { accountRef: ref, source: "mt5:demo-mt5:XAUUSD", digits: 2, connectionVersion: 3, bars: barsOf(T0, 200, { p: price }), now });
+  // The feed 0.5 below the broker at every 5m close (the broker's M1 bar closing at the same minute).
+  const feed = [];
+  for (let k = 1; k <= 39; k += 1) { const close = T0 + k * 5 * M1; feed.push({ open_time: new Date(close - 5 * M1).toISOString(), close_time: new Date(close).toISOString(), open: 1, high: 1, low: 1, close: Math.round((price(k * 5 - 1) - 0.5) * 100) / 100 }); }
+  await e.SIGNAL_CACHE.put("market-data:v2:series:OANDA:XAUUSD|5m", JSON.stringify({ candles: feed }));
+  assert.equal((await runLiquidityStep(e, { now })).status, "ok");
+  const state = JSON.parse(await e.SIGNAL_CACHE.get(LIQUIDITY_STATE_KEY));
+  assert.equal(state.feed_basis_known, true);
+  assert.ok(Math.abs(state.feed_basis - 0.5) < 0.011, String(state.feed_basis));
+  assert.equal(state.levels_feed.length, state.levels.length);
+  state.levels.forEach((z, i) => { assert.ok(Math.abs(z.low - state.feed_basis - state.levels_feed[i].low) < 0.006); assert.equal(state.levels_feed[i].kind, z.kind); });
 });

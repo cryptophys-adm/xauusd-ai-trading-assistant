@@ -165,6 +165,30 @@ All fact names below pass the platform's prohibited filter `/trad(e|ing)\b|order
 - **The profile agent** (`src/profile-agent.mjs`, `src/profile-council.mjs`): the same two facts are recorded in the
   evidence of an upgrade review. They never trigger a downgrade or an upgrade alone.
 
+### 3.6 Study: weekly COT against the next week (2026-11-26, read-only, aggregates only)
+
+The orchestrator asked for an outside-data assessment (owner 2026-11-26: "ya, nilai dulu"; closed the same day:
+"analisis diterima, jadi abaikan"). Lens A stays as it is; nothing was built.
+- **Data.** The disaggregated futures-only report (72hh-3qpy, managed money) from 2018-06 to 2026-11-17, against OANDA
+  XAUUSD weekly bars from the KV 1W series. That gives 247 weeks, 2021-11-28 to 2026-11-15.
+- **No lookahead.** Each report is matched to the first weekly bar opening after its Friday release (21:00Z); the 2025
+  shutdown weeks move to the 2025-12-29 catch-up.
+- **Base rate.** 54.7% of weeks closed up.
+
+| Hypothesis | n | Hit | Majority base | z vs base |
+|---|---:|---:|---:|---:|
+| Flow: managed money's net rose → next week up | 247 | 45.3% | 54.7% | −2.94 |
+| Flow, strong weeks (abs z > 1) | 64 | 43.8% | 54.7% | −1.75 |
+| Crowding contrarian (156-week pctl ≥ 90 → down, ≤ 10 → up) | 79 | 45.6% | 54.7% | −1.62 |
+| Crowding with the trend | 79 | 54.4% | 54.7% | −0.04 |
+
+- **Range.** The next week's range was 3.50% after abs z > 1 and 3.74% otherwise; corr(abs z, range) −0.06 and
+  corr(abs ΔOI, range) −0.06.
+- **Return.** Corr(z, next week's return) −0.13: weak mean reversion, about 2σ at n = 247, which does not survive the
+  five tests made. The two halves agree (flow 47.2% and 43.5%).
+- **Reading.** Weekly COT shows no honest directional or range skill for the next week over five years: weak context
+  only, which is how lens A uses it (a small capped witness).
+
 ## 4. Lens B: liquidity candles from the broker's M1 corpus
 
 ### 4.1 The archive
@@ -347,12 +371,52 @@ the levels as counts), never a sweep clause and never a price. The 4H and 1D roo
    `manageIntents`, the ladder's TP2 wait, the limit council's moves (§4.4), the Position Manager's management set
    (B17, built 2026-11-26) and, once built, the squeeze guard. Every use is gated on lens B on and above its floor
    (`lensKnobs("liquidity").active`), a fresh state (`LIQUIDITY_STATE_FRESH_MS`) and, from B17, `feed_basis_known`.
-   - **Planned: the squeeze guard (Track B, B18).** The Key Level Agent may list lens B members as management
-     candidates (`key_levels.management`), read only by `brokerKeyLevels`' management mode. A lens B block is recorded
-     as its own guardrail check, `room_liquidity`, computed with those candidates beside the Key Level zones, so it can
-     only add a block; its detail is in ATR, never a price. `decision.squeeze` and the room check stay as today, and
-     public output equals the same decision without lens B.
-
+   - **Built: lens B members as management candidates and the squeeze guard (Track B, B18, 2026-11-26; owner
+     2026-11-22: "tidak perlu shadow, langsung integrasikan ... key level, position dan lainnya").**
+     - **The state.** The ledger step (`runLiquidityStep`) also writes `feed_basis`, `feed_basis_known` and
+       `levels_feed`, lens B's levels on the feed's scale (broker − basis, `levelsOnFeed`). The basis is `feedBasis`
+       over the archive's broker M1 bars and the feed's last 24 closed 5m bars from KV. That is not the basis
+       `eaSignal` uses: eaSignal reads the corpus bars and keeps its basis 5 minutes per isolate, so the two can differ
+       by a few cents. With no known basis, `levels_feed` is empty.
+     - **The gates.** `loadStrategyInputs` passes `brokerLiquidity: { levels, at_ms }` only under rule 3's gates
+       (`brokerLiquidityInputs`): the lens on and above its floor for the mode in force, a state fresher than
+       `LIQUIDITY_STATE_FRESH_MS` with its facts available, and a known basis. The owner switch
+       `KEY_LEVEL_FAMILIES_OFF=broker_liquidity` reaches the build through `modes.keyLevelFamiliesOff` only (rule 5).
+       MS2's shadow modes reuse the live mode's input.
+     - **The candidates.** `withBrokerLiquidity` (src/key-level-agent.mjs, family `broker_liquidity`, weight 1) names
+       the zones a member would promote to candidate, at most one per side, strongest then nearest. A member counts
+       for a zone when the zone and the member together stay within the Key Level tolerance. Only zones neither
+       candidate nor qualified (capped) are eligible, and one promotes when its families + 1 ≥ 3 and its score + 1 ≥ 3.
+       The result is `key_levels.management`: copies with the zone's edges and `candidate_by: "broker_liquidity"`.
+       It never feeds the zones, the candidates, plans, entries, SL/TP at entry, limit placement or the squeeze guard's
+       existing inputs.
+     - **room_liquidity.** A guardrail check after `room`, only when management candidates exist and inside
+       SQUEEZE_GUARD. It fails only when lens B makes the squeeze (`squeezeOf` over the candidates plus the management
+       candidates is squeezed and over the candidates alone is not), so it never repeats `room`. The RM1b waiver never
+       lifts it, and it can only add a WAIT. Its detail is in ATR only. `decision.squeeze` and the `room` check stay as
+       before, so room-tuning's fidelity holds, and `withRoom` leaves `room_liquidity` as recorded.
+     - **Where they go.** The decision records `management_levels` [{ low, high }] (the feed's scale) and the signal
+       carries them flat (`management_levels`), read only by Omega's management mode (`brokerKeyLevels` with
+       `spread`: plus the basis, `source: "liquidity"`, `kind: "zone"`; lens B's own levels merge into them).
+       The public recap leaves `room_liquidity` out of `held_back` (errata E4). A lens-B-only block is still a WAIT,
+       and the recap equals the same record without the check. The model's features leave the check out. The council
+       sees the check with its ATR-only words. `/api/key-levels` (Nexus only) shows `key_levels.management`.
+     - **Replay (read-only, 2026-11-26, aggregates only).**
+       - Data: the 92 hourly strategy captures (`strategy_inputs`) from 2026-11-20 10:57 to 2026-11-26 12:00 UTC with a
+         lens B reading in force (79 with levels). Lens B's levels came from `liquidity_readings` on the feed's scale,
+         with the basis rebuilt as in the B17 replay.
+       - `key_levels.management` was non-empty on **3 of 79** bars, all on the **resistance** side (0 support).
+       - `room_liquidity` would have failed on **0** bars at a room of 0.5, 1 or 1.5 × the 1H range, so it would have
+         blocked **0** entries (live or v4). Two of the bars were already squeezed by `room`.
+       - A8 exposure (`pm_loosen_enabled` is on): each of the 3 bars had one open position (3 different short
+         positions). For 2 of them the management zone sits beyond the stop (a level `key_level_outside` could name);
+         for the third it lies between price and the stop.
+       - Council prompt size (the zone scenario's reference prompt, 12,998 chars): +170 chars (+1.3%) with the check
+         passing on both sides, +365 (+2.8%) when it fails. The added text is the guard entry only. The check is
+         present only on bars with management candidates (3 of 79), so the average growth over all bars is about
+         0.05%.
+       - Limits: hourly captures only (no 15m decision between them); the basis on 15m feed bars; the room value of
+         each mode at its default of 1 unless named.
 ## 6. Lens B in the Position Manager: measured reasons, by council only
 
 The Position Manager's use stays council-only with measured reasons (`src/position-manager.mjs`). Nothing loosens, cuts
