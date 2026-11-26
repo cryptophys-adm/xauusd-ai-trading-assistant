@@ -1,5 +1,5 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
-import { applyMt5Fallback } from "./mt5-fallback.mjs";
+import { applyMt5Fallback, applyBrokerSeries } from "./mt5-fallback.mjs";
 import { runBrokerShadow } from "./broker-shadow.mjs";
 import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
@@ -321,6 +321,14 @@ const worker = {
       } catch (error) {
         records.length = 0;
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback_failed", code: asString(error?.code) || "fallback_failed" }));
+      }
+      // QB1 O3: the broker-built series (silver 4H, context only) from the broker's bars, whatever TradingView's state;
+      // the broker is asked only once a new bucket can have closed. Never in the engines' bundle (role "context").
+      try {
+        const broker = await applyBrokerSeries(env);
+        if (broker.some((x) => x.bars || x.status === "failed")) console.log(JSON.stringify({ worker: WORKER_NAME, event: "broker_series", series: broker }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "broker_series_failed", code: asString(error?.code) || "broker_series_failed" }));
       }
       // Build the bundle once for both publish and informational 5m context.
       let latestBundle = null;

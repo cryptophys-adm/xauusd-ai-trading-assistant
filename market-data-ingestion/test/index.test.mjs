@@ -122,15 +122,17 @@ test("POST /pull bootstraps via the TradingView gateway within the per-run budge
   const first = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
   assert.equal(first.status, "ok");
   assert.equal(first.requested, 8);
-  assert.equal(first.deferred, 6);
+  // QB1 O3: silver 4H is built from the broker's bars, never pulled (13 TradingView series, not 14).
+  assert.equal(first.deferred, 5);
   // M1 (the chart source) first; an empty derived cache is bootstrapped natively once.
   assert.deepEqual(gateway.calls[0].requests[0], { symbol: "OANDA:XAUUSD", interval: "1m", count: 3000 });
   assert.deepEqual(gateway.calls[0].requests[1], { symbol: "OANDA:XAUUSD", interval: "5m", count: 5000 });
   assert.ok(gateway.calls[0].requests.every((r) => Object.keys(r).join() === "symbol,interval,count"));
 
   const second = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
-  assert.equal(second.requested, 6);
-  assert.deepEqual(second.updated.map((u) => u.series).sort(), ["CRYPTOCAP:USDT|4h", "OANDA:XAGUSD|4h", "TVC:DXY|4h", "TVC:US10Y|4h", "TVC:USOIL|15m", "TVC:USOIL|1h"]);
+  assert.equal(second.requested, 5);
+  assert.deepEqual(second.updated.map((u) => u.series).sort(), ["CRYPTOCAP:USDT|4h", "TVC:DXY|4h", "TVC:US10Y|4h", "TVC:USOIL|15m", "TVC:USOIL|1h"]);
+  assert.ok(gateway.calls.every((c) => c.requests.every((r) => r.symbol !== "OANDA:XAGUSD")), "silver is never asked of TradingView");
 
   const third = await (await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e)).json();
   assert.equal(third.status, "up_to_date");

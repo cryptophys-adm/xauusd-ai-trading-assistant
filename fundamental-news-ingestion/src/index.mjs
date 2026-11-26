@@ -687,26 +687,58 @@ function retryAfterMilliseconds(response, attempt) {
   return base + Math.floor(Math.random() * 100);
 }
 
-function parseQuotaCooldownUntil(message, now = Date.now()) {
-  const match = asString(message).match(/suspended until\s+(\d{1,2}):(\d{2})\s*UTC/i);
-  if (!match) return new Date(now + 60 * 60 * 1000).toISOString();
+/**
+ * QB1 (orchestrator 2026-11-26, O5): the provider's reset time from its refusal. 2026-11-26 the quota ran out at
+ * 00:50Z and the refusal matched no known form, so every hourly probe was refused again and pushed the cooldown on by
+ * an hour ("expected back" was never the provider's time). Forms read, first match wins: "suspended until HH:MM UTC"
+ * (the 2026-11-11 form; also "until HH:MM[:SS] GMT|Z"), an ISO timestamp, "in N seconds|minutes|hours", then the
+ * Retry-After header. A time more than 48 hours ahead is not trusted. None: one hour (today's hourly probe).
+ * Returns { until, form } with form null when nothing was read.
+ */
+const QUOTA_COOLDOWN_DEFAULT_MS = 60 * 60 * 1000;
+const QUOTA_COOLDOWN_MAX_MS = 48 * 60 * 60 * 1000;
+export function quotaCooldown(message, { now = Date.now(), retryAfterMs = null } = {}) {
+  const text = asString(message);
+  const ok = (ms) => Number.isFinite(ms) && ms > now && ms - now <= QUOTA_COOLDOWN_MAX_MS;
+  const clock = text.match(/until\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:UTC|GMT|Z)\b/i);
+  if (clock) {
+    const [h, m, sec] = [Number(clock[1]), Number(clock[2]), Number(clock[3] || 0)];
+    if (h <= 23 && m <= 59 && sec <= 59) {
+      const d = new Date(now);
+      let until = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), h, m, sec, 0);
+      if (until <= now) until += 24 * 60 * 60 * 1000;
+      if (ok(until)) return { until: new Date(until).toISOString(), form: "until_clock" };
+    }
+  }
+  const iso = text.match(/\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))/);
+  if (iso && ok(Date.parse(iso[1]))) return { until: new Date(Date.parse(iso[1])).toISOString(), form: "iso" };
+  const rel = text.match(/\bin\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/i);
+  if (rel) {
+    const unit = rel[2].toLowerCase();
+    const ms = Number(rel[1]) * (unit.startsWith("h") ? 3_600_000 : unit.startsWith("m") ? 60_000 : 1000);
+    if (ok(now + ms)) return { until: new Date(now + ms).toISOString(), form: "relative" };
+  }
+  if (Number.isFinite(Number(retryAfterMs)) && ok(now + Number(retryAfterMs))) return { until: new Date(now + Number(retryAfterMs)).toISOString(), form: "retry_after" };
+  return { until: new Date(now + QUOTA_COOLDOWN_DEFAULT_MS).toISOString(), form: null };
+}
 
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return new Date(now + 60 * 60 * 1000).toISOString();
+/** Pure: a refusal's text with no secret in it: bearer tokens, long token-like runs, emails and URLs out; 300 chars. */
+export function sanitizeRefusalText(message) {
+  return asString(message)
+    .replace(/bearer\s+\S+/gi, "Bearer <redacted>")
+    .replace(/https?:\/\/[^\s"')]+/gi, "<url>")
+    .replace(/[^\s@"']+@[^\s@"']+\.[a-z]{2,}/gi, "<email>")
+    .replace(/[A-Za-z0-9_\-.~+/=]{32,}/g, "<redacted>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
 
-  const current = new Date(now);
-  let until = Date.UTC(
-    current.getUTCFullYear(),
-    current.getUTCMonth(),
-    current.getUTCDate(),
-    hours,
-    minutes,
-    0,
-    0
-  );
-  if (until <= now) until += 24 * 60 * 60 * 1000;
-  return new Date(until).toISOString();
+/** The cooldown end for a quota refusal; logs the form read and the sanitized text, so an unknown form can be read. */
+export function parseQuotaCooldownUntil(message, now = Date.now(), retryAfterMs = null) {
+  const r = quotaCooldown(message, { now, retryAfterMs });
+  console.log("tv_quota_refusal", JSON.stringify({ form: r.form, until: r.until, retry_after_ms: Number.isFinite(Number(retryAfterMs)) ? Number(retryAfterMs) : null, text: sanitizeRefusalText(message) }));
+  return r.until;
 }
 
 async function invokeMcpGetNews(env, metadata, accessToken, symbols, doFetch = (...args) => fetch(...args)) {
@@ -764,7 +796,7 @@ async function invokeMcpGetNews(env, metadata, accessToken, symbols, doFetch = (
         code: quotaExceeded ? "mcp_quota_exceeded" : rateLimited ? "mcp_rate_limited" : "mcp_upstream_error",
         status: quotaExceeded ? 429 : response.status,
         quota_cooldown_until: quotaExceeded
-          ? parseQuotaCooldownUntil(upstreamMessage)
+          ? parseQuotaCooldownUntil(upstreamMessage, Date.now(), retryAfterMs)
           : rateLimited ? rateLimitCooldownUntil(retryAfterMs) : null,
         retry_after_ms: retryAfterMs,
         detail: asObject(payload) || text.slice(0, 500)

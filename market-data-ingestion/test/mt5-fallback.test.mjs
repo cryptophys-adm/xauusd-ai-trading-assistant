@@ -1,7 +1,7 @@
 // The MT5 fallback (docs/RFC_MT5_FALLBACK.md; owner 2026-11-11). src/mt5-fallback.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyMt5Fallback, applyMacroFallback, syntheticDxy, brokerCandles, gatewayDown, fallbackMode, resolveFallbackMode, FALLBACK_STALE_S, FEED_FALLBACK_KEY } from "../src/mt5-fallback.mjs";
+import { applyMt5Fallback, applyMacroFallback, applyBrokerSeries, syntheticDxy, brokerCandles, gatewayDown, fallbackMode, resolveFallbackMode, FALLBACK_STALE_S, FEED_FALLBACK_KEY } from "../src/mt5-fallback.mjs";
 import { SERIES, SERIES_INTERNALS, readSeries, refreshSeries, healPlan, buildBundle } from "../src/tradingview-source.mjs";
 
 class MemoryKV {
@@ -189,8 +189,20 @@ test("F7. stage 2: oil, silver and the dollar index from the broker's macro symb
   for (const b of ["EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDCHF"]) corpus[b] = minutes(b, "2027-01-15T05:00:00Z", 300);
   corpus.USDSEK = minutes("USDSEK", "2027-01-15T06:30:00Z", 210);
   const later = await applyMacroFallback({ MARKET_DATA_CACHE: kv, AI_WORKER: ai }, { now: Date.parse("2027-01-15T10:01:05Z") });
-  const xag = (await readSeries(kv, spec("OANDA:XAGUSD|4h"))).candles.filter((c) => c.src === "mt5");
+  // QB1 O3: silver is no longer a fallback target; the always-on broker builder makes it, with no fallback mark.
+  assert.equal((await readSeries(kv, spec("OANDA:XAGUSD|4h"))).candles.filter((c) => c.src === "mt5").length, 0, "the fallback leaves silver alone");
+  const built = await applyBrokerSeries({ MARKET_DATA_CACHE: kv, AI_WORKER: ai }, { now: Date.parse("2027-01-15T10:01:05Z") });
+  assert.deepEqual(built, [{ series: "OANDA:XAGUSD|4h", bars: 1 }]);
+  const silver = await readSeries(kv, spec("OANDA:XAGUSD|4h"));
+  const xag = silver.candles.filter((c) => c.src === "mt5");
   assert.deepEqual(xag.map((c) => [c.open_time, c.close]), [["2027-01-15T06:00:00.000Z", 50.2]]);
+  assert.equal(silver.fallback, undefined, "no fallback mark: nothing heals it");
+  assert.equal(silver.source, "mt5macro:monex-demo:XAGUSD");
+  // The next bucket (10:00-14:00) has not closed: the broker is not asked again.
+  let asked = 0;
+  const counting = { async corpusBars(req) { asked += 1; return ai.corpusBars(req); } };
+  assert.deepEqual(await applyBrokerSeries({ MARKET_DATA_CACHE: kv, AI_WORKER: counting }, { now: Date.parse("2027-01-15T10:30:00Z") }), [{ base: "XAGUSD", status: "not_due" }]);
+  assert.equal(asked, 0);
   // The dollar index: USDSEK starts at 06:30, so the 06:00 bucket is not covered by all six and is not built.
   assert.equal((await readSeries(kv, spec("TVC:DXY|4h"))).candles.filter((c) => c.src === "mt5").length, 0, JSON.stringify(later));
 });

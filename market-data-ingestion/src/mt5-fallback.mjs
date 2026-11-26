@@ -124,7 +124,7 @@ export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {
 // from its M1 bars (the AI Worker's corpusBars with a base), on the grid of their last native bar and
 // only for buckets the broker's minutes cover from their start:
 //   TVC:USOIL 5m, 15m, 1H   from the broker's oil CFD (its own price, as gold's);
-//   OANDA:XAGUSD 4H         from the broker's silver;
+//   OANDA:XAGUSD 4H         from the broker's silver at all times since QB1 (BROKER_TARGETS below);
 //   TVC:DXY 4H              the ICE dollar index computed from the broker's six pairs:
 //                           50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091
 //                           x USDSEK^0.042 x USDCHF^0.036, per minute where all six have a bar.
@@ -134,8 +134,16 @@ const DXY_WEIGHTS = Object.freeze({ EURUSD: -0.576, USDJPY: 0.136, GBPUSD: -0.11
 const DXY_CONSTANT = 50.14348112;
 export const MACRO_TARGETS = Object.freeze([
   { base: "USOIL", keys: ["TVC:USOIL|5m", "TVC:USOIL|15m", "TVC:USOIL|1h"] },
-  { base: "XAGUSD", keys: ["OANDA:XAGUSD|4h"] },
   { base: "DXY", synthetic: true, keys: ["TVC:DXY|4h"] }
+]);
+/**
+ * QB1 (orchestrator 2026-11-26, option O3; the TradingView quota): the series built from the broker's bars at all
+ * times, never pulled from TradingView (their SERIES entry carries `broker`). OANDA:XAGUSD 4H is context only (the
+ * Nexus correlations panel, src/correlations.mjs; buildBundle leaves role "context" out of the engines' bundle), so
+ * its 6 calls a weekday go back to the quota. Its bars carry src "mt5" and no fallback mark: nothing heals them.
+ */
+export const BROKER_TARGETS = Object.freeze([
+  { base: "XAGUSD", keys: ["OANDA:XAGUSD|4h"] }
 ]);
 const COVER_LOOKBACK_S = 6 * 3600;
 
@@ -151,54 +159,82 @@ export function syntheticDxy(rowsByBase) {
   }).filter((r) => [r.o, r.c].every(finite) && r.o > 0 && r.c > 0);
 }
 
+/**
+ * One target's series from the broker's M1 bars (the AI Worker's corpusBars with a base), on the grid of each
+ * series' last bar and only for buckets the broker's minutes cover from their start. `mark` (the fallback) records
+ * fallback.since_sec so the native pulls heal the bars; without it (BROKER_TARGETS) the series holds no fallback mark.
+ */
+async function rebuildFromBroker(env, kv, target, { now, mark }) {
+  const nowSec = Math.floor(now / 1000);
+  const out = [];
+  const specs = target.keys.map((k) => SERIES.find((s) => s.key === k)).filter(Boolean);
+  const owns = await Promise.all(specs.map((spec) => readSeries(kv, spec)));
+  // From six hours before the earliest bucket still to build, to know whether the minutes cover it.
+  const nextStart = Math.min(...specs.map((spec, i) => (owns[i]?.candles?.at(-1)?.time ?? nowSec - 24 * 3600) + spec.seconds));
+  // Without the fallback (every run): ask the broker only once the next bucket can have closed.
+  if (!mark && !specs.some((spec, i) => (owns[i]?.candles?.at(-1)?.time ?? -Infinity) + 2 * spec.seconds <= nowSec)) return [{ base: target.base, status: "not_due" }];
+  const sinceMs = (nextStart - COVER_LOOKBACK_S) * 1000;
+  let rows, source;
+  if (target.synthetic) {
+    const byBase = {};
+    let sources = [];
+    for (const b of Object.keys(DXY_WEIGHTS)) {
+      const r = await env.AI_WORKER.corpusBars({ base: b, since_ms: sinceMs, limit: 1500 });
+      byBase[b] = r?.bars || [];
+      if (r?.source) sources.push(r.source);
+    }
+    rows = syntheticDxy(byBase);
+    source = sources.length === 6 ? `${sources[0].split(":").slice(0, 2).join(":")}:DXY(6 pairs)` : null;
+  } else {
+    const r = await env.AI_WORKER.corpusBars({ base: target.base, since_ms: sinceMs, limit: 1500 });
+    rows = r?.bars || [];
+    source = r?.source ?? null;
+  }
+  const minutes = brokerCandles(rows, nowSec);
+  if (!minutes.length || !source) return [{ base: target.base, status: "no_broker_bars" }];
+  const firstMinute = minutes[0].time;
+  for (const [i, spec] of specs.entries()) {
+    const own = owns[i];
+    const after = own?.candles?.at(-1)?.time ?? -Infinity;
+    const anchor = Number.isFinite(after) ? after : 0;
+    const bars = aggregateCandles(minutes, { seconds: spec.seconds, sourceSeconds: 60, nowSec, after, anchor })
+      .filter((c) => c.time >= firstMinute) // the broker's minutes must cover the bucket from its start
+      .map((c) => ({ ...c, src: "mt5" }));
+    if (!bars.length) continue;
+    const merged = mergeCandles(own?.candles, bars, spec.retain);
+    const { fallback: ownFallback, ...rest } = own || {};
+    const record = { ...rest, series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe, fetched_at: new Date(now).toISOString(), candle_count: merged.length, volume_available: merged.every((c) => c.volume !== null), candles: merged };
+    if (mark) record.fallback = { since_sec: Math.min(ownFallback?.since_sec ?? Infinity, bars[0].time), source, started_at: ownFallback?.started_at ?? new Date(now).toISOString() };
+    else record.source = source;
+    await writeSeries(kv, spec, record);
+    out.push({ series: spec.key, bars: bars.length });
+  }
+  return out;
+}
+
 /** The macro series rebuilt from the broker's bars. Never throws; called while the XAUUSD fallback runs. */
 export async function applyMacroFallback(env, { now = Date.now() } = {}) {
   const kv = env?.MARKET_DATA_CACHE;
   if (!kv || typeof env?.AI_WORKER?.corpusBars !== "function") return [];
-  const nowSec = Math.floor(now / 1000);
   const out = [];
   for (const target of MACRO_TARGETS) {
-    try {
-      const specs = target.keys.map((k) => SERIES.find((s) => s.key === k)).filter(Boolean);
-      const owns = await Promise.all(specs.map((spec) => readSeries(kv, spec)));
-      // From six hours before the earliest bucket still to build, to know whether the minutes cover it.
-      const nextStart = Math.min(...specs.map((spec, i) => (owns[i]?.candles?.at(-1)?.time ?? nowSec - 24 * 3600) + spec.seconds));
-      const sinceMs = (nextStart - COVER_LOOKBACK_S) * 1000;
-      let rows, source;
-      if (target.synthetic) {
-        const byBase = {};
-        let sources = [];
-        for (const b of Object.keys(DXY_WEIGHTS)) {
-          const r = await env.AI_WORKER.corpusBars({ base: b, since_ms: sinceMs, limit: 1500 });
-          byBase[b] = r?.bars || [];
-          if (r?.source) sources.push(r.source);
-        }
-        rows = syntheticDxy(byBase);
-        source = sources.length === 6 ? `${sources[0].split(":").slice(0, 2).join(":")}:DXY(6 pairs)` : null;
-      } else {
-        const r = await env.AI_WORKER.corpusBars({ base: target.base, since_ms: sinceMs, limit: 1500 });
-        rows = r?.bars || [];
-        source = r?.source ?? null;
-      }
-      const minutes = brokerCandles(rows, nowSec);
-      if (!minutes.length || !source) { out.push({ base: target.base, status: "no_broker_bars" }); continue; }
-      const firstMinute = minutes[0].time;
-      for (const [i, spec] of specs.entries()) {
-        const own = owns[i];
-        const after = own?.candles?.at(-1)?.time ?? -Infinity;
-        const anchor = Number.isFinite(after) ? after : 0;
-        const bars = aggregateCandles(minutes, { seconds: spec.seconds, sourceSeconds: 60, nowSec, after, anchor })
-          .filter((c) => c.time >= firstMinute) // the broker's minutes must cover the bucket from its start
-          .map((c) => ({ ...c, src: "mt5" }));
-        if (!bars.length) continue;
-        const merged = mergeCandles(own?.candles, bars, spec.retain);
-        const since = Math.min(own?.fallback?.since_sec ?? Infinity, bars[0].time);
-        await writeSeries(kv, spec, { ...(own || {}), series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe, fetched_at: new Date(now).toISOString(), candle_count: merged.length, volume_available: merged.every((c) => c.volume !== null), fallback: { since_sec: since, source, started_at: own?.fallback?.started_at ?? new Date(now).toISOString() }, candles: merged });
-        out.push({ series: spec.key, bars: bars.length });
-      }
-    } catch (error) {
-      out.push({ base: target.base, status: "failed", error: String(error?.message ?? error).slice(0, 120) });
-    }
+    try { out.push(...(await rebuildFromBroker(env, kv, target, { now, mark: true }))); }
+    catch (error) { out.push({ base: target.base, status: "failed", error: String(error?.message ?? error).slice(0, 120) }); }
+  }
+  return out;
+}
+
+/**
+ * QB1 O3: the BROKER_TARGETS series from the broker's bars on every run, whatever the gateway's state; the broker
+ * is asked only once a new bucket can have closed. Never throws.
+ */
+export async function applyBrokerSeries(env, { now = Date.now() } = {}) {
+  const kv = env?.MARKET_DATA_CACHE;
+  if (!kv || typeof env?.AI_WORKER?.corpusBars !== "function") return [];
+  const out = [];
+  for (const target of BROKER_TARGETS) {
+    try { out.push(...(await rebuildFromBroker(env, kv, target, { now, mark: false }))); }
+    catch (error) { out.push({ base: target.base, status: "failed", error: String(error?.message ?? error).slice(0, 120) }); }
   }
   return out;
 }
