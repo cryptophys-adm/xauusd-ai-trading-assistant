@@ -32,7 +32,10 @@ const DIRECTION_FILES = [
   // H3f: the owner's correction control (no direction colour at all: up is the ok cyan, down the off grey).
   "components/Correction.tsx",
   // C5: the Position Manager lines on the Omega page (no direction colour at all: on is the ok cyan, off the fault red, R neutral).
-  "components/PmLines.tsx"
+  "components/PmLines.tsx",
+  // C4: the Opening range page (a side's glyph and word, a breakout's direction, the plan's Stop red and targets green;
+  // statuses in their tones; rates, outcomes and R neutral).
+  "pages/Orb.tsx"
 ];
 
 test("NT1 the owner-approved values: text and fill on the panel #0b0f18", () => {

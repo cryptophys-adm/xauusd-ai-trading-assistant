@@ -1,0 +1,518 @@
+{
+  "status": "ok",
+  "mode": "on",
+  "default_agent": "zone_pullback",
+  "agents": [
+    {
+      "id": "zone_pullback",
+      "label": "Zone pullback",
+      "version": 1,
+      "status": "live",
+      "fits": "Any market: enter at the nearest key zone behind price (or at price when it already holds there), the stop behind the next zone, the target at the next key level. The plan of every decision before the agents.",
+      "record": null
+    },
+    {
+      "id": "sweep_reversal",
+      "label": "Sweep reversal",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A stop hunt: within the last three 15m bars price went through a key zone to a new 3-hour extreme and the last bar closed back inside. Enter at the close with the stop just beyond the sweep's extreme: a tight stop, a quick invalidation. Not for a trend that keeps closing beyond the zone.",
+      "record": null
+    },
+    {
+      "id": "breakout_retest",
+      "label": "Break and retest",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A trend continuing: within the last six 15m bars a bar closed beyond a key zone that had held price back for at least three bars, and no bar has closed back through it. Enter on the retest of the broken zone's edge, the stop behind the zone (or the breakout bar), the target at the next key level. Not for a range, where breaks fail.",
+      "record": null
+    },
+    {
+      "id": "range_fade",
+      "label": "Range fade",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A ranging 1H regime: price near the edge of its 8-hour range. Enter at the edge, the stop a quarter of the 1H average range beyond it, the first target the middle of the range and the second its far side. Not for a trending regime or a range that is breaking.",
+      "record": null
+    },
+    {
+      "id": "pattern_peaks",
+      "label": "Reversal tops and bottoms",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A reversal: price closed through the pattern's confirmation line. Enter on the return to that line, the stop half the pattern's height back inside it. The Projection Agent's double and triple tops and bottoms, head-and-shoulders, three falling peaks and three rising valleys, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "peaks",
+      "patterns": [
+        {
+          "id": "double_bottom_adam_adam",
+          "name": "double bottom (Adam & Adam)"
+        },
+        {
+          "id": "double_bottom_adam_eve",
+          "name": "double bottom (Adam & Eve)"
+        },
+        {
+          "id": "double_bottom_eve_adam",
+          "name": "double bottom (Eve & Adam)"
+        },
+        {
+          "id": "double_bottom_eve_eve",
+          "name": "double bottom (Eve & Eve)"
+        },
+        {
+          "id": "double_top_adam_adam",
+          "name": "double top (Adam & Adam)"
+        },
+        {
+          "id": "double_top_adam_eve",
+          "name": "double top (Adam & Eve)"
+        },
+        {
+          "id": "double_top_eve_adam",
+          "name": "double top (Eve & Adam)"
+        },
+        {
+          "id": "double_top_eve_eve",
+          "name": "double top (Eve & Eve)"
+        },
+        {
+          "id": "head_and_shoulders_bottom",
+          "name": "head-and-shoulders bottom"
+        },
+        {
+          "id": "head_and_shoulders_bottom_complex",
+          "name": "complex head-and-shoulders bottom"
+        },
+        {
+          "id": "head_and_shoulders_top",
+          "name": "head-and-shoulders top"
+        },
+        {
+          "id": "head_and_shoulders_top_complex",
+          "name": "complex head-and-shoulders top"
+        },
+        {
+          "id": "three_falling_peaks",
+          "name": "three falling peaks"
+        },
+        {
+          "id": "three_rising_valleys",
+          "name": "three rising valleys"
+        },
+        {
+          "id": "triple_bottom",
+          "name": "triple bottom"
+        },
+        {
+          "id": "triple_top",
+          "name": "triple top"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_lines",
+      "label": "Triangles, wedges and rectangles",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A breakout from two boundary lines. Enter on the return to the broken line, the stop beyond the pattern's other line, where the pattern would be busted. The Projection Agent's triangles, wedges, rectangles, broadening formations and diamonds, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "lines",
+      "patterns": [
+        {
+          "id": "broadening_bottom",
+          "name": "broadening bottom"
+        },
+        {
+          "id": "broadening_right_angled_ascending",
+          "name": "right-angled ascending broadening formation"
+        },
+        {
+          "id": "broadening_right_angled_descending",
+          "name": "right-angled descending broadening formation"
+        },
+        {
+          "id": "broadening_top",
+          "name": "broadening top"
+        },
+        {
+          "id": "broadening_wedge_ascending",
+          "name": "ascending broadening wedge"
+        },
+        {
+          "id": "broadening_wedge_descending",
+          "name": "descending broadening wedge"
+        },
+        {
+          "id": "diamond_bottom",
+          "name": "diamond bottom"
+        },
+        {
+          "id": "diamond_top",
+          "name": "diamond top"
+        },
+        {
+          "id": "rectangle_bottom",
+          "name": "rectangle bottom"
+        },
+        {
+          "id": "rectangle_top",
+          "name": "rectangle top"
+        },
+        {
+          "id": "triangle_ascending",
+          "name": "ascending triangle"
+        },
+        {
+          "id": "triangle_descending",
+          "name": "descending triangle"
+        },
+        {
+          "id": "triangle_symmetrical",
+          "name": "symmetrical triangle"
+        },
+        {
+          "id": "wedge_falling",
+          "name": "falling wedge"
+        },
+        {
+          "id": "wedge_rising",
+          "name": "rising wedge"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_curve",
+      "label": "Rounded turns",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A slow rounded turn that broke its rim. Enter on the return to the rim, the stop a third of the pattern's height behind it, the first target half the measured move. The Projection Agent's cup with handle, rounding tops and bottoms, scallops and bump-and-run reversals, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "curve",
+      "patterns": [
+        {
+          "id": "bump_and_run_bottom",
+          "name": "bump-and-run reversal bottom"
+        },
+        {
+          "id": "bump_and_run_top",
+          "name": "bump-and-run reversal top"
+        },
+        {
+          "id": "cup_with_handle",
+          "name": "cup with handle"
+        },
+        {
+          "id": "cup_with_handle_inverted",
+          "name": "inverted cup with handle"
+        },
+        {
+          "id": "rounding_bottom",
+          "name": "rounding bottom"
+        },
+        {
+          "id": "rounding_top",
+          "name": "rounding top"
+        },
+        {
+          "id": "scallop_ascending",
+          "name": "ascending scallop"
+        },
+        {
+          "id": "scallop_ascending_inverted",
+          "name": "inverted ascending scallop"
+        },
+        {
+          "id": "scallop_descending",
+          "name": "descending scallop"
+        },
+        {
+          "id": "scallop_descending_inverted",
+          "name": "inverted descending scallop"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_bars",
+      "label": "Spike pairs",
+      "version": 1,
+      "status": "shadow",
+      "fits": "Two spikes that marked a turn. Enter on the return to the level they broke, the stop beyond the spikes' own extreme. The Projection Agent's horns and pipes, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "bars",
+      "patterns": [
+        {
+          "id": "horn_bottom",
+          "name": "horn bottom"
+        },
+        {
+          "id": "horn_top",
+          "name": "horn top"
+        },
+        {
+          "id": "pipe_bottom",
+          "name": "pipe bottom"
+        },
+        {
+          "id": "pipe_top",
+          "name": "pipe top"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_pole",
+      "label": "Flags and pennants",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A pause after a sharp run that broke the way of the run. These seldom return: enter near the breakout, the stop beyond the flag's other side, the target the pole's length. The Projection Agent's flags, pennants and the high and tight flag, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "pole",
+      "patterns": [
+        {
+          "id": "flag",
+          "name": "flag"
+        },
+        {
+          "id": "flag_high_and_tight",
+          "name": "high and tight flag"
+        },
+        {
+          "id": "pennant",
+          "name": "pennant"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_gaps",
+      "label": "Gaps and islands",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A gap that held. Enter on the return to the gap's edge, the stop beyond its other edge. The Projection Agent's gaps, island reversals and long islands, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "gaps",
+      "patterns": [
+        {
+          "id": "gap",
+          "name": "gap"
+        },
+        {
+          "id": "island_reversal",
+          "name": "island reversal"
+        },
+        {
+          "id": "island_long",
+          "name": "long island"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_legs",
+      "label": "Measured moves",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A second leg starting after the pause between two legs. Enter as the pause breaks, the stop beyond the pause, the target a second leg as long as the first. The Projection Agent's the measured move up and down, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "legs",
+      "patterns": [
+        {
+          "id": "measured_move_down",
+          "name": "measured move down"
+        },
+        {
+          "id": "measured_move_up",
+          "name": "measured move up"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_event",
+      "label": "Release patterns",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A high-impact USD release moved price and the pattern after it broke. Enter near the break, the stop beyond the pattern's other side. The Projection Agent's the dead-cat bounce and its inverse, the bullish and bearish release surprise and the release flag, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.",
+      "family": "event",
+      "patterns": [
+        {
+          "id": "dead_cat_bounce",
+          "name": "dead-cat bounce"
+        },
+        {
+          "id": "dead_cat_bounce_inverted",
+          "name": "inverted dead-cat bounce"
+        },
+        {
+          "id": "event_surprise_bearish",
+          "name": "bearish release surprise"
+        },
+        {
+          "id": "event_surprise_bullish",
+          "name": "bullish release surprise"
+        },
+        {
+          "id": "event_flag",
+          "name": "release flag"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "pattern_inside",
+      "label": "Inside the pattern",
+      "version": 1,
+      "status": "shadow",
+      "fits": "A pattern with two boundary lines that has not broken yet (a rectangle, a broadening formation, a wide triangle, wedge or diamond) and price at one of its lines: trade the swing to the other line, a long from the lower line or a short from the upper one, the stop just beyond the line it leans on. Not when the lines are close together, and not once a bar has closed beyond a line: that is the break, another strategy.",
+      "patterns": [
+        {
+          "id": "broadening_bottom",
+          "name": "broadening bottom"
+        },
+        {
+          "id": "broadening_right_angled_ascending",
+          "name": "right-angled ascending broadening formation"
+        },
+        {
+          "id": "broadening_right_angled_descending",
+          "name": "right-angled descending broadening formation"
+        },
+        {
+          "id": "broadening_top",
+          "name": "broadening top"
+        },
+        {
+          "id": "broadening_wedge_ascending",
+          "name": "ascending broadening wedge"
+        },
+        {
+          "id": "broadening_wedge_descending",
+          "name": "descending broadening wedge"
+        },
+        {
+          "id": "diamond_bottom",
+          "name": "diamond bottom"
+        },
+        {
+          "id": "diamond_top",
+          "name": "diamond top"
+        },
+        {
+          "id": "rectangle_bottom",
+          "name": "rectangle bottom"
+        },
+        {
+          "id": "rectangle_top",
+          "name": "rectangle top"
+        },
+        {
+          "id": "triangle_ascending",
+          "name": "ascending triangle"
+        },
+        {
+          "id": "triangle_descending",
+          "name": "descending triangle"
+        },
+        {
+          "id": "triangle_symmetrical",
+          "name": "symmetrical triangle"
+        },
+        {
+          "id": "wedge_falling",
+          "name": "falling wedge"
+        },
+        {
+          "id": "wedge_rising",
+          "name": "rising wedge"
+        }
+      ],
+      "record": null
+    },
+    {
+      "id": "orb_breakout",
+      "label": "Opening range breakout",
+      "version": 1,
+      "status": "live",
+      "fits": "The first hours of the London or New York session: a 15m close beyond the session's opening range (its first three 15m bars) that has not closed back through the range's middle. Enter on the retest of the broken edge, the stop behind the middle of the range or the breakout bar, the target at the next key level; the plan ends with the session's window. Not when a high-impact release fell inside the range, or the range is too narrow or too wide.",
+      "variants": [
+        {
+          "id": "orb_london",
+          "name": "London opening range"
+        },
+        {
+          "id": "orb_new_york",
+          "name": "New York opening range"
+        }
+      ],
+      "record": {
+        "agent": "orb_breakout",
+        "setups": 71,
+        "mean_r": 0.1,
+        "fill_rate": 0.68,
+        "target_rate": 0.4,
+        "stop_rate": 0.4,
+        "patterns": [
+          {
+            "pattern": "orb_london",
+            "setups": 38,
+            "mean_r": 0.14,
+            "fill_rate": 0.71,
+            "target_rate": 0.41
+          },
+          {
+            "pattern": "orb_new_york",
+            "setups": 33,
+            "mean_r": 0.06,
+            "fill_rate": 0.64,
+            "target_rate": 0.38
+          }
+        ]
+      }
+    }
+  ],
+  "suspended_patterns": [],
+  "latest": {
+    "decision_key": "OANDA:XAUUSD:15:1795445100000",
+    "bar_close": "2026-11-23T15:00:00.000Z",
+    "stance": "BUY",
+    "chosen": "orb_breakout",
+    "plans": {
+      "long": {
+        "orb_breakout": {
+          "status": "live",
+          "agent": "orb_breakout",
+          "setup": "a 15m close above the New York opening range",
+          "at_level": false,
+          "entry": 4098.52,
+          "entry_note": "a retest of the New York opening range high after the break",
+          "stop": 4096.68,
+          "stop_note": "below the middle of the New York opening range",
+          "risk": 1.84,
+          "tp1": 4103.6,
+          "tp1_note": "zone",
+          "tp2": 4107.6,
+          "tp2_note": "zone",
+          "progressive_stop": 4098.52,
+          "rrr": {
+            "tp1": 2.76,
+            "tp2": 4.94
+          },
+          "pattern": "orb_new_york",
+          "chart": "15m",
+          "valid_until_ms": 1795470300000
+        },
+        "zone_pullback": {
+          "status": "live",
+          "agent": "zone_pullback",
+          "entry": 4097.5,
+          "stop": 4095.9,
+          "tp1": 4100.06,
+          "tp2": 4103.6,
+          "at_level": false,
+          "rrr": {
+            "tp1": 1.6,
+            "tp2": 3.81
+          }
+        }
+      },
+      "short": {}
+    }
+  }
+}

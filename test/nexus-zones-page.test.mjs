@@ -46,7 +46,7 @@ const poll = (over) => ({ data: null, error: null, loading: false, refresh: () =
 test("ZN1 NAV and PAGES: Zones at /#/zones, key zones, icon Layers, directly after Liquidity in Intelligence", () => {
   const shell = src("components/AppShell.tsx");
   const intel = shell.slice(shell.indexOf('{ title: "Intelligence"'), shell.indexOf('{ title: "Settings"'));
-  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
+  assert.deepEqual([...intel.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]), ["Aether", "Model & Learning", "Strategy agents", "Opening range", "Chart patterns", "Liquidity", "Zones", "Neuron allocation", "Decision audit", "Alerts"]);
   assert.match(intel, /\{ label: "Zones", href: "\/#\/zones", key: "zones", icon: Layers \}/);
   assert.match(shell, /import \{[^}]*\bLayers\b[^}]*\} from "lucide-react";/);
   const app = src("App.tsx");

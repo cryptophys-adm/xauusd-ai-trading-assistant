@@ -1,0 +1,54 @@
+{
+  "status": "ok",
+  "enabled": true,
+  "decision": {
+    "decision_key": "OANDA:XAUUSD:15:1795513500000",
+    "bar_close": "2026-11-24T10:00:00.000Z",
+    "trade": {
+      "side": "BUY",
+      "strategy": "orb_breakout",
+      "pattern": "orb_london",
+      "chart": "15m",
+      "entry": 2605.5,
+      "stop": 2599.2
+    },
+    "strategy_plans": {
+      "long": {
+        "orb_breakout": {
+          "status": "live",
+          "agent": "orb_breakout",
+          "setup": "a 15m close above the London opening range",
+          "at_level": true,
+          "entry": 2605.5,
+          "entry_note": "price retests the London opening range high after the break",
+          "stop": 2599.2,
+          "stop_note": "below the middle of the London opening range",
+          "risk": 6.3,
+          "tp1": 2629,
+          "tp1_note": "zone",
+          "tp2": 2635.3,
+          "tp2_note": "a projection beyond the first target",
+          "progressive_stop": 2605.5,
+          "rrr": {
+            "tp1": 3.73,
+            "tp2": 4.73
+          },
+          "pattern": "orb_london",
+          "chart": "15m",
+          "valid_until_ms": 1795538700000
+        }
+      },
+      "short": {}
+    },
+    "session_range": {
+      "session": "london",
+      "minutes_since_open": 120,
+      "bars_left": 27,
+      "range": {
+        "bars": 3,
+        "width_atr": 1.25,
+        "status": "ok"
+      }
+    }
+  }
+}

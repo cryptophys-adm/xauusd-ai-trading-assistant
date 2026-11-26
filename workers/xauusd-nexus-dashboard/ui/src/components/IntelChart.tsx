@@ -5,6 +5,7 @@ import type { Poll } from "../lib/usePoll";
 import { CANDLE, T, tagText } from "../lib/tokens";
 import { ZonesPrimitive, type ChartZone } from "../lib/zones-primitive";
 import { LinesPrimitive, type ChartLine } from "../lib/lines-primitive";
+import { BoxesPrimitive, type ChartBox } from "../lib/boxes-primitive";
 import { num, price, utcDayTime } from "../lib/intel";
 import { gmt7ClockOf, gmt7Crosshair, gmt7Tick } from "../lib/entryZone";
 
@@ -16,9 +17,11 @@ import { gmt7ClockOf, gmt7Crosshair, gmt7Tick } from "../lib/entryZone";
 // `plan` (owner ruling at the C3 mockup's approval): the lines of one agent plan, each with its price tag on the axis,
 // which only the page of that plan's own chart passes. By default no order line of any kind is drawn (the Liquidity
 // page passes none).
+// C4 adds boxes (lib/boxes-primitive.ts: the opening ranges, each box over its range's bars with its edges dashed to
+// the window's last bar and its midpoint dotted), behind the candles; only the Opening range page passes them.
 // Times (EZ1's helpers, as the War Room chart): the time axis and the crosshair in GMT+7 (lib/entryZone.ts gmt7Tick and
 // gmt7Crosshair), and the last closed bar's time in UTC and GMT+7 under the chart. A pure axis-label change: the same on
-// every page that draws this chart (Liquidity, Chart patterns).
+// every page that draws this chart (Liquidity, Chart patterns, Opening range).
 
 export type IntelBar = { time: number; open: number; high: number; low: number; close: number };
 /** A marker on a bar: a sweep (▲ below the bar or ▼ above it) or a breakout ("circle", on the bar), in its colour. */
@@ -33,6 +36,7 @@ export function barsOf(body: any): IntelBar[] {
 /** The visible bars: about 52 on a phone, 112 on a wider chart (the mockup's 13 and 28 hours of 15m candles). */
 const visibleBars = (width: number) => (width < 520 ? 52 : 112);
 const NO_LINES: ChartLine[] = [];
+const NO_BOXES: ChartBox[] = [];
 
 /** "Mon 23 Nov 15:00 UTC · 22:00 GMT+7": a bar's close in UTC and GMT+7. */
 export function closeText(openSec: number, intervalS: number): string {
@@ -42,7 +46,7 @@ export function closeText(openSec: number, intervalS: number): string {
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-export default function IntelChart({ poll, bars, zones, markers = [], fit = [], caption = "feed scale", label, lines = NO_LINES, plan = NO_LINES, visible = visibleBars, timeVisible = true, intervalS = 900, emptyTitle = "No 15m candles yet", emptyWhen = "The feed's closed 15m candles load every minute." }: {
+export default function IntelChart({ poll, bars, zones, markers = [], fit = [], caption = "feed scale", label, lines = NO_LINES, plan = NO_LINES, boxes = NO_BOXES, visible = visibleBars, timeVisible = true, intervalS = 900, emptyTitle = "No 15m candles yet", emptyWhen = "The feed's closed 15m candles load every minute." }: {
   /** The candles' poll: its skeleton, its error box, or its empty state while there is no candle. */
   poll?: Poll;
   bars: IntelBar[];
@@ -59,6 +63,8 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
   lines?: ChartLine[];
   /** Opt-in: one agent plan's lines, each with its price tag. Empty by default: no order line. */
   plan?: ChartLine[];
+  /** The opening ranges' boxes behind the candles (C4). None by default. */
+  boxes?: ChartBox[];
   /** The bars in view at a width. */
   visible?: (width: number) => number;
   /** The time of day on the time axis (off for daily bars). */
@@ -74,6 +80,7 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
   const series = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const prim = useRef<ZonesPrimitive | null>(null);
   const linesPrim = useRef<LinesPrimitive | null>(null);
+  const boxesPrim = useRef<BoxesPrimitive | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const lastLine = useRef<IPriceLine | null>(null);
@@ -104,12 +111,14 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
         return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...extra), maxValue: Math.max(r.priceRange.maxValue, ...extra) } };
       }
     });
+    const bp = new BoxesPrimitive();
+    s.attachPrimitive(bp);
     const p = new ZonesPrimitive("anchored");
     s.attachPrimitive(p);
     const lp = new LinesPrimitive((x: number) => price(x));
     s.attachPrimitive(lp);
-    chart.current = c; series.current = s; prim.current = p; linesPrim.current = lp;
-    return () => { c.remove(); chart.current = null; series.current = null; prim.current = null; linesPrim.current = null; lastLine.current = null; };
+    chart.current = c; series.current = s; prim.current = p; linesPrim.current = lp; boxesPrim.current = bp;
+    return () => { c.remove(); chart.current = null; series.current = null; prim.current = null; linesPrim.current = null; boxesPrim.current = null; lastLine.current = null; };
   }, []);
 
   useEffect(() => {
@@ -128,6 +137,8 @@ export default function IntelChart({ poll, bars, zones, markers = [], fit = [], 
   }, [bars]);
 
   useEffect(() => { prim.current?.setZones(zones); chart.current?.priceScale("right").applyOptions({}); }, [zones]);
+
+  useEffect(() => { boxesPrim.current?.setBoxes(boxes); chart.current?.priceScale("right").applyOptions({}); }, [boxes]);
 
   useEffect(() => { chart.current?.applyOptions({ timeScale: { timeVisible } }); }, [timeVisible]);
 

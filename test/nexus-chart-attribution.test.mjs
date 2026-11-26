@@ -1,8 +1,8 @@
 // The lightweight-charts licence's attribution on every Nexus chart (a reviewer ruling after OM-LEAN #553): the library's
 // logo injects a <style> that the CSP blocks, so every createChart sets layout.attributionLogo false, and each page with
 // a chart shows a quiet "Charts by TradingView" caption link (components/ui.tsx ChartCredit).
-// The charts: components/IntelChart.tsx (Liquidity, Chart patterns), components/PriceChart.tsx (War Room) and the Omega
-// page's chart (pages/Omega.tsx Mt5ChartCanvas, its caption under the chart since the OM-LEAN revert).
+// The charts: components/IntelChart.tsx (Liquidity, Chart patterns, Opening range), components/PriceChart.tsx (War Room)
+// and the Omega page's chart (pages/Omega.tsx Mt5ChartCanvas, its caption under the chart since the OM-LEAN revert).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -48,7 +48,7 @@ test("CA1 every createChart in the UI sets attributionLogo false, and each chart
 const NO_UI_DEPS = ["esbuild", "react", "react-dom"].some((p) => !existsSync(`${UI}node_modules/${p}/package.json`))
   && "the Nexus UI packages are not installed (npm ci in workers/xauusd-nexus-dashboard/ui)";
 
-test("CA2 each page with a chart renders the caption link: Liquidity, Chart patterns, War Room, Omega", { skip: NO_UI_DEPS }, async () => {
+test("CA2 each page with a chart renders the caption link: Liquidity, Chart patterns, Opening range, War Room, Omega", { skip: NO_UI_DEPS }, async () => {
   const req = createRequire(`${UI}package.json`);
   const { build } = req("esbuild");
   const out = await build({
@@ -72,6 +72,10 @@ test("CA2 each page with a chart renders the caption link: Liquidity, Chart patt
   // Chart patterns: the registry's own entry, its chart drawn from the fixture's candles.
   const patterns = view("PatternsView");
   assert.match(u.render(patterns.View, patterns.fixture), LINK, "Chart patterns");
+  // Opening range (C4): the registry's own entry, its chart drawn from the feed's candles (orb-overlap-candles.json), once.
+  const orb = view("OrbViewOverlap"), orbHtml = u.render(orb.View, orb.fixture);
+  assert.match(orbHtml, LINK, "Opening range");
+  assert.equal((orbHtml.match(/Charts by TradingView/g) ?? []).length, 1, "once, under its one chart");
   // War Room: the PriceChart panel's footer.
   assert.match(u.renderToStaticMarkup(u.createElement(u.PriceChart)), LINK, "War Room");
   // Omega: the chart's caption, under the terminal's chart (the page as before OM-LEAN), once.

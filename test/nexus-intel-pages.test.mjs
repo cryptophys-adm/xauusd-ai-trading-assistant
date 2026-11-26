@@ -15,7 +15,9 @@ const ui = (p) => read(`workers/xauusd-nexus-dashboard/ui/${p}`);
 // runs below need the UI's install (validate-nexus-dashboard.yml runs `npm ci` there and the step itself).
 const NO_UI_DEPS = ["esbuild", "react", "react-dom"].some((p) => !existsSync(`${UI}node_modules/${p}/package.json`))
   && "the Nexus UI packages are not installed (npm ci in workers/xauusd-nexus-dashboard/ui)";
-const run = (...args) => spawnSync(process.execPath, ["scripts/render-check.mjs", ...args], { cwd: UI, encoding: "utf8", timeout: 120_000 });
+// The check grows with each page's views (about 49,000 variants with C4; 115 s on main alone, in a full local run beside
+// the other test files): 5 minutes, so the spawn's limit is not the finding. The workflow step runs it without one.
+const run = (...args) => spawnSync(process.execPath, ["scripts/render-check.mjs", ...args], { cwd: UI, encoding: "utf8", timeout: 300_000 });
 
 test("IP1 the workflow step runs the check right after the UI build; the script is the UI's render-check", () => {
   const wf = read(".github/workflows/validate-nexus-dashboard.yml");

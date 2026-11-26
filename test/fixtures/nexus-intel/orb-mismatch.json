@@ -1,0 +1,123 @@
+{
+  "status": "ok",
+  "schema": "cryptophys.orb-view.v1",
+  "mode": "on",
+  "levels_mode": "on",
+  "scale": {
+    "prices": "feed",
+    "symbol": "OANDA:XAUUSD"
+  },
+  "rules": {
+    "range_bars": 3,
+    "min_width_atr": 0.25,
+    "max_width_atr": 3.5,
+    "beyond_atr": 0.1,
+    "retest_atr": 0.15,
+    "pad_atr": 0.1
+  },
+  "price": 2600,
+  "atr_h1": 8,
+  "atr_m15": 4,
+  "bar_close": "2026-03-16T16:00:00.000Z",
+  "market": {
+    "open": true,
+    "next_range": {
+      "session": "london",
+      "open_ms": 1773730800000
+    }
+  },
+  "decision": {
+    "decision_key": null,
+    "bar_close": null,
+    "session_range": null
+  },
+  "overlap": {
+    "long": null,
+    "short": null
+  },
+  "sessions": {
+    "london": {
+      "variant": "orb_london",
+      "date_ny": "2026-03-16",
+      "open_ms": 1773644400000,
+      "range_end_ms": 1773647100000,
+      "end_ms": 1773675900000,
+      "phase": "over",
+      "bars_built": 3,
+      "bars_left": 0,
+      "status": "session_clock_mismatch",
+      "status_detail": "London is silent this week: the United States and the United Kingdom changed clocks on different dates",
+      "high": null,
+      "low": null,
+      "mid": null,
+      "width": null,
+      "width_atr": null,
+      "breakout": {
+        "side": null,
+        "bar_ms": null,
+        "bars_since": null,
+        "state": "none"
+      },
+      "invalidated": {
+        "long": false,
+        "short": false
+      },
+      "events_in_range": [],
+      "edges_in_zones": [],
+      "plans": {
+        "long": null,
+        "short": null
+      }
+    },
+    "new_york": {
+      "variant": "orb_new_york",
+      "date_ny": "2026-03-16",
+      "open_ms": 1773662400000,
+      "range_end_ms": 1773665100000,
+      "end_ms": 1773693900000,
+      "phase": "live",
+      "bars_built": 3,
+      "bars_left": 19,
+      "status": "ok",
+      "status_detail": "the range is formed and inside the width band",
+      "high": 2602,
+      "low": 2598,
+      "mid": 2600,
+      "width": 4,
+      "width_atr": 0.5,
+      "breakout": {
+        "side": null,
+        "bar_ms": null,
+        "bars_since": null,
+        "state": "none"
+      },
+      "invalidated": {
+        "long": false,
+        "short": false
+      },
+      "events_in_range": [],
+      "edges_in_zones": [],
+      "plans": {
+        "long": null,
+        "short": null
+      }
+    }
+  },
+  "records": {
+    "london": {
+      "setups": 0,
+      "mean_r": null,
+      "fill_rate": null,
+      "target_rate": null,
+      "held_by_breaker": false
+    },
+    "new_york": {
+      "setups": 0,
+      "mean_r": null,
+      "fill_rate": null,
+      "target_rate": null,
+      "held_by_breaker": false
+    }
+  },
+  "recent": []
+}
