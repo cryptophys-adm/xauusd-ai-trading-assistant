@@ -454,7 +454,9 @@ test("MSH-14 range's selector evidence: its strategies' cells over live (any mod
 });
 
 test("MSH-15 off is byte-identical: the decision record, the plan setups and state, and the selector's outcome equal main's (hashes taken on main fdc6c38)", async () => {
-  const off = await offScenario({ de, pl, ms, au, rt }, { MODE_SHADOW_EVIDENCE: "off", MODE_PROBATION: "off" });
+  // Track A PR 9: the fixture's bar is inside a session window, so orb_breakout (and its session_range) is off here and
+  // the pin stays main's; test/opening-range.test.mjs ORB-17 covers the reading.
+  const off = await offScenario({ de, pl, ms, au, rt }, { MODE_SHADOW_EVIDENCE: "off", MODE_PROBATION: "off", STRATEGY_AGENTS_OFF: "orb_breakout" });
   assert.deepEqual(off.decided, { status: "decided", stance: "BUY", source: "fallback" });
   assert.deepEqual(off.selector.runs.map((r) => r.status), ["unchanged", "unchanged", "changed"]);
   assert.deepEqual({ decision: sha(off.decision_json), plan_rows: sha(off.plan_rows), plan_state: sha(off.plan_state), selector: sha(off.selector), learning: off.learning }, {
@@ -465,7 +467,7 @@ test("MSH-15 off is byte-identical: the decision record, the plan setups and sta
     learning: { status: "ok", added: 2, extended: 0, resolved: 2, unavailable: 0, setups: 2, verdict: "collecting", global_pick: "e0@s1" }
   });
   // The decision record is the same with both on: only the shadow table is new.
-  const on = await offScenario({ de, pl, ms, au, rt });
+  const on = await offScenario({ de, pl, ms, au, rt }, { STRATEGY_AGENTS_OFF: "orb_breakout" });
   assert.equal(sha(on.decision_json), sha(off.decision_json));
 });
 

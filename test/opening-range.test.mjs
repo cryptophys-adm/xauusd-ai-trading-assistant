@@ -190,8 +190,11 @@ test("ORB-8 the Decision Engine: the scenario's London breakout is an orb_breako
   const off = decide(ZONE_ENV);
   assert.equal(off.strategy_plans.short.orb_breakout, undefined);
   // Everything but the new agent's plan is the same with it on or off.
-  const strip = (r) => JSON.stringify({ ...r, strategy_plans: { long: r.strategy_plans.long, short: Object.fromEntries(Object.entries(r.strategy_plans.short).filter(([k]) => k !== "orb_breakout")) } });
+  // Everything but the new agent's plan and (Track A PR 9) the session_range reading is the same with it on or off.
+  const strip = (r) => { const { session_range, ...rest } = r; return JSON.stringify({ ...rest, strategy_plans: { long: r.strategy_plans.long, short: Object.fromEntries(Object.entries(r.strategy_plans.short).filter(([k]) => k !== "orb_breakout")) } }); };
   assert.equal(strip(on), strip(off));
+  assert.equal(on.session_range?.session, "london");
+  assert.equal("session_range" in off, false);
 });
 
 // ---------------------------------------------------------------- Track A PR 7 acceptance, completed in PR 8
@@ -289,4 +292,104 @@ test("ORB-16 the zone scenario with the edges on: only the zones they join chang
   assert.equal(on.key_levels.zones.length, off.key_levels.zones.length);
   // The public reading carries the words only.
   assert.ok(!JSON.stringify(on.key_levels.summary ?? "").match(/opening range (high|low)[^,;]*\d{3,5}/));
+});
+
+// ---------------------------------------------------------------- Track A PR 9: the opening range for the council
+import { sessionRangeReading, h1AtrOf15, ORB_READING_BANDS } from "../src/opening-range.mjs";
+import { councilEvidence, councilMessages, SESSION_RANGE_PROMPT, assess, buildDecisionRecord } from "../src/decision-engine.mjs";
+import { agentData, openingMessages, validateOpening, TECHNICAL_RANGE_RULE, DESK_AGENTS } from "../src/war-room.mjs";
+import { FORBIDDEN_KEYS } from "../src/decision-cards.mjs";
+import { PUBLIC_FORBIDDEN_KEYS } from "../src/public-projection.mjs";
+import * as ea from "../src/ea-signal.mjs";
+
+const keysOf = (o, out = []) => { if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) { out.push(k); keysOf(v, out); } return out; };
+
+test("ORB-17 sessionRangeReading: the open window's range, the last bar, the breakout; none outside a window; no price", () => {
+  assert.deepEqual(ORB_READING_BANDS, { beyond_atr: AGENT_RULES.breakout.beyond_atr, retest_atr: AGENT_RULES.breakout.retest_atr }, "the agent's bands");
+  const bars = londonBreak();
+  const r = sessionRangeReading(bars, { atr: 8 });
+  assert.deepEqual([r.session, r.minutes_since_open, r.range, r.last_bar.side], ["london", 120, { bars: 3, width_atr: 1.25, status: "ok" }, "above"]);
+  assert.deepEqual([r.last_bar.from_edge_atr, r.last_bar.from_mid_atr], [0.13, 0.75]);
+  assert.deepEqual(r.breakout, { way: "up", bars_since: 4, held: true, retesting: true });
+  assert.equal(r.invalidated, false);
+  assert.equal(r.bars_left, (Date.UTC(2026, 10, 24, 16, 45) - Date.UTC(2026, 10, 24, 10, 0)) / M15);
+  // A close back through the middle: invalidated, not held.
+  const failed = londonBreak().map((b) => (b.open_time === iso(LDN + 5 * M15) ? { ...b, low: 2598, close: 2599 } : b));
+  assert.deepEqual([sessionRangeReading(failed, { atr: 8 }).invalidated, sessionRangeReading(failed, { atr: 8 }).breakout.held], [true, false]);
+  // While forming: the bars so far, no last bar or breakout.
+  const forming = sessionRangeReading(series(LDN - 4 * M15, LDN + 2 * M15), { atr: 8 });
+  assert.deepEqual([forming.range, "last_bar" in forming, "breakout" in forming], [{ bars: 2, width_atr: null, status: "not_formed" }, false, false]);
+  // A release inside the range.
+  assert.equal(sessionRangeReading(bars, { atr: 8, events: [{ time: iso(LDN + 30 * 60_000), impact: "High", currency: "USD" }] }).range.status, "range_event");
+  // Outside every window (London over at 16:45Z, New York not yet open before 13:00Z the same day is covered above), the
+  // clock-mismatch weeks, no bars: null.
+  assert.equal(sessionRangeReading(series(Date.UTC(2026, 10, 24, 22, 0), Date.UTC(2026, 10, 24, 23, 0))), null);
+  const mismatch = Date.UTC(2026, 9, 27, 7, 0);
+  assert.equal(sessionRangeReading(series(mismatch - 4 * M15, mismatch + 8 * M15), { atr: 8 }), null);
+  assert.equal(sessionRangeReading([]), null);
+  // No ATR: the range and side, no distances or breakout.
+  const noAtr = sessionRangeReading(bars);
+  assert.deepEqual([noAtr.range.width_atr, noAtr.last_bar.from_edge_atr, noAtr.breakout.way], [null, null, null]);
+  // No price and no forbidden key: every number is a count, minutes or an ATR multiple.
+  const keys = keysOf(r);
+  assert.ok(!keys.some((k) => FORBIDDEN_KEYS.includes(k) || PUBLIC_FORBIDDEN_KEYS.includes(k)), keys.join(","));
+  assert.ok(!JSON.stringify(r).includes("2605") && !JSON.stringify(r).includes("2595"), "no edge price");
+  // New York's when both windows are open.
+  const both = { ...Object.fromEntries(londonBreak({ until: NYO }).map((b) => [Date.parse(b.open_time), [b.high, b.low, b.close]])) };
+  for (let t = NYO; t < NYO + 4 * M15; t += M15) both[t] = [2612, 2606, 2609];
+  assert.equal(sessionRangeReading(series(LDN - 4 * M15, NYO + 4 * M15, both), { atr: 8 }).session, "new_york");
+});
+
+test("ORB-18 h1AtrOf15: the 1H ATR from full hours of closed 15m bars, as the strategy engine's atr", () => {
+  const bars = series(LDN, LDN + 20 * 4 * M15, Object.fromEntries(Array.from({ length: 80 }, (_, i) => [LDN + i * M15, [2600 + (i % 7), 2596 - (i % 5), 2598 + (i % 3)]])));
+  const hours = [];
+  for (let h = 0; h < 20; h++) { const q = bars.slice(h * 4, h * 4 + 4); hours.push({ high: Math.max(...q.map((b) => b.high)), low: Math.min(...q.map((b) => b.low)), close: q.at(-1).close }); }
+  assert.equal(h1AtrOf15(bars), se.atr(hours));
+  assert.equal(h1AtrOf15(bars.slice(0, 5)), null, "one full hour");
+});
+
+test("ORB-19 the council: session_range in the evidence, the record and one prompt line, only inside a window; off is byte-identical", () => {
+  const decide = (env) => {
+    const inputs = zoneInputs();
+    const strategy = se.buildStrategy(inputs);
+    const loaded = { inputs, strategy, global: zoneGlobal(), correlations: null, regime: "normal-trending" };
+    const a = assess(loaded, { now: NOW, env });
+    const record = buildDecisionRecord({ key: `OANDA:XAUUSD:15:${Date.parse(CLOSE) - M15}`, barClose: CLOSE, loaded, assessment: a, council: null, now: NOW, env });
+    const evidence = councilEvidence({ barClose: CLOSE, cards: a.cards, quorum: a.quorum, guards: a.guards, sessionRange: a.session_range ?? null });
+    return { a, record, evidence, messages: councilMessages(evidence), signal: ea.eaSignalFromDecision({ decision: record, now: NOW }), management: ea.managementFields(record) };
+  };
+  const on = decide({ ...ZONE_ENV, STRATEGY_AGENTS_OFF: "" }), off = decide(ZONE_ENV);
+  assert.equal(on.a.session_range.session, "london");
+  assert.deepEqual(on.record.session_range, on.a.session_range);
+  assert.deepEqual(on.evidence.session_range, on.a.session_range);
+  assert.ok(on.messages[0].content.includes(SESSION_RANGE_PROMPT));
+  assert.equal(JSON.parse(on.messages.at(-1).content.replace(/^EVIDENCE:\n/, "")).session_range.session, "london");
+  // Off: no field anywhere, the prompt as before.
+  assert.equal("session_range" in off.a || "session_range" in off.record || "session_range" in off.evidence, false);
+  assert.ok(!off.messages[0].content.includes("session_range"));
+  // Without the field, the council's messages are those of the evidence before (no session_range key at all).
+  assert.equal(JSON.stringify(councilMessages({ ...on.evidence, session_range: undefined })).includes(SESSION_RANGE_PROMPT), false);
+  // The EA signal and the management fields read no session_range.
+  assert.equal(JSON.stringify(on.signal).includes("session_range"), false);
+  assert.equal(JSON.stringify(on.management).includes("session_range"), false);
+  assert.ok(!/\d{3,5}/.test(SESSION_RANGE_PROMPT), "no price-like number in the prompt line");
+});
+
+test("ORB-20 the War Room: the Technical Analyst's data and one rule line while a window is open; no new seat; a fixture answer validates", () => {
+  const range = sessionRangeReading(londonBreak(), { atr: 8 });
+  const evidence = { m15: { candles: [{ t: "x", o: 1, h: 2, l: 0, c: 1 }] }, session_range: range };
+  const data = agentData("technical", evidence, null, null, { available: false, reading: [] });
+  assert.deepEqual(data.session_opening_range, range);
+  const msgs = openingMessages("technical", data);
+  assert.ok(JSON.stringify(msgs).includes(TECHNICAL_RANGE_RULE.slice(0, 60)));
+  // Without a window: the data and the messages are those of before.
+  const plain = agentData("technical", { m15: evidence.m15 }, null, null, { available: false, reading: [] });
+  assert.deepEqual(plain, { candles_15m: evidence.m15.candles });
+  assert.equal(JSON.stringify(openingMessages("technical", plain)).includes("session_opening_range"), false);
+  // The other agents' data does not change.
+  assert.equal("session_opening_range" in agentData("risk", evidence, null, null, { available: false, reading: [] }), false);
+  assert.deepEqual(Object.keys(DESK_AGENTS), ["m15", "news", "technical", "risk", "projection"], "no new seat");
+  const answer = { agent: "technical", stance: "WAIT", bias: "BULLISH", confidence: 0.55, claim: "Price broke above the London opening range and is retesting the broken edge; the break has held so far.", metrics: ["the London opening range breakout", "the closed 15m candles"] };
+  assert.equal(validateOpening(answer, "technical").valid, true);
+  assert.ok(!/\d{3,5}/.test(TECHNICAL_RANGE_RULE));
 });
