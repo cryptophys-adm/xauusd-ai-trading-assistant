@@ -747,6 +747,28 @@
       "write": "feature-switch"
     },
     {
+      "key": "MODEL_GBM_CONNECT",
+      "label": "Decision model (GBM) to the council (MA1 b)",
+      "description": "MA1 (b): the daily decision model (LightGBM) may reach the Decision Engine council as advice once its own prospective record passes the baseline's gate (300 decisions per side, p < 0.05, AUC ≥ 0.55; a model older than 48 hours never). off: the gate still runs and records would_promote, nothing reaches the council. With both models connected, the one with the higher worse-side skill advises (a tie: the baseline). The guardrails still decide what can trade.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "profit_lock_gate",
       "label": "Profit-lock gate",
       "description": "SLG1: no stop moves into profit until the position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; legacy: the earlier locks.",

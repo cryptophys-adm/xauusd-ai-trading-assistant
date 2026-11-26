@@ -32,6 +32,7 @@ import { pmLinesOffEnv, PM_LINE_IDS } from "../src/pm-line-breaker.mjs";
 import { calendarContrarianMode } from "../src/econ-releases.mjs";
 import { shadowKnowledgeEnabled } from "../src/shadow-knowledge.mjs";
 import { shadowModelRouterMode } from "../src/model-router.mjs";
+import { modelGbmConnectMode } from "../src/model-gbm.mjs";
 import { knowledgeVerdictPostsEnabled } from "../src/knowledge-verdicts.mjs";
 import { metricRebuttalEnabled } from "../src/metric-shadow.mjs";
 import { correctionsEnabled } from "../src/owner-corrections.mjs";
@@ -112,7 +113,7 @@ test("FS-1 the registry: every switch's config_value is wrangler.jsonc's, read f
   // The keys the orchestrator listed, all present; ZONE_SOURCES_OFF, three lens/calendar switches and H3f's OWNER_CORRECTIONS added.
   for (const k of ["ZONE_PRIORITY", "ZONE_AHEAD_MODE", "KEY_LEVEL_ZONE_TYPES", "ZONE_AIM_OFF", "ZONE_AIM_TP", "AGENT_VETO_RULE", "SHADOW_KNOWLEDGE_ENABLED", "KNOWLEDGE_VERDICT_POSTS",
     "MODE_SHADOW_EVIDENCE", "MODE_PROBATION", "GRID_ADAPT_MODE", "ENTRY_ZONE_MODE", "TP1_KEY_ZONE_MODE", "CHART_PATTERNS_MODE", "METRIC_REBUTTAL", "CFC_MODE",
-    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER", "SD_LEVELS", "zone_sd"]) assert.ok(switchByKey(k), k);
+    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER", "SD_LEVELS", "zone_sd", "MODEL_GBM_CONNECT"]) assert.ok(switchByKey(k), k);
   // Excluded: secrets, bindings, the engine switch, the kill switch, arms, LIVE and profile.
   for (const k of ["OMEGA_ENGINE_ENABLED", "EA_SIGNALS_ENABLED", "STRATEGY_ARM_MODE", "STRATEGY_COUNCIL_ARM", "live_armed", "enabled", "OWNER_ACCESS_SUB", "TELEGRAM_BOT_TOKEN", "WEBHOOK_SECRET", "DB", "SIGNAL_CACHE", "AGENTS", "AETHER", "risk_pct", "max_positions"]) assert.equal(switchByKey(k), null, `${k} is not a panel switch`);
   // era_switch: exactly ERA_SWITCHES' members (a parity era starts on change).
@@ -165,7 +166,8 @@ const ACCESSOR = {
   KNOWLEDGE_VERDICT_POSTS: (env) => (knowledgeVerdictPostsEnabled({ SHADOW_KNOWLEDGE_ENABLED: "true", ...env }) ? "on" : "off"),
   METRIC_REBUTTAL: (env) => (metricRebuttalEnabled(env) ? "on" : "off"),
   OWNER_CORRECTIONS: (env) => (correctionsEnabled(env) ? "on" : "off"),
-  SHADOW_MODEL_ROUTER: (env) => shadowModelRouterMode(env)
+  SHADOW_MODEL_ROUTER: (env) => shadowModelRouterMode(env),
+  MODEL_GBM_CONNECT: (env) => modelGbmConnectMode(env)
 };
 
 test("FS-2 each reader is its accessor's rule: every raw value reads as the code reads it, and every panel value's env form reads back", () => {

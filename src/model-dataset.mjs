@@ -15,7 +15,7 @@
 import { ledgerSeries, atrAt, toMs, sessionAt } from "./signal-ledger.mjs";
 import { WITNESS_PRIORS } from "./witness-weighting.mjs";
 import { readBaseline, shadowPredictions, predict, modelGateMode } from "./model-baseline.mjs";
-import { readGbm, gbmPredictions } from "./model-gbm.mjs";
+import { readGbm, gbmPredictions, predictGbm, gbmUnusable, modelGbmConnectMode, readGbmPromotion } from "./model-gbm.mjs";
 
 export const MODEL_DATASET_VERSION = "cryptophys.model-dataset.v1";
 export const LABEL_RULES = Object.freeze({ stop_atr: 1, target_atr: 1.5, horizon_ms: 4 * 3600_000, atr_period: 14 });
@@ -340,33 +340,55 @@ export async function loadLabeledRows(env, { limit = 4000 } = {}) {
 }
 
 /**
- * The promoted model's advice for the council (owner 2026-11-13: "buat agar autonomous"), or null while
- * the gate (src/model-baseline.mjs promotionGate) has not connected it. Computed from what is known before
- * the council answers, the same features the model learned from: the witnesses, the quorum, both
- * guardrails, the structure, the context and the 15m bars up to the close. Never throws.
+ * The promoted model's advice for the council (owner 2026-11-13: "buat agar autonomous"), or null while no gate
+ * (src/model-baseline.mjs promotionGate for the baseline, gbmGate for the GBM) has connected one. Computed from what
+ * is known before the council answers, the same features the models learned from: the witnesses, the quorum, both
+ * guardrails, the structure, the context and the 15m bars up to the close. MA1 (b): one advice only. The GBM counts
+ * only while MODEL_GBM_CONNECT is "on" (the owner's word), its key says promoted, and the stored model is valid and
+ * fresh; with both promoted, the higher worse-side prospective skill wins and a tie goes to the baseline (`source`,
+ * `reason`). Both switches are re-read on every call. Never throws.
  */
-export async function modelAdvice(env, { barClose, witnesses, quorum, guardrails, structure = null, context = null, feed = null, tradingMode = null, series = null } = {}) {
+export async function modelAdvice(env, { barClose, witnesses, quorum, guardrails, structure = null, context = null, feed = null, tradingMode = null, series = null, now = Date.now() } = {}) {
   try {
     // MA1: the owner's MODEL_AUTO_CONNECT "off" disconnects at once, not only at the next hourly retrain.
     if (modelGateMode(env) === "off") return null;
+    const candidates = [];
     const baseline = await readBaseline(env);
     const gate = baseline?.promotion;
-    if (gate?.status !== "promoted") return null;
-    const long = baseline.models?.[`${gate.set}_long`], short = baseline.models?.[`${gate.set}_short`];
-    if (!long || !short) return null;
+    if (gate?.status === "promoted" && baseline.models?.[`${gate.set}_long`] && baseline.models?.[`${gate.set}_short`]) {
+      const skill = Math.min(baseline.prospective?.[`${gate.set}_long`]?.skill ?? -Infinity, baseline.prospective?.[`${gate.set}_short`]?.skill ?? -Infinity);
+      candidates.push({ source: "baseline", set: gate.set, skill, model_id: baseline.model_id, since: gate.since ?? null, record: baseline.prospective,
+        long: (f) => predict(baseline.models[`${gate.set}_long`], f), short: (f) => predict(baseline.models[`${gate.set}_short`], f),
+        long_base: baseline.models[`${gate.set}_long`].base_rate, short_base: baseline.models[`${gate.set}_short`].base_rate });
+    }
+    if (modelGbmConnectMode(env) === "on") {
+      const gp = await readGbmPromotion(env);
+      const gbm = gp?.status === "promoted" ? await readGbm(env, { now }) : null;
+      const ml = gbm?.models?.[`${gp?.set}_long`], ms = gbm?.models?.[`${gp?.set}_short`];
+      if (gbm && !gbmUnusable(gbm, { now }) && ml && ms && Number.isFinite(gp.skill)) {
+        candidates.push({ source: "gbm", set: gp.set, skill: gp.skill, model_id: gbm.model_id, since: gp.since ?? null, recordOf: gp.record,
+          long: (f) => predictGbm(ml, f, gbm.features), short: (f) => predictGbm(ms, f, gbm.features), long_base: ml.base_rate, short_base: ms.base_rate });
+      }
+    }
+    if (!candidates.length) return null;
+    // The higher worse-side prospective skill wins; a tie goes to the baseline (first in the list).
+    const pick = candidates.reduce((best, c) => (c.skill > best.skill ? c : best));
+    const reason = candidates.length === 1 ? `${pick.source}: the only model connected`
+      : pick.source === "baseline" ? `baseline: worse-side prospective skill ${pick.skill} against the GBM's ${candidates[1].skill} (a tie goes to the baseline)`
+      : `gbm: worse-side prospective skill ${pick.skill} against the baseline's ${candidates[0].skill}`;
     const m15 = (series ?? (await ledgerSeries(env))).m15 || [];
     const k = barIndex(m15, toMs(barClose));
     const atr = k >= 1 ? atrAt(m15, k, LABEL_RULES.atr_period) : null;
     const features = datasetFeatures({ bar_close: barClose, witnesses, quorum, guardrails, structure, context, feed, trading_mode: tradingMode }, { atr, bars: k >= 0 ? barFeatures(m15, k, atr) : {} });
-    const rules = gate.set === "wide" ? WIDE_RULES : LABEL_RULES;
-    const rec = (side) => baseline.prospective?.[`${gate.set}_${side}`] ?? {};
+    const rules = pick.set === "wide" ? WIDE_RULES : LABEL_RULES;
+    const rec = (side) => pick.record?.[`${pick.set}_${side}`] ?? {};
+    const record = pick.recordOf ?? { long: { decisions: rec("long").n ?? null, skill: rec("long").skill ?? null, auc: rec("long").auc ?? null }, short: { decisions: rec("short").n ?? null, skill: rec("short").skill ?? null, auc: rec("short").auc ?? null } };
     return {
-      model_id: baseline.model_id, label_set: gate.set,
+      model_id: pick.model_id, label_set: pick.set, source: pick.source, reason,
       question: `the chance that price reaches ${rules.target_atr} ATR in the side's favour before ${rules.stop_atr} ATR against it, within ${rules.horizon_ms / 3_600_000} hours`,
-      long_target_first: predict(long, features), long_base_rate: long.base_rate,
-      short_target_first: predict(short, features), short_base_rate: short.base_rate,
-      record: { long: { decisions: rec("long").n ?? null, skill: rec("long").skill ?? null, auc: rec("long").auc ?? null }, short: { decisions: rec("short").n ?? null, skill: rec("short").skill ?? null, auc: rec("short").auc ?? null } },
-      connected_since: gate.since ?? null
+      long_target_first: pick.long(features), long_base_rate: pick.long_base,
+      short_target_first: pick.short(features), short_base_rate: pick.short_base,
+      record, connected_since: pick.since
     };
   } catch { return null; }
 }

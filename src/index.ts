@@ -220,7 +220,7 @@ import { runPlanLearning, readPlanLearning, planAdviceFor, planLearningMode } fr
 import { agentStatuses, agentCatalog, strategyAgentsMode, suspendedAgents, suspendedPatterns, syncAgentBreaker, DEFAULT_AGENT } from "./strategy-agents.mjs";
 import { runModelDataset, readModelDataset, readModelDatasetSummary, loadLabeledRows } from "./model-dataset.mjs";
 import { runModelBaseline, readBaseline, baselineStatus, prospectiveRecord } from "./model-baseline.mjs";
-import { readGbm, gbmStatus } from "./model-gbm.mjs";
+import { readGbm, gbmStatus, readGbmPromotion } from "./model-gbm.mjs";
 import { runDecisionEngine, runPendingDecision, decisionEngineEnabled, readLatestDecision, readDecisions, tradingMode, setTradingMode } from "./decision-engine.mjs";
 import { runComplianceChecks, readCompliance } from "./compliance.mjs";
 import { pushDecisionCards, aetherPushStatus, pushWeightingReport, pushWitnessTuningReport, pushExecutionReport, pushModelReport } from "./aether-push.mjs";
@@ -2640,7 +2640,8 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     try {
       const rows = (await loadLabeledRows(env, { limit: 2000 })) as Array<Record<string, any>>;
       const prospective = prospectiveRecord(rows.map((r) => ({ ...r, shadow: r.shadow?.gbm ?? null })));
-      return dashboardJson({ status: "ok", gbm: gbmStatus(await readGbm(env), prospective) });
+      // MA1 (b): the gate's state from the AI Worker's own key (promoted, would_promote or not_promoted).
+      return dashboardJson({ status: "ok", gbm: gbmStatus(await readGbm(env), prospective, await readGbmPromotion(env)) });
     } catch (error) {
       console.error("model_gbm_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "model_gbm_unavailable" }, 500);
