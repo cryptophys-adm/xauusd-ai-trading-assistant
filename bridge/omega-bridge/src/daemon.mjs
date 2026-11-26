@@ -185,10 +185,51 @@ export function createResultIdMemory({ now = () => Date.now(), ttlMs = RESULT_ID
       prune();
     },
     prune,
+    /** [id, reported ms] pairs, oldest first (what is persisted). */
+    entries: () => Array.from(ids.entries()),
+    /** Load persisted pairs (oldest first); invalid ones are skipped, then the bounds apply. */
+    load(pairs) {
+      const valid = (Array.isArray(pairs) ? pairs : [])
+        .filter((p) => Array.isArray(p) && typeof p[0] === "string" && p[0] && p[0].length <= 64 && Number.isFinite(p[1]))
+        .sort((a, b) => a[1] - b[1]);
+      for (const [id, ms] of valid) {
+        ids.delete(id);
+        ids.set(id, ms);
+      }
+      prune();
+    },
     get size() {
       return ids.size;
     },
   };
+}
+
+/** 1.7.1: the reported result ids, kept in the state dir so a restarted bridge does not send a line again. */
+export const REPORTED_IDS_FILE = "reported-results.json";
+
+/**
+ * Read the persisted reported ids: `{ pairs, problem }`. A missing file is `problem: "missing"`, an unreadable or
+ * invalid one `"corrupt"`; both give no pairs (the bridge starts empty). The file holds intent ids and times only.
+ */
+export function readReportedIds(stateDir, { fs = nodeFs } = {}) {
+  const p = path.join(stateDir, REPORTED_IDS_FILE);
+  try {
+    if (!fs.existsSync(p)) return { pairs: [], problem: "missing" };
+    const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (!raw || raw.v !== 1 || !Array.isArray(raw.ids)) return { pairs: [], problem: "corrupt" };
+    return { pairs: raw.ids, problem: null };
+  } catch {
+    return { pairs: [], problem: "corrupt" };
+  }
+}
+
+/** Write the reported ids atomically (tmp + rename, mode 0600). */
+export function writeReportedIds(stateDir, pairs, { fs = nodeFs, now = () => Date.now() } = {}) {
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const target = path.join(stateDir, REPORTED_IDS_FILE);
+  const tmp = `${target}.tmp.${process.pid}.${Math.trunc(now())}`;
+  fs.writeFileSync(tmp, JSON.stringify({ v: 1, ids: pairs }) + "\n", { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tmp, target);
 }
 
 /**
@@ -638,6 +679,12 @@ export function createDaemon(options = {}) {
   let stopRequested = false;
   const pendingResultsById = new Map();
   const reportedResultIds = createResultIdMemory({ now });
+  // 1.7.1: the ids reported before a restart (the last 30 minutes, at most 5000), so the .done re-read sends none again.
+  {
+    const { pairs, problem } = readReportedIds(config.stateDir, { fs });
+    reportedResultIds.load(pairs);
+    if (problem === "corrupt") log({ level: "warn", event: "reported_ids_unreadable", file: REPORTED_IDS_FILE, action: "start_empty" });
+  }
   let lastFailedVersion = null;
 
   function computeBackoffMs(failures) {
@@ -848,8 +895,14 @@ export function createDaemon(options = {}) {
       reportedResultIds.add(r.id);
     }
     // Bounded by age and count (createResultIdMemory): the EA never re-reports an id (processed.txt); this memory guards
-    // the .done re-reads.
+    // the .done re-reads, and is persisted so a restart guards them too.
+    const idsBefore = reportedResultIds.size;
     reportedResultIds.prune();
+    if (sentResults.length > 0 || reportedResultIds.size !== idsBefore) {
+      try { writeReportedIds(config.stateDir, reportedResultIds.entries(), { fs, now }); } catch (err) {
+        log({ level: "warn", event: "reported_ids_write_failed", error: err instanceof Error ? err.message : "write_failed" });
+      }
+    }
 
     const intents = Array.isArray(payload?.intents) ? payload.intents : [];
     writeIntents(config.omegaFilesDir, intents, { fs, now });

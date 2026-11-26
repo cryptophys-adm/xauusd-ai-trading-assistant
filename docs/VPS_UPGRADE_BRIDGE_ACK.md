@@ -11,11 +11,18 @@ in small files under `/root` (`bridge-ack-*.txt`) and each command block reads t
 
 ## What changes, and what it means for the VPS
 
-- Owner 2026-11-26: "Ya, bridge saja". The fix is in the bridge only (`bridge/omega-bridge/src/files.mjs` and
-  `src/daemon.mjs`, version 1.7.0 → 1.7.1). The EA (`ea/mt5/OmegaExecutor.mq5`) does not change.
+- Owner 2026-11-26: "Ya, bridge saja". On this host the fix is in the bridge only (`bridge/omega-bridge/src/files.mjs`
+  and `src/daemon.mjs`, version 1.7.0 → 1.7.1). The EA (`ea/mt5/OmegaExecutor.mq5`) does not change.
 - The bridge now renames `results.txt` only after 400 ms without a write, reads the `.done` files of the last 60 s
   again, skips an incomplete last line until it is complete, and sends each intent id once (docs/OMEGA_BRIDGE.md
   "Results-file race").
+- **After a restart nothing is re-sent.** 1.7.1 keeps the ids it reported (the last 30 minutes, at most 5000) in a new
+  file in its state dir, `/var/lib/omega-bridge/reported-results.json` (intent ids and times only). The first start of
+  1.7.1 finds no such file and starts empty, which is normal. Like every file in `/var/lib/omega-bridge`, never print
+  it.
+- **The server ignores late lines for the fault-clear.** The AI Worker (`src/omega-broker.mjs`, deployed on merge by
+  `deploy-worker.yml`, never from here) lifts the "EA never answered" limit fault only for a result whose intent was
+  still pending, sent or expired. Nothing on this host does that part.
 - On this host the upgrade is: copy the bridge's `src/` into `/opt/omega-bridge`, then restart `omega-bridge.service`.
   That is the only restart. The bridge has no npm dependencies (`bridge/omega-bridge/package.json` lists none), so
   there is no `npm ci`.
@@ -153,18 +160,25 @@ PY
    with every intent still waiting for a result). If any is above 0, **wait** and run the script again every few
    minutes until all three read 0. Do not close anything yourself. `connected: True` and a `state_age_s` under about
    60 are also expected here; if not, **stop and report**: the terminal is not healthy before the upgrade.
-6. **Market window.** Prefer a quiet window: the daily break (22:00-23:00 UTC) or the weekend.
+6. **The AI Worker runs the merged commit** (its half of the fix: the fault-clear). Its `/health` is public:
+   ```bash
+   curl -s https://ai.cryptophys.work/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status"), d.get("commit"))'
+   ```
+   Expect `ok` and the first 12 characters of `<MERGED_COMMIT>`, or of a later `main` commit that contains it. If it is
+   older, wait for `deploy-worker.yml` to finish, then check again. Do not deploy anything yourself. (The bridge part
+   does not depend on it: a 1.7.1 bridge re-sends nothing after its restart either way.)
+7. **Market window.** Prefer a quiet window: the daily break (22:00-23:00 UTC) or the weekend.
    ```bash
    date -u
    ```
    Outside one, go ahead only if Omega is flat (step 5) and the owner said to.
-7. **Node.**
+8. **Node.**
    ```bash
    /usr/bin/node --version
    ```
    `ExecStart` in `omega-bridge.service` runs `/usr/bin/node`. It must be v20 or later. Nothing here installs or
    upgrades Node. If it is older, **stop and report**.
-8. **Free disk.**
+9. **Free disk.**
    ```bash
    df -h /opt /root
    du -sh /opt/omega-bridge
@@ -186,7 +200,8 @@ echo "$B" | tee /root/bridge-ack-backup-path.txt
 ls -la "$B"
 ```
 
-- Do not copy, open or print `/etc/omega-bridge/env` or `/var/lib/omega-bridge/*`. The upgrade changes neither.
+- Do not copy, open or print `/etc/omega-bridge/env` or `/var/lib/omega-bridge/*`. The upgrade changes neither file
+  that is there now; 1.7.1 only adds `/var/lib/omega-bridge/reported-results.json` (step 4.3).
 - **Record the running version.** The bridge has no `/health`. Its last start line in the journal says which version
   runs. This prints only three fields:
   ```bash
@@ -258,8 +273,14 @@ Follow the bridge's own update steps (docs/OMEGA_BRIDGE.md "Calm mode", **Update
    print(dict(c) or "no warnings or errors")'
    ```
    Expect `no warnings or errors`. `result_recovered` (a warning) is the fix at work: a line the EA wrote after a rename,
-   now reported. Note how many there are. Any `sync_*` error or `result_partial_line_dropped` means **stop and
-   report** (names and counts only).
+   now reported. Note how many there are. Any `sync_*` error, `result_partial_line_dropped`, `reported_ids_unreadable`
+   or `reported_ids_write_failed` means **stop and report** (names and counts only).
+   After the first sync that reported a result, the bridge's id file exists. Check its presence and mode only, never
+   its contents:
+   ```bash
+   stat -c '%n %a %s bytes' /var/lib/omega-bridge/reported-results.json 2>/dev/null || echo "not written yet (no result reported since the restart)"
+   ```
+   Expect mode `600` once it exists.
 4. **The terminal was not restarted.**
    ```bash
    systemctl show mt5-terminal.service -p ActiveEnterTimestamp
@@ -296,5 +317,7 @@ Follow the bridge's own update steps (docs/OMEGA_BRIDGE.md "Calm mode", **Update
    B=$(cat /root/bridge-ack-backup-path.txt); cd "$(cat /root/bridge-ack-repo.txt)" && git checkout "$(cat "$B/old-commit.txt")" && git rev-parse HEAD
    ```
 - The `.done` files 1.7.1 wrote have the same format, and 1.7.0 prunes them as before. Leave them.
+- 1.7.0 ignores `/var/lib/omega-bridge/reported-results.json`. Leave it; a later 1.7.1 drops its entries older than
+  30 minutes on load.
 - Never restart `mt5-terminal.service`, and never touch the EA, in a rollback either.
 - Leave `$B` and `/opt/omega-bridge.failed-*` in place for the report. Never print their contents.

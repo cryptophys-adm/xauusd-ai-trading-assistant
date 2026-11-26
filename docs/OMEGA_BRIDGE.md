@@ -331,9 +331,16 @@ EA's open handle: the EA's line landed in a `.done` file the bridge had already 
   now also covers the re-reads: a line seen in the original file and again in a re-read is sent once. Within one pass
   the first copy of an id wins. The memory of reported ids is bounded by age (30 minutes, `RESULT_IDS_TTL_MS`, three
   times the longest a line can be read again) and by count (5000, `RESULT_IDS_MAX`, the oldest first).
-- **After a restart** the memory is empty, so results in `.done` files from the last 60 s are sent once more. The server
-  applies a result only to an intent still `pending`, `sent` or `expired` and says it on Telegram only for a `pending`
-  or `sent` one (and `ea:del:` lines once, by KV), so a repeat changes nothing.
+- **After a restart nothing is re-sent.** The reported ids are kept in `$OMEGA_STATE_DIR/reported-results.json`
+  (default `/var/lib/omega-bridge`; intent ids and times only, mode `0600`), written by tmp + rename after each sync that
+  reported a result, with the same bounds (30 minutes, 5000 ids). A restarted bridge loads them, so the `.done` re-read
+  sends only lines it never sent. A missing file (the first start) means an empty set; a corrupt one too, logged once
+  (`reported_ids_unreadable`).
+- **The server ignores late lines for the fault-clear.** Should a line arrive twice anyway, the server applies a result
+  only to an intent still `pending`, `sent` or `expired`, says it on Telegram only for a `pending` or `sent` one (and
+  `ea:del:` lines once, by KV), and since 2026-11-26 lifts the "EA never answered" limit fault (`clearNoAnswerFault`)
+  only for a result whose intent was still `pending`, `sent` or `expired` at receipt (`RESULT_OPEN_STATUSES` in
+  `src/omega-broker.mjs`). An old line for a done or failed intent clears nothing.
 
 `daemon_started` shows `"bridge_version":"1.7.1"`, `"results_debounce_ms":400` and `"results_reread_ms":60000`. The
 VPS upgrade runbook is docs/VPS_UPGRADE_BRIDGE_ACK.md.

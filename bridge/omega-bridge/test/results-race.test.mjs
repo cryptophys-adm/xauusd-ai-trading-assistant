@@ -380,3 +380,62 @@ test("RR6 prune keeps the newest 20 and every file it is told to keep", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("RR7 restart: the reported ids persist in the state dir, so a restarted bridge re-sends no line it already sent", async () => {
+  const { REPORTED_IDS_FILE } = await import("../src/daemon.mjs");
+  const root = tmp();
+  try {
+    const first = daemonIn(root);
+    const file = path.join(first.omegaDir, "results.txt");
+    fs.writeFileSync(file, LINE_A + LINE_B);
+    age(file, 5000);
+    await first.daemon.tick();
+    assert.deepEqual(first.sent, ["open:1794220800000:BUY", "cl:554433:opp"]);
+    const stored = path.join(root, "state", REPORTED_IDS_FILE);
+    assert.equal(fs.statSync(stored).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(fs.readFileSync(stored, "utf8")).ids.map(([id]) => id), ["open:1794220800000:BUY", "cl:554433:opp"]);
+    assert.deepEqual(fs.readdirSync(path.join(root, "state")).filter((f) => f.includes(".tmp.")), [], "written by tmp + rename");
+
+    // The bridge restarts: the .done file is still inside the 60 s window, and a late line was appended to it.
+    const [done] = doneFiles(first.omegaDir);
+    fs.appendFileSync(path.join(first.omegaDir, done), LINE_C);
+    const second = daemonIn(root);
+    await second.daemon.tick();
+    assert.deepEqual(second.sent, ["mt:554433:1"], "only the line never sent before");
+    assert.ok(!second.logs.some((l) => l.includes("reported_ids_unreadable")));
+
+    // Without the file (as a 1.7.0 state dir), the restarted bridge sends the window's lines once more.
+    fs.rmSync(stored);
+    const third = daemonIn(root);
+    await third.daemon.tick();
+    assert.deepEqual(third.sent.sort(), ["cl:554433:opp", "mt:554433:1", "open:1794220800000:BUY"]);
+    assert.ok(!third.logs.some((l) => l.includes("reported_ids_unreadable")), "a missing file is a first start, not a warning");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RR7b restart: a corrupt or invalid file means an empty set, one warning, no crash; old and invalid ids are dropped on load", async () => {
+  const { REPORTED_IDS_FILE, readReportedIds, createResultIdMemory: mem } = await import("../src/daemon.mjs");
+  for (const content of ["{not json", JSON.stringify({ v: 2, ids: [] }), JSON.stringify([1, 2]), ""]) {
+    const root = tmp();
+    try {
+      fs.mkdirSync(path.join(root, "state"), { recursive: true });
+      fs.writeFileSync(path.join(root, "state", REPORTED_IDS_FILE), content);
+      const d = daemonIn(root);
+      const file = path.join(d.omegaDir, "results.txt");
+      fs.writeFileSync(file, LINE_A);
+      age(file, 5000);
+      const res = await d.daemon.tick();
+      assert.equal(res.ok, true);
+      assert.deepEqual(d.sent, ["open:1794220800000:BUY"]);
+      assert.equal(d.logs.filter((l) => l.includes('"event":"reported_ids_unreadable"')).length, 1);
+      assert.equal(readReportedIds(path.join(root, "state")).problem, null, "rewritten valid after the sync");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const m = mem({ now: () => 10_000, ttlMs: 1000, max: 2 });
+  m.load([["old", 1000], ["a", 9500], [42, 9600], ["b", 9700], ["c", 9800], ["", 9900], ["d", NaN]]);
+  assert.deepEqual(m.entries().map(([id]) => id), ["b", "c"], "TTL, then the count cap; invalid pairs skipped");
+});

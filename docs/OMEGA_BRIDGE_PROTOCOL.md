@@ -68,8 +68,9 @@ How the bridge collects `results` (omega-bridge 1.7.1, owner 2026-11-26: "Ya, br
 "Results-file race"): it renames `omega/results.txt` only once the file has had no write for 400 ms, reads complete lines
 only (a last line without its newline waits), reads the `.done` files of the last 60 s again (an awaited incomplete line
 keeps its file for up to 10 minutes) and sends each intent id once (its memory of reported ids: 30 minutes, at most
-5000). After a bridge restart a result from the last 60 s can arrive a second time; the server applies a result only to
-an intent still `pending`, `sent` or `expired`, so a repeat changes nothing.
+5000, kept in `$OMEGA_STATE_DIR/reported-results.json`, so a restart re-sends nothing). Should a result arrive twice
+anyway, the server applies it only to an intent still `pending`, `sent` or `expired`, and only such a result lifts the
+"EA never answered" limit fault: a late line for a done or failed intent changes nothing.
 
 ### Response body (200)
 
