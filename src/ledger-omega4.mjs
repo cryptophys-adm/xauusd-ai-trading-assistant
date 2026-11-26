@@ -28,7 +28,7 @@
 // realised P/L over the risk at the open (|entry − stop| × volume at the open); partials count their share.
 // The parity check (omegaParity) compares it with Omega's real trades on the live USD account.
 
-import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS, zoneMgmtOn, zoneSdOn } from "./omega-engine.mjs";
+import { planIntents, isProtected, OMEGA_DEFAULTS, commandedStops, STOP_COMMAND_MS, REENTRY_EXIT_REASONS, zoneMgmtOn, zoneSdOn, brokerKeyLevels, managementSpread } from "./omega-engine.mjs";
 import { eaSignalFromDecision, managementFields, applyArmGate, blackoutWindow } from "./ea-signal.mjs";
 import { positionFacts, positionAction, brokerLevels, positionReport, PIP } from "./position-manager.mjs";
 import { lastClosedCandle } from "./omega-broker.mjs";
@@ -460,10 +460,12 @@ export function replayOmega4({
         const decision = { ...d, quorum_prev: prev && d.close_ms - prev.close_ms === M15 ? prev.quorum ?? null : null };
         // Z6: the signal's box levels reach the Position Manager only while zone_sd is on, as live.
         const levels = brokerLevels(signal, { sd: zoneSdOn(S) });
+        // B17: the management level set beside them, as live (lens B only while the signal carries it).
+        const managementLevels = brokerKeyLevels(signal, { sd: zoneSdOn(S), spread: managementSpread(signal, sym) }) ?? [];
         for (const p of positions) {
           const text = councils[`${p.intent_id}|${pmBar}`] ?? null;
           const council = parseCouncil(text);
-          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}) });
+          const f = positionFacts({ position: execPos(p), sym, openIntent: p.open_intent, levels, decision, ladder: S.tp_ladder === true, signal, ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}), managementLevels });
           const offNow = linesOff(now);
           const a = offNow ? positionAction(f, council, { off: offNow }) : positionAction(f, council);
           pmCalls += 1;
@@ -661,7 +663,7 @@ function toRecord(t, { openR = null, version = OMEGA4_VERSION } = {}) {
  * (Function.prototype.toString in node, the repository's own text) and values make ENGINE_CODE_HASH.
  */
 export const ENGINE_CODE = Object.freeze({
-  "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE",
+  "omega-engine": [omegaEngine, ["planIntents", "manageIntents", "keyLevelPlan", "ladderPlan", "ladderRungs", "ladderStep", "ladderTp1Locked", "partialShare", "strategyExits", "positionManagerIntents", "reentryGate", "isProtected", "openRiskAtStops", "commandedStops", "withCommandedStop", "brokerKeyLevels", "managementSpread", "powerBand", "floorToStep", "isRolloverQuarantine", "isOmegaOwned", "openId", "closeId", "pendingRiskAtStops", "pendingDeleteReason", "omegaPendingOrders", "pendingAsPosition", "settingsFrom", "OMEGA_DEFAULTS", "POWER_STRONG", "POWER_WEAK", "POWER_FRESH_MS", "LEAN_BAND", "DEFAULT_POSITION_AGENT", "LADDER_CONFIRM_TF", "REENTRY_EXIT_REASONS", "GOLD_PIP", "STOP_COMMAND_MS", "EXECUTOR_MAX_AGE_MS", "LIMIT_ENTRY_AVAILABLE",
     // Live limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md stage 3): the placement, the council's actions, the fill's re-check.
     "limitPlacement", "limitActionIntents", "fillGuard", "deleteOrderIntent", "pendingWithoutStop", "PROFILE_RANK", "ENTRY_ORDERS", "LIMIT_EA_MIN_VERSION", "PLATFORM_MAX_OPEN", "ENTRY_COUNCIL_WAIT_MS",
     // EZ1 (2026-11-23): the limit inside the signal's entry zone.
@@ -745,7 +747,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "12cdf5a54d2fdd389d29780a142b1f3e0eb3844d210259131bdee5bc0f33e81b";
+export const ENGINE_CODE_HASH = "9766e73248bbda79d81d45cb3770e9048181462ffffa32109b5ed02d720649e0";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

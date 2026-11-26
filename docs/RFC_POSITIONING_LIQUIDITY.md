@@ -272,12 +272,42 @@ the levels as counts), never a sweep clause and never a price. The 4H and 1D roo
   - **The limit council's path stays** (Track B ruling, orchestrator 2026-11-22, errata E0). A resting limit may move to
     a lens B level, as above. The planned fix B1, which would have kept lens B out of the limit council's moves, is
     dropped (§16 item 14). No new entry path is added: lens B never sets a new entry's price (§5).
-  - **Planned: one management level set (Track B, B17).** `brokerKeyLevels` gains a management mode that adds lens B
-    only when `liquidity_on` and `feed_basis_known` both hold; a level within two spreads of a zone merges into it.
-    `manageIntents`, the ladder's TP2 wait and the Position Manager read it. The Position Council still sees no lens B
-    price: its evidence (`positionFacts`' `tp2`, :131; `positionCouncilMessages`' position block and `key_levels`,
-    :518-521) keeps the Key Level Agent's levels, and lens B reaches it only as `liquidity_levels`
-    [{ kind, side, distance_atr }]. Its line is `liquidity@1` behind the Position Manager line breaker (B5).
+  - **Built: one management level set (Track B, B17, 2026-11-26; owner 2026-11-22: "tidak perlu shadow, langsung
+    integrasikan ... position dan lainnya").** `brokerKeyLevels(signal, { spread })` is the management mode (`spread`
+    given: `managementSpread`, the hour's spread median `liquidity_spread_median` times the symbol's point, or null).
+    - Lens B joins only when `liquidity_on` and `feed_basis_known` both hold.
+    - A lens B level within two spreads of a Key Level zone (a box level too, with `zone_sd` on) merges into it: the
+      zone keeps its edges and the duplicate goes. An unknown spread merges nothing.
+    - `manageIntents` (SL+, the trailing TP, the ladder's rungs and its TP1 lock), the ladder's TP2 wait in
+      `planIntents` and the Position Manager read it. A stop or target move that the same plan without lens B's levels
+      would not make carries `level_source: "liquidity"` (a zone-typed one keeps `"zone"`).
+    - The Position Manager keeps `levels = brokerLevels(signal)` for every council-visible field. The management set
+      goes in beside it as `positionFacts({ ..., managementLevels })`. Only with a lens B level in it do the facts
+      carry `management` { tp2, tp2_source, ladder_hold, loosen_levels, liquidity }, and only `positionAction`'s TP2
+      move, the ladder's hold and the bounded loosening (A8) read it.
+    - The Position Council sees no lens B price. Its position block (`tp2` included) and `key_levels` are today's, and
+      lens B reaches it only as `liquidity_levels` [{ kind, side: above | below | at, distance_atr }]: at most 12,
+      nearest first, the distance from price to the level's near edge in the broker's 5m ATR. One prompt sentence
+      (`LIQUIDITY_LEVELS_SYSTEM`) is added only when they are present.
+    - Its line is `liquidity@1` behind the Position Manager line breaker (B5): `PM_LINES_OFF=liquidity` (or the
+      breaker) reads the management set as absent, and `lines_json.cause` is `liquidity@1` when the action without
+      lens B's reading and its levels would differ. No new reason. The owner's `liquidity_enabled` switch turns lens B
+      off everywhere.
+    - Without `spread` (the limit council's moves, errata E0) `brokerKeyLevels` is as before. The Nexus view's
+      management set (`src/liquidity-view.mjs`) shows the management mode.
+    - **Replay (read-only, 2026-11-26, aggregates only).** Over the 1,195 lens B readings of 2026-11-20 10:57 to
+      2026-11-26 12:53 UTC (D1 `liquidity_readings`), 967 carried levels (3,272 levels). The basis was rebuilt per
+      reading as `eaSignal` takes it, on the KV 15m series and the broker's M1 archive.
+      - The feed-basis gate would have removed lens B in **0** readings: the basis was known in all 967.
+      - The merge would have joined **3,015 of the 3,272 levels (92%)** to a Key Level zone of the decision in force
+        (two spreads: the hour's median of 32 to 36 points, 0.64 to 0.72), leaving **257 (8%)** as lens B's own
+        management levels. That was 966 of the 967 readings with a merge. By kind, sweep 406 of 432, hvn 1,972 of 2,097
+        and pool 637 of 743 merged.
+      - v4 replays without the lens (its signal carries no `liquidity_on`; omegaParity's expected-difference note,
+        §7.2), so v4 with lens B on and off is identical by construction, and B17 changes no v4 trade. The fixtures'
+        Omega v4 scenarios are byte for byte as before.
+      - Limits: the basis here is on 15m feed bars (eaSignal uses 5m), the zones are each decision's `key_levels`
+        without the box levels, and the spread median is the lens state's current baseline.
 - **On the feed's scale** (the ledger's replays; anything that reads OANDA prices): `feed = broker − feed_basis`
   (`feedBasis`, `src/feed-basis.mjs` since B8, re-exported by `src/ea-signal.mjs`). Without a known basis (`feed_basis_known` false) liquidity levels are left out on
   the feed's scale.
@@ -314,8 +344,8 @@ the levels as counts), never a sweep clause and never a price. The 4H and 1D roo
    reasons do not hold.
 5. **Where lens B levels never go** (Track B rule 3, amended by errata E0, 2026-11-22). Plan entries and targets, the
    reward guardrail, the `KEY_LEVELS` witness and `decision.key_levels` never read lens B. They reach only
-   `manageIntents`, the ladder's TP2 wait, the limit council's moves (§4.4), and, once built, the Position Manager's
-   management set (B17) and the squeeze guard. Every use is gated on lens B on and above its floor
+   `manageIntents`, the ladder's TP2 wait, the limit council's moves (§4.4), the Position Manager's management set
+   (B17, built 2026-11-26) and, once built, the squeeze guard. Every use is gated on lens B on and above its floor
    (`lensKnobs("liquidity").active`), a fresh state (`LIQUIDITY_STATE_FRESH_MS`) and, from B17, `feed_basis_known`.
    - **Planned: the squeeze guard (Track B, B18).** The Key Level Agent may list lens B members as management
      candidates (`key_levels.management`), read only by `brokerKeyLevels`' management mode. A lens B block is recorded
@@ -716,6 +746,6 @@ replays without lens B's gate and deferral, and `omegaParity` treats a v4-only t
     and that behaviour stays as it is today. Lens B still sets no new entry's price and adds no entry path (§5 item 5).
 15. **The Position Council reads the Key Level Agent's levels only** (found 2026-11-25). §4.4 names the Position
     Manager's TP2 and A8 reasons among `brokerKeyLevels`' readers, but `runPositionManager` reads `brokerLevels`, so
-    lens B reaches the Position Manager only as the measured sweep reason of §6. B17 (planned) brings lens B into its
-    management set without showing the council a lens B price.
+    lens B reached the Position Manager only as the measured sweep reason of §6. B17 (built 2026-11-26) brings lens B
+    into its management set without showing the council a lens B price (§4.4).
 

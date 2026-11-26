@@ -61,7 +61,7 @@ import { eaSignal } from "./ea-signal.mjs";
 import { SWEEP_WITH_MAX_AGE_MIN } from "./liquidity-lens.mjs";
 import { ensurePositionSchema, ACTION_TTL_MS } from "./position-actions.mjs";
 import { readDelegations, hitlSupported } from "./omega-hitl.mjs";
-import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords, sdMarks, zoneSdOn } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, ladderTp1Locked, loosenRecords, sdMarks, zoneSdOn, brokerKeyLevels, managementSpread } from "./omega-engine.mjs";
 import { pmLoosenKnobs } from "./pm-loosen-knobs.mjs";
 import { gatedEvents, eventRisk } from "./econ-calendar.mjs";
 import { gateBreakEven, gateAtrM5, gateText, profitLockGateOn, GATE_UNMEASURED } from "./profit-lock-gate.mjs";
@@ -114,8 +114,12 @@ export const pipsOf = (dist) => r1(dist / PIP);
  * `gate` (SLG1, profit_lock_gate "on"): the position's profit-lock gate facts (src/profit-lock-gate.mjs gateFacts; null
  * reads as closed, unmeasured); the facts then carry `gate` { open, mfe_r, mfe_atr, ..., be } with `be` the gate's
  * first lock. Absent ("legacy"): the facts are today's.
+ * B17 (Track B PR 17): `managementLevels` is the management level set (omega-engine.mjs brokerKeyLevels' management mode:
+ * the Key Level zones and lens B's levels). Only with a lens B level in it, the facts carry `management` { tp2,
+ * tp2_source, ladder_hold, loosen_levels?, liquidity }: positionAction's TP2 move, the ladder's hold and the bounded
+ * loosening read it, never the council (its fields stay on `levels`). Without one: the facts are today's.
  */
-export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null, gate = undefined, changes = undefined }) {
+export function positionFacts({ position: p, sym, openIntent, levels = [], decision, ladder = false, signal = null, loosen = null, gate = undefined, changes = undefined, managementLevels = null }) {
   if (!p || (p.side !== "BUY" && p.side !== "SELL") || !isNum(sym?.bid) || !isNum(sym?.ask)) return null;
   const buy = p.side === "BUY", dir = buy ? 1 : -1;
   const open = Number(p.open_price ?? p.entry), sl = Number(p.sl), tp = Number(p.tp);
@@ -129,10 +133,12 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   const conf = decision.agent_confidence?.[agent]?.[k], prev = decision.agent_confidence_prev?.[agent]?.[k];
   const share = buy ? decision.quorum.long_share : decision.quorum.short_share;
   const prevShare = buy ? decision.quorum_prev?.long_share : decision.quorum_prev?.short_share;
-  const beyond = levels.filter((z) => (buy ? z.low > tp1 + spreadPx : z.high < tp1 - spreadPx)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
+  const beyondOf = (lv) => lv.filter((z) => (buy ? z.low > tp1 + spreadPx : z.high < tp1 - spreadPx)).sort((a, b) => (buy ? a.low - b.low : b.high - a.high))[0];
+  const beyond = beyondOf(levels);
   // Z6 (zone_sd on): box levels (sd) may bring TP2 nearer; the ladder's TP1 lock and the bounded loosening keep today's
   // levels, so a box level never unlocks an outward target earlier and never gives a reason to loosen a stop.
-  const keyLevels = levels.some((z) => z?.sd === true) ? levels.filter((z) => z?.sd !== true) : levels;
+  const withoutBoxes = (lv) => (lv.some((z) => z?.sd === true) ? lv.filter((z) => z?.sd !== true) : lv);
+  const keyLevels = withoutBoxes(levels);
   const band = pmBand(openIntent, decision.trading_mode ?? null);
   const pips = pipsOf(dir * (price - open));
   const out = {
@@ -148,6 +154,16 @@ export function positionFacts({ position: p, sym, openIntent, levels = [], decis
   };
   // ADR-0020 Amendment 8: only with its switch on (`loosen` given by the runner); otherwise the facts are today's.
   if (loosen && typeof loosen === "object") out.loosen = loosenFacts(loosen, { openIntent, mode: band.mode, levels: keyLevels });
+  // B17: the management level set, only with a lens B level in it (otherwise the facts are today's).
+  if (Array.isArray(managementLevels) && managementLevels.some((z) => z?.source === "liquidity")) {
+    const mb = beyondOf(managementLevels), mKey = withoutBoxes(managementLevels);
+    out.management = {
+      tp2: mb ? (buy ? mb.low : mb.high) : null, tp2_source: mb ? (mb.source === "liquidity" ? "liquidity" : "key_level") : null,
+      ladder_hold: ladder === true && !ladderTp1Locked({ position: p, levels: mKey.length ? mKey : null, sym, signal }),
+      ...(out.loosen ? { loosen_levels: mKey } : {}),
+      liquidity: managementLevels.filter((z) => z?.source === "liquidity").map((z) => ({ kind: z.kind, low: z.low, high: z.high }))
+    };
+  }
   // The liquidity lens (docs/RFC_POSITIONING_LIQUIDITY.md §6), only while it is on (the signal's liquidity_on: the
   // owner's switch, the weight above its floor, a fresh state); otherwise the facts are today's.
   const liq = liquidityOf(signal, p.side);
@@ -207,7 +223,9 @@ export function positionAction(f, council, { off = null } = {}) {
   // B5 (src/pm-line-breaker.mjs): the lines that are off (`off`, ids) are skipped exactly as if their rule did not fire;
   // the line `liquidity` off reads as lens B's reading absent. None off (the default): the rules as before, byte for byte.
   const lines = Array.isArray(off) && off.length ? new Set(off) : null;
-  const g = lines?.has("liquidity") && f?.liquidity ? withoutLiquidity(f) : f;
+  // B17: the line `liquidity` off also reads as lens B's management levels absent; on, TP2, the ladder's hold and the
+  // bounded loosening read the management set (positionFacts `management`).
+  const g = managed(lines?.has("liquidity") && (f?.liquidity || f?.management) ? withoutLiquidity(f) : f);
   const base = ruleAction(g, council, lines);
   // ADR-0020 Amendment 8 (owner 2026-11-20), only with its switch on (the facts then carry `loosen`) and only on the
   // council's answer: a silent council changes nothing, and nothing loosens mechanically. After a loosening a lock
@@ -217,24 +235,32 @@ export function positionAction(f, council, { off = null } = {}) {
   return council ? a8Action(g, council, held, lines) : held;
 }
 
-/** Pure (B5): the facts without lens B's reading (the line `liquidity` off). */
+/** Pure (B5, B17): the facts without lens B's reading and its management levels (the line `liquidity` off). */
 function withoutLiquidity(f) {
-  const { liquidity: _, ...rest } = f;
+  const { liquidity: _, management: __, ...rest } = f;
   return rest;
+}
+
+/** Pure (B17): the facts the rules read: with a management set, its TP2, ladder hold and loosening levels. */
+function managed(f) {
+  if (!f?.management) return f;
+  const { management: m, ...rest } = f;
+  return { ...rest, tp2: m.tp2, ladder_hold: m.ladder_hold, ...(rest.loosen && m.loosen_levels ? { loosen: { ...rest.loosen, levels: m.loosen_levels } } : {}) };
 }
 
 /**
  * Pure (B5): position_actions.lines_json of one Position Manager action: `present` the on lines of this layer whose input
- * the evaluation had (the fixed rules with facts, A8's with its switch on, `liquidity` with a reading), `cause` the line
- * whose reason or level set a close, stop or target: `liquidity` when the action without lens B's reading would differ,
+ * the evaluation had (the fixed rules with facts, A8's with its switch on, `liquidity` with a reading or B17's management
+ * levels), `cause` the line whose reason or level set a close, stop or target: `liquidity` when the action without lens
+ * B's reading and its management levels would differ,
  * else the action's own rule when it is a line; null otherwise. Tags "id@version".
  */
 export function pmLinesJson(f, council, a, { off = [] } = {}) {
   const offS = new Set(Array.isArray(off) ? off : []);
-  const present = PM_LINES.filter((l) => !offS.has(l.id) && !PM_FAST_LINE_IDS.includes(l.id) && (l.id === "liquidity" ? Boolean(f?.liquidity) : isA8Line(l.id) ? Boolean(f?.loosen) : Boolean(f))).map((l) => lineTag(l.id)).sort();
+  const present = PM_LINES.filter((l) => !offS.has(l.id) && !PM_FAST_LINE_IDS.includes(l.id) && (l.id === "liquidity" ? Boolean(f?.liquidity || f?.management) : isA8Line(l.id) ? Boolean(f?.loosen) : Boolean(f))).map((l) => lineTag(l.id)).sort();
   let cause = null;
   if (f && a && (a.action === "close" || a.action === "sl" || a.action === "tp")) {
-    if (f.liquidity && !offS.has("liquidity")) {
+    if ((f.liquidity || f.management) && !offS.has("liquidity")) {
       const b = positionAction(f, council, { off: [...offS, "liquidity"] });
       if (b.action !== a.action || b.rule !== a.rule || (b.sl ?? null) !== (a.sl ?? null) || (b.tp ?? null) !== (a.tp ?? null)) cause = "liquidity";
     }
@@ -568,6 +594,24 @@ export function councilLevels(levels, price) {
   return [...list].sort((a, b) => dist(a) - dist(b) || a.low - b.low).slice(0, COUNCIL_LEVELS_MAX).sort((a, b) => a.low - b.low);
 }
 
+/** B17: the council's one sentence on liquidity_levels, only when they are present. */
+export const LIQUIDITY_LEVELS_SYSTEM = " liquidity_levels are lens B's levels from the broker's own tick volume (sweep extremes, untaken pools, high-volume nodes), by side of price and distance in 5m ATR; the fixed rules may take TP2 at one; they never decide alone.";
+/**
+ * Pure (B17): the council's view of lens B's management levels (positionFacts `management.liquidity`), at most
+ * COUNCIL_LEVELS_MAX, nearest first: [{ kind, side: "above" | "below" | "at", distance_atr }] with the distance from price
+ * to the level's near edge in the broker's 5m ATR (null when unknown). Never a price. Null without one.
+ */
+export function councilLiquidityLevels(f, m5 = null) {
+  const list = Array.isArray(f?.management?.liquidity) ? f.management.liquidity : [];
+  if (!list.length || !isNum(f.price)) return null;
+  const atr = Number(m5?.m5_atr);
+  const rows = list.map((z) => {
+    const d = f.price < z.low ? z.low - f.price : f.price > z.high ? f.price - z.high : 0;
+    return { kind: z.kind, side: d === 0 ? "at" : f.price < z.low ? "above" : "below", d };
+  }).sort((a, b) => a.d - b.d).slice(0, COUNCIL_LEVELS_MAX);
+  return rows.map((r) => ({ kind: r.kind, side: r.side, distance_atr: isNum(atr) && atr > 0 ? Math.round((r.d / atr) * 100) / 100 : null }));
+}
+
 /** Pure: the council's messages for one position (measured inputs only; never a size, never the council's own confidence). */
 export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
   const evidence = {
@@ -584,9 +628,12 @@ export function positionCouncilMessages(f, { m5 = null, levels = [] } = {}) {
   const system = "You are the Position Council of the XAUUSD system. Every 5 minutes you judge ONE open position from measured inputs only: the strategy agent's confidence on the position's side now and 15 minutes ago, the quorum's share on its side, the Decision Engine's stance, the broker's 5m structure and the key levels. Answer momentum (strengthening, holding or weakening: is price still moving the position's way with the agents and the quorum behind it?) and thesis (intact, weakening or broken: does the reason the position was opened still hold?). Fixed rules turn your answer into an action; you never choose the action, a size or a price. Return only the JSON object, with one short reason in plain words.";
   // The liquidity lens (RFC §6), only while it is on and a sweep stands: one measured fact and one sentence.
   if (f.liquidity) evidence.liquidity = { sweep: f.liquidity.sweep, sweep_side: f.liquidity.sweep_side, age_min: f.liquidity.age_min, lens_weight: f.liquidity.weight };
+  // B17: lens B's management levels, only with one in the set: kind, side of price and distance in 5m ATR, never a price.
+  const lensB = councilLiquidityLevels(f, m5);
+  if (lensB) evidence.liquidity_levels = lensB;
   const liq = f.liquidity ? ` liquidity is the broker's own tick volume: a reclaimed sweep on a volume spike in the last 15 minutes, with or against the position; weigh it at ${f.liquidity.weight ?? "its lens weight"}. Against the position it is a measured reason (liquidity_sweep_against) for a cut in the loss band${L ? " or a target nearer" : ""}; it never decides alone.` : "";
   return [
-    { role: "system", content: `${system}${L ? A8_SYSTEM : ""}${liq}` },
+    { role: "system", content: `${system}${L ? A8_SYSTEM : ""}${liq}${lensB ? LIQUIDITY_LEVELS_SYSTEM : ""}` },
     { role: "user", content: JSON.stringify(evidence) }
   ];
 }
@@ -664,6 +711,9 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     try { const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first(); const st = row?.settings ? JSON.parse(row.settings) : {}; if (typeof st.tp_ladder === "boolean") ladder = st.tp_ladder; a8 = st.pm_loosen_enabled === true; lockGate = profitLockGateOn({ ...OMEGA_DEFAULTS, ...st }); changes = changeTokens({ ...OMEGA_DEFAULTS, ...st }); sdOn = zoneSdOn({ ...OMEGA_DEFAULTS, ...st }); } catch { /* the defaults */ }
     // Z6: the signal's box levels only while zone_sd is on (brokerLevels drops them otherwise).
     const levels = brokerLevels(signal, { sd: sdOn });
+    // B17: the management level set (brokerKeyLevels' management mode: lens B with a known basis, merged into a zone
+    // within two spreads) beside it; only positionAction's TP2, the ladder's hold and the loosening read it.
+    const managementLevels = brokerKeyLevels(signal, { sd: sdOn, spread: managementSpread(signal, sym) }) ?? [];
     // SLG1 (owner 2026-11-23): with profit_lock_gate "on", each position's profit-lock gate, measured as Omega's sync
     // measures it (src/omega-broker.mjs profitLockGates: the broker's M1 corpus since the fill, the terminal's ATR(14,
     // M15), the decision's ATR(H1)); a position without facts reads as closed. "legacy": none, today's rules.
@@ -699,7 +749,7 @@ export async function runPositionManager(env, { now = Date.now(), call = callBus
     for (const p of positions) {
       const id = `pm:${p.ticket}:${bar}`;
       if (await db.prepare("SELECT id FROM position_actions WHERE id = ?").bind(id).first()) continue;
-      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}), ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}) });
+      const f = positionFacts({ position: p, sym, openIntent: openIntents[p.intent_id], levels, decision, ladder, signal, ...(loosenOf ? { loosen: loosenOf(p) } : {}), ...(gates ? { gate: gates[String(p.ticket)] ?? null } : {}), ...(changes.length ? { changes } : {}), managementLevels });
       let council = null, councilNote = null;
       if (f && spent < capUsd) {
         try {

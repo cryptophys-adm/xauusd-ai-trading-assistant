@@ -511,12 +511,18 @@ export function zoneGiveback(meta) {
  * words { type, strength, freshness } and lens B's levels type "none"; otherwise (and always without `typed`) today's.
  * Z6: a box level (a "/sd" token, sdMarks) is dropped unless `sd` (zone_sd on); with `sd` it carries `sd: true`. A
  * signal without box levels gives today's levels byte for byte either way.
+ * B17 (Track B PR 17): with `spread` given (the management mode: Omega's manageIntents, the ladder's TP2 wait and the
+ * Position Manager's management set; managementSpread, a price or null when unknown), lens B's levels join only with a
+ * known feed basis (feed_basis_known), and one within two spreads of a Key Level zone merges into it (the zone stays as
+ * it is; the duplicate goes). An unknown spread merges nothing. Without `spread` (the limit council, the views): today's.
  */
-export function brokerKeyLevels(signal, { typed = false, sd = false } = {}) {
+export function brokerKeyLevels(signal, { typed = false, sd = false, spread = undefined } = {}) {
   // The Positioning & Liquidity analyst's lens B (docs/RFC_POSITIONING_LIQUIDITY.md §4.4; owner 2026-11-20,
   // "rekomendasi"): sweep extremes, untaken pools and high-volume nodes join the key levels with source "liquidity",
   // already on the broker's scale (no basis added), only while the lens is on (the signal's liquidity_on).
-  const liquidity = signalLiquidityLevels(signal);
+  const management = spread !== undefined;
+  const known = signal?.feed_basis_known === true && finite(signal.feed_basis);
+  const liquidity = management && !known ? [] : signalLiquidityLevels(signal);
   const words = typed ? typedLevels(signal) : null;
   const marks = sdMarks(signal);
   const out = [];
@@ -529,8 +535,20 @@ export function brokerKeyLevels(signal, { typed = false, sd = false } = {}) {
       if (positive(lo) && positive(hi) && lo <= hi) out.push(words ? { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...words[i], ...box } : { low: lo + signal.feed_basis, high: hi + signal.feed_basis, ...box });
     }
   }
-  out.push(...(words ? liquidity.map((z) => ({ ...z, type: "none", strength: null, freshness: null })) : liquidity));
+  const near = management && positive(spread) ? 2 * spread : null;
+  const zones = near != null ? out.slice() : [];
+  const joined = near != null ? liquidity.filter((z) => !zones.some((k) => Math.max(0, z.low - k.high, k.low - z.high) <= near + 1e-9)) : liquidity;
+  out.push(...(words ? joined.map((z) => ({ ...z, type: "none", strength: null, freshness: null })) : joined));
   return out.length ? out.sort((a, b) => a.low - b.low) : null;
+}
+
+/**
+ * Pure (B17): the spread brokerKeyLevels' management mode merges within, in price: the liquidity lens's spread median of
+ * the hour (signal.liquidity_spread_median, in points) times the symbol's point; null when either is unknown.
+ */
+export function managementSpread(signal, sym) {
+  const med = Number(signal?.liquidity_spread_median), point = Number(sym?.point);
+  return positive(med) && positive(point) ? med * point : null;
 }
 
 /** Pure: the power band of a signed power: "strong" (with the position), "weak", "reversed" (strongly against) or "normal". */
@@ -832,18 +850,25 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
   const recent = new Set(recentIntentIds);
   const scaledBefore = (ticket) => [...recent].some((rid) => String(rid).startsWith(`ps:${ticket}:`));
   const targetExtTp = positive(signal?.extended_tp) ? signal.extended_tp : positive(signal?.tp2) ? signal.tp2 : null;
-  const levels = brokerKeyLevels(signal);
+  // B17: the management level set (brokerKeyLevels' management mode: lens B only with a known feed basis, merged into a
+  // Key Level zone within two spreads).
+  const spread = managementSpread(signal, sym);
+  const levels = brokerKeyLevels(signal, { spread });
   // Z3a (zone_mgmt not "off"): the same levels with their demand and supply words, for SL+ and the trailing TP only
   // (keyLevelPlan's `zone`); null when off or untyped (a missing or mismatched key_level_types), so today's plan.
-  const typedLv = zoneMgmtOn(S) ? brokerKeyLevels(signal, { typed: true }) : null;
+  const typedLv = zoneMgmtOn(S) ? brokerKeyLevels(signal, { typed: true, spread }) : null;
   const zoneLevels = typedLv && typedLv.some((z) => typeof z.type === "string") ? typedLv : null;
   // Z6 (zone_sd on): the same levels with the signal's box levels, beside today's (only where today's exist and the
   // signal carries box levels): SL+ and the trailing TP through sdKeyPlan (never looser, never further), the ladder's
   // lock through sdLadderPlan (a box rung at its far edge, sdLadderLevels; never looser; the partials today's). The
   // ladder's TP1 lock (Amendment 4) keeps today's levels. Off, or no box level: null, today's management byte for byte.
-  const sdLv = zoneSdOn(S) && levels ? brokerKeyLevels(signal, { sd: true }) : null;
+  const sdLv = zoneSdOn(S) && levels ? brokerKeyLevels(signal, { sd: true, spread }) : null;
   const boxLevels = sdLv && sdLv.some((z) => z.sd === true) ? sdLv : null;
-  const typedSdLv = boxLevels && zoneLevels ? brokerKeyLevels(signal, { typed: true, sd: true }) : null;
+  const typedSdLv = boxLevels && zoneLevels ? brokerKeyLevels(signal, { typed: true, sd: true, spread }) : null;
+  // B17: whether lens B is in the set; then a stop or target that the same plan without lens B's levels would not make
+  // carries level_source "liquidity" (a zone-typed one keeps "zone").
+  const lensB = Boolean(levels?.some((z) => z.source === "liquidity"));
+  const noLens = (lv) => (lv ? lv.filter((z) => z.source !== "liquidity") : lv);
   // One modify per position per ZONE_MGMT_RATE_MS across the 1m fast layer and the typing: a fast action of the position
   // (pm1:<ticket>:<bar minute>, decided at the bar's close) in the window leaves its management untyped (today's).
   const fastRecent = (ticket) => [...recent].some((rid) => {
@@ -885,19 +910,25 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
     if (levels) {
       // Z3a: typed with the position's giveback cap (its mode and R at entry), unless a fast action is in the window.
       const zone = zoneLevels && !fastRecent(p.ticket) ? { cap: zoneGiveback(positionMeta?.[p.intent_id] ?? null) } : null;
-      const k0 = keyLevelPlan({ position: p, sym, signal, levels: zone ? zoneLevels : levels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone ? { zone } : {}) });
-      const k = boxLevels
-        ? sdKeyPlan(k0, keyLevelPlan({ position: p, sym, signal, levels: zone && typedSdLv ? typedSdLv : boxLevels, now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone && typedSdLv ? { zone } : {}) }), { buy, point: positive(sym.point) ? sym.point : Math.pow(10, -digits) })
-        : k0;
+      const planOf = (f) => {
+        const k0 = keyLevelPlan({ position: p, sym, signal, levels: f(zone ? zoneLevels : levels), now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone ? { zone } : {}) });
+        return boxLevels
+          ? sdKeyPlan(k0, keyLevelPlan({ position: p, sym, signal, levels: f(zone && typedSdLv ? typedSdLv : boxLevels), now, extend: extendOf(p), ...(gate ? { lockPx: gateBe } : {}), ...(zone && typedSdLv ? { zone } : {}) }), { buy, point: positive(sym.point) ? sym.point : Math.pow(10, -digits) })
+          : k0;
+      };
+      const k = planOf((lv) => lv);
+      const kb = lensB && !k.close && (k.sl != null || k.tp != null) && noLens(levels).length ? planOf(noLens) : null;
+      const liqSl = lensB && k.sl != null && !k.sl_zone && (kb == null || kb.close || kb.sl !== k.sl);
+      const liqTp = lensB && k.tp != null && !k.tp_zone && (kb == null || kb.close || kb.tp !== k.tp);
       if (k.close) {
         out.push({ id: `cl:${p.ticket}:pw:${Math.floor(signal.power_ms / 60_000)}`, kind: "close", ticket: p.ticket, reason: "power_reversal" });
         continue;
       }
       if (k.sl != null && !held(k.sl) && !gateShut(k.sl)) {
-        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}`, ...(k.sl_zone ? { level_source: "zone" } : {}), ...(k.sl_sd ? { sd: true } : {}) });
+        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}`, ...(k.sl_zone ? { level_source: "zone" } : liqSl ? { level_source: "liquidity" } : {}), ...(k.sl_sd ? { sd: true } : {}) });
         movedSl = true;
       }
-      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level", ...(k.tp_zone ? { level_source: "zone" } : {}), ...(k.tp_sd ? { sd: true } : {}) });
+      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level", ...(k.tp_zone ? { level_source: "zone" } : liqTp ? { level_source: "liquidity" } : {}), ...(k.tp_sd ? { sd: true } : {}) });
     }
     if (gate && !movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
       // SLG1: the break-even waits for the gate and then goes to the gate's first lock, with the broker's stop distance.
@@ -1716,7 +1747,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // outward move, until the stop locks a profit at or beyond TP1. A target the council moves nearer (Amendment 8) is
   // not an outward move.
   if (S.tp_ladder) {
-    const levels = brokerKeyLevels(signal);
+    const levels = brokerKeyLevels(signal, { spread: managementSpread(signal, sym) });
     pm.intents = pm.intents.filter((it) => {
       if (it.kind !== "modify_tp") return true;
       const p = positions.find((x) => x.ticket === it.ticket);
