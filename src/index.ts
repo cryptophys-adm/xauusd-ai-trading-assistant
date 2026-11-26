@@ -1,5 +1,5 @@
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
-import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, INGEST_ENGINES, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
+import { buildEvidenceFusion, indicatorPayloadsFromLocal, analysisAllowedForTimeframe, isHudSource, LOCAL_ENGINES, INGEST_ENGINES, ADOPT_ENGINES, adoptIngest, validateLocalCalculation, WEBHOOK_EVIDENCE_CONTRACT_VERSION, NEWS_ANALYSIS_CONTRACT_VERSION, NEWS_MAX_AGE_MS, containsCredentialFields, stripCredentialFields } from "./evidence-fusion.mjs";
 import { validateM5Context, freshM5Context } from "./m5-context.mjs";
 import { filterRecentUniqueArticles } from "./news-filter.mjs";
 import { parseTradingViewJson } from "./tradingview-json.mjs";
@@ -95,6 +95,8 @@ export interface Env {
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
   INDICATOR_SOURCE?: string;
+  /** B11: "off" refuses the adoption records (gmi_adopt, prophet_adopt) at ingest; default on. Parity only, nothing reads them. */
+  ADOPT_INGEST?: string;
   CALIBRATION_INTERVAL_DAYS?: string;
   ANALYSIS_TIMEFRAMES?: string;
   /** The news threads (owner 2026-11-15; MULTI_AGENT_BUS_ENABLED is read for one deploy when this is unset). */
@@ -1394,6 +1396,12 @@ async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ sta
   if (!key || !INGEST_ENGINES.includes(engine)) {
     return { status: 400, body: { error: "Invalid candle_key or engine" } };
   }
+  // B11: the adoption records are accepted for group parity only; ADOPT_INGEST "off" refuses them (a 200, so the
+  // publisher marks the bar and does not retry it).
+  const adopt = ADOPT_ENGINES.includes(engine);
+  if (adopt && adoptIngest(env) === "off") {
+    return { status: 200, body: { status: "adopt_ingest_off", engine, candle_key: key, trust_status: "not_ingested" } };
+  }
   const validation = validateLocalCalculation(record, {
     symbol: asText(record.symbol),
     timeframe: asText(record.timeframe),
@@ -1420,7 +1428,8 @@ async function ingestLocalCalculation(env: Env, payload: unknown): Promise<{ sta
   };
   // Persist the observed output and identity before queueing reconciliation.
   await ensureSchema(env.DB);
-  await registerIdentity(env.DB, identity);
+  // An adoption record earns trust per field group only (registered at its first comparison), never as an engine.
+  if (!adopt) await registerIdentity(env.DB, identity);
   await env.WEBHOOK_BUFFER.put(OBSERVED_PREFIX + key + ":" + engine, JSON.stringify(stored), LOCAL_TTL);
 
   const task = buildLocalCalculationQueueTask({
@@ -1482,6 +1491,8 @@ async function processWebhookReconcileTask(env: Env, task: Extract<QueueTask, { 
 
 async function processLocalCalculationReconcileTask(env: Env, task: Extract<QueueTask, { kind: "local_calculation_reconcile" }>): Promise<void> {
   await reconcileLocalComputation(env, task.candle_key);
+  // B11: an adoption record only pairs with its alert; it never starts the analysis path.
+  if (ADOPT_ENGINES.includes(asText((task as { engine?: unknown }).engine))) return;
   // Parity runs on every timeframe; only analysis timeframes (H1 in production) start the AI chain.
   if (!analysisAllowedForTimeframe(task.timeframe, env.ANALYSIS_TIMEFRAMES || "60")) return;
   const required = (env.REQUIRED_SOURCES || "prophet_r38,prophet_r37_ssot,gmi_v12_70").split(",").map(value => value.trim()).filter(Boolean);

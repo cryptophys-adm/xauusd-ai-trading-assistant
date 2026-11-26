@@ -28,6 +28,7 @@ import { cfcMode, CFC_MODES } from "../src/cfc-triggers.mjs";
 import { modeShadowEvidence, modeProbationMode } from "../src/mode-shadow.mjs";
 import { liquidityWitnessEnabled } from "../src/decision-engine.mjs";
 import { lensRoomLine, LENS_ROOM_LINES, lensLevelReadings } from "../src/lens-steps.mjs";
+import { adoptIngest } from "../src/evidence-fusion.mjs";
 import { pmLinesOffEnv, PM_LINE_IDS } from "../src/pm-line-breaker.mjs";
 import { calendarContrarianMode } from "../src/econ-releases.mjs";
 import { shadowKnowledgeEnabled } from "../src/shadow-knowledge.mjs";
@@ -113,7 +114,7 @@ test("FS-1 the registry: every switch's config_value is wrangler.jsonc's, read f
   // The keys the orchestrator listed, all present; ZONE_SOURCES_OFF, three lens/calendar switches and H3f's OWNER_CORRECTIONS added.
   for (const k of ["ZONE_PRIORITY", "ZONE_AHEAD_MODE", "KEY_LEVEL_ZONE_TYPES", "ZONE_AIM_OFF", "ZONE_AIM_TP", "AGENT_VETO_RULE", "SHADOW_KNOWLEDGE_ENABLED", "KNOWLEDGE_VERDICT_POSTS",
     "MODE_SHADOW_EVIDENCE", "MODE_PROBATION", "GRID_ADAPT_MODE", "ENTRY_ZONE_MODE", "TP1_KEY_ZONE_MODE", "CHART_PATTERNS_MODE", "METRIC_REBUTTAL", "CFC_MODE",
-    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "LENS_LEVEL_READINGS", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER", "SD_LEVELS", "zone_sd", "MODEL_GBM_CONNECT"]) assert.ok(switchByKey(k), k);
+    "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "LENS_LEVEL_READINGS", "ADOPT_INGEST", "CALENDAR_CONTRARIAN", "OWNER_CORRECTIONS", "SHADOW_MODEL_ROUTER", "SD_LEVELS", "zone_sd", "MODEL_GBM_CONNECT"]) assert.ok(switchByKey(k), k);
   // Excluded: secrets, bindings, the engine switch, the kill switch, arms, LIVE and profile.
   for (const k of ["OMEGA_ENGINE_ENABLED", "EA_SIGNALS_ENABLED", "STRATEGY_ARM_MODE", "STRATEGY_COUNCIL_ARM", "live_armed", "enabled", "OWNER_ACCESS_SUB", "TELEGRAM_BOT_TOKEN", "WEBHOOK_SECRET", "DB", "SIGNAL_CACHE", "AGENTS", "AETHER", "risk_pct", "max_positions"]) assert.equal(switchByKey(k), null, `${k} is not a panel switch`);
   // era_switch: exactly ERA_SWITCHES' members (a parity era starts on change).
@@ -162,6 +163,7 @@ const ACCESSOR = {
   LIQUIDITY_WITNESS: (env) => (liquidityWitnessEnabled(env) ? "on" : "off"),
   LENS_ROOM_LINE: (env) => lensRoomLine(env),
   LENS_LEVEL_READINGS: (env) => lensLevelReadings(env),
+  ADOPT_INGEST: (env) => adoptIngest(env),
   CALENDAR_CONTRARIAN: (env) => calendarContrarianMode(env),
   SHADOW_KNOWLEDGE_ENABLED: (env) => (shadowKnowledgeEnabled(env) ? "on" : "off"),
   KNOWLEDGE_VERDICT_POSTS: (env) => (knowledgeVerdictPostsEnabled({ SHADOW_KNOWLEDGE_ENABLED: "true", ...env }) ? "on" : "off"),

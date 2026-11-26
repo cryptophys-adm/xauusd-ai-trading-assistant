@@ -12,7 +12,7 @@
 // has settled. recordComparison dedupes per (identity, candle), so re-running a
 // reconciled candle is a no-op.
 
-import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES } from "./evidence-fusion.mjs";
+import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
   recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt,
@@ -287,6 +287,29 @@ export async function repairApprovedAtOnce(env, now = Date.now()) {
   }
 }
 
+/** B11 (orchestrator 2026-11-26, Q5): retention of the adoption groups' comparison rows. */
+export const ADOPT_COMPARISON_RETENTION_DAYS = 30;
+export const ADOPT_PRUNE_MAX_ROWS = 2000;
+
+/**
+ * B11: deletes the adoption groups' comparison rows (engine ids gmi_adopt_* / prophet_adopt_*) older than 30 days,
+ * at most 2,000 a sweep. No other engine's rows are touched (their retention is a separate decision). Returns the
+ * number deleted (0 without the table or on an error; the sweep never fails on it).
+ */
+export async function pruneAdoptComparisons(env, { now = Date.now() } = {}) {
+  if (!env?.DB?.prepare) return 0;
+  const cutoff = new Date(now - ADOPT_COMPARISON_RETENTION_DAYS * 86_400_000).toISOString();
+  const like = ADOPT_ENGINES.map(() => "engine LIKE ? ESCAPE '\\'").join(" OR ");
+  const patterns = ADOPT_ENGINES.map((e) => e.replace(/_/g, "\\_") + "\\_%");
+  try {
+    const r = await env.DB.prepare(`DELETE FROM engine_parity_comparisons WHERE rowid IN (SELECT rowid FROM engine_parity_comparisons WHERE (${like}) AND compared_at < ? LIMIT ${ADOPT_PRUNE_MAX_ROWS})`)
+      .bind(...patterns, cutoff).run();
+    return Number(r?.meta?.changes) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
   // Before this sweep compares anything: restore identities revoked only by input-bar differences
   // under the old rule, so this same sweep places their records into the trusted lane again.
@@ -315,7 +338,8 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
   }
   // The intrabars of recent GMI mismatches, read again once (diagnostics only; never changes a result).
   const intrabarRecheck = await recheckMismatchIntrabars(env, { now });
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, intrabar_recheck: intrabarRecheck };
+  const adoptPruned = await pruneAdoptComparisons(env, { now });
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, intrabar_recheck: intrabarRecheck, adopt_pruned: adoptPruned };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */

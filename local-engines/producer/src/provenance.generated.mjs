@@ -438,6 +438,44 @@ export const ENGINE_PROVENANCE = Object.freeze({
       ]
     }
   },
+  "prophet_adopt": {
+    "source_hash": "cd83ac2e0525ed687e290438deb4734b64e610a4c4e9b8671d6394ed8bafa46e",
+    "implementation_hash": "e78ff21ac0f0fd0e79cfa4ed1c3509a500c8d661dc0debaaac2100274210fa98",
+    "files": {
+      "sources": [
+        {
+          "path": "pinescript/candidates/The-Prophet-v7.02-R38.hud.v2.txt",
+          "sha256": "fb81483859aef7390882803376782e8f238aac257945212a6fd02031619f64cd"
+        }
+      ],
+      "implementation": [
+        {
+          "path": "local-engines/prophet-r38/src/core.mjs",
+          "sha256": "35f60ade42a29e9481cdf6608446ae8bf44cd3942108594b783d3a4b2cfd4c66"
+        },
+        {
+          "path": "src/prophet-r37-kernel.mjs",
+          "sha256": "d2d55ae4986d37b6e9274bbbf2ef30eca9c658fefa2de1fcf0d8d6525b7c2c4c"
+        },
+        {
+          "path": "src/prophet-r37-oscillator.mjs",
+          "sha256": "ac3b7099138b99a21d942d5acaf3412c832952fea928d15abbe406344b530f6e"
+        },
+        {
+          "path": "local-engines/producer/src/h1-producer.mjs",
+          "sha256": "4064d1d4d3cc97ee5125b4423c530e5fee1d124673657bbd2ef60cfde7bde9f1"
+        },
+        {
+          "path": "local-engines/producer/src/prophet-setup.mjs",
+          "sha256": "fe44b1a2164b20cf0d9e3e4e4a6a55157d6716060a927823ebf3a297b98a49f6"
+        },
+        {
+          "path": "local-engines/producer/src/adopt/prophet-adopt.mjs",
+          "sha256": "c9f5a6f1e0d54a488e0a2eb7a9b5b3f1d4d3edca7d7b47b48aadaf40fd1c154f"
+        }
+      ]
+    }
+  },
   "prophet_d1": {
     "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
     "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6",

@@ -9,7 +9,7 @@
 // "computed from verified bars" when the candle also has a parity comparison whose input
 // bar (open, high, low, close, volume) equalled TradingView's (barsVerified). Everything
 // else reads as not yet calibrated.
-import { containsCredentialFields, INGEST_ENGINES } from "./evidence-fusion.mjs";
+import { containsCredentialFields, INGEST_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
 import { PARITY_GROUPS } from "./parity-registry.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
@@ -88,7 +88,8 @@ export async function approvedComparable(env, candleKey, { groups = PARITY_GROUP
     if (!isRecord(comparable)) { Object.assign(out, comparable); return; }
     for (const [source, fields] of Object.entries(comparable)) out[source] = isRecord(out[source]) && isRecord(fields) ? { ...out[source], ...fields } : fields;
   };
-  const groupIds = Object.keys(groups || {}).filter((id) => INGEST_ENGINES.includes(groups[id]?.engine));
+  // B11: the adoption records' groups are never read here (no reader in B11; no HUD field points at them).
+  const groupIds = Object.keys(groups || {}).filter((id) => INGEST_ENGINES.includes(groups[id]?.engine) && !ADOPT_ENGINES.includes(groups[id]?.engine));
   // gmi_hud: the HUD parity identity (Grid Bot Protocol fields, source gmi_v12_70_hud).
   for (const key of ["prophet", "gmi", "gmi_hud", ...groupIds]) {
     const raw = await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + key);
@@ -106,7 +107,9 @@ export async function approvedComparable(env, candleKey, { groups = PARITY_GROUP
 export async function barsVerified(env, candleKey) {
   if (!env?.DB?.prepare || typeof candleKey !== "string") return false;
   try {
-    const rows = (await env.DB.prepare("SELECT result FROM engine_parity_comparisons WHERE candle_key = ?").bind(candleKey).all())?.results || [];
+    // B11: an adoption group's comparison (engine id gmi_adopt_* / prophet_adopt_*) never vouches for the HUD's bars.
+    const rows = ((await env.DB.prepare("SELECT engine, result FROM engine_parity_comparisons WHERE candle_key = ?").bind(candleKey).all())?.results || [])
+      .filter((r) => !ADOPT_ENGINES.some((e) => String(r.engine ?? "").startsWith(e + "_") || r.engine === e));
     return rows.some((r) => r.result === "match") && !rows.some((r) => r.result === "input_mismatch");
   } catch {
     return false;

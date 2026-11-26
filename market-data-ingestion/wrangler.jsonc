@@ -48,7 +48,10 @@
     // H4/D1 lane (owner decision 2026-11-05): local records for parity on the H4 and D1 charts.
     "HTF_PARITY_PUBLISH": "true",
     // Phase C2: HUD snapshots (H1 and 15m) for the HUD agents; never decision evidence.
-    "HUD_SNAPSHOT_PUBLISH": "true"
+    "HUD_SNAPSHOT_PUBLISH": "true",
+    // B11a (RFC_INDICATOR_ADOPTION): the Prophet adoption records (15m, 1H, 4H, 1D), compared group by group with the
+    // v2 alert and read by nothing else. At most one adoption build a tick. "true" publishes; anything else stops it.
+    "PROPHET_ADOPT_PUBLISH": "true"
   },
   "triggers": {
     "crons": ["* * * * *"]

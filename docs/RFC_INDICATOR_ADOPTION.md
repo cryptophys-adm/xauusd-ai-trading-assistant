@@ -107,7 +107,7 @@ Nov), with new agents last.
 |---|---|---|---|
 | B7 | Parity field groups | all | **merged** (#572), inert until B11 |
 | B10 | GMI and Prophet `*.hud.v2` and the Cryptophys Mizan Probe v1 (Pine candidates) | 1-6 | built (this PR): files in `pinescript/candidates`, sources registered, groups declared and inert until B11; the owner installs by 2026-12-08 |
-| B11 | Adopt records: the producer publishes `gmi_adopt` and `prophet_adopt` | 1-6 | planned |
+| B11 | Adopt records: the producer publishes `gmi_adopt` and `prophet_adopt` | 1-6 | B11a built (this PR): `prophet_adopt`, all five groups; B11b (`gmi_adopt` hud, flow, kin, burst) and B11c (zone, zone_levels, order, levels, plan) planned |
 | B20, B21, B22, B24 | HUD lines: stage 1; stage 2 scalp; stage 3 levels; stage 4 order flow and structure | 1-4 | planned |
 | B23 | Key Level Agent families (Asian range, daily R/S, 5m Camarilla, Fibonacci ratios, R37 extremes) | 3 | planned |
 | B5 | Position Manager lines, each behind a breaker | 2, 4, 6 | built (this PR): the PM's broker-action rules are lines; the inputs of later stages join as lines when their PRs land |
@@ -158,6 +158,31 @@ Nov), with new agents last.
 - **Install** (the owner, by 2026-12-08). On `OANDA:XAUUSD` 5m, 15m, 1H, 4H and 1D the v2 files replace v1, with one
   "Any alert() function call" alert each to the AI Worker's webhook; the Probe goes on 15m only, for 11 alerts in all.
   No session touches TradingView. Off: the owner pauses an alert.
+
+### B11's wiring (B11a built; B11b, B11c planned)
+
+Orchestrator rulings of 2026-11-26 on the B11 brief: three PRs (B11a Prophet, then B11b and B11c GMI), each live on merge
+and inert; raw compare as B7 declared (Q2: path-dependent groups stay unverified and fail closed; the match rate per
+group is reported after the install); the adoption identities alone may list `adopt/*` (Q3); the frontend adds the two
+display names to the Nexus map (Q4); a bounded prune of the adoption comparison rows (Q5).
+
+- **Record.** Engine `prophet_adopt`, `cryptophys.local-calculation.v1`, for the latest closed 15m, 1H, 4H and 1D bar;
+  `values.comparable.prophet_r38_adopt_hud` carries the alert's 62 fields (`PROPHET_ADOPT_FIELDS` in
+  `local-engines/producer/src/adopt/prophet-adopt.mjs`), numbers rounded as the alert prints them, na as null.
+- **Values.** From the Prophet core's own per-bar outputs (sensors, oscillator, structure, confirmation, order blocks),
+  plus what the alert latches: the entry references (Pine 407-425), the TARGET KEY latch (826-834, 1040-1060, with a
+  duplicate of the core's OB zone lifecycle, `obZoneSeries`, that a test holds to the core's last-bar zones), the
+  momentum and context codes (603-614), the counter-trend watch (333-334), the projection (531-540) and the exit reason
+  code. The manual position inputs are at their defaults ("NO POSITION"), so pos, entry_ok, tp_struct, tp_reached,
+  reversal and mom_weak are constants and exit_code takes its no-position branch.
+- **CPU.** The core with the native higher timeframes costs about 2 s in node (its higher-timeframe lookup is per chart
+  bar). The adoption build never runs it: it reads the run the publishers' setup state already made for the same bundle
+  in the same tick (`chartProphetCore`, `prophet-setup.mjs`, memoised per bundle object), about 1-3 ms. A chart without
+  that run is not built that tick.
+- **Parity only.** Ingested for its groups (`ADOPT_ENGINES`), never an engine identity, never the analysis path, never
+  read by a HUD reading, an agent, a council, the Key Level Agent, the Position Manager, Omega or a public page.
+  Switches: `PROPHET_ADOPT_PUBLISH` (pull adapter) and `ADOPT_INGEST` (AI Worker, FS1).
+- **Retention.** Adoption comparison rows older than 30 days, at most 2,000 a sweep.
 
 ### The Mizan Oracle (planned: B26, PF1, B27)
 

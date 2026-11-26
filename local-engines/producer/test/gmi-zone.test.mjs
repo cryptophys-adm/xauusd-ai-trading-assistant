@@ -265,12 +265,14 @@ test("Z1b-G7 a chart where GMI did not run has no aegis, and prophet is as it wa
   assert.deepEqual(snap.chart_plane.zones.prophet, normal.chart_plane.zones.prophet);
 });
 
-test("Z1b-G8 provenance: gmi-core*.mjs, mizan.mjs and pine.mjs hash to their records; adopt/ and hud-snapshot.mjs are in none", () => {
+test("Z1b-G8 provenance: gmi-core*.mjs, mizan.mjs and pine.mjs hash to their records; hud-snapshot.mjs is in none, adopt/ only in the adopt identities (B11)", () => {
   const records = new Map();
-  for (const engine of Object.values(ENGINE_PROVENANCE)) {
+  const adoptIdentities = new Set(["gmi_adopt", "prophet_adopt"]);
+  for (const [id, engine] of Object.entries(ENGINE_PROVENANCE)) {
     for (const f of [...(engine.files?.sources || []), ...(engine.files?.implementation || [])]) {
       assert.equal(sha(readFileSync(new URL(`../../../${f.path}`, import.meta.url))), f.sha256, f.path);
-      records.set(f.path, f.sha256);
+      assert.doesNotMatch(f.path, /hud-snapshot\.mjs/, `${id}: ${f.path}`);
+      if (!adoptIdentities.has(id)) records.set(f.path, f.sha256);
     }
   }
   for (const p of ["local-engines/gmi/src/gmi-core.mjs", "local-engines/gmi/src/gmi-core-tf.mjs", "local-engines/gmi/src/gmi-core-htf.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/pine.mjs"]) {

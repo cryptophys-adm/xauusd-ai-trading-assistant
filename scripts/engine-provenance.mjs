@@ -61,7 +61,13 @@ export const ENGINE_FILES = {
   gmi_hud: {
     sources: ["pinescript/candidates/Global-Multiverse-Interceptor-v12.70.hud.v1.txt"],
     implementation: ["local-engines/gmi/src/pine.mjs", "local-engines/gmi/src/mizan.mjs", "local-engines/gmi/src/gmi-core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/grid-bot.mjs", "local-engines/producer/src/gmi-hud-producer.mjs"]
+  },  // B11a (RFC_INDICATOR_ADOPTION): the Prophet R38 adoption record (15m, 1H, 4H, 1D), compared group by group with the
+  // v2 alert (source prophet_r38_adopt_hud). Its own identity: no approved identity's files change.
+  prophet_adopt: {
+    sources: ["pinescript/candidates/The-Prophet-v7.02-R38.hud.v2.txt"],
+    implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/prophet-setup.mjs", "local-engines/producer/src/adopt/prophet-adopt.mjs"]
   },
+
   prophet_d1: {
     sources: ["pinescript/ssot/The-Prophet-v7.02-R38.txt", "pinescript/ssot/Global-Multiverse-Interceptor-v12.70.txt"],
     implementation: ["local-engines/prophet-r38/src/core.mjs", "src/prophet-r37-kernel.mjs", "src/prophet-r37-oscillator.mjs", "local-engines/producer/src/h1-producer.mjs", "local-engines/producer/src/htf-local-producer.mjs"]
