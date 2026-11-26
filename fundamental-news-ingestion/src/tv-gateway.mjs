@@ -142,7 +142,7 @@ async function callMcpTool(env, endpoint, accessToken, toolName, args, deps, lab
       code: quota ? "mcp_quota_exceeded" : rateLimited ? "mcp_rate_limited" : (response.ok ? "mcp_tool_error" : "mcp_upstream_error"),
       status: quota ? 429 : (response.ok ? 502 : response.status),
       quota_cooldown_until: quota
-        ? deps.parseQuotaCooldownUntil(upstreamMessage)
+        ? deps.parseQuotaCooldownUntil(upstreamMessage, Date.now(), retryAfterMs)
         : rateLimited ? deps.rateLimitCooldownUntil(retryAfterMs) : null
     });
   }

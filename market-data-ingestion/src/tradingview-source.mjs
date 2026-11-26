@@ -57,7 +57,9 @@ export const SERIES = Object.freeze([
   // Nexus correlations panel (backlog 11.3, 2026-11-08): context only, never in the engine bundle
   // (buildBundle skips role "context"), last in priority. 2 series x 6 closed 4h bars = about 12 calls a day.
   { key: "TVC:US10Y|4h", symbol: "TVC:US10Y", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" },
-  { key: "OANDA:XAGUSD|4h", symbol: "OANDA:XAGUSD", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" }
+  // QB1 (orchestrator 2026-11-26, O3): silver is built from the broker's bars at all times (`broker`, the corpus base;
+  // src/mt5-fallback.mjs applyBrokerSeries), never pulled: 6 calls a weekday back to the TradingView quota.
+  { key: "OANDA:XAGUSD|4h", symbol: "OANDA:XAGUSD", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context", broker: "XAGUSD" }
 ]);
 
 const asString = (value) => (typeof value === "string" ? value : "");
@@ -157,6 +159,8 @@ export function closureId(nowSec) {
 export function pendingWork(records) {
   const bootstrap = [], heal = [];
   SERIES.forEach((spec, i) => {
+    // A broker-built series (QB1 O3) is neither bootstrapped nor healed from TradingView.
+    if (spec.broker) return;
     if (!records?.[i]?.candles?.length) bootstrap.push(spec.key);
     if (Number.isFinite(Number(records?.[i]?.fallback?.since_sec))) heal.push(spec.key);
   });
@@ -175,7 +179,7 @@ export function gapBackoffSeconds(spec) {
  */
 export function healPlan(spec, cached, nowSec) {
   const since = Number(cached?.fallback?.since_sec);
-  if (spec.derived_from || !Number.isFinite(since)) return null;
+  if (spec.derived_from || spec.broker || !Number.isFinite(since)) return null;
   // Once per 5 minutes: while the gateway is still in cooldown every attempt reserves the daily budget.
   if (Math.floor(nowSec / 60) % HEAL_EVERY_MIN !== 0) return null;
   const count = Math.min(spec.retain, MAX_GATEWAY_COUNT, Math.ceil((nowSec - since) / spec.seconds) + 3);
@@ -342,6 +346,8 @@ async function refreshCycle(env, { now, force }) {
   const planned = [];
   SERIES.forEach((spec, index) => {
     let plan;
+    // QB1 O3: a broker-built series is never asked of TradingView.
+    if (spec.broker) return;
     if (spec.derived_from) {
       // Derived locally unless its cache is empty or the cached source no longer reaches
       // back to its first missing bar: then one native pull bootstraps or fills the gap.
