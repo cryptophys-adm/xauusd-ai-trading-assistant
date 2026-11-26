@@ -344,6 +344,16 @@ const patternInside = Object.freeze({
 /** The registry: adding or removing a strategy is one entry here. */
 const toMsOf = (v) => (typeof v === "number" ? v : Date.parse(v));
 /**
+ * Pure (Track B PR 14, shared by orb_breakout and GET /api/orb): a formed opening range's width against the 1H ATR:
+ * "ok" between AGENT_RULES.orb's min_width_atr and max_width_atr (inclusive), "too_narrow" or "too_wide" outside, null
+ * without a width or an ATR.
+ */
+export function orbWidthStatus(range, atr) {
+  const O = AGENT_RULES.orb;
+  if (!isNum(range?.width) || !isNum(atr) || atr <= 0) return null;
+  return range.width < O.min_width_atr * atr ? "too_narrow" : range.width > O.max_width_atr * atr ? "too_wide" : "ok";
+}
+/**
  * Track A PR 7 (rebuilds #507): the opening range breakout, the 14th live agent. A 15m close beyond the London or New
  * York opening range (the session's first three 15m bars) by the breakout band; entry on the retest of the broken
  * edge, the stop behind the range's midpoint or the breakout bar, whichever is further; the plan lasts until the
@@ -356,12 +366,12 @@ const orbBreakout = Object.freeze({
   fits: "The first hours of the London or New York session: a 15m close beyond the session's opening range (its first three 15m bars) that has not closed back through the range's middle. Enter on the retest of the broken edge, the stop behind the middle of the range or the breakout bar, the target at the next key level; the plan ends with the session's window. Not when a high-impact release fell inside the range, or the range is too narrow or too wide.",
   plan(dir, ctx) {
     if (!isNum(ctx.price) || !isNum(ctx.atr) || ctx.atr <= 0) return null;
-    const O = AGENT_RULES.orb, B = AGENT_RULES.breakout, bars = ctx.bars || [], atr = ctx.atr;
+    const B = AGENT_RULES.breakout, bars = ctx.bars || [], atr = ctx.atr;
     const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
     // New York first: in the overlap it wins on a side where it has a plan.
     for (const r of openingRanges(bars, { events: ctx.events }).reverse()) {
       if (r.status !== "ok" || held.includes(`${this.id}:${r.key}`)) continue;
-      if (r.width < O.min_width_atr * atr || r.width > O.max_width_atr * atr) continue;
+      if (orbWidthStatus(r, atr) !== "ok") continue;
       const edge = dir > 0 ? r.high : r.low;
       const after = bars.filter((b) => toMsOf(b.open_time) >= r.range_end_ms);
       const i = after.findIndex((b) => dir * (b.close - edge) >= B.beyond_atr * atr);
@@ -575,7 +585,9 @@ export function agentCatalog(statuses, { suspended = [] } = {}) {
     // A pattern family: the patterns of the Projection Agent's catalogue it trades.
     ...(a.family ? { family: a.family } : {}),
     // The patterns it trades: its own family, or (inside the pattern) the family whose forming patterns it swings in.
-    ...(a.family || a.covers ? { patterns: PATTERN_CATALOG.filter((p) => p.applies && familyOf(p.id) === (a.family ?? a.covers)).map((p) => ({ id: p.id, name: p.name })) } : {})
+    ...(a.family || a.covers ? { patterns: PATTERN_CATALOG.filter((p) => p.applies && familyOf(p.id) === (a.family ?? a.covers)).map((p) => ({ id: p.id, name: p.name })) } : {}),
+    // Track B PR 14: an agent's own variants (orb_breakout's two opening ranges), whose records are its record's patterns.
+    ...(a.variants ? { variants: Object.entries(a.variants).map(([id, name]) => ({ id, name })) } : {})
   }));
 }
 

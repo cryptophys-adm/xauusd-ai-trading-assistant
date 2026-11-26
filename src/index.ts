@@ -239,6 +239,7 @@ import { runLensStep, lensStatus, pushLensReport } from "./lens-steps.mjs";
 import { intelViewsOn, readStrategyMemo } from "./intel-memo.mjs";
 import { readLiquidityView } from "./liquidity-view.mjs";
 import { readChartPatternsView } from "./chart-patterns-view.mjs";
+import { readOrbView } from "./orb-view.mjs";
 import { runCotStep } from "./positioning-lens.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
@@ -2148,7 +2149,7 @@ function parseJsonText(value: unknown, fallback: unknown): unknown {
 const LOCAL_LANE_FRESH_MS = 2 * 60 * 60 * 1000;
 
 /** The Nexus Intelligence views (Track B) behind INTEL_VIEWS: B8 GET /api/liquidity, B9 GET /api/chart-patterns. */
-const INTEL_VIEW_PATHS: readonly string[] = ["/api/liquidity", "/api/chart-patterns"];
+const INTEL_VIEW_PATHS: readonly string[] = ["/api/liquidity", "/api/chart-patterns", "/api/orb"];
 
 /**
  * Read-only API for the Nexus dashboard (nexus.cryptophys.work proxies /api/*).
@@ -2825,6 +2826,11 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     if (url.pathname === "/api/chart-patterns") {
       try { return dashboardJson({ status: "ok", ...(await readChartPatternsView(env, { strategy, history: url.searchParams.get("history") })) }); }
       catch (error) { console.error("chart_patterns_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "chart_patterns_unavailable" }, 500); }
+    }
+    if (url.pathname === "/api/orb") {
+      // B14: the London and New York opening ranges and the orb_breakout agent (src/orb-view.mjs; the feed's prices only).
+      try { return dashboardJson({ status: "ok", ...(await readOrbView(env, { strategy })) }); }
+      catch (error) { console.error("orb_view_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error", error: "orb_unavailable" }, 500); }
     }
   }
   if (url.pathname === "/api/corpus/status") {

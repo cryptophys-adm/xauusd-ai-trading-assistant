@@ -52,8 +52,8 @@ this design.
 2. **Lens B and the other binding limits.**
    - Lens B never opens, sizes or prices an entry. Its switch, floor and staleness gates and every breaker stay.
    - No new price in the rooms, the decision cards, the Position Council (its pinned fields stay), Aether reports or
-     public pages. Of Track B's new routes only the Nexus views (`GET /api/liquidity`, `GET /api/chart-patterns`, the
-     planned `GET /api/orb`; Cloudflare Access) carry prices.
+     public pages. Of Track B's new routes only the Nexus views (`GET /api/liquidity`, `GET /api/chart-patterns`, and
+     `GET /api/orb`, B14; Cloudflare Access) carry prices.
    - `pinescript/ssot` is untouched. No EA change. The LIVE and strategy arms stay the owner's.
    - Mizan s17/s20 and the indicators' own plans are evidence only.
    - Engine-state fields need 24-candle TradingView parity, else they read "unverified"; bar formulas are "derived".
