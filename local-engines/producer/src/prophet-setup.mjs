@@ -108,12 +108,33 @@ export function prophetSetupState(outputs) {
  * Returns { candle_key, state }; { candle_key: null, state: null } without bars.
  */
 export function chartProphetSetup(bundle, chart = "H1", { mintick = 0.001 } = {}) {
+  const core = chartProphetCore(bundle, chart, { mintick });
+  if (!core) return { candle_key: null, state: null };
+  return { candle_key: core.candle_key, state: prophetSetupState(core.r38.outputs) };
+}
+
+// B11a: one core run per bundle and chart. The run with the native higher timeframes costs about 2 s in node (the core
+// looks up each higher-timeframe bar for every chart bar), so the setup state above and the adoption record
+// (adopt/prophet-adopt.mjs) share it: the bundle is the same object for every publisher of a cron tick, and a WeakMap
+// lets it go with the tick. The input is exactly the one chartProphetSetup always built; nothing about the state changes.
+const CORE_MEMO = new WeakMap();
+const coreMemoKey = (chart, mintick) => `${chart}|${mintick}`;
+
+/**
+ * The Prophet R38 core run of a chart, built as its producer builds it (the last 1000 bars, confirmed, the native higher
+ * timeframes), once per bundle object: { candle_key, input, r38 }, or null without bars. Throws on an unsupported chart.
+ */
+export function chartProphetCore(bundle, chart = "H1", { mintick = 0.001 } = {}) {
   const spec = SETUP_CHARTS[chart];
   if (!spec) throw Object.assign(new Error(`unsupported chart: ${chart}`), { code: "unsupported_chart" });
+  const memo = bundle && typeof bundle === "object" ? (CORE_MEMO.get(bundle) ?? CORE_MEMO.set(bundle, new Map()).get(bundle)) : null;
+  const key = coreMemoKey(chart, mintick);
+  if (memo?.has(key)) return memo.get(key);
   const series = bars(bundle?.timeframes?.[spec.series]).slice(-spec.window);
   const last = series.at(-1);
-  if (!last) return { candle_key: null, state: null };
-  const r38 = calculateProphetR38Core(series.map((b) => ({ ...b, confirmed: true })), {
+  if (!last) return null;
+  const input = series.map((b) => ({ ...b, confirmed: true }));
+  const r38 = calculateProphetR38Core(input, {
     timeframe_minutes: spec.minutes,
     gmi_closed_only: true,
     mintick,
@@ -122,7 +143,14 @@ export function chartProphetSetup(bundle, chart = "H1", { mintick = 0.001 } = {}
       D1: bars(bundle.timeframes.D1), W1: bars(bundle.timeframes.W1)
     }
   });
-  return { candle_key: `${TICKERID}:${spec.period}:${Date.parse(last.open_time)}`, state: prophetSetupState(r38.outputs) };
+  const out = { candle_key: `${TICKERID}:${spec.period}:${Date.parse(last.open_time)}`, input, r38 };
+  memo?.set(key, out);
+  return out;
+}
+
+/** True when this bundle's core run of the chart was already made (by a publisher's setup state this tick). */
+export function hasChartProphetCore(bundle, chart = "H1", { mintick = 0.001 } = {}) {
+  return Boolean(bundle && typeof bundle === "object" && CORE_MEMO.get(bundle)?.has(coreMemoKey(chart, mintick)));
 }
 
 /** The H1 chart (the first carrier, #192). */

@@ -109,6 +109,8 @@
     // Local-primary (owner decision 2026-11-05): approved local records drive the chain;
     // TradingView webhooks only calibrate the local engines, for example monthly.
     "INDICATOR_SOURCE": "local",
+    // B11 (RFC_INDICATOR_ADOPTION): accept the adoption records for group parity only; "off" refuses them at ingest.
+    "ADOPT_INGEST": "on",
     "CALIBRATION_INTERVAL_DAYS": "30",
     // Omega broker engine (owner decision 2026-11-09): enabled on the server; controlled live by the
     // "Engine enabled" toggle on the Omega page (and "Arm live" for real accounts).

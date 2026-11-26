@@ -9,7 +9,17 @@ export const LOCAL_ENGINES = Object.freeze(["mizan", "prophet", "gmi"]);
  * engine, but never part of the decision lane (LOCAL_ENGINES): fusion and the H1 chain ignore them.
  */
 export const HUD_ENGINES = Object.freeze(["gmi_hud"]);
-export const INGEST_ENGINES = Object.freeze([...LOCAL_ENGINES, ...HUD_ENGINES]);
+/**
+ * Adoption records (B11, RFC_INDICATOR_ADOPTION): accepted at ingest only to be compared group by group (the
+ * gmi_adopt_* / prophet_adopt_* field groups of src/parity-registry.mjs); never an engine-level identity, never the
+ * decision lane, never a HUD reading. Nothing reads them in B11 (no agent, council, Key Level, Position Manager, Omega).
+ */
+export const ADOPT_ENGINES = Object.freeze(["gmi_adopt", "prophet_adopt"]);
+export const INGEST_ENGINES = Object.freeze([...LOCAL_ENGINES, ...HUD_ENGINES, ...ADOPT_ENGINES]);
+/** B11: ADOPT_INGEST "off" refuses the adoption records at ingest; "on" (default) otherwise. */
+export function adoptIngest(env) {
+  return String(env?.ADOPT_INGEST ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
 export const NEWS_MAX_AGE_MS = 75 * 60 * 1000;
 export const LOCAL_CALC_MAX_AGE_MS = 30 * 60 * 1000;
 // Provisional acceptance policy: must be reviewed against the deployed candle-time semantics before production.

@@ -60,7 +60,7 @@ export function normalizeHash(value) {
   return HASH.test(hash) ? hash : null;
 }
 
-export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud"]);
+export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud", "gmi_adopt", "prophet_adopt"]);
 
 /** A HUD field group whose local and webhook fields share their names (null === null is equal). */
 function hudGroup(engine, source, fields) {
@@ -78,10 +78,10 @@ function hudGroup(engine, source, fields) {
  *   - kind "hud": a HUD group; only a HUD group may set nullEqual (null === null counts as equal).
  *   - kind "witness": requireFinite, a candle matches only when every field is a finite number on
  *     both sides; null (or any non-finite value) on both sides is incomplete, never a match.
- * Inert until B11 wires a group: a group is compared only for an engine whose records are ingested
- * and observed (evidence-fusion INGEST_ENGINES), and no producer emits these fields yet. B10's
- * engines (gmi_adopt, prophet_adopt, probe_mizan) are neither ingested nor base engines, so their
- * local records are refused at ingest and their groups have no identity (groupIdentityOf null).
+ * A group is compared only for an engine whose records are ingested and observed (evidence-fusion
+ * INGEST_ENGINES). B11a ingests prophet_adopt (gmi_adopt follows in B11b/c): its groups have an
+ * identity, the engine itself never does (ingest registers group identities only). probe_mizan is
+ * neither ingested nor a base engine yet (B26), so its group has no identity (groupIdentityOf null).
  */
 export const PARITY_GROUPS = Object.freeze({
   // MZ1, the Mizan witness (owner 2026-11-23). Carried by the Mizan Probe's records (engine

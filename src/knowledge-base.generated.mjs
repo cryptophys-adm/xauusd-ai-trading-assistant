@@ -653,6 +653,10 @@ export const KNOWLEDGE_BASE_V4 = Object.freeze({
         "source_hash": "1bf3c79ea6c1cac5eaf16a593cdcc5719e2730af6fe79d244b80a796382c41f4",
         "implementation_hash": "7ceed7ad9a2cad6e856a81097fbdb22777d65474c49d833331be1b84a6ebaae3"
       },
+      "prophet_adopt": {
+        "source_hash": "cd83ac2e0525ed687e290438deb4734b64e610a4c4e9b8671d6394ed8bafa46e",
+        "implementation_hash": "dc83a1221d39ba3d87a2f849e3c10501858ac5a88b666550d7acb725d1378926"
+      },
       "prophet_d1": {
         "source_hash": "696544c53144af1c1888f3f38b8c8084bcbb78dea3c4c0d571e0fffb224f1ce6",
         "implementation_hash": "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6"

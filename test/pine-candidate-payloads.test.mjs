@@ -244,14 +244,19 @@ test("B10 groups: declared, sound, none starts with mizan, each on its source; p
   assert.ok(groupFields("probe_mizan_hud").includes("prior_edge"));
 });
 
-test("B10 inert until B11: no ingested or base engine carries a B10 group, so nothing is compared or trusted", async () => {
-  for (const engine of ["gmi_adopt", "prophet_adopt", "probe_mizan"]) {
-    assert.equal(INGEST_ENGINES.includes(engine), false, engine);
-    assert.equal(BASE_ENGINES.includes(engine), false, engine);
+test("B10 then B11: the adoption engines are ingested and their groups have identities; probe_mizan stays inert until B26", async () => {
+  // B11a (RFC_INDICATOR_ADOPTION): gmi_adopt and prophet_adopt are ingested base engines; their groups earn trust on their own.
+  for (const engine of ["gmi_adopt", "prophet_adopt"]) {
+    assert.equal(INGEST_ENGINES.includes(engine), true, engine);
+    assert.equal(BASE_ENGINES.includes(engine), true, engine);
     const record = { engine, timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
-    for (const id of groupsFor(engine)) assert.equal(groupIdentityOf(record, id), null, id);
+    for (const id of groupsFor(engine)) assert.equal(groupIdentityOf(record, id)?.engine, id + "_m15", id);
   }
-  for (const engine of INGEST_ENGINES) assert.deepEqual(groupsFor(engine), [], engine);
+  assert.equal(INGEST_ENGINES.includes("probe_mizan"), false);
+  assert.equal(BASE_ENGINES.includes("probe_mizan"), false);
+  const probe = { engine: "probe_mizan", timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
+  for (const id of groupsFor("probe_mizan")) assert.equal(groupIdentityOf(probe, id), null, id);
+  for (const engine of INGEST_ENGINES.filter((e) => !["gmi_adopt", "prophet_adopt"].includes(e))) assert.deepEqual(groupsFor(engine), [], engine);
   for (const source of ["gmi_v12_70_adopt_hud", "prophet_r38_adopt_hud", "probe_mizan_hud"]) assert.equal(isHudSource(source), true);
 });
 

@@ -46,6 +46,9 @@ test.beforeEach(() => resetSchemaCacheForTests());
 test("B7-1 parity is byte-identical to main for today's identities: sweep output, stored trust and the parity view", async () => {
   const now = await runParityScenario();
   const main = fixture("parity-b7-main.json");
+  // B11a adds the adoption rows' prune count to the sweep result (0 here); everything else is main's byte for byte.
+  assert.equal(now.sweep?.adopt_pruned, 0);
+  delete now.sweep.adopt_pruned;
   assert.equal(JSON.stringify(now), JSON.stringify(main));
   assert.ok(now.registry.length >= 8 && now.view.registry.length === now.registry.length, "the scenario covers prophet, gmi, gmi_hud and Mizan on 1H and 15m");
   assert.ok(now.reconciles.every(([, r]) => !("groups" in r)), "no group path ran");
@@ -128,8 +131,8 @@ test("B7-5 nullEqual counts null === null as equal for a HUD group only; a field
   assert.deepEqual(diff.values, { s: { local: { x: 2 }, webhook: { x_hook: 3 } } });
 });
 
-test("B7-6 inert: no ingested engine declares a group, so the sweep's group path and the group KV reads never run", async () => {
-  for (const engine of INGEST_ENGINES) assert.deepEqual(groupsFor(engine), [], engine);
+test("B7-6 only the adoption engines (B11) declare groups; the HUD store never reads their groups, so its KV reads are main's", async () => {
+  for (const engine of INGEST_ENGINES.filter((e) => !["gmi_adopt", "prophet_adopt"].includes(e))) assert.deepEqual(groupsFor(engine), [], engine);
   assert.equal(INGEST_ENGINES.includes(PARITY_GROUPS.probe_mizan_witness.engine), false);
   assert.equal(BASE_ENGINES.includes("probe_mizan"), false);
   const probeRecord = { engine: "probe_mizan", timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
