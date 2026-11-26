@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import {
   routeShadowCall, shadowModelRouterMode, modelRouterConfig, routerCounters, routerLimitReached, readRouterEvents, resetModelRouterForTests,
   MODEL_ROUTER_DEFAULTS, MODEL_ROUTER_LIMITS, MODEL_ROUTER_MAX_TOKENS, MODEL_ROUTER_TIMEOUT_MS, MODEL_ROUTER_BREAKER, MODEL_ROUTER_AGENT,
-  MODEL_ROUTER_CAPABILITIES, MODEL_ROUTER_PAID_KEY, MODEL_ROUTER_REASONS, MODEL_ROUTER_STATUS_CACHE_MS, readKernelStatus, paidSignalOf
+  MODEL_ROUTER_CAPABILITIES, MODEL_ROUTER_PAID_KEY, MODEL_ROUTER_REASONS, MODEL_ROUTER_STATUS_CACHE_MS, readKernelStatus, paidSignalOf, paidSignOf, rateLimitUntil, MODEL_ROUTER_RATE_KEY
 } from "../src/model-router.mjs";
 import { runNewsShadowCompare, cleanReading, NEWS_COMPARE_METER, MODEL_ROUTER_ALLOW } from "../src/news-shadow-compare.mjs";
 import { shadowSpendToday, checkShadowBudget } from "../src/shadow-switch.mjs";
@@ -499,4 +499,42 @@ test("SB1-8b model_router.report_paid sends { signal } only, mapped from the pai
   fellBackWith(await route(env2, { fetcher: f, at: NIGHT + 120_000 }), "paid_hold");
   assert.equal(f.calls.length, 1);
   assert.equal(reportPaidCalls(refusing).length, 2);
+});
+
+test("SB1-8c a 429 is a rate limit whatever its text (never a paid sign); billing text counts only on another 4xx; a 5xx is http_5xx", async () => {
+  // Pure order (the platform's AIR1 B1).
+  assert.equal(paidSignOf(429, "insufficient_quota upgrade your plan for higher limits", 0), null);
+  assert.equal(paidSignOf(429, "out of credits", 0.5), null);
+  assert.equal(paidSignOf(403, "billing: your credit balance is too low", 0), "paid_billing");
+  assert.equal(paidSignOf(503, "billing service unavailable", 0), null);
+  assert.equal(paidSignOf(402, "", 0), "paid_402");
+  assert.equal(paidSignOf(200, "", 0.001), "paid_cost");
+  assert.equal(paidSignOf(500, "", 0.5), null, "a cost counts only on a 2xx");
+  // Back-off: a daily quota to the next 00:00 UTC; else Retry-After; else 60 s.
+  assert.equal(rateLimitUntil(NIGHT, "daily request limit reached, upgrade your plan", null), Date.parse("2026-11-26T00:00:00Z"));
+  assert.equal(rateLimitUntil(NIGHT, "too many requests", "30"), NIGHT + 30_000);
+  assert.equal(rateLimitUntil(NIGHT, "too many requests", null), NIGHT + 60_000);
+  // Through the router: a 429 saying "upgrade your plan" (then "credits") is rate_limited, with no report_paid and no paid hold.
+  for (const message of ["Daily free quota reached. Upgrade your plan for higher limits.", "You have used your free credits for today"]) {
+    const env = fresh();
+    const f = beam(() => beamResponse({ error: { code: "rate_limit_exceeded", message } }, { status: 429 }));
+    fellBackWith(await route(env, { fetcher: f, at: NIGHT }), "rate_limited");
+    assert.equal(reportPaidCalls(env.AGENTS).length, 0, message);
+    assert.equal(env.SIGNAL_CACHE.m.has(MODEL_ROUTER_PAID_KEY), false, message);
+    assert.equal(JSON.parse(env.SIGNAL_CACHE.m.get(MODEL_ROUTER_RATE_KEY)).until, Date.parse("2026-11-26T00:00:00Z"));
+    // Held until 00:00 UTC: no request; after it, Beam is asked again.
+    fellBackWith(await route(env, { fetcher: f, at: NIGHT + 3_600_000 }), "rate_limit_hold");
+    assert.equal(f.calls.length, 1);
+  }
+  const later = fresh();
+  later.SIGNAL_CACHE.m.set(MODEL_ROUTER_RATE_KEY, JSON.stringify({ until: NIGHT - 1 }));
+  assert.equal((await route(later, { at: NIGHT })).via, "beam", "an ended back-off does not hold");
+  // A 403 with billing text: paid_billing, reported once.
+  const e403 = fresh();
+  fellBackWith(await route(e403, { fetcher: beam(() => beamResponse({ error: { type: "billing_error", message: "Your credit balance is too low" } }, { status: 403 })), at: NIGHT }), "paid_billing");
+  assert.deepEqual(reportPaidCalls(e403.AGENTS).map((c) => c.payload), [{ signal: "billing_error" }]);
+  // A 5xx with billing text: http_5xx, no report.
+  const e5xx = fresh();
+  fellBackWith(await route(e5xx, { fetcher: beam(() => beamResponse({ error: { message: "billing backend unavailable" } }, { status: 503 })), at: NIGHT }), "http_5xx");
+  assert.equal(reportPaidCalls(e5xx.AGENTS).length, 0);
 });

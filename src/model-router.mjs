@@ -16,7 +16,8 @@
 // the answer): a console line `model_router_fallback` and a row in D1 model_router_events.
 //   - unreachable: a 25 s timeout or a network error; a breaker opens after 3 failures (timeout, network error, 5xx)
 //     in a 15-minute window (aligned to the quarter hour) and stays open for the rest of that window;
-//   - a 429, or Beam's own counters: 100k input tokens and 20k output tokens a UTC day (the Beam rows of ai_usage_daily,
+//   - a 429 (never a paid sign, whatever its text; a back-off to the next 00:00 UTC for a daily quota, else Retry-After
+//     or 60 s, held in KV model-router:rate-limited:v1), or Beam's own counters: 100k input tokens and 20k output tokens a UTC day (the Beam rows of ai_usage_daily,
 //     read through the shadow breaker's shadowSpendToday; the output check reserves this call's own cap), 20 requests a
 //     UTC day and 2 a minute (every request sent, D1 model_router_events);
 //   - any paid sign: a 402, a billing or credit error, or an answer that reports a cost above 0. These also turn routing
@@ -61,13 +62,32 @@ export const MODEL_ROUTER_PAID_KEY = "model-router:paid:v1";
 /** Every fallback reason code. */
 export const MODEL_ROUTER_REASONS = Object.freeze([
   "not_allowed", "no_key", "breaker_open", "limit_tokens_in", "limit_tokens_out", "limit_requests_day", "limit_rpm",
-  "kernel_off", "kernel_paid_capped", "kernel_unknown", "paid_hold", "timeout", "unreachable", "rate_limited", "paid_402", "paid_billing", "paid_cost",
+  "kernel_off", "kernel_paid_capped", "kernel_unknown", "paid_hold", "timeout", "unreachable", "rate_limited", "rate_limit_hold", "paid_402", "paid_billing", "paid_cost",
   "http_5xx", "http_4xx", "retention_missing", "retention_contributor", "invalid_answer"
 ]);
 const PAID = new Set(["paid_402", "paid_billing", "paid_cost"]);
 /** The kernel's paid signal for each of this router's paid reasons (report_paid takes { signal } only). */
 export const MODEL_ROUTER_PAID_SIGNAL = Object.freeze({ paid_402: "http_402", paid_billing: "billing_error", paid_cost: "cost_field", paid_plan: "plan_change" });
 export const paidSignalOf = (reason) => MODEL_ROUTER_PAID_SIGNAL[reason] ?? "reported";
+/** KV (SIGNAL_CACHE): a 429's back-off, { until } (ms). */
+export const MODEL_ROUTER_RATE_KEY = "model-router:rate-limited:v1";
+/**
+ * Pure, the platform's order (AIR1 B1): a 402 is paid; a 429 never is (it is a rate limit, whatever the text); billing or
+ * credit text counts only on another 4xx (never on a 429 or a 5xx); a cost above 0 counts only on a 2xx. Null otherwise.
+ */
+export function paidSignOf(status, said, billed) {
+  if (status === 402) return "paid_402";
+  if (status === 429 || status >= 500) return null;
+  if (status >= 400 && status < 500) return BILLING.test(String(said ?? "")) ? "paid_billing" : null;
+  if (status >= 200 && status < 300 && Number.isFinite(Number(billed)) && Number(billed) > 0) return "paid_cost";
+  return null;
+}
+/** Pure: when a 429's back-off ends: the next 00:00 UTC for a daily quota (the text says day, daily or today), else Retry-After seconds, else 60 s. */
+export function rateLimitUntil(now, said, retryAfter) {
+  if (/\b(daily|day|today|per[ _-]?day|24 ?h)\b/i.test(String(said ?? ""))) return (Math.floor(now / 86_400_000) + 1) * 86_400_000;
+  const ra = Number(retryAfter);
+  return now + (Number.isFinite(ra) && ra > 0 ? Math.min(ra, 86_400) * 1000 : 60_000);
+}
 const BILLING = /billing|credit|payment|insufficient[_ ]?(funds|balance)|prepaid|paid[_ ]?plan|upgrade|subscription/i;
 const EVENTS_SQL = [
   `CREATE TABLE IF NOT EXISTS model_router_events (id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, day TEXT NOT NULL,
@@ -201,6 +221,8 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   const limit = routerLimitReached({ ...beam, requests: Math.max(asked, Number(beam.calls) || 0) });
   if (limit) return back(limit);
   if (db && await countSince(db, "SELECT COUNT(*) AS n FROM model_router_events WHERE asked = 1 AND at_ms > ?", now - 60_000) >= MODEL_ROUTER_LIMITS.rpm) return back("limit_rpm");
+  // A 429's back-off still running: no request.
+  try { const rl = JSON.parse((await env?.SIGNAL_CACHE?.get?.(MODEL_ROUTER_RATE_KEY)) || "null"); if (rl && Number(rl.until) > now) return back("rate_limit_hold"); } catch { /* unreadable: no hold */ }
   // The kernel's status; after a paid sign here, only a status read made after it counts, and only "on" lifts it.
   const paid = await readPaid(env);
   // A paid sign whose report_paid did not land: the org-wide switch-off is not in force, so a kernel "on" proves nothing.
@@ -242,8 +264,15 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   const sent = { asked: true, retention, tokens_in: usage.prompt, tokens_out: usage.completion };
   const billed = Number(body?.usage?.cost ?? body?.usage?.total_cost ?? body?.cost ?? 0);
   const said = `${body?.error?.code ?? ""} ${body?.error?.type ?? ""} ${body?.error?.message ?? ""}`;
-  const paidSign = res.status === 402 ? "paid_402" : BILLING.test(said) ? "paid_billing" : Number.isFinite(billed) && billed > 0 ? "paid_cost" : null;
   await meter(res.ok ? "ok" : "failed", usage);
+  // A 429 is a rate limit whatever its text says (a free-quota answer often reads "upgrade your plan" or "credits"):
+  // never a paid sign. Back off until the next 00:00 UTC for a daily quota, else Retry-After or 60 s.
+  if (res.status === 429) {
+    const until = rateLimitUntil(clock(), said, res?.headers?.get?.("retry-after"));
+    try { await env?.SIGNAL_CACHE?.put?.(MODEL_ROUTER_RATE_KEY, JSON.stringify({ until }), { expirationTtl: Math.max(60, Math.ceil((until - clock()) / 1000) + 60) }); } catch { /* the next 429 sets it again */ }
+    return back("rate_limited", sent);
+  }
+  const paidSign = paidSignOf(res.status, said, billed);
   if (paidSign) {
     // Routing off org-wide, once, and held off here until the kernel's status reads "on" again.
     const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { signal: paidSignalOf(paidSign) });
@@ -253,7 +282,6 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
     console.log("model_router_paid", JSON.stringify({ reason: paidSign, reported }));
     return back(paidSign, sent);
   }
-  if (res.status === 429) return back("rate_limited", sent);
   if (!res.ok) return back(res.status >= 500 ? "http_5xx" : "http_4xx", { ...sent, failure: res.status >= 500 });
   if (!retention) return back("retention_missing", sent);
   if (retention === "contributor") return back("retention_contributor", sent);

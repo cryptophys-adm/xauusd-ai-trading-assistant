@@ -19,6 +19,9 @@ export function resetModelRouterForTests(): void;
 export type KernelRouterStatus = "on" | "paid_capped" | "off" | "unknown";
 export function readKernelStatus(result: unknown): { status: KernelRouterStatus; detail: string | null };
 export const MODEL_ROUTER_PAID_SIGNAL: Readonly<Record<string, "http_402" | "billing_error" | "cost_field" | "plan_change">>;
+export const MODEL_ROUTER_RATE_KEY: string;
+export function paidSignOf(status: number, said: string, billed: number): "paid_402" | "paid_billing" | "paid_cost" | null;
+export function rateLimitUntil(now: number, said: string, retryAfter?: string | null): number;
 export function paidSignalOf(reason: string): "http_402" | "billing_error" | "cost_field" | "plan_change" | "reported";
 export function routerKernelStatus(env: unknown, options?: { now?: number; fresh?: boolean }): Promise<{ at: number; status: KernelRouterStatus; detail: string | null }>;
 export function routeShadowCall<T>(env: unknown, options: {
