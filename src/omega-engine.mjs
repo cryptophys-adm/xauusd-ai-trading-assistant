@@ -2001,6 +2001,12 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       if (typeof signal.grid_slice === "string") it.grid_slice = signal.grid_slice;
       if (!tight) it.stop_source = `grid:${signal.grid_cell}`;
     }
+    // Track A PR 5 (recorded only): a pattern trade's pattern, chart and plan TP2 (feed scale) on its entry intent.
+    if (typeof signal.trade_pattern === "string" && signal.trade_pattern) {
+      it.pattern = signal.trade_pattern;
+      if (typeof signal.trade_chart === "string" && signal.trade_chart) it.chart = signal.trade_chart;
+      if (finite(signal.trade_tp2_plan)) it.plan_tp2_feed = signal.trade_tp2_plan;
+    }
     if (volRegime !== "NORMAL") it.vol_regime = volRegime;
     // The mode it opened in and its stop distance (the ladder's step per mode; a later mode switch never changes them).
     if (["scalp", "intraday", "swing", "range"].includes(signal.trading_mode)) it.mode = signal.trading_mode;

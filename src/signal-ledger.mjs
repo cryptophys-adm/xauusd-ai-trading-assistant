@@ -466,8 +466,26 @@ export const OMEGA4_RULES = Object.freeze({
   parity: "omegaParity against the live USD account: only the live trades opened under the current engine and Position Manager code count (its era, from the code's hash; a later change starts a new window at its deploy); at least 20 of them, else insufficient; passes with the same exit on at least 90 % of the trades compared and a mean |dR| of at most 0.1; the trades since 2026-11-19 12:00 UTC under earlier code are shown apart, not counted"
 });
 
+/**
+ * Pure (Track A PR 5): the decision signals' plan R split by the trade's pattern and chart ("<pattern>@<chart>"), from
+ * `patterns` ({ decision_key: { pattern, chart } }, the engine_decisions join). R only; a pattern without a chart reads "-".
+ */
+export function patternBlocks(items, patterns = {}) {
+  const groups = {};
+  for (const x of items) {
+    if (x.source !== "decision" || typeof x.id !== "string") continue;
+    const p = patterns[x.id.slice("decision:".length)];
+    if (!p?.pattern) continue;
+    (groups[`${p.pattern}@${p.chart || "-"}`] ??= []).push(x);
+  }
+  return Object.fromEntries(Object.entries(groups).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, list]) => [k, {
+    signals: list.length, closed: list.filter((x) => x.status === "closed").length,
+    tp1: performance(list, "tp1"), tp2: performance(list.filter((x) => finite(x.tp2)), "tp2")
+  }]));
+}
+
 /** Pure: the ledger view of `items` (rows of signal_ledger, with their outcome fields) and `omega4` (D1 ledger_omega4 rows). */
-export function ledgerView(items, { days, omega4 = [] } = {}) {
+export function ledgerView(items, { days, omega4 = [], patterns = null } = {}) {
   const by = (source) => items.filter((x) => source == null || x.source === source);
   const ledgerIds = new Set(items.map((x) => x.id));
   const v4All = omega4.map((x) => ({ ...x, in_ledger: ledgerIds.has(`decision:${x.decision_key}`) }));
@@ -499,6 +517,8 @@ export function ledgerView(items, { days, omega4 = [] } = {}) {
     },
     all: block(by(null), v4All), by_source: Object.fromEntries(SOURCES.map((s) => [s, block(by(s), s === "decision" ? v4All : [])])),
     by_mode: Object.fromEntries(TRADING_MODES.map((m) => [m, block(decisions.filter((x) => x.trading_mode === m), v4All.filter((x) => x.trading_mode === m))])),
+    // Track A PR 5: only with the engine_decisions join (readLedger); every other caller's view is as before.
+    ...(patterns ? { by_pattern: patternBlocks(items, patterns) } : {}),
     items: items.slice().sort((a, b) => toMs(b.opened_at) - toMs(a.opened_at)).slice(0, 100)
   };
 }
@@ -558,6 +578,8 @@ export const LIMIT_COLUMNS = Object.freeze(["regime TEXT", "limit_status TEXT", 
 const OMEGA_COLUMNS = ["trading_mode TEXT", "entry_action TEXT", "omega_status TEXT", "omega_gate TEXT", "omega_filled_at TEXT", "omega_closed_at TEXT", "omega_exit TEXT", "r_omega REAL", "omega_size REAL", "omega_json TEXT",
   // v4 (src/ledger-omega4.mjs), on the ledger's own rows beside v3, so the two are paired on the same signals.
   "omega4_status TEXT", "omega4_exit TEXT", "r_omega4 REAL", "omega4_size REAL", "omega4_filled_at TEXT", "omega4_closed_at TEXT", "omega4_json TEXT"];
+/** Track A PR 5: the pattern trade's pattern and chart on v4's row of each decision (from the decision's trade; null otherwise). */
+export const PATTERN_COLUMNS = Object.freeze(["pattern TEXT", "chart TEXT"]);
 /** SV1b (src/agent-veto.mjs): a decision that traded only because A6 or A7 lifted a veto keeps its tag ({ rule, old_detail }, JSON). */
 export const VETO_SOFTENED_COLUMN = "veto_softened TEXT";
 /** RM1b (src/room-waive.mjs): a decision that traded on a side whose room check was waived keeps its tag ({ corridor, broke_at, trend }, JSON). */
@@ -570,7 +592,7 @@ export async function ensureLedgerSchema(db) {
   for (const col of ["progressive_stop REAL", "sl_plus_triggered INTEGER NOT NULL DEFAULT 0", "sl_plus_at TEXT", "tp1_closed_at TEXT", "tp2_closed_at TEXT", "tp2_exit_reason TEXT", ...OMEGA_COLUMNS, VETO_SOFTENED_COLUMN, ROOM_WAIVED_COLUMN]) {
     try { await db.prepare(`ALTER TABLE signal_ledger ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
-  for (const col of LIMIT_COLUMNS) {
+  for (const col of [...LIMIT_COLUMNS, ...PATTERN_COLUMNS]) {
     try { await db.prepare(`ALTER TABLE ledger_omega4 ADD COLUMN ${col}`).run(); } catch { /* exists */ }
   }
   schemaReady = true;
@@ -1010,7 +1032,13 @@ export async function readLedger(env, { days = 30, now = Date.now() } = {}) {
     const sinceMs = now - days * 86_400_000;
     parityV3 = v3l.v3LiveParity(rows, await v3l.loadLiveEntries(env, { sinceMs: sinceMs - 2 * 3600_000 }), { sinceMs, days });
   } catch { parityV3 = null; }
-  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days, omega4 }), held: { count: Number(heldCount?.n) || 0, items: held }, parity, parity_v3: parityV3 };
+  // Track A PR 5: each decision signal's trade pattern and chart, for the plan R per pattern.
+  let patterns = {};
+  try {
+    const pr = (await env.DB.prepare("SELECT decision_key, json_extract(decision_json, '$.trade.pattern') AS pattern, json_extract(decision_json, '$.trade.chart') AS chart FROM engine_decisions WHERE bar_close >= ? AND json_extract(decision_json, '$.trade.pattern') IS NOT NULL").bind(since).all()).results || [];
+    patterns = Object.fromEntries(pr.filter((r) => typeof r.pattern === "string").map((r) => [r.decision_key, { pattern: r.pattern, chart: typeof r.chart === "string" ? r.chart : null }]));
+  } catch { patterns = {}; }
+  return { ...ledgerView(rows.map((r) => ({ ...r, ambiguous: Boolean(r.ambiguous) })), { days, omega4, patterns }), held: { count: Number(heldCount?.n) || 0, items: held }, parity, parity_v3: parityV3 };
 }
 
 // ---------------------------------------------------------------------------
