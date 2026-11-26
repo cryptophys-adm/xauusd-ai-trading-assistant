@@ -9,8 +9,16 @@
 // neuron breaker (src/shadow-switch.mjs) hold it like every other shadow path; it also waits while the day's shadow
 // spend is past 80% of that budget. About 1,200 prompt and 600 completion tokens a call: on gpt-oss-120b about 80
 // neurons, so about 160 neurons a day (below USD 0.002 at the paid rate). NEWS_SHADOW_COMPARE "off" stops it.
+//
+// SB1 (owner 2026-11-25: "semua shadow pakai beam", then "news_compare saja"): with the FS1 switch SHADOW_MODEL_ROUTER
+// "on", both readings are asked of Beam through the model router (src/model-router.mjs), selected by this call site's
+// own allow-list MODEL_ROUTER_ALLOW; every fallback is the Workers AI call below, unchanged. Off (the default), the
+// router is never called and both readings are exactly as before. The effective route of each reading is in D1
+// model_router_events (day, reading, routed or the fallback reason), and the owner's flips of the switch in FS1's own
+// audit (omega_events feature_switch, key SHADOW_MODEL_ROUTER): the 14-day agreement window splits at them.
 import { callBusModel } from "./model-call.mjs";
 import { shadowAllowed, shadowSpendToday, shadowBudget, SHADOW_METER_PREFIX } from "./shadow-switch.mjs";
+import { routeShadowCall, shadowModelRouterMode, modelRouterConfig } from "./model-router.mjs";
 
 export const NEWS_COMPARE_METER = `${SHADOW_METER_PREFIX}news_compare`;
 /** The UTC hour after which the day's comparison runs (New York has closed). */
@@ -19,6 +27,8 @@ export const NEWS_COMPARE_HOUR = 21;
 // budget. Before 2026-11-18 it waited for 20% headroom like the model arena, and on 2026-11-17 the day's shadow arms
 // had used 24,200 of 25,000 neurons by 21:00 UTC, so the first comparison never ran.
 export const NEWS_COMPARE_RESERVE = 600;
+/** SB1: the model router's allow-list of this call site (the only call site that may route). */
+export const MODEL_ROUTER_ALLOW = Object.freeze(["news_compare"]);
 const MAX_HEADLINES = 40;
 const BIAS = ["BULLISH", "BEARISH", "NEUTRAL"];
 const IMPACT = ["LOW", "MEDIUM", "HIGH"];
@@ -63,7 +73,7 @@ export function agreement(tv, shadow) {
  * The day's comparison, once, after NEWS_COMPARE_HOUR UTC. Gated by the shadow switch, its budget headroom and
  * NEWS_SHADOW_COMPARE. Never throws; returns what it did.
  */
-export async function runNewsShadowCompare(env, { now = Date.now(), call = callBusModel } = {}) {
+export async function runNewsShadowCompare(env, { now = Date.now(), call = callBusModel, router = {} } = {}) {
   if (String(env?.NEWS_SHADOW_COMPARE ?? "on").trim().toLowerCase() === "off") return { status: "off" };
   const db = env?.DB;
   if (!db || typeof env?.NEWS_INGESTION?.shadowItems !== "function") return { status: "unavailable" };
@@ -77,13 +87,24 @@ export async function runNewsShadowCompare(env, { now = Date.now(), call = callB
     if (spend.neurons + NEWS_COMPARE_RESERVE > shadowBudget(env)) return { status: "shadow_budget_headroom", neurons: spend.neurons };
     const items = await env.NEWS_INGESTION.shadowItems({ hours: 24 });
     const tvSet = Array.isArray(items?.tv) ? items.tv : [], shadowSet = Array.isArray(items?.shadow) ? items.shadow : [];
-    const read = async (set) => {
+    const read = async (set, reading) => {
       if (!set.length) return null;
-      const r = await call(env, { messages: readingMessages(set), schemaName: "news_reading", schema: NEWS_READING_SCHEMA, maxTokens: 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: NEWS_COMPARE_METER });
-      return r?.status === "answered" ? cleanReading(r.obj) : null;
+      const workersAi = async () => {
+        const r = await call(env, { messages: readingMessages(set), schemaName: "news_reading", schema: NEWS_READING_SCHEMA, maxTokens: 700, effort: "low", deadline: Date.now() + 60_000, clock: () => Date.now(), runState: {}, role: "agent", meterSource: NEWS_COMPARE_METER });
+        return r?.status === "answered" ? cleanReading(r.obj) : null;
+      };
+      if (shadowModelRouterMode(env) !== "on") return workersAi();
+      const routerModel = modelRouterConfig(env).model;
+      const clock = typeof router.clock === "function" ? router.clock : () => Date.now();
+      const routed = await routeShadowCall(env, {
+        site: "news_compare", allow: MODEL_ROUTER_ALLOW, reading, messages: readingMessages(set), meterSource: NEWS_COMPARE_METER,
+        accept: cleanReading, fallback: workersAi, spendToday: () => shadowSpendToday(db, { now: clock(), routerModel }),
+        clock, ...(router.fetcher ? { fetcher: router.fetcher } : {}), ...(router.timeoutMs ? { timeoutMs: router.timeoutMs } : {})
+      });
+      return routed.value;
     };
-    const tv = await read(tvSet);
-    const shadow = await read(shadowSet);
+    const tv = await read(tvSet, "tv");
+    const shadow = await read(shadowSet, "free");
     const a = agreement(tv, shadow);
     const bit = (v) => (v == null ? null : v ? 1 : 0);
     const status = tv && shadow ? "compared" : !tvSet.length ? "no_tv_headlines" : !shadowSet.length ? "no_shadow_headlines" : "reading_failed";

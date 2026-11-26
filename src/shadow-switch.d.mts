@@ -5,7 +5,7 @@ export const DEFAULT_SHADOW_NEURONS_PER_DAY: number;
 export const BREAKER_ACTOR: string;
 export function shadowBudget(env: unknown): number;
 export function shadowAllowed(env: unknown): Promise<boolean>;
-export function shadowSpendToday(db: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function shadowSpendToday(db: unknown, options?: { now?: number; routerModel?: string }): Promise<Record<string, any>>;
 export function readShadowMode(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function setShadowMode(env: unknown, input?: { mode?: string; reason?: string; actor?: string }, options?: { now?: number }): Promise<Record<string, any>>;
 export function shadowModeMessage(result: Record<string, any>, options?: { reason?: string; spend?: number | null; budget?: number | null }): string;

@@ -10,6 +10,7 @@ import { HUD_PLATFORM_IDS, PLATFORM_HOST_WORKER } from "../src/platform-reports.
 import { HEALTH_AGENT_ID } from "../src/health-alerts.mjs";
 import { NEXUS_TEACHER_ID } from "../src/owner-corrections.mjs";
 import { KNOWLEDGE_VERDICT_AGENT_ID, KNOWLEDGE_VERDICT_CAPABILITY } from "../src/knowledge-verdicts.mjs";
+import { MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES } from "../src/model-router.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
@@ -20,7 +21,10 @@ const CEILING = new Set(["signals.observe", "reports.publish", "memory.recall", 
 // XAUUSD_CEILING (platform V3, live 2026-11-17): the moderator alone may also read its handed-off proposals' state.
 // Platform HAIC H3e: nexus-teacher alone may record the owner's corrections (src/owner-corrections.mjs).
 // Platform PF3 (migration 0088, KA2): shadow-knowledge alone may post the shadow arm's verdicts (src/knowledge-verdicts.mjs).
-const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"], "shadow-knowledge": ["knowledge.verdict"] });
+// Platform AIR1 (982971c, SB1): xauusd-model-router alone may read the router's status and report a paid sign (src/model-router.mjs).
+const AGENT_EXTRA = Object.freeze({ "xauusd-moderator": ["council.decisions.read"], "nexus-teacher": ["corrections.record"], "shadow-knowledge": ["knowledge.verdict"], "xauusd-model-router": ["model_router.status", "model_router.report_paid"] });
+// The platform's capability-id rule (control-plane-shared/src/organism.ts, widened by AIR1 for model_router.report_paid).
+const CAPABILITY_ID = /^[a-z][a-z_]*\.[a-z_]+(\.[a-z_]+)?$/;
 // DNA-1 (2026-11-22): genes the platform registered before this repository runs their code. Platform PF1 (migration
 // 0087) registers hud-mizan-oracle; declaring it here keeps the census free of undeclared_agent until B27 wires it.
 // Each is idle: not in HUD_PLATFORM_IDS and named nowhere in src/, so nothing reports as it. B27 moves
@@ -46,7 +50,7 @@ test("D1. one organ per Worker of this repository, named as its wrangler config 
 });
 
 test("D2. the agents are exactly those that report to the platform kernel, within the external ceiling", () => {
-  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID, KNOWLEDGE_VERDICT_AGENT_ID].sort();
+  const code = [...Object.values(HUD_PLATFORM_IDS), "xauusd-reasoner", "xauusd-moderator", HEALTH_AGENT_ID, NEXUS_TEACHER_ID, KNOWLEDGE_VERDICT_AGENT_ID, MODEL_ROUTER_AGENT].sort();
   assert.deepEqual(ai.agents.map((a) => a.id).sort(), [...code, ...DECLARED_IDLE].sort());
   // A declared-idle gene has no code path: no kernel id in HUD_PLATFORM_IDS and no mention anywhere in src/.
   for (const id of DECLARED_IDLE) {
@@ -62,6 +66,12 @@ test("D2. the agents are exactly those that report to the platform kernel, withi
   assert.deepEqual(ai.agents.find((a) => a.id === NEXUS_TEACHER_ID).capabilities, ["corrections.record"]);
   // PF3: shadow-knowledge holds knowledge.verdict and nothing else, tier 1, no seat (KA2).
   assert.deepEqual(ai.agents.find((a) => a.id === KNOWLEDGE_VERDICT_AGENT_ID), { id: "shadow-knowledge", display_name: "Shadow Knowledge", capabilities: [KNOWLEDGE_VERDICT_CAPABILITY], tier_max: 1, voter: false });
+  // AIR1 (SB1): xauusd-model-router holds the router's two capabilities and nothing else, tier 1, no seat.
+  assert.deepEqual(ai.agents.find((a) => a.id === MODEL_ROUTER_AGENT), { id: "xauusd-model-router", display_name: "Model Router", capabilities: [MODEL_ROUTER_CAPABILITIES.status, MODEL_ROUTER_CAPABILITIES.report_paid], tier_max: 1, voter: false });
+  // Every declared capability id passes the platform's rule: the new two-segment ids and the old ones alike.
+  for (const a of ai.agents) for (const c of a.capabilities) assert.match(c, CAPABILITY_ID, `${a.id}: ${c}`);
+  for (const c of ["model_router.status", "model_router.report_paid", "council.decisions.read", "signals.observe", "knowledge.verdict", "corrections.record"]) assert.match(c, CAPABILITY_ID, c);
+  for (const c of ["Model_router.status", "model_router", "model-router.status", "a.b.c.d", ".status"]) assert.doesNotMatch(c, CAPABILITY_ID, c);
   for (const o of dna.organs.filter((x) => x !== ai)) assert.deepEqual(o.agents, [], o.service);
   assert.ok(read("src/platform-reports.mjs").includes('"xauusd-reasoner"') && read("src/platform-reports.mjs").includes('"xauusd-moderator"'));
 });

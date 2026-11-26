@@ -254,6 +254,12 @@ sources were:
 - Among the room calls, only `shadow:*` rows have a daily breaker: `checkShadowBudget` (`src/shadow-switch.mjs:129`,
   run hourly from `src/index.ts:3424`) switches shadow mode off when today's shadow calls pass
   `SHADOW_NEURONS_PER_DAY_MAX` (default 25,000).
+- SB1 (2026-11-25, owner: "news_compare saja"): with the FS1 switch `SHADOW_MODEL_ROUTER` on (off by default), the news
+  shadow comparison's two readings go to Reflection's Beam (`src/model-router.mjs`), which has no neuron rate. Beam has
+  its own caps: 100k input and 20k output tokens a day, 20 requests a day, 2 a minute, 2,000 output tokens a call;
+  `shadowSpendToday` reads its `ai_usage_daily` rows as those counters (`beam`), so a Beam call never passes the shadow
+  breaker at 0. Any cap, error or paid sign falls back to the Workers AI call, priced in neurons as before
+  (docs/SSOT.md, "Shadow model router").
 - These have their own daily caps:
   - the Position Council and the Entry Council share `POSITION_COUNCIL_DAILY_USD` (`src/position-manager.mjs:91`,
     default 5; `wrangler.jsonc` "5"; the limit council's spend is counted against it, `src/limit-council.mjs:17`);

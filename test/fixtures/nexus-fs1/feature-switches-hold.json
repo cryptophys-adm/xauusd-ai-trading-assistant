@@ -702,6 +702,28 @@
       "write": "feature-switch"
     },
     {
+      "key": "SHADOW_MODEL_ROUTER",
+      "label": "Shadow model router: news comparison on Beam (SB1)",
+      "description": "SB1: the news shadow comparison's two daily readings asked of Reflection's Beam (free Beta, its own caps: 100k input and 20k output tokens, 20 requests a day, 2 a minute) instead of the Workers AI agent model; no other call routes. Any limit, error, timeout, paid sign, missing retention terms, invalid answer or a platform router status other than on falls back to Workers AI for that call. off: as before.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "profit_lock_gate",
       "label": "Profit-lock gate",
       "description": "SLG1: no stop moves into profit until the position's MFE on closed bars of its mode's timeframe reaches the mode's threshold; legacy: the earlier locks.",

@@ -42,6 +42,12 @@ export interface Env {
   TELEGRAM_CHAT_ID?: string;
   WEBHOOK_SECRET?: string;
   CONFLUENCE_HANDOFF_SECRET?: string;
+  // SB1 model router (src/model-router.mjs): the Worker secret the owner sets through the platform; MODEL_BASE_URL and
+  // MODEL_ID default to Reflection's endpoint and Beam. SHADOW_MODEL_ROUTER is the FS1 switch (off by default).
+  REFLECTION_API_KEY?: string;
+  MODEL_BASE_URL?: string;
+  MODEL_ID?: string;
+  SHADOW_MODEL_ROUTER?: string;
   NEWS_INGESTION?: {
     pull(options?: { forceRefresh?: boolean; origin?: string }): Promise<Record<string, unknown>>;
     // Economic releases (owner 2026-11-10): TradingView's calendar with actuals, and gold's 1H history.

@@ -215,6 +215,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     description: "HAIC H3f: the owner's ratings and corrections of Nexus outputs (POST /omega/api/correction) stored here with prices masked and sent to the platform as nexus-teacher; off records and sends nothing. Never changes a parameter, a weight or a gate.",
     values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
   }),
+  entry({
+    key: "SHADOW_MODEL_ROUTER", label: "Shadow model router: news comparison on Beam (SB1)", group: "knowledge",
+    description: "SB1: the news shadow comparison's two daily readings asked of Reflection's Beam (free Beta, its own caps: 100k input and 20k output tokens, 20 requests a day, 2 a minute) instead of the Workers AI agent model; no other call routes. Any limit, error, timeout, paid sign, missing retention terms, invalid answer or a platform router status other than on falls back to Workers AI for that call. off: as before.",
+    values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
+  }),
   // ---- Omega engine, the owner's settings (D1 omega_settings; the Omega settings page's write path)
   entry({
     key: "profit_lock_gate", label: "Profit-lock gate", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
