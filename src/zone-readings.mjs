@@ -189,6 +189,10 @@ export function resetZoneReadingsSchemaForTests() { schemaReady = new WeakSet();
 export async function ensureZoneReadingsSchema(db) {
   if (!db || schemaReady.has(db)) return;
   for (const sql of ZONE_READINGS_SCHEMA_SQL) await db.prepare(sql).run();
+  // Track A PR 6: plan_setups' chart and valid_until_ms, so zone_blocked_setups keeps every plan_setups column.
+  for (const col of ["chart TEXT", "valid_until_ms INTEGER"]) {
+    try { await db.prepare(`ALTER TABLE zone_blocked_setups ADD COLUMN ${col}`).run(); } catch { /* exists */ }
+  }
   schemaReady.add(db);
 }
 

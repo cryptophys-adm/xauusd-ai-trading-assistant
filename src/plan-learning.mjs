@@ -105,6 +105,8 @@ export function setupsFrom(decisions) {
       regime: typeof d.regime === "string" && d.regime ? d.regime : null,
       // A pattern family's plan: the Projection Agent's pattern it traded.
       pattern: typeof d.pattern === "string" && d.pattern ? d.pattern : null,
+      // Track A PR 6: a pattern plan's chart and its lapse (valid_until_ms), only when the plan has them.
+      ...(typeof d.chart === "string" && d.chart ? { chart: d.chart } : {}), ...(finite(d.valid_until_ms) ? { valid_until_ms: d.valid_until_ms } : {}),
       // Z0 (recorded only): the zone types of its entry, stop and first target and the room to the opposing zone ahead.
       ...zoneColumnsOf(d)
     };
@@ -136,7 +138,7 @@ export const fillWindowOf = (s) => Math.min(FILL_WINDOW_MS, Math.max(M15, s.last
 
 /**
  * Pure: every arm's outcome of one ended setup on `bars` (closed, oldest first). { status: "resolved",
- * results: { arm: { s, r, f } } } once every fitting arm is final ("s" the exit, "r" in R of the arm's own
+ * results: { arm: { s, r, f } } } once every fitting arm is final ("s" the exit, "lapse" when the plan's valid_until_ms closed a winner, "r" in R of the arm's own
  * risk with 0 for no fill, "f" 1 when filled); "open" while one still runs; "unavailable" without bars
  * right after the decision. `resolved_ms` is the last arm's exit.
  */
@@ -157,7 +159,7 @@ export function replaySetup(setup, bars, { now = Date.now(), arms = PLAN_ARMS } 
   for (const arm of arms) {
     const v = variantOf(arm.entry_shift === 0 && filled ? filled : setup, arm);
     if (!v) { results[arm.id] = { s: "invalid", r: null, f: 0 }; continue; }
-    const sim = simulateSignal({ side: v.side, entry: v.entry, stop: v.stop, tp1: v.tp1, progressive_stop: v.entry, opened_at: iso(setup.opened_ms) }, after, { now, fillWindowMs: fillWindowOf(setup), holdMaxMs: PLAN_RULES.hold_max_ms });
+    const sim = simulateSignal({ side: v.side, entry: v.entry, stop: v.stop, tp1: v.tp1, progressive_stop: v.entry, opened_at: iso(setup.opened_ms) }, after, { now, fillWindowMs: fillWindowOf(setup), holdMaxMs: PLAN_RULES.hold_max_ms, ...(finite(setup.valid_until_ms) ? { lapseMs: setup.valid_until_ms } : {}) });
     if (sim.status === "closed") results[arm.id] = { s: sim.exit_reason, r: r3(sim.r_tp1), f: 1 };
     else if (sim.status === "cancelled") results[arm.id] = { s: sim.exit_reason, r: 0, f: 0 };
     else { open = true; continue; }
@@ -310,6 +312,9 @@ export async function ensurePlanLearningSchema(db) {
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN stop_zone_type TEXT").run(); } catch { /* exists */ }
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN tp1_zone_type TEXT").run(); } catch { /* exists */ }
   try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN opposing_room_atr REAL").run(); } catch { /* exists */ }
+  // Track A PR 6: a pattern plan's chart and the time its setup lapses (valid_until_ms; the replay's lapse exit).
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN chart TEXT").run(); } catch { /* exists */ }
+  try { await db.prepare("ALTER TABLE plan_setups ADD COLUMN valid_until_ms INTEGER").run(); } catch { /* exists */ }
   schemaReady.add(db);
 }
 
@@ -370,7 +375,7 @@ export function decisionPlans(r) {
   if (typeof plans === "string") { try { plans = JSON.parse(plans); } catch { plans = null; } }
   const mine = plans && typeof plans === "object" ? plans[r.side === "BUY" ? "long" : "short"] : null;
   const list = Object.entries(mine && typeof mine === "object" ? mine : {}).filter(([, p]) => p && typeof p === "object")
-    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true, pattern: typeof p.pattern === "string" ? p.pattern : null, ...zoneColumns(p.zone_types, p.opposing_ahead) }));
+    .map(([agent, p]) => ({ ...base, agent, entry: Number(p.entry), stop: Number(p.stop), tp1: Number(p.tp1), action: p.at_level ? "ENTER_MARKET" : "ENTER_LIMIT", at_level: p.at_level === true, pattern: typeof p.pattern === "string" ? p.pattern : null, ...(typeof p.chart === "string" && p.chart ? { chart: p.chart } : {}), ...(finite(Number(p.valid_until_ms)) && p.valid_until_ms != null ? { valid_until_ms: Number(p.valid_until_ms) } : {}), ...zoneColumns(p.zone_types, p.opposing_ahead) }));
   if (list.length) return list;
   return [{ ...base, agent: DEFAULT_PLAN_AGENT, entry: Number(r.entry), stop: Number(r.stop), tp1: Number(r.tp), action: r.action, at_level: r.at_level === 1 || r.at_level === true, ...zoneColumns(r.zone_types, r.opposing_ahead) }];
 }
@@ -384,16 +389,19 @@ export function agentRecords(setups) {
   for (const s of setups || []) {
     const x = s.results?.[CONTROL_ARM];
     if (!finite(x?.r)) continue;
-    const a = (by[s.agent ?? DEFAULT_PLAN_AGENT] ??= { n: 0, r: 0, f: 0, t: 0, st: 0, ctx: {}, pat: {} });
+    const a = (by[s.agent ?? DEFAULT_PLAN_AGENT] ??= { n: 0, r: 0, f: 0, t: 0, st: 0, ctx: {}, pat: {}, pc: {} });
     const c = (a.ctx[s.context] ??= { n: 0, r: 0 });
     a.n += 1; a.r += x.r; a.f += x.f ? 1 : 0; a.t += x.s === "target" ? 1 : 0; a.st += x.s === "stop" ? 1 : 0; c.n += 1; c.r += x.r;
     if (s.pattern) { const q = (a.pat[s.pattern] ??= { n: 0, r: 0, t: 0, f: 0 }); q.n += 1; q.r += x.r; q.f += x.f ? 1 : 0; q.t += x.s === "target" ? 1 : 0; }
+    // Track A PR 6 (evidence only, no breaker reads it): the record per pattern@chart.
+    if (s.pattern && s.chart) { const q = (a.pc[`${s.pattern}@${s.chart}`] ??= { n: 0, r: 0, t: 0, f: 0, l: 0 }); q.n += 1; q.r += x.r; q.f += x.f ? 1 : 0; q.t += x.s === "target" ? 1 : 0; q.l += x.s === "lapse" ? 1 : 0; }
   }
   return Object.keys(by).sort().map((agent) => {
     const a = by[agent];
     return { agent, setups: a.n, mean_r: r3(a.r / a.n), fill_rate: r3(a.f / a.n), target_rate: a.f ? r3(a.t / a.f) : null, stop_rate: a.f ? r3(a.st / a.f) : null, contexts: Object.keys(a.ctx).sort().map((context) => ({ context, setups: a.ctx[context].n, mean_r: r3(a.ctx[context].r / a.ctx[context].n) })),
       // A pattern family: each pattern's own record (the breaker holds a losing pattern back, not its family).
-      ...(Object.keys(a.pat).length ? { patterns: Object.keys(a.pat).sort().map((pattern) => ({ pattern, setups: a.pat[pattern].n, mean_r: r3(a.pat[pattern].r / a.pat[pattern].n), fill_rate: r3(a.pat[pattern].f / a.pat[pattern].n), target_rate: a.pat[pattern].f ? r3(a.pat[pattern].t / a.pat[pattern].f) : null })) } : {}) };
+      ...(Object.keys(a.pat).length ? { patterns: Object.keys(a.pat).sort().map((pattern) => ({ pattern, setups: a.pat[pattern].n, mean_r: r3(a.pat[pattern].r / a.pat[pattern].n), fill_rate: r3(a.pat[pattern].f / a.pat[pattern].n), target_rate: a.pat[pattern].f ? r3(a.pat[pattern].t / a.pat[pattern].f) : null })) } : {}),
+      ...(Object.keys(a.pc).length ? { pattern_charts: Object.keys(a.pc).sort().map((key) => { const q = a.pc[key]; return { key, setups: q.n, mean_r: r3(q.r / q.n), fill_rate: r3(q.f / q.n), target_rate: q.f ? r3(q.t / q.f) : null, lapse_exits: q.l }; }) } : {}) };
   });
 }
 
@@ -407,7 +415,8 @@ async function runAll(db, statements) {
 const fromRow = (r) => {
   let results = null;
   try { results = r.results_json ? JSON.parse(r.results_json) : null; } catch { results = null; }
-  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, htf: r.htf ?? null, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results };
+  const s = { setup_key: r.setup_key, decision_key: r.decision_key, agent: r.agent ?? DEFAULT_PLAN_AGENT, pattern: r.pattern ?? null, opened_ms: toMs(r.opened_at), decided_ms: toMs(r.decided_at), last_seen_ms: toMs(r.last_seen_at), decisions: Number(r.decisions) || 1, side: r.side, entry: r.entry, stop: r.stop, tp1: r.tp1, atr_h1: r.atr_h1, mode: r.mode ?? null, action: r.action ?? null, at_level: r.at_level === 1, regime: r.regime ?? null, context: r.context, htf: r.htf ?? null, status: r.status, resolved_ms: r.resolved_at ? toMs(r.resolved_at) : null, results,
+    ...(typeof r.chart === "string" && r.chart ? { chart: r.chart } : {}), ...(r.valid_until_ms != null && finite(Number(r.valid_until_ms)) ? { valid_until_ms: Number(r.valid_until_ms) } : {}) };
   return s;
 };
 /** Pure (Z5): a stored row in plan_setups' columns as the setup the replay reads (the plan learner's own reader). */
@@ -446,6 +455,8 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
         writes.push(typed
           ? db.prepare(`INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version, ${ZONE_SETUP_COLUMNS.join(", ")}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values, ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null))
           : db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)").bind(...values));
+        // Track A PR 6: the chart and the lapse, only for a setup that has them (every other row is written as before).
+        if (s.chart || finite(s.valid_until_ms)) writes.push(db.prepare("UPDATE plan_setups SET chart = ?, valid_until_ms = ? WHERE setup_key = ?").bind(s.chart ?? null, finite(s.valid_until_ms) ? s.valid_until_ms : null, s.setup_key));
         if (isShadow) shadow.added += 1; else added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
         writes.push(db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key));

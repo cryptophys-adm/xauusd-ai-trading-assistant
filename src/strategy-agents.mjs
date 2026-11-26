@@ -597,7 +597,7 @@ export function priceActionReading(patterns, calibration = null) {
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
 // Z0: zone_types and opposing_ahead only when the plan has them (KEY_LEVEL_ZONE_TYPES on).
-export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}), ...(p.zone_types ? { zone_types: p.zone_types } : {}), ...(p.opposing_ahead ? { opposing_ahead: p.opposing_ahead } : {}) });
+export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}), ...(p.pattern && typeof p.chart === "string" ? { chart: p.chart } : {}), ...(isNum(p.valid_until_ms) ? { valid_until_ms: p.valid_until_ms } : {}), ...(p.zone_types ? { zone_types: p.zone_types } : {}), ...(p.opposing_ahead ? { opposing_ahead: p.opposing_ahead } : {}) });
 
 /**
  * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): a BUY or SELL trades only
