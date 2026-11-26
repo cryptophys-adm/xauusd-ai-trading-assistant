@@ -488,6 +488,10 @@ Each lens is judged on its own readings, so its weight follows its own skill. A 
   - **hold:** each stop Omega moved to a lens B level (SL+, or the ladder's lock tagged `level_source: "liquidity"`). It
     is scored over the next eight closed 15m bars of the broker's M1 archive. A close more than 0.1 × ATR(14, 15m) beyond
     the stop is a miss; eight bars without one is a hit.
+  - **The word "trail".** A hold's `what` is `"ladder"` (the ladder's lock) or `"trail"`. Here "trail" means the
+    SL+ key-level stop move (`sl_key_level_*`), not the trailing TP: no target move is a hold reading. It is not
+    called a stop or an SL because the lens report's forbidden keys (`forbiddenReportKeys`) refuse "sl" and "stop",
+    and the Nexus page forbids order words.
   - **Why they stay out of the floor.** A skip cites a sweep that is already a `sweep` reading, so floored on skips the
     same sweep would count twice. A hold measures the stop's level, a different question from the lens's call, so it
     should not floor the call. After 7 days the counts and hit rates per kind go to the orchestrator.
@@ -743,7 +747,8 @@ weight for the lens under another `doctrine_sha`, pulled after the floor.
   them as blocks.
 - `lensHoldStep` reads `omega_intents` of the last 3 days: `modify_sl`/`modify_sltp`, done and applied, with
   `level_source: "liquidity"`. It records one `hold` reading per ticket and stop price, with id `holdReadingId`, an
-  FNV-1a hash, so the id carries no price. The detail is `{ what: "ladder" | "trail" }`. The side comes from the stop
+  FNV-1a hash, so the id carries no price. The detail is `{ what: "ladder" | "trail" }` ("trail" is the SL+
+  key-level stop move, never the trailing TP; §7.2). The side comes from the stop
   against the archive's last close at the move. `scoreLevelHold` scores only closed 15m bars, on the broker scale, so
   no feed basis is needed.
 - The ladder's lock carries `level_source: "liquidity"` only when its rung is lens B's exact edge and no other level

@@ -16,6 +16,8 @@
 //            them now: LENS_ROOM_LINE "conditions" and lens B on, above its floor and fresh); null without available facts.
 //   B19      effects.level_moves: the hold readings (a stop moved to a lens B level: SL+ or the ladder's lock), and each
 //            skip's outcome from its skip reading; level_moves is null while LENS_LEVEL_READINGS is "off".
+//            A level move's action is "ladder_lock" (the ladder's lock) or "trail": the SL+ key-level stop move, never
+//            the trailing TP (no target move is recorded). Not called a stop or an SL: the lens report refuses those words.
 import { LIQUIDITY_STATE_KEY, LIQUIDITY_STATE_FRESH_MS, baselineKey, backfillKey, backfillFailedKey, backfillIdentity, backfillVersionsKey, liquidityFields, liquidityLine, liquidityConditions, liquidityConditionsOn } from "./liquidity-lens.mjs";
 import { lensKnobs, lensScore, readLensState } from "./lens-policy.mjs";
 import { activeAccount, lensRoomLine, lensLevelReadings } from "./lens-steps.mjs";
