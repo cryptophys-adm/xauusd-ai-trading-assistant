@@ -38,8 +38,8 @@ import { patternFactor } from "./pattern-calibration.mjs";
 import { zoneTypes as typeZones, dsEvidence } from "./zone-types.mjs";
 
 export const KEY_LEVEL_VERSION = "cryptophys.key-level-agent.v2";
-export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
-const TF_NAME = { "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly" };
+export const TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3, "1W": 3 });
+const TF_NAME = { "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly", "1W": "weekly" };
 const CAMARILLA_WEIGHT = { h3: 0.6, l3: 0.6, h4: 1, l4: 1, h5: 0.8, l5: 0.8 };
 const SWING_LOOKBACK = 60, SWINGS_PER_SIDE = 4, ROUND_RANGE_ATR = 4;
 export const CANDIDATE_MIN_SOURCES = 3, CANDIDATE_MIN_SCORE = 3, MAX_CANDIDATES_PER_SIDE = 2;
@@ -214,9 +214,17 @@ function keyLevelRaw({ snapshots = {}, bars = {}, price = null, atrH1 = null, pa
   const tolerance = Math.max(1, isNum(atrH1) ? 0.3 * atrH1 : 1);
   const found = patterns === "off" ? {} : chartPatterns(bars, { events });
   // The patterns' measured record on gold (src/pattern-calibration.mjs) scales their weights.
-  const raw = rawLevels({ snapshots, bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
+  const raw = rawLevels({ snapshots: levelSnapshots(snapshots), bars, price, atrH1, patterns: found, factorOf: (id) => patternFactor(calibration, id) });
   return { tolerance, found, raw };
 }
+
+/**
+ * ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): the weekly snapshot ("1W") types the zones only (dsEvidence); it adds
+ * no raw level, so the zones themselves (their members, clusters and candidates) are those of the other charts.
+ */
+const TYPING_ONLY_SNAPSHOTS = Object.freeze(["1W"]);
+const levelSnapshots = (snapshots) => (snapshots && TYPING_ONLY_SNAPSHOTS.some((k) => k in snapshots)
+  ? Object.fromEntries(Object.entries(snapshots).filter(([k]) => !TYPING_ONLY_SNAPSHOTS.includes(k))) : snapshots);
 
 /** The zones near price: within four 1H ranges of it (every zone without a price or an ATR). */
 const nearZones = (zones, price, atrH1) => (isNum(price) && isNum(atrH1) ? zones.filter((z) => Math.abs(z.price - price) <= 4 * atrH1) : zones);

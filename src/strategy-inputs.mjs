@@ -5,7 +5,8 @@
 // concluded by then), the sweep stores what buildStrategy reads (src/strategy-engine.mjs), slimmed
 // to the fields it uses and gzip-compressed:
 //   - each room's agents (status, stance, bias, confidence), conclusion and bar times;
-//   - News Daily's TLDR stance; the HUD snapshots' fields; the confirmations; the H1 chain decision;
+//   - News Daily's TLDR stance; the HUD snapshots' fields (the weekly one only when present, ZF2); the confirmations;
+//     the H1 chain decision;
 //   - the closed bars the engine reads (H1, M15, H4, D1: the last 60; W1: the last 2).
 // Once the 4-hour horizon has closed, the outcome of each stance (BUY, SELL, WAIT) from the capture
 // is scored once on the 15m bars and stored, so a replay needs no old bars.
@@ -77,6 +78,8 @@ export function slimInputs(inputs) {
     rooms: Object.fromEntries(["D1", "H4", "H1", "M15"].map((k) => [k, room(rooms[k])])),
     news: tldr ? { tldr: { status: tldr.status ?? null, stance: tldr.stance ?? null, confidence: isNum(tldr.confidence) ? tldr.confidence : null } } : null,
     h1Snapshot: snapshot(inputs?.h1Snapshot), m15Snapshot: snapshot(inputs?.m15Snapshot), h4Snapshot: snapshot(inputs?.h4Snapshot), d1Snapshot: snapshot(inputs?.d1Snapshot),
+    // ZF2: the weekly snapshot (zone typing only), kept only when there is one (stored inputs are unchanged without it).
+    ...(snapshot(inputs?.w1Snapshot) ? { w1Snapshot: snapshot(inputs.w1Snapshot) } : {}),
     confirmations: inputs?.confirmations ?? null,
     m5Price: isNum(inputs?.m5Price) ? inputs.m5Price : null,
     h1Bars: (inputs?.h1Bars || []).map(bar), m15Bars: (inputs?.m15Bars || []).map(bar), h4Bars: (inputs?.h4Bars || []).map(bar),

@@ -133,8 +133,9 @@ test("invalid snapshots are refused without writing", async () => {
 });
 
 test("HT1: the latest snapshot per chart outlives its bar (4H 5h, 1D 26h; 15m and 1H keep 3h) and is stored with that TTL", async () => {
-  assert.deepEqual({ ...HUD_LATEST_TTL_S }, { "15": 10800, "60": 10800, "240": 18000, "1D": 93600 });
-  const barS = { "15": 900, "60": 3600, "240": 14400, "1D": 86400 };
+  // ZF2 adds the weekly chart (8 days); the four others are unchanged.
+  assert.deepEqual({ ...HUD_LATEST_TTL_S }, { "15": 10800, "60": 10800, "240": 18000, "1D": 93600, "1W": 691200 });
+  const barS = { "15": 900, "60": 3600, "240": 14400, "1D": 86400, "1W": 604800 };
   for (const tf of Object.keys(barS)) assert.ok(latestTtlSeconds(tf) > barS[tf], `${tf}: TTL longer than one bar`);
   assert.equal(latestTtlSeconds("unknown"), 10800);
   const puts = [];

@@ -210,6 +210,13 @@ The guardrails, the council's evidence and messages, the EA signal, `managementF
 - `test/zone-types.test.mjs` Z1b-1 to Z1b-7 (test/support/zone-types-fixture.mjs gains an optional `aegis` layer).
 - **Drift.** If gmi-core.mjs's loop changes, the equality and loop-text tests fail; the duplicate is then updated in the same PR.
 
+## 4c. ZF2: the weekly snapshot as a chart of the typing
+Owner 2026-11-26: "ZF2 snapshot Weekly". The pull adapter publishes a weekly HUD snapshot (`"1W"`, `hud:1W:latest`, 8 days) and `dsEvidence` reads it as a fifth chart (`CHARTS` += `"1W"`, `TF_WEIGHT` 3, label `weekly`).
+- **No GMI.** The bundle holds 260 closed weekly bars (pull adapter `SERIES` retain 260; production KV 2026-11-26: 260), under GMI's 320, and GMI has no weekly chart (hashed core, not edited). The weekly snapshot carries the Prophet HUDs, `chart_plane.zones.prophet` and `chart_plane.liquidity.whale_zones` (`buildWeeklyPlane`, the whale map's own function), so its boxes are `prophet_zone`, `whale` and, on a plane without Prophet zones, `prophet_best`; never `gmi_ob`, `gabfx` or `gmi_flag`. A lone weekly box is strong (0.7 x 3 = 2.1; active whale 2.7).
+- **Typing only.** The weekly snapshot adds no raw level (`levelSnapshots`, key-level-agent.mjs): zones, members, candidates and prices are the four charts'. KM1's per-chart maps, the rooms, the council, the HUD agents and the UI do not read it.
+- **Optional.** No weekly snapshot (before the producer's first weekly publish, or a stored capture without one) gives Z1b's typing byte for byte (test/hud-weekly.test.mjs ZF2-4, ZF2-5). Stored inputs gain `w1Snapshot` only when it exists.
+- **Untouched.** The four charts' snapshots (pinned in local-engines/producer/test/hud-snapshot-weekly.test.mjs ZF2-P4), the fixtures, ENGINE_CODE_HASH (70930517…), ENGINE_BEHAVIOUR_HASH (ecfe3f90…), provenance (`hud-snapshot.mjs`, `chart-plane.mjs` and `adopt/` are in no record).
+
 ## 5. Z2: the zone_ahead check (decision side only)
 **Why.** Until Z2 nothing kept a long out of supply: the only zone gates were scalp's 'reward' (a real level as the target) and `zone_pullback`'s own location rule. The design replay (426 at-level plans): an opposing typed zone under 0.5 ATR ahead -0.268R against +0.512R with none ahead; the counter-trend plans it would block -0.379R (n 121), the with-trend plans +0.135R (n 54), hence the trend exemption. A contrary-entry veto would have removed +0.055R with-trend plans, so a contrary entry zone stays a record.
 

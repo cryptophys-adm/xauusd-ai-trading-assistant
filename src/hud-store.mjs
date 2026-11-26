@@ -14,15 +14,18 @@ import { PARITY_GROUPS } from "./parity-registry.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
 export const HUD_SNAPSHOT_VERSION = "cryptophys.hud-snapshot.v1";
-export const HUD_TIMEFRAMES = Object.freeze(["60", "15", "240", "1D"]);
-const KEY = /^OANDA:XAUUSD:(60|15|240|1D):\d{12,13}$/;
+// ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): "1W" (Pine v6 timeframe.period of the weekly chart, as "1D" is the
+// daily's) is the weekly snapshot, read only by the zone typing (src/zone-types.mjs dsEvidence). It is optional: no
+// room, council, health check or UI reads it, and a missing one means no weekly boxes, never an error.
+export const HUD_TIMEFRAMES = Object.freeze(["60", "15", "240", "1D", "1W"]);
+const KEY = /^OANDA:XAUUSD:(60|15|240|1D|1W):\d{12,13}$/;
 const MAX_AGE_MS = 30 * 60 * 1000;
 const MAX_BYTES = 64 * 1024;
 const TTL = { expirationTtl: 60 * 60 * 24 * 14 };
 // The latest snapshot per chart stays readable for at least one bar plus a margin (HT1, 2026-11-25): with one 3-hour TTL
 // for every chart, the last hour of each 4H bar and most of each day read no 4H or 1D chart (found in the Z2 live replay).
-// 15m and 1H keep 3 hours (several bars); 4H 5 hours (bar + 1h); 1D 26 hours (bar + 2h).
-export const HUD_LATEST_TTL_S = Object.freeze({ "15": 60 * 60 * 3, "60": 60 * 60 * 3, "240": 60 * 60 * 5, "1D": 60 * 60 * 26 });
+// 15m and 1H keep 3 hours (several bars); 4H 5 hours (bar + 1h); 1D 26 hours (bar + 2h); 1W (ZF2) 8 days (bar + 1 day).
+export const HUD_LATEST_TTL_S = Object.freeze({ "15": 60 * 60 * 3, "60": 60 * 60 * 3, "240": 60 * 60 * 5, "1D": 60 * 60 * 26, "1W": 60 * 60 * 24 * 8 });
 /** The KV TTL (seconds) of hud:<timeframe>:latest. */
 export const latestTtlSeconds = (timeframe) => HUD_LATEST_TTL_S[timeframe] ?? 60 * 60 * 3;
 

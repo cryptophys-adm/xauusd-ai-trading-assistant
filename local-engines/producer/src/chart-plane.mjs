@@ -416,3 +416,30 @@ export function buildChartPlane(bundle, { chart, chartBars, mintick = 0.001 } = 
 
   return { version: CHART_PLANE_VERSION, close: r3(c), atr: r3(atr[t]), bands, liquidity, projection, session };
 }
+
+// ---------------------------------------------------------------- weekly plane (ZF2)
+
+export const CHART_PLANE_WEEKLY_VERSION = "cryptophys.chart-plane.weekly.v1";
+/** ZF2: the fewest closed weekly bars the weekly plane is built on (the whale map's ATR 14 and volume SMA 20 warm up). */
+export const WEEKLY_PLANE_MIN_BARS = 40;
+
+/**
+ * ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): the weekly chart's plane, a subset of buildChartPlane's. The bundle
+ * carries 260 closed weekly bars (market-data-ingestion SERIES retain 260), fewer than the 320 buildChartPlane and GMI
+ * need for their 300-bar profile, and GMI has no weekly chart. So the weekly plane carries only what needs neither:
+ * the Spacetime Whale Map (whaleZones, the same function and inputs as buildChartPlane's liquidity.whale_zones: ATR 14
+ * floored at mintick, volume SMA 20). No bands, FVG targets, GABFX, profile, projection or session: absent, never
+ * invented. Null when the window is shorter than WEEKLY_PLANE_MIN_BARS; whale_zones null when it cannot be computed.
+ */
+export function buildWeeklyPlane({ chartBars, mintick = 0.001 } = {}) {
+  const n = chartBars?.length ?? 0;
+  if (n < WEEKLY_PLANE_MIN_BARS) return null;
+  const t = n - 1;
+  const open = chartBars.map((b) => b.open), high = chartBars.map((b) => b.high), low = chartBars.map((b) => b.low), close = chartBars.map((b) => b.close);
+  const volume = chartBars.map((b) => (isNum(b.volume) ? b.volume : null));
+  const atr = pineAtr(chartBars, 14).map((a) => (isNum(a) ? Math.max(a, mintick) : null));
+  const volSma = sma(volume, 20).map((v) => (isNum(v) ? Math.max(v, 0.0001) : null));
+  let whale = null;
+  try { whale = whaleZones({ open, high, low, close, volume, atr, volSma }, t); } catch { whale = null; }
+  return { version: CHART_PLANE_WEEKLY_VERSION, close: r3(close[t]), atr: r3(atr[t]), liquidity: { whale_zones: whale } };
+}

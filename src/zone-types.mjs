@@ -21,7 +21,7 @@
 //                 (chart_plane.zones.aegis, the 4 nearest per side; local-engines/producer/src/adopt/gmi-zone.mjs):
 //                 bull demand, bear supply, 0.8. On a chart that has them, gmi_flag is dropped (its order-block flag is
 //                 price inside one of them); a chart without them keeps it. Their touches age a zone as prophet_zone's.
-// each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5). A box types a zone on a strict overlap, or when
+// each weight times the chart's TF_WEIGHT (15m 1, 1H 1.5, 4H 2, daily 2.5, weekly 3). A box types a zone on a strict overlap, or when
 // one of its edges is one of the zone's member prices (ZF1: the box made the cluster); a point must lie inside the zone
 // or on a member. Per side, a (source, timeframe) adds only its heaviest box, so two overlapping 15m
 // whales count once. Type: demand when demand_w > 0 and demand_w >= 2 x supply_w, supply in the mirror case, mixed when
@@ -39,9 +39,9 @@ import { prophetZoneBoxes, aegisZoneBoxes } from "./level-readers.mjs";
 
 export const ZONE_TYPES_VERSION = "cryptophys.zone-types.v1";
 /** The Key Level Agent's timeframe weights (src/key-level-agent.mjs TF_WEIGHT; a test holds them equal). */
-export const ZONE_TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3 });
+export const ZONE_TF_WEIGHT = Object.freeze({ "15": 1, "60": 1.5, "240": 2, D: 2.5, "1D": 2.5, W: 3, "1W": 3 });
 /** Source labels use these words, never a period number: "240" would read like a price (public-projection PRICE_LIKE). */
-export const ZONE_TF_NAME = Object.freeze({ "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly" });
+export const ZONE_TF_NAME = Object.freeze({ "15": "15m", "60": "1H", "240": "4H", D: "daily", "1D": "daily", W: "weekly", "1W": "weekly" });
 /** The readers' own base weights (src/level-readers.mjs, src/key-level-agent.mjs), and the 15m GMI flag. */
 export const ZONE_SOURCE_WEIGHT = Object.freeze({ whale_active: 0.9, whale_mitigation: 0.7, prophet_best: 0.7, rbs: 1, sbr: 1, qm_buy: 0.9, qm_sell: 0.9, gmi_flag: 0.7 });
 /** Z1a: an active Prophet order block's base weight, and its weight when the core flags its source bar high_volume. */
@@ -69,7 +69,10 @@ export const ZONE_RULES = Object.freeze({
 export const ZONE_NEED = Object.freeze({ risk: 1, atr: 0.75 });
 /** The trend lean that exempts a plan (src/strategy-engine.mjs STRATEGY_PARAMS.lean; a test holds them equal). */
 export const ZONE_TREND_LEAN = 0.15;
-const CHARTS = Object.freeze(["15", "60", "240", "1D"]);
+// ZF2 (owner 2026-11-26: "ZF2 snapshot Weekly"): the weekly snapshot ("1W", optional) types zones too: its
+// prophet_zone, whale and prophet_best boxes at the weekly weight (it carries no GMI, so no gmi_ob, gabfx or flag).
+// A missing weekly snapshot adds no box: every other chart's typing is as before.
+const CHARTS = Object.freeze(["15", "60", "240", "1D", "1W"]);
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const r2 = (v) => (isNum(v) ? Math.round(v * 100) / 100 : null);
@@ -101,7 +104,7 @@ export function zoneSourcesList(list) {
 export const zoneNeed = (risk, atrH1) => Math.max(ZONE_NEED.risk * risk, ZONE_NEED.atr * atrH1);
 
 /**
- * Pure: the demand and supply evidence of the charts ({ "15", "60", "240", "1D" } HUD snapshots), with the closed 15m
+ * Pure: the demand and supply evidence of the charts ({ "15", "60", "240", "1D", "1W" } HUD snapshots; "1W" optional, ZF2), with the closed 15m
  * bars and the 1H ATR for freshness: { boxes: [{ source, tf, side, bottom, top, weight, point?, at_price?, touches? }],
  * bars, atr_h1 }. `weight` is the base weight times the chart's timeframe weight. A missing field gives no box, never a
  * default. `sourcesOff` (ZONE_SOURCES_OFF) leaves those sources out.
