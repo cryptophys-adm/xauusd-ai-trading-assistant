@@ -12,7 +12,7 @@ import { build } from "esbuild";
 import { calculateProphetR38Core } from "../local-engines/prophet-r38/src/core.mjs";
 import { obZoneSeries, prophetAdoptValues, momentumCode, buildProphetAdopt, buildProphetAdoptRecord, PROPHET_ADOPT_FIELDS, PROPHET_ADOPT_SOURCE } from "../local-engines/producer/src/adopt/prophet-adopt.mjs";
 import { ENGINE_PROVENANCE } from "../local-engines/producer/src/provenance.generated.mjs";
-import { chartProphetCore, chartProphetSetup } from "../local-engines/producer/src/prophet-setup.mjs";
+import { chartProphetCore, chartProphetSetup, attachProphetSetup, prophetSetupState, SETUP_CHARTS } from "../local-engines/producer/src/prophet-setup.mjs";
 import { PARITY_GROUPS, groupsFor, groupIdentityOf, identityOf, resetSchemaCacheForTests } from "../src/parity-registry.mjs";
 import { ADOPT_ENGINES, INGEST_ENGINES, validateLocalCalculation, adoptIngest } from "../src/evidence-fusion.mjs";
 import { reconcileLocalComputation, pruneAdoptComparisons, ADOPT_PRUNE_MAX_ROWS } from "../src/parity-sweep.mjs";
@@ -230,6 +230,23 @@ test("AD-8 the publisher: the switch, reuse only (no core of its own), one build
   assert.equal(late.charts["prophet_adopt:M15"].status, "no_fresh_close");
   // The setup state reads the same run: one core per bundle and chart, and the state is unchanged.
   assert.deepEqual(chartProphetSetup(bundle, "H1"), chartProphetSetup(bundleAt(now), "H1"));
+});
+
+test("AD-12 the memo changes nothing the publishers post: each chart's attached setup state equals the one from an unshared core run, byte for byte", () => {
+  const now = Date.parse("2026-11-26T10:07:00Z");
+  const bundle = bundleAt(now), fresh = bundleAt(now);
+  for (const chart of ["H1", "M15", "H4", "D1"]) {
+    const spec = SETUP_CHARTS[chart], series = fresh.timeframes[spec.series].candles.slice(-spec.window);
+    const key = `OANDA:XAUUSD:${spec.period}:${Date.parse(series.at(-1).open_time)}`;
+    const r = calculateProphetR38Core(series.map((b) => ({ ...b, confirmed: true })), { timeframe_minutes: spec.minutes, gmi_closed_only: true, mintick: 0.001, higher_timeframes: { M15: fresh.timeframes.M15.candles, H1: spec.h1_from_slice ? series : fresh.timeframes.H1.candles, H4: fresh.timeframes.H4.candles, D1: fresh.timeframes.D1.candles, W1: fresh.timeframes.W1.candles } });
+    const unshared = prophetSetupState(r.outputs);
+    // The publisher's record, built twice on the same bundle (the second reads the memo) and once on a new bundle.
+    const post = (b) => { const built = { candle_key: key, records: [{ engine: "prophet", values: { comparable: {} } }] }; attachProphetSetup(built, b, { chart }); return JSON.stringify(built); };
+    const first = post(bundle), second = post(bundle), other = post(fresh);
+    assert.equal(first, second, `${chart}: the memoised run posts the same record`);
+    assert.equal(first, other, `${chart}: as a new bundle's`);
+    assert.deepEqual(JSON.parse(first).records[0].values.setup, JSON.parse(JSON.stringify(unshared)), `${chart}: as an unshared core run's`);
+  }
 });
 
 test("AD-9 no reader: no AI Worker module, Omega or Nexus reads an adoption record (only ingest, parity, the HUD store's exclusion and the names)", () => {

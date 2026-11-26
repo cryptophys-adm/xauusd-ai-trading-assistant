@@ -115,8 +115,10 @@ export function chartProphetSetup(bundle, chart = "H1", { mintick = 0.001 } = {}
 
 // B11a: one core run per bundle and chart. The run with the native higher timeframes costs about 2 s in node (the core
 // looks up each higher-timeframe bar for every chart bar), so the setup state above and the adoption record
-// (adopt/prophet-adopt.mjs) share it: the bundle is the same object for every publisher of a cron tick, and a WeakMap
-// lets it go with the tick. The input is exactly the one chartProphetSetup always built; nothing about the state changes.
+// (adopt/prophet-adopt.mjs) share it: the bundle is the same object for every publisher of a cron tick. The WeakMap is
+// keyed by that bundle object, so nothing survives the tick: the next tick builds a new bundle and a new run, and an
+// old bundle's entry goes with it. The input is exactly the one chartProphetSetup always built; nothing about the state
+// or the records the publishers post changes.
 const CORE_MEMO = new WeakMap();
 const coreMemoKey = (chart, mintick) => `${chart}|${mintick}`;
 

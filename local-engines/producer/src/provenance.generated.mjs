@@ -440,7 +440,7 @@ export const ENGINE_PROVENANCE = Object.freeze({
   },
   "prophet_adopt": {
     "source_hash": "cd83ac2e0525ed687e290438deb4734b64e610a4c4e9b8671d6394ed8bafa46e",
-    "implementation_hash": "dc83a1221d39ba3d87a2f849e3c10501858ac5a88b666550d7acb725d1378926",
+    "implementation_hash": "e78ff21ac0f0fd0e79cfa4ed1c3509a500c8d661dc0debaaac2100274210fa98",
     "files": {
       "sources": [
         {
@@ -467,11 +467,11 @@ export const ENGINE_PROVENANCE = Object.freeze({
         },
         {
           "path": "local-engines/producer/src/prophet-setup.mjs",
-          "sha256": "920c3a6a0eec3a36776611b1a980cb4993121eb5d7a1f7824d5b467356e090c4"
+          "sha256": "fe44b1a2164b20cf0d9e3e4e4a6a55157d6716060a927823ebf3a297b98a49f6"
         },
         {
           "path": "local-engines/producer/src/adopt/prophet-adopt.mjs",
-          "sha256": "230f0ddb4395892caf7151f3d3b39513eb1006b1dd47f2579d3b7cf05b2769e7"
+          "sha256": "c9f5a6f1e0d54a488e0a2eb7a9b5b3f1d4d3edca7d7b47b48aadaf40fd1c154f"
         }
       ]
     }
