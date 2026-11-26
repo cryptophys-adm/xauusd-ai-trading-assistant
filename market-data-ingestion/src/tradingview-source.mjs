@@ -57,9 +57,10 @@ export const SERIES = Object.freeze([
   // Nexus correlations panel (backlog 11.3, 2026-11-08): context only, never in the engine bundle
   // (buildBundle skips role "context"), last in priority. 2 series x 6 closed 4h bars = about 12 calls a day.
   { key: "TVC:US10Y|4h", symbol: "TVC:US10Y", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" },
-  // QB1 (orchestrator 2026-11-26, O3): silver is built from the broker's bars at all times (`broker`, the corpus base;
-  // src/mt5-fallback.mjs applyBrokerSeries), never pulled: 6 calls a weekday back to the TradingView quota.
-  { key: "OANDA:XAGUSD|4h", symbol: "OANDA:XAGUSD", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context", broker: "XAGUSD" }
+  // QB1-R (2026-11-26): pulled from TradingView again. QB1 O3 built it from the broker's silver, but the bridge sends no
+  // macro symbol on the active broker (D1 corpus_sources: only gold), so it froze. A SERIES entry with `broker` is
+  // built by applyBrokerSeries instead (src/mt5-fallback.mjs BROKER_TARGETS, empty until the bridge sends them).
+  { key: "OANDA:XAGUSD|4h", symbol: "OANDA:XAGUSD", interval: "4h", timeframe: "H4", seconds: 14400, retain: 500, role: "context" }
 ]);
 
 const asString = (value) => (typeof value === "string" ? value : "");

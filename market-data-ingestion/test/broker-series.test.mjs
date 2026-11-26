@@ -1,8 +1,9 @@
-// QB1 (orchestrator 2026-11-26, O3; the TradingView quota): silver 4H is built from the broker's bars at all times and
-// never pulled from TradingView. src/tradingview-source.mjs (SERIES `broker`), src/mt5-fallback.mjs applyBrokerSeries.
+// The broker-built series (src/mt5-fallback.mjs BROKER_TARGETS, applyBrokerSeries; SERIES entries with `broker`).
+// QB1 O3 (2026-11-26) built silver 4H from the broker's bars; QB1-R the same day pulled it from TradingView again,
+// because the bridge sends no macro symbol on the active broker. The builder stays, inert, until it does.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyBrokerSeries, BROKER_TARGETS, MACRO_TARGETS } from "../src/mt5-fallback.mjs";
+import { applyBrokerSeries, rebuildFromBroker, BROKER_TARGETS, MACRO_TARGETS } from "../src/mt5-fallback.mjs";
 import { SERIES, SERIES_INTERNALS, readSeries, healPlan, pendingWork, buildBundle } from "../src/tradingview-source.mjs";
 
 class MemoryKV {
@@ -15,47 +16,39 @@ const bar = (time, seconds, o, h, l, c, v = 10) => ({ time, open_time: new Date(
 const spec = (key) => SERIES.find((s) => s.key === key);
 const put = (kv, key, record) => kv.put(SERIES_INTERNALS.SERIES_KEY_PREFIX + key, JSON.stringify({ series: key, ...record }));
 
-test("QB-1. silver 4H is the only broker-built series; it is never planned, bootstrapped or healed from TradingView", () => {
-  assert.deepEqual(SERIES.filter((s) => s.broker).map((s) => [s.key, s.broker, s.role]), [["OANDA:XAGUSD|4h", "XAGUSD", "context"]]);
-  assert.deepEqual(BROKER_TARGETS.map((t) => t.keys).flat(), ["OANDA:XAGUSD|4h"]);
-  assert.ok(!MACRO_TARGETS.some((t) => t.keys.includes("OANDA:XAGUSD|4h")), "no longer a fallback target");
+test("QB-1. QB1-R: no series is broker-built; silver is a TradingView pull again and a fallback macro target; the builder asks nothing", async () => {
+  assert.deepEqual(SERIES.filter((s) => s.broker).map((s) => s.key), [], "every series is pulled or derived");
+  assert.deepEqual(BROKER_TARGETS, []);
+  assert.ok(MACRO_TARGETS.some((t) => t.keys.includes("OANDA:XAGUSD|4h")), "silver is rebuilt from the broker only during a fallback, as before QB1");
   const silver = spec("OANDA:XAGUSD|4h");
-  assert.equal(healPlan(silver, { candles: [bar(T0, 14400, 1, 1, 1, 1)], fallback: { since_sec: T0 } }, T0 + 3600 * 5), null, "a leftover fallback mark is never healed");
-  const records = SERIES.map((s) => (s.key === "OANDA:XAGUSD|4h" ? { candles: [], fallback: { since_sec: T0 } } : { candles: [bar(T0, s.seconds, 1, 1, 1, 1)] }));
-  const due = pendingWork(records);
-  assert.ok(!due.bootstrap.includes("OANDA:XAGUSD|4h") && !due.heal.includes("OANDA:XAGUSD|4h"));
-  // Every other series keeps its SERIES entry as before (no `broker`).
-  assert.equal(SERIES.filter((s) => !s.broker).length, SERIES.length - 1);
+  assert.equal(silver.role, "context");
+  assert.ok(healPlan(silver, { candles: [bar(T0, 14400, 1, 1, 1, 1)], fallback: { since_sec: T0 } }, Math.floor(T0 / 300) * 300 + 3600 * 5) !== null, "fallback bars heal from TradingView again");
+  const records = SERIES.map((s) => (s.key === "OANDA:XAGUSD|4h" ? { candles: [] } : { candles: [bar(T0, s.seconds, 1, 1, 1, 1)] }));
+  assert.ok(pendingWork(records).bootstrap.includes("OANDA:XAGUSD|4h"), "an empty silver cache bootstraps from TradingView");
+  let asked = 0;
+  const ai = { async corpusBars() { asked += 1; return { source: "x", bars: [] }; } };
+  assert.deepEqual(await applyBrokerSeries({ MARKET_DATA_CACHE: new MemoryKV(), AI_WORKER: ai }, { now: T0 * 1000 }), []);
+  assert.equal(asked, 0);
 });
 
-test("QB-2. built from the broker's silver on the series' own grid, buckets the minutes cover only, no fallback mark; the broker is asked only once a bucket can have closed", async () => {
+test("QB-2. the builder without the fallback mark (kept for when the bridge sends macro symbols): own grid, covered buckets only, no fallback mark, asks only once a bucket can have closed", async () => {
   const kv = new MemoryKV();
-  await put(kv, "OANDA:XAGUSD|4h", { candles: [bar(T0 - 6 * 3600, 14400, 50, 51, 49, 50.5)], fallback: { since_sec: T0 - 6 * 3600, source: "old" } }); // 02:00 bar
-  const minutes = Array.from({ length: 300 }, (_, i) => ({ t: (T0 - 3 * 3600 + i * 60) * 1000, o: 50.2, h: 50.3, l: 50.1, c: 50.25, v: 2 })); // from 05:00
+  await put(kv, "OANDA:XAGUSD|4h", { candles: [bar(T0 - 6 * 3600, 14400, 50, 51, 49, 50.5)], fallback: { since_sec: T0 - 6 * 3600, source: "old" } });
+  const minutes = Array.from({ length: 300 }, (_, i) => ({ t: (T0 - 3 * 3600 + i * 60) * 1000, o: 50.2, h: 50.3, l: 50.1, c: 50.25, v: 2 }));
   const calls = [];
   const ai = { async corpusBars(req) { calls.push(req); return { source: "mt5macro:demo:XAGUSD", bars: minutes.filter((r) => r.t > req.since_ms) }; } };
   const env = { MARKET_DATA_CACHE: kv, AI_WORKER: ai };
-  // 09:30: the 06:00-10:00 bucket is still open, the broker is not asked.
-  assert.deepEqual(await applyBrokerSeries(env, { now: (T0 + 5400) * 1000 }), [{ base: "XAGUSD", status: "not_due" }]);
+  const target = { base: "XAGUSD", keys: ["OANDA:XAGUSD|4h"] };
+  assert.deepEqual(await rebuildFromBroker(env, kv, target, { now: (T0 + 5400) * 1000, mark: false }), [{ base: "XAGUSD", status: "not_due" }]);
   assert.equal(calls.length, 0);
-  // 10:01: it closed; the broker's minutes cover it from 06:00.
-  const r = await applyBrokerSeries(env, { now: (T0 + 2 * 3600 + 65) * 1000 });
-  assert.deepEqual(r, [{ series: "OANDA:XAGUSD|4h", bars: 1 }]);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].base, "XAGUSD");
+  assert.deepEqual(await rebuildFromBroker(env, kv, target, { now: (T0 + 2 * 3600 + 65) * 1000, mark: false }), [{ series: "OANDA:XAGUSD|4h", bars: 1 }]);
   const s = await readSeries(kv, spec("OANDA:XAGUSD|4h"));
   assert.deepEqual(s.candles.map((c) => [c.open_time, c.src ?? null]), [[new Date((T0 - 6 * 3600) * 1000).toISOString(), null], [new Date((T0 - 2 * 3600) * 1000).toISOString(), "mt5"]]);
-  assert.equal(s.fallback, undefined, "the old fallback mark is cleared: nothing heals it");
+  assert.equal(s.fallback, undefined);
   assert.equal(s.source, "mt5macro:demo:XAGUSD");
-  // No binding, no broker bars: nothing written, never throws.
-  assert.deepEqual(await applyBrokerSeries({ MARKET_DATA_CACHE: kv }, { now: (T0 + 8 * 3600) * 1000 }), []);
-  const empty = { MARKET_DATA_CACHE: kv, AI_WORKER: { async corpusBars() { return { source: "x", bars: [] }; } } };
-  assert.deepEqual(await applyBrokerSeries(empty, { now: (T0 + 8 * 3600) * 1000 }), [{ base: "XAGUSD", status: "no_broker_bars" }]);
-  const failing = { MARKET_DATA_CACHE: kv, AI_WORKER: { async corpusBars() { throw new Error("rpc down"); } } };
-  assert.equal((await applyBrokerSeries(failing, { now: (T0 + 8 * 3600) * 1000 }))[0].status, "failed");
 });
 
-test("QB-3. the engines' bundle (4H and every other input) is byte-identical whether silver came from TradingView or the broker", async () => {
+test("QB-3. the engines' bundle (4H and every other input) is byte-identical whatever silver holds", async () => {
   const build = async (silverCandles) => {
     const kv = new MemoryKV();
     const at = new Date(T0 * 1000).toISOString();
@@ -72,8 +65,8 @@ test("QB-3. the engines' bundle (4H and every other input) is byte-identical whe
   for (let t = T0 - 40 * 14400; t < T0; t += 14400) native.push(bar(t, 14400, 50, 51, 49, 50.5));
   const broker = native.map((c, i) => (i >= 35 ? { ...c, open: 49.9, close: 50.4, src: "mt5" } : c));
   const a = await build(native), b = await build(broker), none = await build([]);
-  assert.ok(a.length > 1000, "a real bundle");
-  assert.equal(a, b, "silver's source never reaches the engines' bundle");
-  assert.equal(a, none, "nor does its presence");
+  assert.ok(a.length > 1000);
+  assert.equal(a, b);
+  assert.equal(a, none);
   assert.ok(!a.includes("XAGUSD"));
 });

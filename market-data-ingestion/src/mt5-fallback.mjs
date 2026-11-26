@@ -124,7 +124,7 @@ export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {
 // from its M1 bars (the AI Worker's corpusBars with a base), on the grid of their last native bar and
 // only for buckets the broker's minutes cover from their start:
 //   TVC:USOIL 5m, 15m, 1H   from the broker's oil CFD (its own price, as gold's);
-//   OANDA:XAGUSD 4H         from the broker's silver at all times since QB1 (BROKER_TARGETS below);
+//   OANDA:XAGUSD 4H         from the broker's silver;
 //   TVC:DXY 4H              the ICE dollar index computed from the broker's six pairs:
 //                           50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091
 //                           x USDSEK^0.042 x USDCHF^0.036, per minute where all six have a bar.
@@ -134,17 +134,15 @@ const DXY_WEIGHTS = Object.freeze({ EURUSD: -0.576, USDJPY: 0.136, GBPUSD: -0.11
 const DXY_CONSTANT = 50.14348112;
 export const MACRO_TARGETS = Object.freeze([
   { base: "USOIL", keys: ["TVC:USOIL|5m", "TVC:USOIL|15m", "TVC:USOIL|1h"] },
+  { base: "XAGUSD", keys: ["OANDA:XAGUSD|4h"] },
   { base: "DXY", synthetic: true, keys: ["TVC:DXY|4h"] }
 ]);
 /**
- * QB1 (orchestrator 2026-11-26, option O3; the TradingView quota): the series built from the broker's bars at all
- * times, never pulled from TradingView (their SERIES entry carries `broker`). OANDA:XAGUSD 4H is context only (the
- * Nexus correlations panel, src/correlations.mjs; buildBundle leaves role "context" out of the engines' bundle), so
- * its 6 calls a weekday go back to the quota. Its bars carry src "mt5" and no fallback mark: nothing heals them.
+ * The series built from the broker's bars at all times, never pulled from TradingView (their SERIES entry carries
+ * `broker`). QB1 O3 (2026-11-26) put silver 4H here; QB1-R (the same day) took it out again: the bridge sends no macro
+ * symbol on the active broker (D1 corpus_sources holds only its gold), so the series froze. Empty until it does.
  */
-export const BROKER_TARGETS = Object.freeze([
-  { base: "XAGUSD", keys: ["OANDA:XAGUSD|4h"] }
-]);
+export const BROKER_TARGETS = Object.freeze([]);
 const COVER_LOOKBACK_S = 6 * 3600;
 
 /** Pure: the ICE dollar index from the six pairs' rows by minute; only minutes where all six have a bar. */
@@ -164,7 +162,7 @@ export function syntheticDxy(rowsByBase) {
  * series' last bar and only for buckets the broker's minutes cover from their start. `mark` (the fallback) records
  * fallback.since_sec so the native pulls heal the bars; without it (BROKER_TARGETS) the series holds no fallback mark.
  */
-async function rebuildFromBroker(env, kv, target, { now, mark }) {
+export async function rebuildFromBroker(env, kv, target, { now, mark }) {
   const nowSec = Math.floor(now / 1000);
   const out = [];
   const specs = target.keys.map((k) => SERIES.find((s) => s.key === k)).filter(Boolean);

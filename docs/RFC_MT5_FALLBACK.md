@@ -71,9 +71,9 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
      symbol's prefix and suffix) and the terminal's USD economic calendar (`omega/calendar.json`, MQL5
      Calendar, with the released values). The bridge sends them after per-base cursors; the AI Worker
      keeps them under `mt5macro:<server>:<BASE>` and in D1 `mt5_calendar`, from Omega's active broker
-     and user only. During a fallback the pull adapter rebuilds TVC:USOIL 5m/15m/1H
-     and TVC:DXY 4H (OANDA:XAGUSD 4H is built from the broker's silver at all times since QB1 O3,
-     2026-11-26, never pulled from TradingView and never marked for healing) (computed per minute: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x
+     and user only. During a fallback the pull adapter rebuilds TVC:USOIL 5m/15m/1H, OANDA:XAGUSD 4H
+     and TVC:DXY 4H (QB1 O3 built silver from the broker at all times; QB1-R reverted it the same day,
+     2026-11-26, because the bridge sends no macro symbol on the active broker) (computed per minute: 50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x
      GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036, only where all six have a bar), on
      their own grids and only for covered buckets. When TradingView's calendar fails, the released
      value comes from the MQL5 calendar, matched to the waiting row of the same minute and kind.
