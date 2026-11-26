@@ -745,7 +745,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61";
+export const ENGINE_CODE_HASH = "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

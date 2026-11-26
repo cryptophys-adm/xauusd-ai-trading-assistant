@@ -487,14 +487,14 @@ export function sdLadderLevels(levels, side) {
 /**
  * Pure (Z6): the ladder step with the box levels (`withSd`, ladderPlan over sdLadderLevels) merged into today's (`base`):
  * the lock is the box plan's only where it is tighter than today's (or today's makes none: it is then already tighter
- * than the current stop); the partial is always today's (its rungs and their count unchanged). A box level can replace
+ * than the current stop), and `sl_sd` marks it; the partial is always today's (its rungs and their count unchanged). A box level can replace
  * the ladder's thirds with a coarser rung, so its lock alone could sit looser than today's: never taken then.
  */
 export function sdLadderPlan(base, withSd, { buy, point }) {
   if (!base || !withSd || withSd.sl == null) return base;
   const half = (positive(point) ? point : 0.01) / 2;
   if (base.sl != null && !((buy ? 1 : -1) * (withSd.sl - base.sl) > half)) return base;
-  return { ...base, sl: withSd.sl, sl_rung: withSd.sl_rung };
+  return { ...base, sl: withSd.sl, sl_rung: withSd.sl_rung, sl_sd: true };
 }
 
 /** Pure (Z3a): a position's giveback cap in price (ZONE_GIVEBACK_R of its mode x its R at entry), or null when R is unknown. */
@@ -820,6 +820,8 @@ export function withCommandedStop(p, stops = {}) {
  * supply words (keyLevelPlan's `zone`, the cap from `positionMeta`'s mode and r_dist); an intent whose price the typing
  * changed carries level_source "zone". While a 1m fast action of the position is within ZONE_MGMT_RATE_MS its
  * management stays untyped. "off": today's intents byte for byte.
+ * Z6 marker: a stop or target move whose price the box plan set (sdKeyPlan's sl_sd / tp_sd, sdLadderPlan's sl_sd)
+ * carries `sd: true`; level_source keeps its meaning. zone_sd off or no box plan won: today's intents byte for byte.
  */
 export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAULTS, signal = null, side = null, recentIntentIds = [], skipTickets = [], now = Date.now(), extendOf = () => true, positionMeta = {}, candles = undefined, stops = {}, loosenedFrom = {}, gates = undefined } = {}) {
   const S = { ...OMEGA_DEFAULTS, ...pickSettings(settings ?? {}) };
@@ -892,10 +894,10 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
         continue;
       }
       if (k.sl != null && !held(k.sl) && !gateShut(k.sl)) {
-        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}`, ...(k.sl_zone ? { level_source: "zone" } : {}) });
+        out.push({ id: `ms:${p.ticket}:k:${Math.round(k.sl * 100)}`, kind: "modify_sl", ticket: p.ticket, sl: k.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `sl_key_level_${k.band}`, ...(k.sl_zone ? { level_source: "zone" } : {}), ...(k.sl_sd ? { sd: true } : {}) });
         movedSl = true;
       }
-      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level", ...(k.tp_zone ? { level_source: "zone" } : {}) });
+      if (k.tp != null) out.push({ id: `mt:${p.ticket}:${Math.round(k.tp * 100)}`, kind: "modify_tp", ticket: p.ticket, tp: k.tp, reason: "trail_tp_key_level", ...(k.tp_zone ? { level_source: "zone" } : {}), ...(k.tp_sd ? { sd: true } : {}) });
     }
     if (gate && !movedSl && S.trailing_stop_r > 0 && !atBreakEven && risk > 0 && r >= S.trailing_stop_r) {
       // SLG1: the break-even waits for the gate and then goes to the gate's first lock, with the broker's stop distance.
@@ -942,7 +944,7 @@ export function manageIntents({ positions = [], sym = {}, settings = OMEGA_DEFAU
         const planned = i >= 0 ? out[i].sl : null;
         if (planned == null || (buy ? lad.sl > planned : lad.sl < planned)) {
           if (i >= 0) out.splice(i, 1);
-          out.push({ id: `ms:${p.ticket}:lad:${Math.round(lad.sl * 100)}`.slice(0, INTENT_ID_MAX), kind: "modify_sl", ticket: p.ticket, sl: lad.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `ladder_lock_tp${lad.sl_rung}` });
+          out.push({ id: `ms:${p.ticket}:lad:${Math.round(lad.sl * 100)}`.slice(0, INTENT_ID_MAX), kind: "modify_sl", ticket: p.ticket, sl: lad.sl, tp: Number.isFinite(curTp) ? curTp : null, reason: `ladder_lock_tp${lad.sl_rung}`, ...(lad.sl_sd ? { sd: true } : {}) });
         }
       }
       if (lad.partial) out.push({ id: `pl:${p.ticket}:${lad.partial.rung}`, kind: "partial_close", ticket: p.ticket, volume: lad.partial.volume, reason: `ladder_tp${lad.partial.rung}_${Math.round(lad.partial.share * 100)}pct` });

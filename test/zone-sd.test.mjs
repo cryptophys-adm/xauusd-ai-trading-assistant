@@ -333,7 +333,7 @@ test("ZS-13 zone_sd on: box levels never loosen a stop, and no stop is looser th
   assert.deepEqual([ladder(far, 3934, "off"), ladder(far, 3934, "on")], [3915, 3925]);
   const lp = oe.sdLadderPlan({ sl: 3930, sl_rung: 2, partial: { rung: 1 } }, { sl: 3925, sl_rung: 1, partial: { rung: 9 } }, buy);
   assert.deepEqual(lp, { sl: 3930, sl_rung: 2, partial: { rung: 1 } });
-  assert.deepEqual(oe.sdLadderPlan({ sl: 3915, sl_rung: 1, partial: null }, { sl: 3925, sl_rung: 1, partial: { rung: 2 } }, buy), { sl: 3925, sl_rung: 1, partial: null }, "the partials stay today's");
+  assert.deepEqual(oe.sdLadderPlan({ sl: 3915, sl_rung: 1, partial: null }, { sl: 3925, sl_rung: 1, partial: { rung: 2 } }, buy), { sl: 3925, sl_rung: 1, partial: null, sl_sd: true }, "the partials stay today's; the box lock is marked");
   // Over a grid (both sides, every power band, the ladder on, zone_mgmt off and omega): each final stop with the box
   // levels is at least as tight as without them, and never looser than today's untyped stop by more than the cap.
   const cap = oe.zoneGiveback(META["open:1:B"]);
@@ -464,4 +464,46 @@ test("ZS-18 the hashes: ENGINE_BEHAVIOUR_HASH (V14) does not move; ENGINE_CODE g
   for (const n of ["brokerLevels", "positionFacts", "positionCouncilMessages", "runPositionManager", "councilLevels", "COUNCIL_LEVELS_MAX"]) assert.ok(ENGINE_CODE["position-manager"][1].includes(n), n);
   assert.ok(ENGINE_CODE["ea-signal"][1].includes("managementFields"));
   assert.match(engineCodeSource(), /"zone_sd":"on"/);
+});
+
+test("ZS-19 the sd marker: `sd: true` on a stop or target move only where the box plan won; level_source, prices, reasons and ids unchanged; none with zone_sd off or without box levels", () => {
+  const strip = (list) => list.map(({ sd, ...rest }) => rest);
+  // SL+ (ZS-12's case): the box plan's stop 3907.6 wins over today's 3904.6.
+  const signal = { ...SIGNAL_PLAIN, key_levels: "3905:3907,3908:3917.4", key_level_types: "demand/medium/tested,demand/strong/fresh/sd" };
+  const slOn = sync(signal, 3918).find((i) => i.kind === "modify_sl");
+  assert.deepEqual(slOn, { id: "ms:7:k:390760", kind: "modify_sl", ticket: 7, sl: 3907.6, tp: 3945, reason: slOn.reason, sd: true });
+  assert.equal(sync(signal, 3918, { settings: { zone_sd: "off" } }).some((i) => "sd" in i), false);
+  // The trailing TP: a long near its target 3928 with a strong power; the box 3931-3933 is nearer than today's 3936.
+  const nearTp = { ...LONG, tp: 3928 };
+  const tpOf = (zone_sd) => sync(SIGNAL_SD, 3926, { position: nearTp, power: 0.6, settings: { zone_sd } }).filter((i) => i.kind === "modify_tp");
+  assert.deepEqual(tpOf("on"), [{ id: "mt:7:393100", kind: "modify_tp", ticket: 7, tp: 3931, reason: "trail_tp_key_level", sd: true }]);
+  assert.deepEqual(tpOf("off"), [{ id: "mt:7:393600", kind: "modify_tp", ticket: 7, tp: 3936, reason: "trail_tp_key_level" }]);
+  // Over ZS-13's grid with the ladder on and off: every marked intent is a stop or target move whose price differs
+  // from the run without the box levels (the box plan won), it never carries a new level_source, and the ladder's
+  // lock is marked too. zone_sd off and a signal without box levels mark nothing.
+  const counts = {};
+  for (const tp_ladder of [true, false]) {
+    for (const zone_mgmt of ["off", "omega"]) {
+      for (const power of [0.1, 0.3, 0.6]) {
+        for (const bid of [3905.5, 3912, 3918, 3919.2, 3921, 3925, 3929.5, 3932, 3934, 3940, 3944]) {
+          const run = (sig, zone_sd) => oe.manageIntents({ positions: [LONG, SHORT], sym: { ...SYM, bid, ask: bid + 0.2 }, settings: { ...oe.OMEGA_DEFAULTS, zone_mgmt, zone_sd, tp_ladder }, signal: { ...sig, power }, now: NOW, positionMeta: META });
+          const on = run(SIGNAL_SD, "on"), off = run(SIGNAL_SD, "off");
+          for (const i of on.filter((x) => "sd" in x)) {
+            assert.equal(i.sd, true);
+            assert.ok(i.kind === "modify_sl" || i.kind === "modify_tp", i.kind);
+            const price = i.kind === "modify_sl" ? i.sl : i.tp;
+            assert.equal(off.some((o) => o.kind === i.kind && o.ticket === i.ticket && (i.kind === "modify_sl" ? o.sl : o.tp) === price), false, `${i.id}: the box plan won`);
+            assert.ok(!("level_source" in i) || i.level_source === "zone", i.id);
+            const k = i.reason.startsWith("ladder_lock_") ? "ladder" : i.kind;
+            counts[k] = (counts[k] ?? 0) + 1;
+          }
+          assert.equal(off.some((x) => "sd" in x), false);
+          assert.equal(run(SIGNAL_PLAIN, "on").some((x) => "sd" in x), false);
+          // Stripped of the marker, the intents are what the same plan wrote before it: only `sd` is new.
+          assert.deepEqual(strip(on).map((x) => Object.keys(x).filter((key) => !["id", "kind", "ticket", "sl", "tp", "reason", "level_source", "volume"].includes(key))).flat(), []);
+        }
+      }
+    }
+  }
+  assert.ok(counts.modify_sl > 0 && counts.ladder > 0, JSON.stringify(counts));
 });

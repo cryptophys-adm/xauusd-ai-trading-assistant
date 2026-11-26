@@ -357,7 +357,7 @@ test("Z0-16 plan_setups: the ALTERs run twice are a no-op; live and shadow setup
 
 test("Z0-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to its value; the behaviour hash is MS2's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61");
+  assert.equal(ENGINE_CODE_HASH, "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
   // managementFields' key_levels reads only low/high; Z3a (2026-11-25) adds key_level_types beside it for typed levels.
   const m = ea.managementFields({ key_levels: [{ low: 3990, high: 3992, zone_type: "demand", zone_strength: "medium", zone_freshness: "fresh", zone_rank: "candidate" }] });
@@ -528,7 +528,7 @@ test("Z1a-8 the readers and the rooms: readPlane and the Projection Agent read t
 
 test("Z1a-9 no hashed engine function changes: ENGINE_CODE_HASH and the behaviour hash are Z0's", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61");
+  assert.equal(ENGINE_CODE_HASH, "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 
@@ -700,7 +700,7 @@ test("Z1b-7 the readers: readPlane and the Projection Agent read a plane with ae
     assert.equal(JSON.stringify(projectionReading({ bars: rich.m15Bars, plane: rich[k].chart_plane, timeframe: "15 minutes" })), JSON.stringify(projectionReading({ bars: plain.m15Bars, plane: plain[k].chart_plane, timeframe: "15 minutes" })), k);
   }
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61");
+  assert.equal(ENGINE_CODE_HASH, "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

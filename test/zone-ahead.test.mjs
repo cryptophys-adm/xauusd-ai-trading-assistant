@@ -362,8 +362,8 @@ const EXPECTED_2026_11_20_22 = {
   }
 };
 
-test("Z2-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 63e1f4dd… (Z6 moved it, after B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
+test("Z2-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 2e40fac9… (the Z6 sd marker moved it, after Z6, B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "63e1f4ddc2811d2d475673a639b75ebc85628b395e0dcff9bfbf79cd79822d61");
+  assert.equal(ENGINE_CODE_HASH, "2e40fac9a9553d261c395b42c3eb25e73f47713e65a09291b6fa6bf59f3dd4b8");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });

@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-26
+- fix(omega): mark box-level stop and target moves (`sd: true`). Orchestrator 2026-11-26, option 1: `sdKeyPlan`'s `sl_sd` / `tp_sd` and `sdLadderPlan`'s new `sl_sd` were never written to the intent, so a live box-driven move could not be told apart. `manageIntents` adds `sd: true` to the `modify_sl` / `modify_tp` payload (SL+, trailing TP, ladder lock) only where the box plan won; `level_source`, prices, reasons and ids unchanged; the EA never sees it. `ENGINE_CODE_HASH` 63e1f4dd… → 2e40fac9… (`sdLadderPlan`, `manageIntents`); `ENGINE_BEHAVIOUR_HASH` ecfe3f90… (V14) unchanged, so the era carries. Tests: test/zone-sd.test.mjs ZS-19. docs/SSOT.md, docs/RFC_DEMAND_SUPPLY_ZONES.md §10.
 - docs(vps): fill the bridge ack runbook's merged commit (bcc43699708e98f9dbf68532bf34b468a39c660a, #603). docs/VPS_UPGRADE_BRIDGE_ACK.md; no code change.
 - docs(zones): Z6 era note. Z6 (#602, 444fb8a60bb91ac0603eaf08d1934890ab71474b) went live at 2026-11-26T03:51:01Z; the era carries (`zone_sd` defaults on, V14 unchanged); v4 parity readers split at that time (first decision with possible `/sd` levels: bar 04:00Z). docs/SSOT.md (Box levels in management).
 - fix(bridge): lost acks from the results-file race (bridge 1.7.1). Owner 2026-11-26, on fixing it in the bridge only: "Ya, bridge saja". No EA change; the case where the EA's FileOpen fails and it writes nothing stays with CA1 (`src/close-reconcile.mjs`).
