@@ -303,7 +303,9 @@ export async function lensHoldStep(env, { now = Date.now(), mode = null } = {}) 
     rows = (await db.prepare("SELECT payload, created_ms FROM omega_intents WHERE created_ms > ? AND kind IN ('modify_sl', 'modify_sltp') AND status = 'done' AND json_extract(payload, '$.level_source') = 'liquidity' AND json_extract(result, '$.ok') = 1 ORDER BY created_ms LIMIT 200").bind(now - 3 * DAY).all()).results ?? [];
   } catch { return { status: "no_intents", seen: 0 }; }
   const out = { status: "ok", seen: rows.length, added: 0, scored: 0 };
+  // Readings already scored are final: their bars are not read again.
   const done = new Set();
+  try { for (const r of (await db.prepare("SELECT id FROM lens_readings WHERE lens = 'liquidity' AND kind = 'hold' AND outcome IS NOT NULL AND at_ms > ?").bind(now - 4 * DAY).all()).results ?? []) done.add(r.id); } catch { /* none yet */ }
   for (const r of rows) {
     const p = parse(r.payload, null), t = Number(r.created_ms), sl = Number(p?.sl);
     if (!p || !finite(t) || !finite(sl) || sl <= 0 || p.ticket == null) continue;

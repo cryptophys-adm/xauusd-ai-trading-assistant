@@ -111,6 +111,10 @@ test("LR-3 hold readings: one per ticket and stop price (retries and a key-level
   const again = await lensHoldStep(env, { now: NOW + HOUR, mode: "intraday" });
   assert.deepEqual([again.added, again.scored], [0, 0]);
   assert.equal(readings(env, "hold").length, 2);
+  let reads = 0; const prepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => { if (/FROM broker_bars_1m/.test(sql)) reads += 1; return prepare(sql); };
+  await lensHoldStep(env, { now: NOW + 2 * HOUR, mode: "intraday" });
+  assert.equal(reads, 0, "scored readings' bars are not read again");
   // A pending reading (window open) is scored on a later run.
   const t2 = NOW - 30 * M1;
   const env2 = await world({ intents: [{ id: "ms:7:k:391500", payload: payload("sl_key_level_normal"), created_ms: t2 }], bars: [...flat(Math.ceil(t2 / M15) * M15 - 20 * M15, 20 * 15 + 30, { c: 3920 })] });
