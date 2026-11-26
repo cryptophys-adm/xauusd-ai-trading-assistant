@@ -346,7 +346,7 @@ test("ZR-10 the tick: one 'XAUUSD ZONES' line per change, hourly; a 7-day hold t
   await runZoneBreaker(env, { now: t3 + 4 * HOUR, send });
   assert.equal(lines.length, n + 1);
   // Writes: only its own tables' schema (run by the test) and SELECTs; KV: its own key besides the seeded override.
-  for (const q of db.sql) assert.match(q.trim(), /^(SELECT|CREATE (TABLE|INDEX) IF NOT EXISTS (idx_)?zone_)/, q);
+  for (const q of db.sql) assert.match(q.trim(), /^(SELECT|CREATE (TABLE|INDEX) IF NOT EXISTS (idx_)?zone_|ALTER TABLE zone_blocked_setups ADD COLUMN )/, q);
   assert.ok(!db.sql.some((q) => /omega_settings|position_actions SET|INSERT INTO (omega|position)/i.test(q)));
   assert.deepEqual([...env.SIGNAL_CACHE.m.keys()].sort(), [FEATURE_SWITCH_OVERRIDE_KEY, ZONE_BREAKER_KEY].sort());
   assert.equal(JSON.parse(await env.SIGNAL_CACHE.get(FEATURE_SWITCH_OVERRIDE_KEY)).ZONE_PRIORITY.value, "on", "the owner's FS1 value is unchanged");

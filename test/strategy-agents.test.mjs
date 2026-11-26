@@ -311,7 +311,7 @@ test("a pattern family trades the Projection Agent's broken-out patterns by its 
   const ctx = (extra = {}) => ({ price: 103.6, atr: 4, levels: [], scalp: false, patterns: [dt], calibration: null, ...extra });
   const peaks = agent("pattern_peaks");
   const plan = peaks.plan(-1, ctx());
-  assert.deepEqual(slimPlan(plan), { entry: 103.6, stop: 107.4, tp1: 98, tp2: 95, at_level: true, rrr: { tp1: 1.47, tp2: 2.26 }, setup: "the Projection Agent's 15m double top (Eve & Adam), broken downward (no record on gold yet)", pattern: "double_top_eve_adam" });
+  assert.deepEqual(slimPlan(plan), { entry: 103.6, stop: 107.4, tp1: 98, tp2: 95, at_level: true, rrr: { tp1: 1.47, tp2: 2.26 }, setup: "the Projection Agent's 15m double top (Eve & Adam), broken downward (no record on gold yet)", pattern: "double_top_eve_adam", chart: "15m" });
   assert.deepEqual([plan.agent, plan.pattern, plan.chart, plan.entry_note, plan.stop_note, plan.tp1_note], ["pattern_peaks", "double_top_eve_adam", "15m", "price is at the broken lower line of the 15m double top (Eve & Adam)", "half the pattern's height behind the broken line", "15m double top (Eve & Adam): measured target"]);
   assert.notEqual(plan.tp1_note, PROJECTION_NOTE);
   assert.equal(peaks.plan(1, ctx()), null, "the pattern broke downward");
@@ -456,7 +456,7 @@ test("inside the pattern: a forming line pattern is traded from one line toward 
   const inside = agent("pattern_inside");
   // A long from the lower line.
   const long = inside.plan(1, ctx());
-  assert.deepEqual(slimPlan(long), { entry: 100.4, stop: 99, tp1: 105, tp2: 109, at_level: true, rrr: { tp1: 3.29, tp2: 6.14 }, setup: "the Projection Agent's forming 15m rectangle top, not broken yet: a swing from its lower line toward its upper line", pattern: "rectangle_top" });
+  assert.deepEqual(slimPlan(long), { entry: 100.4, stop: 99, tp1: 105, tp2: 109, at_level: true, rrr: { tp1: 3.29, tp2: 6.14 }, setup: "the Projection Agent's forming 15m rectangle top, not broken yet: a swing from its lower line toward its upper line", pattern: "rectangle_top", chart: "15m" });
   assert.deepEqual([long.agent, long.entry_note, long.stop_note, long.tp1_note, long.tp2_note], ["pattern_inside", "price is at the lower line of the forming 15m rectangle top", "beyond the pattern's lower line", "the middle of the forming 15m rectangle top", "the upper line of the forming 15m rectangle top"]);
   // A short from the upper line: the same rule downward.
   const short = inside.plan(-1, ctx({ price: 109.7 }));

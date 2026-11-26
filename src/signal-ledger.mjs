@@ -57,7 +57,7 @@ export function validSignal(s) {
  * high, low, close }). `now` bounds the windows: a signal whose window is still running stays
  * pending or open.
  */
-export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = FILL_WINDOW_MS, holdMaxMs = HOLD_MAX_MS } = {}) {
+export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = FILL_WINDOW_MS, holdMaxMs = HOLD_MAX_MS, lapseMs = undefined } = {}) {
   const dir = signal.side === "BUY" ? 1 : -1;
   const { entry, stop, tp1 } = signal, tp2 = finite(signal.tp2) ? signal.tp2 : null;
   const risk = Math.abs(entry - stop);
@@ -90,6 +90,9 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
   const policy = (target) => {
     let mfe = 0, mae = 0, ambiguous = false, slPlus = false, slPlusAt = null;
     let currentStop = stop;
+    // Track A PR 6: the plan's lapse (its valid_until_ms). At the first close at or after it, a filled trade in profit
+    // closes there ("lapse"); one that is not keeps its stop and target. Without lapseMs: today's policy.
+    let lapseChecked = !finite(lapseMs);
     for (let k = i; k < after.length; k++) {
       const b = after[k];
       const favorable = dir > 0 ? b.high : b.low, adverse = dir > 0 ? b.low : b.high;
@@ -99,6 +102,10 @@ export function simulateSignal(signal, bars, { now = Date.now(), fillWindowMs = 
       const hitStop = beyond(b, currentStop, dir < 0), hitTarget = beyond(b, target, dir > 0);
       if (hitStop) { ambiguous = hitTarget; return { result: "stop", r: R(currentStop), exit_price: currentStop, closed_at: b.close_time, bars: k - i + 1, mfe, mae: R(currentStop), ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt }; }
       if (hitTarget) return { result: "target", r: R(target), exit_price: target, closed_at: b.close_time, bars: k - i + 1, mfe: Math.max(mfe, R(target)), mae, ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt };
+      if (!lapseChecked && toMs(b.close_time) >= lapseMs) {
+        lapseChecked = true;
+        if (R(b.close) > 0) return { result: "lapse", r: R(b.close), exit_price: b.close, closed_at: b.close_time, bars: k - i + 1, mfe, mae, ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt };
+      }
       if (toMs(b.close_time) - fillMs >= holdMaxMs) return { result: "time", r: R(b.close), exit_price: b.close, closed_at: b.close_time, bars: k - i + 1, mfe, mae, ambiguous, sl_plus: slPlus, sl_plus_at: slPlusAt };
     }
     return { result: "open", r: after.length > i ? R(after.at(-1).close) : 0, mfe, mae, bars: after.length - i, sl_plus: slPlus, sl_plus_at: slPlusAt };
