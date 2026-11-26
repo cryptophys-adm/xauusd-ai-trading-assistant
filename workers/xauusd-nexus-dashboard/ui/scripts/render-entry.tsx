@@ -17,7 +17,7 @@ import chartPatterns from "../../../../test/fixtures/nexus-intel/chart-patterns.
 import strategyAgents from "../../../../test/fixtures/nexus-intel/strategy-agents.json";
 import neuronAllocation from "../../../../test/fixtures/nexus-intel/neuron-allocation.json";
 import { LensHeader, LensView } from "../src/components/LensPanel";
-import { LiquidityView } from "../src/pages/Liquidity";
+import { LEVEL_MOVES_HINT, LiquidityView } from "../src/pages/Liquidity";
 import { PatternsUnread, PatternsView } from "../src/pages/Patterns";
 import { DecisionPlanView } from "../src/components/PlanLadder";
 import { OmegaSignalView } from "../src/components/OmegaZone";
@@ -154,6 +154,19 @@ export const LENS_OFF = merged(lens, { switches: { liquidity_enabled: false }, l
  */
 /** Before B19: no level moves (null) and a skip without an outcome, so both B19 placeholders show. */
 export const PRE_B19 = { effects: { level_moves: null, skips: ((liquidity as any).effects.skips ?? []).map((x: any) => ({ ...x, outcome: null })) } };
+/**
+ * B19's level moves in every outcome (src/liquidity-view.mjs: { at_ms, side, mode, action, outcome }, no price): the
+ * fixture's two, a missed ladder lock on a short, a key level lock with no side, mode or known outcome (pending), a
+ * neutral one three days back, and one older than the panel's 7 days (not shown).
+ */
+const LM_AT = (liquidity as any).state.at_ms, HOUR_MS = 3_600_000;
+export const LEVEL_MOVES = [
+  ...(liquidity as any).effects.level_moves,
+  { at_ms: LM_AT - 6 * HOUR_MS, side: "SELL", mode: "scalp", action: "ladder_lock", outcome: "miss" },
+  { at_ms: LM_AT - 8 * HOUR_MS, side: null, mode: null, action: "key_level_lock", outcome: "odd" },
+  { at_ms: LM_AT - 72 * HOUR_MS, side: "BUY", mode: "intraday", action: "ladder_lock", outcome: "neutral" },
+  { at_ms: LM_AT - 216 * HOUR_MS, side: "BUY", mode: "swing", action: "ladder_lock", outcome: "hit" }
+];
 export const LIVE_EFFECTS = { effects: { blocks: [], makers: [{ at_ms: (liquidity as any).state.at_ms - 5_400_000, side: "BUY", mode: "scalp", outcome: "pending" }], skips: [], deferrals: [], level_moves: null, pm_actions: [] } };
 /**
  * The Chart patterns page (Track C3) over its reads. /api/chart-patterns is backend B9's contract
@@ -538,7 +551,8 @@ export const VIEWS: Entry[] = [
     name: "LiquidityView", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: liquidity,
     shows: [...PANELS, HINT, "lens B on", "LIQUIDITY", "fresh 13m", "Council only: it never counts toward the quorum.", "0.03", "a tenth of lens B&#x27;s 0.30, at most 0.06", "▲ +0.60 bullish", "▲ sell-side", "3 min ago",
       "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness", "made", "14:47 UTC", "lens B state", "14:46 UTC", "Quorum with liquidity", "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.", "▲ 0.67", "+0.17", "▲ long",
-      "Level moves", "ladder lock", "key level lock", "past a lens B level", "1 hit", "1 pending", "Position Manager actions", "baseline insufficient · 2 of 4 weeks", "backfill done"],
+      "Level moves", "ladder lock", "key level lock", "past a lens B level", "1 hit", "1 pending", "Position Manager actions",
+      "Mon 09:20 NY", "14:20 UTC · 21:20 GMT+7", "Mon 05:00 NY", "10:00 UTC · 17:00 GMT+7", "▼ short", "intraday", LEVEL_MOVES_HINT, "baseline insufficient · 2 of 4 weeks", "backfill done"],
     hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."],
     missing: [NOT_FOUND]
   },
@@ -556,7 +570,8 @@ export const VIEWS: Entry[] = [
   { name: "LiquidityViewQuorumWithLiquidity", View: ({ d }) => <LiquidityView d={{ ...(liquidity as any), quorum_with_liquidity: d }} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: (liquidity as any).quorum_with_liquidity, shows: ["Quorum with liquidity", "▲ long"] },
   { name: "LiquidityViewCardBearish", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_BEARISH }, shows: ["▼ −0.60 bearish", "▼ buy-side", "6 min ago", "fresh sweep, M15 agrees"] },
   { name: "LiquidityViewCardStale", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), card: CARD_STALE }, shows: ["stale 22m", "▲ +0.60 bullish", "14:38 UTC"], hides: ["fresh 13m"] },
-  { name: "LiquidityViewQuorumNotMet", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), quorum_with_liquidity: QUORUM_NOT_MET }, shows: ["Quorum with liquidity", "▲ 0.48", "+0.08"], hides: ["▲ long"] },
+  // No level moves here: a long move would also read "▲ long".
+  { name: "LiquidityViewQuorumNotMet", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: { ...(liquidity as any), quorum_with_liquidity: QUORUM_NOT_MET, effects: { ...(liquidity as any).effects, level_moves: [] } }, shows: ["Quorum with liquidity", "▲ 0.48", "+0.08"], hides: ["▲ long"] },
   // Lens B's conditions (B16) in the Facts panel; the conditions as the varied body, so each of their paths is nulled.
   { name: "LiquidityViewConditions", View: ({ d }) => <LiquidityView d={{ ...(liquidity as any), conditions: d }} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: COND,
     shows: ["Spread normal · 1.1× typical", "Depth normal · p41", "Activity normal · p62", "London + New York overlap · liquidity high", "outside a high-volume node · 0 nodes above, 1 below · pools 1 above, 0 below, 0 at price", "intraday mode · baseline insufficient, 2 of 4 weeks", "14:58 UTC", "What the rooms read", "Spread 2× (widened)", "Spread above 2×", "Spike, 95th or more", "Thin, 20th or less", "thresholds of the intraday mode"],
@@ -578,6 +593,17 @@ export const VIEWS: Entry[] = [
     name: "LiquidityViewLater", View: ({ d }) => <LiquidityView d={d} lens={LENS_AETHER} decision={decision} now={LIQUIDITY_NOW} />, fixture: LIQUIDITY_FULL,
     shows: [...PANELS, HINT, "LIQUIDITY", "Quorum with liquidity", "Level moves"],
     missing: [NOT_FOUND]
+  },
+  // B19's level moves as the varied body, so each move's paths are nulled: grouped by action, each move's time, side,
+  // mode and neutral outcome; the empty list reads its own Empty.
+  {
+    name: "LiquidityViewLevelMoves", View: ({ d }) => <LiquidityView d={merged(liquidity, { effects: { level_moves: d } })} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: LEVEL_MOVES,
+    shows: ["ladder lock", "key level lock", "1 hit", "1 miss", "1 neutral", "2 pending", "Mon 03:58 NY", "08:58 UTC · 15:58 GMT+7", "Fri 09:58 NY", "▼ short", "▲ long", "scalp", LEVEL_MOVES_HINT],
+    hides: ["2 hit", "swing", "Sat 09:58 NY", "No level move in the last 7 days."]
+  },
+  {
+    name: "LiquidityViewNoLevelMoves", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, { effects: { level_moves: [] } }),
+    shows: ["Level moves", "No level move in the last 7 days.", LEVEL_MOVES_HINT], hides: ["ladder lock", "past a lens B level", "Fills after backend B19 is deployed."]
   },
   {
     name: "LiquidityViewPreB19", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, PRE_B19),
