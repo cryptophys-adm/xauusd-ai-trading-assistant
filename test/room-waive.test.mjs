@@ -65,7 +65,7 @@ test("RW-2 off, unset and held: decisions, council messages, the EA signal and O
   assert.notEqual(sha(on), MAIN_HASH);
   assert.deepEqual([main.engine.stance, on.engine.stance], ["WAIT", "SELL"]);
   // The engines' hashes do not move (V13/V14 recompute them).
-  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "a6990366");
+  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "4dcd1ac9");
   assert.equal(ENGINE_BEHAVIOUR_HASH.slice(0, 8), "ecfe3f90");
 });
 

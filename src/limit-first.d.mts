@@ -1,0 +1,16 @@
+export const LIMIT_FIRST_MODES: readonly ["on", "off"];
+export const LIMIT_FIRST_AGENTS: readonly string[];
+export const LIMIT_FIRST_DEFAULT_AGENT: string;
+export const LIMIT_FIRST_DEPTH_ATR: number;
+export const LIMIT_FIRST_REVERT: { readonly trades: number };
+export const LIMIT_FIRST_REVERT_KEY: string;
+export const LIMIT_FIRST_BASIS: string;
+export function limitFirstOn(settings: unknown): boolean;
+export function limitFirstAgent(agent: unknown): boolean;
+export function zoneTypeGate(ownZone: unknown): "pass" | "block";
+export function limitFirstSignalFields(decision: unknown, t: unknown, side: string): Record<string, any>;
+export function limitFirstPlacement(input: Record<string, any>): Record<string, any>;
+export function limitFirstWords(p: Record<string, any> | null | undefined): string;
+export function limitFirstVerdict(trades: { r: number; e0: number }[], options?: { n?: number }): { ready: boolean; n: number; mean_r: number | null; mean_e0: number | null; revert: boolean };
+export function limitFirstRevertLine(v: { n: number; mean_r: number; mean_e0: number }): string;
+export function limitFirstRevert(env: unknown, options?: { now?: number; send?: ((text: string) => unknown) | null; write?: ((body: Record<string, unknown>, actor: string) => unknown) | null }): Promise<Record<string, any>>;

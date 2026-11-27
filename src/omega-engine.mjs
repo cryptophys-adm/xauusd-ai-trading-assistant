@@ -30,6 +30,7 @@ import { isFastId, PM_FAST_MODES } from "./pm-fast.mjs";
 import { reentryOn, isReentryId, REENTRY_MODES, REENTRY_RULE, REENTRY_1M } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersededOrders, orderSignalMs, LIMIT_SUPERSEDE_MODES, SUPERSEDE_REASON } from "./limit-supersede.mjs";
 import { cdGateOn, cdGateVerdict, CD_GATE_MODES } from "./cd-gate.mjs";
+import { limitFirstOn, limitFirstAgent, limitFirstPlacement, LIMIT_FIRST_MODES, LIMIT_FIRST_BASIS } from "./limit-first.mjs";
 
 export const OMEGA_DEFAULTS = Object.freeze({
   enabled: false,
@@ -111,7 +112,14 @@ export const OMEGA_DEFAULTS = Object.freeze({
   // ever tighter; the partials unchanged);
   // "off", they are dropped and the engine is as before byte for byte. The owner's switch only; Aether's policy and
   // its rollback never write it.
-  zone_sd: "on"
+  zone_sd: "on",
+  // E1 limit-first (owner 2026-11-27: "harus mengikuti strateginya ... tunggu di limit dan berada di zone";
+  // src/limit-first.mjs): "on" (default, the owner's word), with entry_order "limit" or "council" a pullback strategy's
+  // signal (zone_pullback, breakout_retest) always rests a limit, 0.1 ATR(1H) behind its entry or inside its own-type
+  // demand/supply zone, never a market order (the council's enter_market, a silent council and a conversion become a
+  // limit or nothing); every other agent as before. "off": the engine as before byte for byte. Its automatic revert sets
+  // it to "off" once (limitFirstRevert); Aether's policy never writes it.
+  limit_first: "on"
 });
 /** Stage 3 of docs/RFC_OMEGA_LIMIT_ENTRY.md: "limit" and "council" may be switched on (with OmegaExecutor 1.21). */
 export const LIMIT_ENTRY_AVAILABLE = true;
@@ -246,6 +254,10 @@ export function settingsFrom(body, current = OMEGA_DEFAULTS, { ea_version = null
   if (body.zone_mgmt !== undefined) {
     if (typeof body.zone_mgmt !== "string" || !ZONE_MGMT_MODES.includes(body.zone_mgmt)) return { error: "zone_mgmt must be 'off' or 'omega'" };
     out.zone_mgmt = body.zone_mgmt;
+  }
+  if (body.limit_first !== undefined) {
+    if (typeof body.limit_first !== "string" || !LIMIT_FIRST_MODES.includes(body.limit_first)) return { error: "limit_first must be 'on' or 'off'" };
+    out.limit_first = body.limit_first;
   }
   if (body.zone_sd !== undefined) {
     if (typeof body.zone_sd !== "string" || !ZONE_SD_MODES.includes(body.zone_sd)) return { error: "zone_sd must be 'off' or 'on'" };
@@ -1469,6 +1481,8 @@ export function limitActionIntents({ orders = [], sym = {}, actions = [], entryO
     } else if (a.action === "convert") {
       if (entryOrder !== "council") { drop(a, "a conversion to market needs entry_order council"); continue; }
       const m = meta?.[o.ticket] ?? {};
+      // E1: a pullback strategy's limit-first order waits at its level; it is never converted to market.
+      if (m.limit_first === true) { drop(a, "limit-first: a pullback strategy's limit is never converted to market"); continue; }
       out.push({ id: `del:${o.ticket}:cv`.slice(0, INTENT_ID_MAX), kind: "delete_order", ticket: o.ticket, reason: "convert_to_market", side: buy ? "BUY" : "SELL", signal_issued_ms: finite(m.signal_issued_ms) ? m.signal_issued_ms : null });
       removed.push(o.ticket);
     } else if (a.action === "move" && finite(a.price) && finite(a.max_move)) {
@@ -1910,8 +1924,16 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
   // "place"; "council": the council's measured choice (enter_market, place_limit or skip), today's market path when it
   // is silent. The deterministic refusals of a limit come first, so no council is asked for an order that cannot rest.
   let route = "market", lim = null;
+  // E1 limit-first (src/limit-first.mjs): a pullback strategy's signal rests a limit and never takes the market path.
+  // Only for a signal that carries the limit-first fields (src/ea-signal.mjs, lf_atr): an older signal (and the
+  // fingerprint's fixtures) as before, so ENGINE_BEHAVIOUR_HASH does not move (as zone_sd's "/sd" tokens).
+  const lf = limitMode && !leg && !re1 && limitFirstOn(S) && limitFirstAgent(tradeAgent) && Number(signal.lf_atr) > 0;
   if (limitMode && !leg && !re1) {
-    lim = limitPlacement({ signal, sym, account, planStopDist, minDist, changes: changeTokens(S) });
+    if (lf) {
+      lim = account?.margin_mode !== "hedging" ? { ok: false, code: "netting_account", detail: `margin mode ${account?.margin_mode ?? "unknown"}` }
+        : signal?.feed_basis_known !== true ? { ok: false, code: "basis_unknown" }
+        : limitFirstPlacement({ signal, sym, digits: Number.isInteger(sym.digits) ? sym.digits : 2, planStopDist, minDist, knobs: limitKnobs(signal.trading_mode, null, { changes: changeTokens(S) }), minRiskShare: ZONE_MIN_RISK_SHARE, minRr: ZONE_MIN_RR });
+    } else lim = limitPlacement({ signal, sym, account, planStopDist, minDist, changes: changeTokens(S) });
     const council = entryCouncil && entryCouncil.id === id ? entryCouncil : null;
     const request = () => {
       // The sync files this for the entry council (src/limit-council.mjs, the 5-minute ledger step); planIntents never
@@ -1933,6 +1955,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       route = "limit";
     } else if (!council && now - decided < ENTRY_COUNCIL_WAIT_MS) {
       return request();
+    } else if (lf) {
+      // E1: the council's skip stays a skip; its enter_market, its place_limit and a silent council (whose default is
+      // today's market path, as no_measured_reason's) all rest the limit-first limit, or nothing when it cannot rest.
+      if (council?.status === "answered" && council.choice === "skip") { note("council_skip", council.reason ?? null); return done(); }
+      if (!lim.ok) { note(lim.code, lim.detail); return done(); }
+      note("limit_first", council?.status === "answered" ? `the council's ${council.choice}${council.rule ? ` (${council.rule})` : ""} rests the limit` : `no council answer (${council?.rule ?? "no_answer"}): the limit rests`);
+      route = "limit";
     } else if (!council || council.status !== "answered") {
       // A silent council (no answer in time, a model failure, the daily cap) is today's market path, never a skip or a limit.
       note("council_unavailable", council?.rule ?? "no_answer");
@@ -2123,7 +2152,13 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     // EZ1: the entry zone (broker scale) the order may never be moved out of, and where a zone move put it from.
     const zone = signalEntryZone(signal, sym.digits);
     if (zone) it.entry_zone = zone;
-    if (lim.edge === true) { it.zone_from = lim.from; it.entry_basis = "zone_edge"; note("limit_zone_edge", JSON.stringify(lim.edge_detail)); }
+    if (lf) {
+      // E1: the limit-first order: how it was placed, the zone type at the entry and the record-only own-type gate.
+      Object.assign(it, { limit_first: true, entry_basis: lim.entry_basis ?? LIMIT_FIRST_BASIS, zone_from: lim.from, entry_zone_type: lim.zone_type, zone_type_gate: lim.gate,
+        decision_key: typeof signal.signal_id === "string" && signal.signal_id ? signal.signal_id : null, sl_plan: sl, r_dist: roundTo(Math.abs(price - sl), sym.digits + 2) });
+      if (lim.own_zone) it.own_zone = lim.own_zone;
+      note("limit_first_placed", `${lim.from} -> ${price} (${lim.entry_basis}, ${lim.zone_type})`);
+    } else if (lim.edge === true) { it.zone_from = lim.from; it.entry_basis = "zone_edge"; note("limit_zone_edge", JSON.stringify(lim.edge_detail)); }
     else if (lim.moved === true) { it.zone_from = lim.from; note("limit_in_zone", `${lim.from} -> ${price}`); }
     if (deleteFirst()) return done();
     intents.push(it);
