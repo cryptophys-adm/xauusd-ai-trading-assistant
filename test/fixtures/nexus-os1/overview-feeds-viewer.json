@@ -1,0 +1,95 @@
+{
+  "broker": {
+    "connection": {
+      "version": 0,
+      "status": "none",
+      "server": null,
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": null,
+      "updated_ms": null
+    },
+    "bridge": {
+      "terminal_connected": false,
+      "server": null
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": null
+    },
+    "server_check": null,
+    "feeds": [
+      {
+        "bridge_id": "backup",
+        "role": "feed",
+        "kid": "ccd56eb1e2d15266",
+        "public_key": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn4Zw0PGypKtwoIIcJWLAUbC1xZ4JcsK5dqaBtM3OnKq7le3mOAaCMgaq4cC3rhMkrRXvQceWHHPOKrgjw5B9azLG+oGUbWAjERcqJ2i17iyq1deQn0nOpfbVHHlyyqW4JVTHwg3pwMtVD1ptnkG4ikKRXSdEWHRHZITwHW15l4HySRYwaTNKwr/u3WWgjeRsPMl3XtFoZWIe1tdr9IoTNRAzDiIckTBHfBf3EC+aUJImOpKcGXC7AdBXH5UpOnJTPrq6QebLNRcEaCzmeAgoi1q/WgDjLmocLmd8vY6UtLMh8Uor0F6yc6P2I70r4VAliDAJ/HC8SOPWbr3wF45tQnprFSjKmt82zP6LZCmEh0TM8Wiy7qayqxunwqUcfWyn7/wroygTPgbvAvhyAz1jSUeShvdgNNF/HXY4g7/j4NTniK05HMA3PLBOCpU7Nc1K+2Z9Exfl5dgstIAQ7P4l4DCybPNG48uNrodnoCIzO05mBoJHv7BTQcUTvYAqoRCLAgMBAAE=",
+        "bridge_version": "1.8.2",
+        "synced_age_ms": 20000,
+        "fresh": true,
+        "terminal_connected": true,
+        "server": "BackupBroker-Demo",
+        "symbol": "XAUUSD",
+        "connection": {
+          "version": 0,
+          "status": "none",
+          "server": null,
+          "sealed_to_current_key": false,
+          "updated_ms": null
+        },
+        "last_bar_age_ms": null,
+        "content_stale": false
+      },
+      {
+        "bridge_id": "live",
+        "role": "feed",
+        "kid": "ccd56eb1e2d15266",
+        "public_key": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn4Zw0PGypKtwoIIcJWLAUbC1xZ4JcsK5dqaBtM3OnKq7le3mOAaCMgaq4cC3rhMkrRXvQceWHHPOKrgjw5B9azLG+oGUbWAjERcqJ2i17iyq1deQn0nOpfbVHHlyyqW4JVTHwg3pwMtVD1ptnkG4ikKRXSdEWHRHZITwHW15l4HySRYwaTNKwr/u3WWgjeRsPMl3XtFoZWIe1tdr9IoTNRAzDiIckTBHfBf3EC+aUJImOpKcGXC7AdBXH5UpOnJTPrq6QebLNRcEaCzmeAgoi1q/WgDjLmocLmd8vY6UtLMh8Uor0F6yc6P2I70r4VAliDAJ/HC8SOPWbr3wF45tQnprFSjKmt82zP6LZCmEh0TM8Wiy7qayqxunwqUcfWyn7/wroygTPgbvAvhyAz1jSUeShvdgNNF/HXY4g7/j4NTniK05HMA3PLBOCpU7Nc1K+2Z9Exfl5dgstIAQ7P4l4DCybPNG48uNrodnoCIzO05mBoJHv7BTQcUTvYAqoRCLAgMBAAE=",
+        "bridge_version": "1.8.2",
+        "synced_age_ms": 30000,
+        "fresh": true,
+        "terminal_connected": true,
+        "server": "LiveBroker-Demo",
+        "symbol": "XAUUSD",
+        "connection": {
+          "version": 1,
+          "status": "stored",
+          "server": "LiveBroker-Demo",
+          "sealed_to_current_key": true,
+          "updated_ms": 1795753860000
+        },
+        "last_bar_age_ms": 120000,
+        "content_stale": false
+      },
+      {
+        "bridge_id": "oanda",
+        "role": "feed",
+        "kid": "ccd56eb1e2d15266",
+        "public_key": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn4Zw0PGypKtwoIIcJWLAUbC1xZ4JcsK5dqaBtM3OnKq7le3mOAaCMgaq4cC3rhMkrRXvQceWHHPOKrgjw5B9azLG+oGUbWAjERcqJ2i17iyq1deQn0nOpfbVHHlyyqW4JVTHwg3pwMtVD1ptnkG4ikKRXSdEWHRHZITwHW15l4HySRYwaTNKwr/u3WWgjeRsPMl3XtFoZWIe1tdr9IoTNRAzDiIckTBHfBf3EC+aUJImOpKcGXC7AdBXH5UpOnJTPrq6QebLNRcEaCzmeAgoi1q/WgDjLmocLmd8vY6UtLMh8Uor0F6yc6P2I70r4VAliDAJ/HC8SOPWbr3wF45tQnprFSjKmt82zP6LZCmEh0TM8Wiy7qayqxunwqUcfWyn7/wroygTPgbvAvhyAz1jSUeShvdgNNF/HXY4g7/j4NTniK05HMA3PLBOCpU7Nc1K+2Z9Exfl5dgstIAQ7P4l4DCybPNG48uNrodnoCIzO05mBoJHv7BTQcUTvYAqoRCLAgMBAAE=",
+        "bridge_version": "1.8.2",
+        "synced_age_ms": 30000,
+        "fresh": true,
+        "terminal_connected": true,
+        "server": "FeedBroker-Demo",
+        "symbol": "XAUUSD",
+        "connection": {
+          "version": 1,
+          "status": "stored",
+          "server": "FeedBroker-Demo",
+          "sealed_to_current_key": true,
+          "updated_ms": 1795753860000
+        },
+        "last_bar_age_ms": 1260000,
+        "content_stale": true
+      }
+    ]
+  },
+  "viewer": {
+    "subject": "ci.access",
+    "type": "service_token",
+    "can_control": false
+  }
+}

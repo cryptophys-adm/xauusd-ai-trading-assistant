@@ -46,7 +46,7 @@ export const PLACEHOLDER = Object.freeze({ login: "demo-login", password: "place
 const FEED_KEY = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn4Zw0PGypKtwoIIcJWLAUbC1xZ4JcsK5dqaBtM3OnKq7le3mOAaCMgaq4cC3rhMkrRXvQceWHHPOKrgjw5B9azLG+oGUbWAjERcqJ2i17iyq1deQn0nOpfbVHHlyyqW4JVTHwg3pwMtVD1ptnkG4ikKRXSdEWHRHZITwHW15l4HySRYwaTNKwr/u3WWgjeRsPMl3XtFoZWIe1tdr9IoTNRAzDiIckTBHfBf3EC+aUJImOpKcGXC7AdBXH5UpOnJTPrq6QebLNRcEaCzmeAgoi1q/WgDjLmocLmd8vY6UtLMh8Uor0F6yc6P2I70r4VAliDAJ/HC8SOPWbr3wF45tQnprFSjKmt82zP6LZCmEh0TM8Wiy7qayqxunwqUcfWyn7/wroygTPgbvAvhyAz1jSUeShvdgNNF/HXY4g7/j4NTniK05HMA3PLBOCpU7Nc1K+2Z9Exfl5dgstIAQ7P4l4DCybPNG48uNrodnoCIzO05mBoJHv7BTQcUTvYAqoRCLAgMBAAE=";
 const FEED_KEY_NEW = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAumjBA47NennOM7/70JvdoT32JwaGBoavIA5RGBeiMjPQi75/9OGlBoykkpNCJHxkCitpKONOI7ezQ4kLCUFCAt4wT6vyNkuZpXAnaxDzL0PiFLkvXseZhZXm0/RwW8/ZW5yxyzdyMBLx6txKmlh9PwWMTG90gVWY5EkEQmz9LZIIxY2nHJWeT92iTBozkTPZl406EyDEVJhKF5srzsDmo6M7TOCkyRdl+3jJiyB6uOmW1/zrKJyK7ZN9ooOyJS6+TSEz4K564hWu/fjwhdZ63wG4c2qe/ify9ZUP3saI/L1wOua3trBwhG25bfEFPU7jHPTx9POMpJ03iJZdi+r/L2SxgLOV4WgBB23V1RG5OWlrWHdgEHkByJa16S6w71wo7dApbP4L8xlC8xzGYoHhtK2/FtWkG/3ZbejuQH61DzGm72uM1cObh9vVZm0q4Dzt+muWqKskFIqX1jFgLi78TF/Fh0jcOrdQzgQTClZMNhzQpbUQe+22u9DkiBpN0h9dAgMBAAE=";
 const EXECUTOR_KEY = "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0elNEp61tRXlccwGLuzXGRLGXPwuYgRDkjStAjBeirLmXRi02nDyLg43jP/NRSB00GDVYxKyI4asvSIzSjpCcy5eeQ//8nyV7s2fMgJjRzEYhybMrZiNnea4TEnY61K5aANOSrLoIOR1r49IMgHg+2taVAuVS4HYEPxIGZi+dM14T0nZ8AAKt0HUtpotnbUuc7Tt2yCJnHUuKwvTXhx5k4g4+MvYinKKRzWR04s+fxTfWdSg3QKAmI9tDDAo/ckbGw/CcQ6SbfEF4T6wO6rTy9QrsD/NQ9iY3aYapykPDoibLYJno6x6bBhGV3Hbq2WmRpDrgUTW0CXPJJ1+U5vTBpxqH2RgCTn/1avdt6WVU4cEsrhSbc26bezPJkFLK+LkYYqkcfsa/8ECeawR4QRJM2FjOmORCVdcerKkXFUF+VyFRLMqvX0TBXqtjqFiInV4eSzFY2XrmFftiZapth+Qtsfv0FaLbTXqh1I5NW6PYKfd8GEqOlKhMfhzeMyUyPinAgMBAAE=";
-const kidOf = async (spki) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", Buffer.from(spki, "base64"))).slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+export const kidOf = async (spki) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", Buffer.from(spki, "base64"))).slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
 /** The feed's key, the key it has after a reinstall, and the executor bridge's key (with their kids). */
 export const KEYS = Object.freeze({ feed: FEED_KEY, feedNew: FEED_KEY_NEW, executor: EXECUTOR_KEY });
 
@@ -73,7 +73,7 @@ export async function access() {
 }
 
 // ------------------------------------------------------------------ the bundled AI Worker and a migrated D1 (as H3f)
-async function loadWorkerModule() {
+export async function loadWorkerModule() {
   const out = await build({
     entryPoints: [join(root, "src/index.ts")], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent",
     alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") }
@@ -85,7 +85,7 @@ async function loadWorkerModule() {
   await rm(dir, { recursive: true, force: true });
   return mod;
 }
-async function migratedD1() {
+export async function migratedD1() {
   const db = new DatabaseSync(":memory:");
   db.exec(await readFile(join(root, "schema.sql"), "utf8"));
   const dir = join(root, "migrations");
@@ -93,10 +93,10 @@ async function migratedD1() {
   const st = (sql, p = []) => ({ bind: (...a) => st(sql, a.map((v) => (v === undefined ? null : v))), run: async () => { const r = db.prepare(sql).run(...p); return { success: true, meta: { changes: Number(r.changes) } }; }, first: async (c) => { const row = db.prepare(sql).get(...p) ?? null; return c && row ? row[c] : row; }, all: async () => ({ success: true, results: db.prepare(sql).all(...p) }) });
   return { raw: db, prepare: (sql) => st(sql), batch: async (l) => Promise.all(l.map((s) => s.run())), exec: async (sql) => { db.exec(sql); return { count: 1 }; } };
 }
-const ctx = { waitUntil: () => {}, passThroughOnException() {} };
+export const ctx = { waitUntil: () => {}, passThroughOnException() {} };
 
 /** Date.now at the fixture's clock (moved by `at`), no network; restored afterwards. */
-async function deterministic(fn) {
+export async function deterministic(fn) {
   const realNow = Date.now, realFetch = globalThis.fetch;
   let clock = NOW;
   Date.now = () => clock;

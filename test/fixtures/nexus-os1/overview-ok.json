@@ -1,0 +1,33 @@
+{
+  "broker": {
+    "connection": {
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live 2",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": "owner@example.com",
+      "updated_ms": 1795755000000
+    },
+    "bridge": {
+      "terminal_connected": true,
+      "server": "Placeholder-Live 2"
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": null
+    },
+    "server_check": {
+      "status": "ok"
+    },
+    "feeds": []
+  },
+  "viewer": {
+    "subject": "owner@example.com",
+    "type": "user",
+    "can_control": true
+  }
+}

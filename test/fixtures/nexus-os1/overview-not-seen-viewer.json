@@ -1,0 +1,45 @@
+{
+  "broker": {
+    "connection": {
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live-2",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": "owner@example.com",
+      "updated_ms": 1795754400000
+    },
+    "bridge": {
+      "terminal_connected": false,
+      "server": "Placeholder-Live-2"
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": {
+        "ms": 1795755060000,
+        "directive": "restart_terminal",
+        "reason": "terminal_disconnected",
+        "status": "held",
+        "conn_version": 1,
+        "dispatches": 3,
+        "action_id": "hold:1",
+        "cause": "server_not_seen",
+        "message": "3 terminal restarts did not reconnect: the terminal has not logged into a server named exactly 'Placeholder-Live-2'. Check spaces, hyphens and case, then enter the connection again. No more restarts until then or until the terminal is healthy again."
+      }
+    },
+    "server_check": {
+      "status": "not_seen",
+      "message": "The terminal has not logged into a server named exactly 'Placeholder-Live-2'. Check spaces, hyphens and case, then enter the connection again.",
+      "did_you_mean": "Placeholder-Live 2"
+    },
+    "feeds": []
+  },
+  "viewer": {
+    "subject": "ci.access",
+    "type": "service_token",
+    "can_control": false
+  }
+}

@@ -36,6 +36,10 @@ export type Feed = {
   server: string | null;
   symbol: string | null;
   connection: FeedConnection;
+  /** OS1 (#649, src/feed-stale.mjs): the age of the feed's newest bar, or null when it has sent none. */
+  last_bar_age_ms: number | null;
+  /** Syncing, but its bars stopped (the server's flag: it alone knows gold's trading hours). */
+  content_stale: boolean;
 };
 
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
@@ -61,7 +65,9 @@ export function feedOf(x: any): Feed | null {
       server: text(c.server),
       sealed_to_current_key: c.sealed_to_current_key === true,
       updated_ms: isNum(c.updated_ms) && c.updated_ms > 0 ? c.updated_ms : null
-    }
+    },
+    last_bar_age_ms: isNum(x.last_bar_age_ms) && x.last_bar_age_ms >= 0 ? x.last_bar_age_ms : null,
+    content_stale: x.content_stale === true
   };
 }
 
@@ -92,6 +98,18 @@ export function ageText(ms: number | null): string {
 export function syncOf(f: Feed): Reading {
   if (f.synced_age_ms == null) return { tone: "off", label: "never synced", text: "never synced" };
   return f.fresh ? { tone: "ok", label: "fresh", text: `synced ${ageText(f.synced_age_ms)}` } : { tone: "late", label: "stale", text: `last sync ${ageText(f.synced_age_ms)}` };
+}
+
+/** The feed's newest bar: its age ("—" when it has sent none, never "0 s"), late while the server flags it stale. */
+export function lastBarOf(f: Feed): { tone: StatusTone | null; text: string } {
+  if (f.last_bar_age_ms == null) return { tone: null, text: "—" };
+  return { tone: f.content_stale ? "late" : null, text: ageText(f.last_bar_age_ms) };
+}
+
+/** The bars-stopped warning's lines: the age, and the remedy (for the owner the form is below; a viewer has none). */
+export function barsStoppedOf(f: Feed, canControl: boolean): { age: string; remedy: string } | null {
+  if (!f.content_stale) return null;
+  return { age: f.last_bar_age_ms == null ? "Last bar —" : `Last bar ${ageText(f.last_bar_age_ms)}`, remedy: canControl ? "Re-enter the feed login below." : "Re-enter the feed login." };
 }
 
 /** The feed terminal's own login to its broker, as its last sync reported it. */
