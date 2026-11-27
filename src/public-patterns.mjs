@@ -155,14 +155,18 @@ export async function runPatternsStep(env, { now = Date.now() } = {}) {
     if (Object.values(closed).every((t) => t === null)) return { status: "no_bars" };
     const mode = chartPatternsMode(env);
     const fresh = freshPrice(Array.isArray(m1raw?.candles) ? m1raw.candles : [], bars.M15, now);
-    if (stored?.version === PATTERNS_VERSION && stored.mode === mode && JSON.stringify(stored.closed) === JSON.stringify(closed) && Array.isArray(stored.patterns)) {
+    // PT1d: a value written before PT1c (a pattern without confirmed_at_ms) is not reused: every chart is detected again
+    // once, so no stored pattern goes without its breakout time until its own chart's next close.
+    const current = stored?.version === PATTERNS_VERSION && stored.mode === mode && Array.isArray(stored.patterns)
+      && stored.patterns.every((p) => p && typeof p === "object" && Object.hasOwn(p, "confirmed_at_ms"));
+    if (current && JSON.stringify(stored.closed) === JSON.stringify(closed)) {
       // Only the price can differ: the stored patterns, by chart, with this run's price.
       const value = valueOf(Object.fromEntries(charts.map((c) => [c, stored.patterns.filter((p) => p?.chart === c)])), closed, mode, fresh);
       if (JSON.stringify(stored) === JSON.stringify(value)) return { status: "same_close", at_close_ms: stored.at_close_ms };
       await kv.put(PATTERNS_KEY, JSON.stringify(value), { expirationTtl: PATTERNS_TTL_S });
       return { status: "price", at_close_ms: stored.at_close_ms, price_tf: fresh.price_tf };
     }
-    const reuse = stored?.version === PATTERNS_VERSION && stored.mode === mode && Array.isArray(stored.patterns) && stored.closed && typeof stored.closed === "object";
+    const reuse = current && stored.closed && typeof stored.closed === "object";
     const detect = mode === "off" ? [] : charts.filter((c) => !reuse || stored.closed[c] !== closed[c]);
     const events = detect.length ? ((await recentReleases(env, { now }).catch(() => [])) ?? []) : [];
     const byChart = {};
