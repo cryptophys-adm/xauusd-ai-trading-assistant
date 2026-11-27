@@ -21,4 +21,5 @@ export function rangeShadowEvidence(setups: Record<string, any>[], options: { ru
 export function liveRecordOf(setups: Record<string, any>[], mode: string, options?: { sinceMs?: number | null }): { n: number; since_n: number; since_mean_r: number | null };
 export function probationStep(input: Record<string, any>): Record<string, any>;
 export function modeEvidenceStatus(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function rangeShadowStatus(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function modeProbationRisk(env: unknown, signal: Record<string, any> | null): Promise<{ mode: string; scale: number } | null>;

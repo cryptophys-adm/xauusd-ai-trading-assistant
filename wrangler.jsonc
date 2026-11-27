@@ -114,6 +114,9 @@
     // TradingView cleanup (2026-11-27): the hourly CoinMarketCap USDT sampler, shadow only (src/cmc-usdt-shadow.mjs);
     // dormant without the CMC_API_KEY secret, "off" stops it.
     "CMC_USDT_SHADOW": "on",
+    // Range shadow (2026-11-27, src/range-shadow.mjs): both sides' range plans while the 1H regime ranges (plan_setups
+    // source 'range_both', 150 a day, the mode selector's range evidence only) and the intraday range episodes. "off": none.
+    "RANGE_SHADOW_MODE": "on",
     // K1 (cost brief 2026-11-27): the EA signal reads the 48-bar tail of the gold 5m series ("shadow" compares, "off" as before).
     "EA_SIGNAL_TAIL": "on",
     // B11 (RFC_INDICATOR_ADOPTION): accept the adoption records for group parity only; "off" refuses them at ingest.
@@ -296,6 +299,8 @@
     "vars": {
       // Previews never spend the production CoinMarketCap credits or write its shadow key.
       "CMC_USDT_SHADOW": "off",
+      // Previews never write range_both setups or range episodes.
+      "RANGE_SHADOW_MODE": "off",
       "AI_MODEL_ANALYST": "@cf/openai/gpt-oss-120b",
       "AI_MODEL_COUNSELOR": "@cf/openai/gpt-oss-120b",
       "AI_MODEL_REASONER": "@cf/openai/gpt-oss-120b",
