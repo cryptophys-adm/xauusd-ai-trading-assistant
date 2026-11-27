@@ -1,0 +1,14 @@
+export const CMC_HOST: string;
+export const CMC_USDT_ID: number;
+export const CMC_SHADOW_KEY: string;
+export const TV_USDT_SERIES_KEY: string;
+export const CMC_KEEP_HOURS: number;
+export const CMC_TIMEOUT_MS: number;
+export function cmcShadowMode(env: unknown): "on" | "off";
+export function cmcUrls(): { quote: string; global: string };
+export function parseQuote(j: unknown): { mcap: number; dom: number | null; at: number | null; credit: number } | null;
+export function parseGlobal(j: unknown): { total: number; credit: number } | null;
+export function bars4hFromSamples(samples: unknown): Array<{ time: number; open: number; high: number; low: number; close: number; n: number }>;
+export function compareWithTv(bars: unknown, tvCandles: unknown): Record<string, any>;
+export function runCmcUsdtStep(env: unknown, options?: { now?: number; fetchImpl?: unknown }): Promise<Record<string, any>>;
+export function cmcUsdtShadowSummary(env: unknown): Promise<Record<string, any>>;
