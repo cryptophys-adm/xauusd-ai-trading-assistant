@@ -84,20 +84,25 @@ function comparisonsDb(rows) {
   return { prepare: (sql) => wrap(sql) };
 }
 
-test("bars are verified only by a matching parity comparison of the same candle, and never with an input mismatch", async () => {
-  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "match"], ["gmi", key, "match"]]) }, key), true);
-  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "match"], ["gmi", key, "input_mismatch"]]) }, key), false);
-  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", key, "incomplete"]]) }, key), false);
-  assert.equal(await barsVerified({ DB: comparisonsDb([["prophet", "OANDA:XAUUSD:60:1", "match"]]) }, key), false, "another candle says nothing");
-  assert.equal(await barsVerified({ DB: { prepare: () => { throw new Error("no such table"); } } }, key), false);
+test("S2: bars are verified by the candle's trusted copy built on native bars, never by a fallback copy, an untrusted record or another candle", async () => {
+  const withCopy = async (engine, record) => { const w = kv(); await w.put("localcalc:" + key + ":" + engine, JSON.stringify(record)); return { WEBHOOK_BUFFER: w }; };
+  const trusted = { trust_status: "approved_by_parity", values: { comparable: {} } };
+  assert.equal(await barsVerified(await withCopy("prophet", trusted), key), true);
+  assert.equal(await barsVerified(await withCopy("gmi", trusted), key), true);
+  assert.equal(await barsVerified(await withCopy("prophet", { ...trusted, feed: "mt5_fallback" }), key), false, "built on the broker's bars");
+  assert.equal(await barsVerified(await withCopy("prophet", { ...trusted, trust_status: "not_parity_approved" }), key), false);
+  assert.equal(await barsVerified(await withCopy("gmi_hud", trusted), key), false, "a HUD copy never vouches for the bars");
+  const other = kv(); await other.put("localcalc:OANDA:XAUUSD:60:1:prophet", JSON.stringify(trusted));
+  assert.equal(await barsVerified({ WEBHOOK_BUFFER: other }, key), false, "another candle says nothing");
   assert.equal(await barsVerified({}, key), false);
+  assert.equal(await barsVerified({ DB: { prepare: () => { throw new Error("no comparisons are read any more"); } }, WEBHOOK_BUFFER: kv() }, key), false);
 
-  // Through hudReadings: the bar tier needs both the approved record and the matching comparison.
+  // Through hudReadings: the bar tier follows the trusted copy.
   const huds = { chronos_matrix: { fields: { session_london: true, verdict: 3 }, parity: { verdict: "gmi_v12_70.verdict" } } };
-  const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv(), DB: comparisonsDb([["gmi", key, "match"]]) };
+  const env = { SIGNAL_CACHE: kv(), WEBHOOK_BUFFER: kv() };
   let h = await hudReadings(env, snapshot({ huds }));
-  assert.equal(h.bars_verified, false, "no approved record: the candle is not in the trusted lane");
-  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi", JSON.stringify({ values: { comparable: { gmi_v12_70: { verdict: 3 } } } }));
+  assert.equal(h.bars_verified, false, "no trusted record: the candle is not in the trusted lane");
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi", JSON.stringify({ trust_status: "approved_by_parity", values: { comparable: { gmi_v12_70: { verdict: 3 } } } }));
   h = await hudReadings(env, snapshot({ huds }));
   assert.equal(h.bars_verified, true);
   assert.deepEqual(h.readings.chronos_matrix.lines.map(l => [l.verified, l.derived]), [[false, true], [true, false]]);

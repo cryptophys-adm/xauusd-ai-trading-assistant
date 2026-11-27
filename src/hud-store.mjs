@@ -3,12 +3,11 @@
 //
 // A snapshot arrives over the LocalComputationIngress RPC (submitHud). It is evidence
 // for the HUD agents only: it never enters the H1 decision lane or the evidence fusion.
-// Verification is decided here, at read time, against the parity-approved local record
-// of the same candle (localcalc:<candle_key>:prophet|gmi): a HUD field is verified only
-// when it equals that record. A statement that is a pure formula of closed bars reads as
-// "computed from verified bars" when the candle also has a parity comparison whose input
-// bar (open, high, low, close, volume) equalled TradingView's (barsVerified). Everything
-// else reads as not yet calibrated.
+// Verification is decided here, at read time, against the trusted local record of the same
+// candle (localcalc:<candle_key>:prophet|gmi): a HUD field is verified only when it equals
+// that record. A statement that is a pure formula of closed bars reads as "computed from
+// verified bars" when that trusted record was built on native bars (barsVerified, S2).
+// Everything else reads as not yet calibrated.
 import { containsCredentialFields, INGEST_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
 import { PARITY_GROUPS } from "./parity-registry.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
@@ -100,20 +99,24 @@ export async function approvedComparable(env, candleKey, { groups = PARITY_GROUP
 }
 
 /**
- * True when this candle's own bar is proven equal to TradingView's: a parity comparison of the
- * candle matched (the input bar is part of every comparison) and none of its comparisons found
- * only the input bar different. Without the parity tables (or any comparison yet) it is false.
+ * True when this candle's bars are verified: a trusted copy of a decision engine exists for the candle and
+ * was built on native bars, not on the broker's during an MT5 fallback (parity removal S2, orchestrator
+ * PR1 ruling 2: "trusted identity + native settled bar"). Native H1 and longer bars are published only
+ * after they settle (market-data-ingestion SETTLE_SECONDS). Before S2 it needed a parity comparison of the
+ * candle that matched and none that found the input bar different; of the 1,196 15m candles compared
+ * 2026-11-03..27, 10 (all with an input-bar difference) read differently under this rule.
  */
 export async function barsVerified(env, candleKey) {
-  if (!env?.DB?.prepare || typeof candleKey !== "string") return false;
-  try {
-    // B11: an adoption group's comparison (engine id gmi_adopt_* / prophet_adopt_*) never vouches for the HUD's bars.
-    const rows = ((await env.DB.prepare("SELECT engine, result FROM engine_parity_comparisons WHERE candle_key = ?").bind(candleKey).all())?.results || [])
-      .filter((r) => !ADOPT_ENGINES.some((e) => String(r.engine ?? "").startsWith(e + "_") || r.engine === e));
-    return rows.some((r) => r.result === "match") && !rows.some((r) => r.result === "input_mismatch");
-  } catch {
-    return false;
+  if (typeof candleKey !== "string" || !env?.WEBHOOK_BUFFER?.get) return false;
+  for (const engine of ["prophet", "gmi"]) {
+    const raw = await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":" + engine);
+    if (!raw) continue;
+    try {
+      const record = JSON.parse(raw);
+      if (record?.trust_status === "approved_by_parity" && record?.feed !== "mt5_fallback") return true;
+    } catch { /* malformed copy is ignored */ }
   }
+  return false;
 }
 
 /**

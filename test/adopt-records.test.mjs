@@ -141,7 +141,7 @@ test("AD-4 ingest: accepted for group parity, stored as observed, no engine-leve
   assert.ok(INGEST_ENGINES.includes("prophet_adopt") && ADOPT_ENGINES.includes("gmi_adopt"));
 });
 
-test("AD-5 reconcile: each group is compared on its own fields; a matching alert counts for every group, no engine compare, no trusted copy before 24", async () => {
+test("AD-5 reconcile (S2): an adoption record is compared with nothing and gets no trusted copy, alert or not", async () => {
   resetSchemaCacheForTests();
   const rec = freshRecord("M15");
   const env = { DB: await d1(), WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv() };
@@ -150,18 +150,10 @@ test("AD-5 reconcile: each group is compared on its own fields; a matching alert
   const alert = { source: PROPHET_ADOPT_SOURCE, o: c.o, h: c.h, l: c.l, c: c.c, volume: c.volume, ...rec.values.comparable[PROPHET_ADOPT_SOURCE] };
   await env.WEBHOOK_BUFFER.put(`candle:${rec.candle_key}:${PROPHET_ADOPT_SOURCE}`, JSON.stringify(alert));
   const r = await reconcileLocalComputation(env, rec.candle_key);
-  assert.deepEqual(Object.keys(r.comparisons), [], "no engine-level comparison");
-  assert.deepEqual(Object.keys(r.groups.comparisons).sort(), [...groupsFor("prophet_adopt")].sort());
-  for (const [id, g] of Object.entries(r.groups.comparisons)) assert.equal(g.result, "match", id);
-  for (const id of groupsFor("prophet_adopt")) assert.equal(r.groups.trust[id], false, `${id}: one candle is not 24`);
+  assert.deepEqual(r, { comparisons: {}, trust: {} }, "no engine or group comparison (parity removal S2)");
+  assert.equal(r.groups, undefined);
   assert.equal([...env.WEBHOOK_BUFFER.map.keys()].filter((k) => k.startsWith("localcalc:")).length, 0);
-  // A different field fails only its own group.
-  const env2 = { DB: await d1(), WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv() };
-  await env2.WEBHOOK_BUFFER.put(`localcalc-observed:${rec.candle_key}:prophet_adopt`, JSON.stringify(rec));
-  await env2.WEBHOOK_BUFFER.put(`candle:${rec.candle_key}:${PROPHET_ADOPT_SOURCE}`, JSON.stringify({ ...alert, cshi: (alert.cshi ?? 0) + 0.5 }));
-  const r2 = await reconcileLocalComputation(env2, rec.candle_key);
-  assert.equal(r2.groups.comparisons.prophet_adopt_hud.result, "mismatch");
-  for (const id of ["prophet_adopt_core", "prophet_adopt_ob", "prophet_adopt_scalp", "prophet_adopt_plan"]) assert.equal(r2.groups.comparisons[id].result, "match", id);
+  assert.ok(groupsFor("prophet_adopt").length > 0, "the groups are still declared (retired in S4)");
 });
 
 test("AD-6 knock-ons: the HUD store never reads an adoption group and its rows never vouch for a candle's bars; an adoption reconcile never starts the analysis path", async () => {
@@ -171,13 +163,12 @@ test("AD-6 knock-ons: the HUD store never reads an adoption group and its rows n
   await store.put("localcalc:K:prophet_adopt_hud", JSON.stringify({ values: { comparable: { [PROPHET_ADOPT_SOURCE]: { cshi: 0.5 } } } }));
   assert.equal(await approvedComparable({ WEBHOOK_BUFFER: counting }, "K"), null);
   assert.equal(gets, 3);
-  // barsVerified: an adopt group's match alone does not verify the bars.
-  const db = await d1();
-  db.db.exec("CREATE TABLE IF NOT EXISTS engine_parity_comparisons (engine TEXT, source_hash TEXT, implementation_hash TEXT, candle_key TEXT, result TEXT, detail TEXT, compared_at TEXT)");
-  db.db.prepare("INSERT INTO engine_parity_comparisons VALUES ('prophet_adopt_hud_m15','a','b','K','match',NULL,'2026-11-26T00:00:00Z')").run();
-  assert.equal(await barsVerified({ DB: db }, "K"), false);
-  db.db.prepare("INSERT INTO engine_parity_comparisons VALUES ('gmi_m15','a','b','K','match',NULL,'2026-11-26T00:00:00Z')").run();
-  assert.equal(await barsVerified({ DB: db }, "K"), true);
+  // barsVerified (S2): an adoption group's copy never verifies the bars; only a decision engine's trusted copy does.
+  const bars = kv();
+  await bars.put("localcalc:K:prophet_adopt_hud", JSON.stringify({ trust_status: "approved_by_parity" }));
+  assert.equal(await barsVerified({ WEBHOOK_BUFFER: bars }, "K"), false);
+  await bars.put("localcalc:K:gmi", JSON.stringify({ trust_status: "approved_by_parity" }));
+  assert.equal(await barsVerified({ WEBHOOK_BUFFER: bars }, "K"), true);
   // (ii) the queue: an adoption record's reconcile task returns before the analysis path (source check).
   const idx = readFileSync(new URL("src/index.ts", ROOT), "utf8");
   const body = idx.slice(idx.indexOf("async function processLocalCalculationReconcileTask"), idx.indexOf("async function processLocalCalculationReconcileTask") + 600);

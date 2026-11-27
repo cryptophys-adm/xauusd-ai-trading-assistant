@@ -279,22 +279,17 @@ test("PF-5 repairApprovedAtOnce runs once behind its KV marker, with one log lin
   assert.equal(bare.prepared(), prepared);
 });
 
-test("PF-6 the sweep's output is the same with and without the repair", async () => {
-  const run = async (marker) => {
-    resetSchemaCacheForTests();
-    const db = d1();
-    await buildWorld(db);
-    const env = { DB: db, WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv({ [RECLASSIFY_MARKER]: "{}", ...(marker ? { [APPROVED_AT_REPAIR_MARKER]: "{}" } : {}) }) };
-    const original = console.log;
-    console.log = () => {};
-    try { return { sweep: await reconcileRecentCandles(env, { now: Date.parse("2026-11-20T12:10:00Z") }), rows: db.db.prepare("SELECT * FROM engine_parity_registry ORDER BY engine").all() }; }
-    finally { console.log = original; }
-  };
-  const repaired = await run(false);
-  const unrepaired = await run(true);
-  assert.deepEqual(repaired.sweep, unrepaired.sweep);
-  assert.deepEqual(strip(repaired.rows), strip(unrepaired.rows));
-  assert.notDeepEqual(repaired.rows, unrepaired.rows, "the repair did run in the first sweep");
+test("PF-6 S2: the sweep runs neither the approved_at repair nor the reclassification; the registry is untouched", async () => {
+  resetSchemaCacheForTests();
+  const db = d1();
+  await buildWorld(db);
+  const before = db.db.prepare("SELECT * FROM engine_parity_registry ORDER BY engine").all();
+  const env = { DB: db, WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv() };
+  const sweep = await reconcileRecentCandles(env, { now: Date.parse("2026-11-20T12:10:00Z") });
+  assert.deepEqual(db.db.prepare("SELECT * FROM engine_parity_registry ORDER BY engine").all(), before);
+  assert.equal(await env.SIGNAL_CACHE.get(APPROVED_AT_REPAIR_MARKER), null);
+  assert.equal(await env.SIGNAL_CACHE.get(RECLASSIFY_MARKER), null);
+  assert.ok(Object.values(sweep.results).every((r) => Object.keys(r.comparisons ?? {}).length === 0));
 });
 
 test("PF-7 the reclassification is single-shot: the marker present, it never runs; absent, it runs once and sets it", async () => {
@@ -354,18 +349,19 @@ test("PF-7 the reclassification is single-shot: the marker present, it never run
   assert.equal(row(none.db, none.id).status, "revoked");
 });
 
-test("PF-8 the B7 scenario after the fix: real ISO approval times, and the revoked gmi identities are not restored", async () => {
-  const { runParityScenario } = await import("./support/parity-scenario.mjs");
+test("PF-8 S2: repairApprovedAtOnce and reclassifyOnce still work when called (bookkeeping kept until S6), the sweep no longer calls them", async () => {
+  resetSchemaCacheForTests();
+  const db = d1();
+  await buildWorld(db);
+  const env = { DB: db, SIGNAL_CACHE: kv() };
   const original = console.log;
   console.log = () => {};
-  let out;
-  try { out = await runParityScenario(); } finally { console.log = original; }
-  const byEngine = Object.fromEntries(out.registry.map((r) => [r.engine, r]));
-  for (const engine of ["prophet", "prophet_m15", "gmi", "gmi_m15", "gmi_hud", "gmi_hud_m15"]) assert.ok(isIsoTimestamp(byEngine[engine].approved_at), engine);
-  for (const engine of ["gmi", "gmi_m15", "gmi_hud", "gmi_hud_m15"]) {
-    assert.equal(byEngine[engine].status, "revoked", engine + ": revoked by an indicator mismatch, never restored");
-    assert.ok(byEngine[engine].revoked_at > byEngine[engine].approved_at, engine);
-  }
-  assert.deepEqual(JSON.parse(Object.fromEntries(out.signal_cache)[RECLASSIFY_MARKER]).restored, []);
-  assert.deepEqual(JSON.parse(Object.fromEntries(out.signal_cache)[APPROVED_AT_REPAIR_MARKER]), { repaired: 0, skipped: [], revoked_cleared: 0, at: out.sweep.swept_at });
+  try {
+    assert.equal((await repairApprovedAtOnce(env)).status, "ok");
+    assert.equal((await repairApprovedAtOnce(env)).status, "done_before");
+    assert.equal((await reclassifyOnce(env)).status, "ok");
+  } finally { console.log = original; }
+  const src = (await import("node:fs")).readFileSync(new URL("../src/parity-sweep.mjs", import.meta.url), "utf8");
+  const sweepBody = src.slice(src.indexOf("export async function reconcileRecentCandles"), src.indexOf("export async function reconcileRecentCandles") + 1500);
+  assert.doesNotMatch(sweepBody, /repairApprovedAtOnce\(|reclassifyOnce\(|recheckMismatchIntrabars\(/);
 });

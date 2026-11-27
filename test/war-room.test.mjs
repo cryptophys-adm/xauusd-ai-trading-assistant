@@ -188,7 +188,7 @@ test("calibration status is shown once: no disclaimer asked, uncalibrated HUD co
   assert.match(debate, /never an agent or a role/);
 });
 
-test("computed from verified bars: Camarilla and session statements lift the 0.4 cap only when the candle's bar matched TradingView", async () => {
+test("computed from verified bars: Camarilla and session statements lift the 0.4 cap only when the candle's trusted copy was built on native bars (S2)", async () => {
   const snapshot = {
     ...hudSnapshot(),
     huds: {
@@ -196,7 +196,7 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
       kinetic_engine: { fields: { theta: 43, omega: -0.4, alpha: -0.1, entropy: 0.86, is_chaos: true }, parity: {} }
     }
   };
-  const run = async ({ approved, comparison }) => {
+  const run = async ({ approved, feed }) => {
     resetThreadSchemaCacheForTests();
     const ai = fakeAI();
     const run0 = ai.run;
@@ -207,14 +207,12 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
       return r;
     };
     const e = env(ai, { SIGNAL_CACHE: kv({ ["hud:15:" + K15]: JSON.stringify(snapshot) }) });
-    e.DB.raw.exec("CREATE TABLE engine_parity_comparisons (engine TEXT, candle_key TEXT, result TEXT)");
-    if (comparison) e.DB.raw.prepare("INSERT INTO engine_parity_comparisons VALUES ('prophet_m15', ?, ?)").run(K15, comparison);
-    if (approved) await e.WEBHOOK_BUFFER.put("localcalc:" + K15 + ":prophet", JSON.stringify({ values: { comparable: { prophet_r38: { direction: 0 } } } }));
+    if (approved) await e.WEBHOOK_BUFFER.put("localcalc:" + K15 + ":prophet", JSON.stringify({ trust_status: "approved_by_parity", ...(feed ? { feed } : {}), values: { comparable: { prophet_r38: { direction: 0 } } } }));
     await runWarRoomBar(e, task());
     return { room: await readWarRoom(e.DB), ai };
   };
 
-  const ok = await run({ approved: true, comparison: "match" });
+  const ok = await run({ approved: true });
   assert.deepEqual(ok.room.roster.find(r => r.id === "interstellar_eyes").calibration, { verified_lines: 0, derived_lines: 1, total_lines: 1 });
   assert.equal(ok.room.openings.find(o => o.id === "interstellar_eyes").confidence, 0.7, "a statement computed from verified bars lifts the cap");
   assert.equal(ok.room.openings.find(o => o.id === "kinetic_engine").confidence, 0.4, "engine internals stay capped");
@@ -224,7 +222,7 @@ test("computed from verified bars: Camarilla and session statements lift the 0.4
   const bus = busOf(debate);
   assert.equal(bus.find(b => b.ref === refOf(ok.room, "interstellar_eyes")).evidence, "1 computed from verified bars (of 1 statement)");
 
-  for (const [label, args] of [["no comparison yet", { approved: true }], ["the bar differed from TradingView", { approved: true, comparison: "input_mismatch" }], ["no approved record", { approved: false, comparison: "match" }]]) {
+  for (const [label, args] of [["built on the broker's bars (MT5 fallback)", { approved: true, feed: "mt5_fallback" }], ["no trusted record", { approved: false }]]) {
     const r = await run(args);
     assert.deepEqual(r.room.roster.find(x => x.id === "interstellar_eyes").calibration, { verified_lines: 0, derived_lines: 0, total_lines: 1 }, label);
     assert.equal(r.room.openings.find(o => o.id === "interstellar_eyes").confidence, 0.4, label);
