@@ -119,3 +119,27 @@ test("FD-5. the feed module has no path to intents or trading", () => {
   assert.doesNotMatch(code, /writeIntents|intents\.txt|writeReferencePrice|ensureLiveTradingSettings|applyCredentials\(/, "no executor writer is reachable from the feed loop");
   assert.doesNotMatch(code, /\/api\/bridge\/sync"/, "the feed never calls the executor's sync");
 });
+
+test("FD-7. the feed terminal's ini keeps its owner (mt5) and mode 600 after the login and the forced trading switch", async () => {
+  const s = setup({ ini: "[Common]\nLogin=\nPassword=\n[Experts]\nAllowLiveTrading=1\n" });
+  // The real fs, with stat and chown observed: the ini looks owned by uid/gid 1001 (the unit's user).
+  const chowns = [];
+  const spy = { ...fs,
+    statSync: (p, ...a) => { const st = fs.statSync(p, ...a); return p === s.terminalIni ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid: 1001, gid: 1001 }) : st; },
+    chownSync: (p, uid, gid) => { chowns.push([p, uid, gid]); } };
+  const keys = loadOrCreateKeyPair(s.stateDir, { fs });
+  const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
+  const d = createFeedDaemon({ env: s.env, fs: spy, fetch: async () => okJson({ ok: true, connection: { version: 1, server: "OANDA-Demo-1", envelope } }), execFile: async () => "", log: () => {} });
+  await d.syncOnce();
+  const onIni = chowns.filter(([p]) => p === s.terminalIni);
+  assert.ok(onIni.length >= 1, "the login write gives the ini back to its owner");
+  assert.ok(onIni.every(([, uid, gid]) => uid === 1001 && gid === 1001), "with the original uid and gid");
+  assert.equal(fs.statSync(s.terminalIni).mode & 0o777, 0o600);
+  // The forced trading switch alone (a sync with no new login, the ini rewritten by something else).
+  fs.writeFileSync(s.terminalIni, "[Experts]\nAllowLiveTrading=1\n");
+  chowns.length = 0;
+  const d2 = createFeedDaemon({ env: s.env, fs: spy, fetch: async () => okJson({ ok: true, connection: null }), execFile: async () => "", log: () => {} });
+  await d2.syncOnce();
+  assert.ok(chowns.some(([p, uid, gid]) => p === s.terminalIni && uid === 1001 && gid === 1001), "ensureFeedSettings keeps the owner too");
+  assert.match(fs.readFileSync(s.terminalIni, "utf8"), /AllowLiveTrading=0/);
+});

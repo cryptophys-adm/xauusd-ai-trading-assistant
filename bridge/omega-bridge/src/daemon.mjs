@@ -276,7 +276,7 @@ function writeAppliedState(stateDir, { version, server, applied_ms }, fs) {
   fs.chmodSync(appliedPath, 0o600);
 }
 
-function writeTerminalIniPreservingOwner(terminalIni, content, fs) {
+export function writeTerminalIniPreservingOwner(terminalIni, content, fs) {
   let stat = null;
   if (fs.existsSync(terminalIni)) {
     try {
