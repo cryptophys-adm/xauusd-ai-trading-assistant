@@ -4,8 +4,8 @@
 //   - the Key Level Agent's candidate zones (where the key levels of every chart stack), as demand zones
 //     (below the price, "area beli") and supply zones (above it, "area jual"), information only;
 //   - the Projection Agent's chart patterns on H1, H4 and D1 (forming or confirmed), by their catalogue name,
-//     and since M15P (2026-11-27, the owner's "langsung ketika pattern 15m confirmed tanpa menunggu jadwal 1H")
-//     on M15 too, for patterns only (zones_by_chart and closed stay H1, H4 and D1),
+//     and since PT1 (2026-11-27, the owner to CTA: confirmed patterns on every chart within about 5 minutes, and their
+//     invalidation) on M15 too and busted ones too, for patterns only (zones_by_chart and closed stay H1, H4 and D1),
 //     with their breakout lines, the line that undoes them and the pattern's measured projection;
 //   - the market structure per chart (trend and swing label);
 //   - KM1 (owner 2026-11-25): each chart's own key-level map (zones_by_chart H1, H4, D1, the agent's clustering over
@@ -17,7 +17,7 @@ import { patternInfo } from "./chart-patterns.mjs";
 
 export const PUBLIC_ANALYSIS_VERSION = "cryptophys.public-analysis.v1";
 /**
- * The charts whose patterns may be posted, and their public names. M15P (2026-11-27): "15" is M15, for `patterns` only;
+ * The charts whose patterns may be posted, and their public names. PT1 (2026-11-27): "15" is M15, for `patterns` only;
  * every chart-keyed field other than patterns (zones_by_chart, closed: KEY_MAP_CHARTS) is unchanged.
  */
 export const ANALYSIS_CHARTS = Object.freeze({ "15": "M15", "60": "H1", "240": "H4", D: "D1", "1D": "D1" });
@@ -115,13 +115,18 @@ function chartMaps(charts) {
 }
 
 /**
+ * The pattern statuses the public sees. PT1 (2026-11-27): "busted" too (a one-sided pattern that closed beyond its other
+ * side, chart-patterns.mjs), so CTA can post the invalidation; a busted pattern has no projection (publicProjectionOf).
+ */
+export const PUBLIC_PATTERN_STATUSES = Object.freeze(["forming", "confirmed", "busted"]);
+/**
  * Pure: the Projection Agent's patterns (key_levels.patterns, { tf, id, status, direction, upper, lower, target, ... }) as
- * public patterns: forming or confirmed, on ANALYSIS_CHARTS only, with BP1's projection (publicProjectionOf) and positive
- * lines. publicAnalysis's `patterns`, and the M15 path's (src/public-m15-patterns.mjs, M15P), so both are the same shape.
+ * public patterns: forming, confirmed or busted, on ANALYSIS_CHARTS only, with BP1's projection (publicProjectionOf) and positive
+ * lines. publicAnalysis's `patterns`, and the cheap path's (src/public-patterns.mjs, PT1), so both are the same shape.
  */
 export function publicPatterns(list) {
   return (Array.isArray(list) ? list : [])
-    .filter((p) => ANALYSIS_CHARTS[String(p?.tf)] && ["forming", "confirmed"].includes(p?.status) && typeof p.id === "string")
+    .filter((p) => ANALYSIS_CHARTS[String(p?.tf)] && PUBLIC_PATTERN_STATUSES.includes(p?.status) && typeof p.id === "string")
     .map((p) => {
       const info = patternInfo(p.id);
       const dir = Number(p.direction) > 0 ? "up" : Number(p.direction) < 0 ? "down" : "undetermined";

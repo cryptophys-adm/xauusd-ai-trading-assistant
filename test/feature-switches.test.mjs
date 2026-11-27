@@ -641,9 +641,9 @@ test("FS-13 ruling 2: every entry point of the AI Worker resolves the overrides 
   assert.match(idx, /return consumeQueue\(batch, await withFeatureSwitches\(env\)\);/);
   assert.match(idx, /if \(event\.cron === LEDGER_CRON && idle\) return;\n(?:\s*\/\/[^\n]*\n)+\s*env = await withFeatureSwitches\(env\);/);
   // The RPC entrypoints that reach a switch's reader: every method resolves first (the FS1 methods read the store fresh).
-  // m15Patterns (M15P, 2026-11-27) reads one KV key and no switch reader (src/public-m15-patterns.mjs; its writer runs in the
-  // ledger step, after that step's withFeatureSwitches): test/public-m15-patterns.test.mjs M15P-6 pins its one line.
-  const exempt = new Set(["reserveTvCalls", "releaseTvCalls", "setAgentVetoRule", "featureSwitches", "setFeatureSwitch", "fs", "m15Patterns"]);
+  // patterns (PT1, 2026-11-27) reads one KV key and no switch reader (src/public-patterns.mjs; its writer runs in the ledger
+  // step, after that step's withFeatureSwitches): test/public-patterns.test.mjs PT1-6 pins its one line.
+  const exempt = new Set(["reserveTvCalls", "releaseTvCalls", "setAgentVetoRule", "featureSwitches", "setFeatureSwitch", "fs", "patterns"]);
   for (const cls of ["LocalComputationIngress", "PublicProjection", "OmegaGateway"]) {
     const start = idx.indexOf(`export class ${cls} extends WorkerEntrypoint<Env> {`);
     const body = idx.slice(start, idx.indexOf("\n}\n", start));

@@ -1,0 +1,10 @@
+export const PATTERNS_VERSION: string;
+export const PATTERNS_KEY: string;
+export const PATTERN_SERIES: Readonly<Record<string, string>>;
+export function seriesKey(interval: string): string;
+export const PATTERN_BARS: number;
+export const PATTERNS_TTL_S: number;
+export function barCloseMs(bar: unknown): number | null;
+export function patternsOf(bars?: Record<string, unknown>, options?: { events?: unknown[]; mode?: string }): { version: string; at_close_ms: number | null; closed: Record<string, number | null>; mode: string; patterns: Record<string, any>[] };
+export function runPatternsStep(env: unknown, options?: { now?: number }): Promise<Record<string, unknown>>;
+export function readPatterns(env: unknown, options?: { sinceCloseMs?: number | null }): Promise<Record<string, unknown>>;
