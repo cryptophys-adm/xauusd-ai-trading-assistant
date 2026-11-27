@@ -41,8 +41,27 @@ export const limitFirstOn = (settings) => String(settings?.limit_first ?? "on") 
 /** Whether a trade's agent is a pullback strategy (an empty agent is the default agent's plan, of before the agents). */
 export const limitFirstAgent = (agent) => LIMIT_FIRST_AGENTS.includes(typeof agent === "string" && agent ? agent : LIMIT_FIRST_DEFAULT_AGENT);
 
-/** Pure: "pass" when an own-type zone holds the entry, "block" otherwise (record only). */
-export const zoneTypeGate = (ownZone) => (ownZone ? "pass" : "block");
+/** Pure: "pass" when the zone at the entry is the side's own type (a BUY in demand, a SELL in supply), "block" otherwise (record only). */
+export const zoneTypeGate = (own) => (own ? "pass" : "block");
+/** Pure: a plan setup's record-only gate from its side and entry_zone_type (plan_setups). */
+export const setupZoneTypeGate = (side, entryZoneType) => zoneTypeGate(entryZoneType === OWN[side]);
+
+/** The promotion criterion the owner set (2026-11-27, "filter zona a"): n >= 30 in each group, pass beating block by >= +0.15R. */
+export const ZONE_TYPE_GATE_PROMOTION = Object.freeze({ min_n: 30, min_edge_r: 0.15 });
+
+/**
+ * Pure: the record-only gate's evidence over zone_pullback plan setups ([{ side, entry_zone_type, r, f }], the control
+ * arm): per group (pass, block) n, mean R and fill rate, the edge (pass - block) and whether the promotion criterion is met.
+ */
+export function zoneTypeGateEvidence(setups = []) {
+  const g = { pass: [], block: [] };
+  for (const s of setups || []) { if (!finite(Number(s?.r))) continue; g[setupZoneTypeGate(s.side, s.entry_zone_type)].push(s); }
+  const part = (list) => ({ n: list.length, mean_r: list.length ? r3(list.reduce((a, s) => a + Number(s.r), 0) / list.length) : null, fill_rate: list.length ? r3(list.filter((s) => Number(s.f) === 1).length / list.length) : null });
+  const pass = part(g.pass), block = part(g.block);
+  const edge = pass.mean_r != null && block.mean_r != null ? r3(pass.mean_r - block.mean_r) : null;
+  const P = ZONE_TYPE_GATE_PROMOTION;
+  return { pass, block, edge_r: edge, criterion: { ...P }, met: pass.n >= P.min_n && block.n >= P.min_n && edge != null && edge >= P.min_edge_r - EPS };
+}
 
 /**
  * Pure (the EA signal, src/ea-signal.mjs): the flat limit-first fields of a pullback strategy's trade, feed scale.
@@ -64,8 +83,10 @@ export function limitFirstSignalFields(decision, t, side) {
     // The tightest own zone (the one the limit sits in most precisely).
     .sort((a, b) => (Number(a.high) - Number(a.low)) - (Number(b.high) - Number(b.low)))[0] ?? null;
   const type = own ? OWN[side] : typed ? String(typed.zone_type) : "untyped";
+  // The record-only gate reads the zone type at the entry (any strength), as the plan setups' entry_zone_type does, so
+  // the live record and the replay count the same thing; the placement uses only a medium or strong own zone.
   return {
-    lf_atr: atr, lf_type: type, lf_gate: zoneTypeGate(own),
+    lf_atr: atr, lf_type: type, lf_gate: zoneTypeGate(type === OWN[side]),
     ...(own ? { lf_zone_low: Number(own.low), lf_zone_high: Number(own.high) } : {})
   };
 }
@@ -138,6 +159,34 @@ export function limitFirstVerdict(trades = [], { n: need = LIMIT_FIRST_REVERT.tr
 export function limitFirstRevertLine(v) {
   const s = (x) => `${x > 0 ? "+" : ""}${x}R`;
   return `XAUUSD OMEGA · Limit-first (limit_first) off: its first ${v.n} closed trades averaged ${s(v.mean_r)}, below the ${s(v.mean_e0)} the plan replay at the plan's own entry gave on the same setups. Entries are as before; the owner may turn it on again on the switches page.`;
+}
+
+/**
+ * GET /api/limit-first: the switch as stored, the limit-first orders so far (placed, filled), the revert's state and the
+ * record-only own-type gate's evidence over the zone_pullback plan setups of the last `days` (pass and block: n, mean R,
+ * fill; the promotion criterion). No price. Never throws.
+ */
+export async function limitFirstStatus(env, { now = Date.now(), days = 30 } = {}) {
+  const db = env?.DB;
+  if (!db) return { status: "unavailable" };
+  try {
+    const row = await db.prepare("SELECT settings FROM omega_settings WHERE id = 1").first().catch(() => null);
+    const settings = parse(row?.settings, {}) ?? {};
+    const orders = await db.prepare("SELECT COUNT(*) AS placed, SUM(CASE WHEN json_extract(payload, '$.filled_ms') IS NOT NULL THEN 1 ELSE 0 END) AS filled FROM omega_intents WHERE kind = 'place_limit' AND json_extract(payload, '$.limit_first') = 1").first().catch(() => null);
+    const since = new Date(now - days * 86_400_000).toISOString();
+    const rows = (await db.prepare("SELECT side, entry_zone_type, results_json FROM plan_setups WHERE agent = ? AND source = 'live' AND status = 'resolved' AND opened_at >= ?").bind(LIMIT_FIRST_DEFAULT_AGENT, since).all().catch(() => ({ results: [] }))).results ?? [];
+    const setups = rows.map((r) => { const x = parse(r.results_json, {})?.["e0@s1"] ?? {}; return { side: r.side, entry_zone_type: r.entry_zone_type ?? null, r: Number(x.r), f: Number(x.f) }; });
+    let revert = null;
+    try { revert = parse(await env?.SIGNAL_CACHE?.get?.(LIMIT_FIRST_REVERT_KEY), null); } catch { revert = null; }
+    return {
+      status: "ok", setting: limitFirstOn(settings) ? "on" : "off", agents: [...LIMIT_FIRST_AGENTS], depth_atr: LIMIT_FIRST_DEPTH_ATR,
+      orders: { placed: Number(orders?.placed) || 0, filled: Number(orders?.filled) || 0 },
+      revert: revert ? { status: revert.status ?? null, n: revert.n ?? null, mean_r: revert.mean_r ?? null, mean_e0: revert.mean_e0 ?? null, at: revert.at ?? null } : { status: "waiting", trades_needed: LIMIT_FIRST_REVERT.trades },
+      zone_type_gate: { mode: "record", days, ...zoneTypeGateEvidence(setups) }
+    };
+  } catch (e) {
+    return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
 }
 
 const parse = (s, fallback = null) => { if (s == null) return fallback; if (typeof s !== "string") return s; try { return JSON.parse(s); } catch { return fallback; } };

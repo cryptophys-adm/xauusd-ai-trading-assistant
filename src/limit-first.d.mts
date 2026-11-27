@@ -14,3 +14,7 @@ export function limitFirstWords(p: Record<string, any> | null | undefined): stri
 export function limitFirstVerdict(trades: { r: number; e0: number }[], options?: { n?: number }): { ready: boolean; n: number; mean_r: number | null; mean_e0: number | null; revert: boolean };
 export function limitFirstRevertLine(v: { n: number; mean_r: number; mean_e0: number }): string;
 export function limitFirstRevert(env: unknown, options?: { now?: number; send?: ((text: string) => unknown) | null; write?: ((body: Record<string, unknown>, actor: string) => unknown) | null }): Promise<Record<string, any>>;
+export function setupZoneTypeGate(side: string, entryZoneType: string | null): "pass" | "block";
+export const ZONE_TYPE_GATE_PROMOTION: { readonly min_n: number; readonly min_edge_r: number };
+export function zoneTypeGateEvidence(setups: Record<string, any>[]): Record<string, any>;
+export function limitFirstStatus(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, any>>;

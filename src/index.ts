@@ -304,7 +304,7 @@ import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
-import { limitFirstRevert } from "./limit-first.mjs";
+import { limitFirstRevert, limitFirstStatus } from "./limit-first.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runZoneReadingsStep, runZoneBreaker, zonesView, zoneReadingsMode } from "./zone-readings.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
@@ -2539,6 +2539,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         selector: await modeEvidenceStatus(env).catch(() => null) });
     }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
+  }
+  if (url.pathname === "/api/limit-first") {
+    // E1 (src/limit-first.mjs): the switch, the limit-first orders, the revert and the record-only own-type gate's
+    // evidence (pass and block: n, mean R, fill; the promotion criterion). Read only; no price.
+    const view = await limitFirstStatus(env) as Record<string, unknown>;
+    return dashboardJson(view, view.status === "failed" ? 500 : 200);
   }
   if (url.pathname === "/api/range-shadow") {
     // Range shadow (src/range-shadow.mjs): range's cells with and without the both-side setups, the cap and the intraday

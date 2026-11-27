@@ -144,8 +144,8 @@ test("LF-7 the signal's fields: only on pullback trades; the own-type medium+ zo
   assert.deepEqual(lf.limitFirstSignalFields(decision, t, "BUY"), { lf_atr: 4, lf_type: "demand", lf_gate: "pass", lf_zone_low: 4098.5, lf_zone_high: 4100.5 });
   // A SELL at the same entry sits in a demand zone: opposite type, the gate blocks (record only).
   assert.deepEqual(lf.limitFirstSignalFields(decision, t, "SELL"), { lf_atr: 4, lf_type: "demand", lf_gate: "block" });
-  // A weak own zone only: not own-type for the rule.
-  assert.deepEqual(lf.limitFirstSignalFields({ ...decision, key_levels: [] }, { ...t, entry: 4101 }, "BUY"), { lf_atr: 4, lf_type: "demand", lf_gate: "block" });
+  // A weak own zone only: no placement zone, but the zone at the entry is the own type, so the record-only gate passes.
+  assert.deepEqual(lf.limitFirstSignalFields({ ...decision, key_levels: [] }, { ...t, entry: 4101 }, "BUY"), { lf_atr: 4, lf_type: "demand", lf_gate: "pass" });
   // No zone at all: untyped.
   assert.deepEqual(lf.limitFirstSignalFields({ strategy: { atr_h1: 4 } }, t, "BUY"), { lf_atr: 4, lf_type: "untyped", lf_gate: "block" });
   // Market-by-design agents and a missing ATR: no field.
@@ -216,4 +216,28 @@ test("LF-9 the named auto-revert: waits for 30 closed trades; below the e0 repla
   assert.equal((await lf.limitFirstRevert({ DB: db3, SIGNAL_CACHE: kv() }, { now: 1, write })).status, "waiting");
   const db4 = d1(); db4.raw.prepare("INSERT INTO omega_settings VALUES (1, ?, '{}')").run(JSON.stringify({ limit_first: "off" }));
   assert.equal((await lf.limitFirstRevert({ DB: db4, SIGNAL_CACHE: kv() }, { now: 1, write })).status, "inactive");
+});
+
+test("LF-10 the record-only own-type gate's evidence and GET /api/limit-first: pass and block n, mean R, fill; the promotion criterion", async () => {
+  assert.equal(lf.setupZoneTypeGate("BUY", "demand"), "pass");
+  assert.equal(lf.setupZoneTypeGate("SELL", "demand"), "block");
+  assert.equal(lf.setupZoneTypeGate("SELL", "supply"), "pass");
+  assert.equal(lf.setupZoneTypeGate("BUY", null), "block");
+  const mk = (n, side, type, r, f = 1) => Array.from({ length: n }, () => ({ side, entry_zone_type: type, r, f }));
+  const thin = lf.zoneTypeGateEvidence([...mk(18, "BUY", "demand", 0.42), ...mk(10, "BUY", "supply", -0.15, 0), ...mk(8, "SELL", null, -0.75)]);
+  assert.deepEqual([thin.pass.n, thin.pass.mean_r, thin.block.n, thin.block.fill_rate, thin.met], [18, 0.42, 18, 0.444, false]);
+  const met = lf.zoneTypeGateEvidence([...mk(30, "BUY", "demand", 0.3), ...mk(30, "SELL", "demand", 0.1)]);
+  assert.deepEqual([met.edge_r, met.met], [0.2, true]);
+  assert.equal(lf.zoneTypeGateEvidence([...mk(30, "BUY", "demand", 0.2), ...mk(30, "SELL", "demand", 0.1)]).met, false, "an edge under +0.15R");
+  // The route's shape from D1 (no price).
+  const db = d1(); const store = kv();
+  db.raw.prepare("INSERT INTO omega_settings VALUES (1, ?, '{}')").run(JSON.stringify({ limit_first: "on" }));
+  db.raw.exec("ALTER TABLE plan_setups ADD COLUMN entry_zone_type TEXT; ALTER TABLE plan_setups ADD COLUMN opened_at TEXT;");
+  const ins = db.raw.prepare("INSERT INTO plan_setups (decision_key, side, agent, source, status, results_json, entry_zone_type, opened_at) VALUES ('k', ?, 'zone_pullback', 'live', 'resolved', ?, ?, ?)");
+  ins.run("BUY", JSON.stringify({ "e0@s1": { r: 0.5, f: 1 } }), "demand", "2026-11-26T10:00:00.000Z");
+  ins.run("SELL", JSON.stringify({ "e0@s1": { r: -0.5, f: 1 } }), "demand", "2026-11-26T10:00:00.000Z");
+  const v = await lf.limitFirstStatus({ DB: db, SIGNAL_CACHE: store }, { now: Date.parse("2026-11-27T16:00:00Z") });
+  assert.deepEqual([v.status, v.setting, v.zone_type_gate.mode, v.zone_type_gate.pass.n, v.zone_type_gate.block.n, v.zone_type_gate.edge_r, v.revert.status], ["ok", "on", "record", 1, 1, 1, "waiting"]);
+  assert.deepEqual(v.orders, { placed: 0, filled: 0 });
+  assert.equal((await lf.limitFirstStatus({})).status, "unavailable");
 });
