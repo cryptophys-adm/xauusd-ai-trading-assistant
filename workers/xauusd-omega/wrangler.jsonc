@@ -33,6 +33,9 @@
   "vars": {
     "ACCESS_TEAM_DOMAIN": "cryptophys.cloudflareaccess.com",
     "OMEGA_BRIDGE_CLIENT_ID": "71282ac4d693191beed607578d375dff.access",
+    // F5 (owner 2026-11-27 "Setuju"): the data-only feed bridge's Access service token (cryptophys-agent-omega-feed),
+    // its client id only (never the secret); the only token POST /api/bridge/feed-sync accepts.
+    "OMEGA_FEED_CLIENT_ID": "6932b89d0a3e713af5d4afce068544f7.access",
     "OWNER_ACCESS_SUB": "6d015218-6ea2-5fc3-b4aa-cc98c5ced21a"
   },
   // Static page (no build step). run_worker_first: the JWT is checked before any asset is served.
