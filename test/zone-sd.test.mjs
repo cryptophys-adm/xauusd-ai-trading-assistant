@@ -226,7 +226,8 @@ test("ZS-9 record: decision.sd_levels recorded, the signal and management as off
   // The EA reads the same value for every key it reads; it reads neither key_levels nor key_level_types; no tp2/extended_tp.
   const src = readFileSync(new URL("../ea/mt5/CryptophysXAUUSD.mq5", import.meta.url), "utf8");
   const eaKeys = [...new Set([...src.matchAll(/Json(?:String|Number|Bool)\(json, "([a-z_]+)"\)/g)].map((m) => m[1]))].sort();
-  const full = (r) => JSON.stringify({ ...ea.eaSignalFromDecision({ decision: r.record, now: Z_NOW }), ...r.management, server_ms: 0 });
+  // E1 (2026-11-27): a pullback trade's signal adds the flat lf_* fields (test/limit-first.test.mjs pins them): left out.
+  const full = (r) => JSON.stringify(Object.fromEntries(Object.entries({ ...ea.eaSignalFromDecision({ decision: r.record, now: Z_NOW }), ...r.management, server_ms: 0 }).filter(([k]) => !k.startsWith("lf_"))));
   assert.deepEqual(Object.fromEntries(eaKeys.map((k) => [k, eaValue(full(sig), k)])), Object.fromEntries(eaKeys.map((k) => [k, eaValue(full(off), k)])));
   assert.ok(!eaKeys.includes("key_levels") && !eaKeys.includes("key_level_types"));
   assert.ok(!Object.keys(JSON.parse(full(sig))).some((k) => /tp2|extended_tp/.test(k)));
@@ -443,7 +444,8 @@ test("ZS-16 zone_sd: off | on, default on (the owner's word); settingsFrom check
 
 test("ZS-17 the era: ERA_SWITCHES has zone_sd; at its default it adds nothing (the merge carries the era); the owner's 'off' starts a new one", () => {
   assert.ok(ERA_SWITCHES.includes("zone_sd"));
-  assert.equal(ERA_SWITCHES.at(-1), "zone_sd");
+  // E1's limit_first (2026-11-27) follows zone_sd in the list.
+  assert.equal(ERA_SWITCHES[ERA_SWITCHES.indexOf("zone_sd") + 1], "limit_first");
   assert.deepEqual(eraSwitches(oe.OMEGA_DEFAULTS), []);
   assert.deepEqual(eraSwitches({ ...oe.OMEGA_DEFAULTS, zone_sd: "off" }), ["zone_sd=off"]);
   const T = Date.parse("2026-11-26T08:00:00Z");

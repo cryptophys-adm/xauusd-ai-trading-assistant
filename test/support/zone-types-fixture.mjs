@@ -9,6 +9,7 @@ export const CLOSE = "2026-11-20T13:00:00.000Z";
 export const NOW = Date.parse(CLOSE) + 70_000;
 const M1 = 60_000, M15 = 15 * M1, H1 = 60 * M1;
 const iso = (ms) => new Date(ms).toISOString();
+const withoutLimitFirst = (sig) => Object.fromEntries(Object.entries(sig || {}).filter(([k]) => !k.startsWith("lf_")));
 
 /** A chart plane around 4000: a demand whale under price, a supply whale above, GABFX points and bands. */
 const plane = (tf) => ({
@@ -134,7 +135,9 @@ export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes =
   const record = de.buildDecisionRecord({ key, barClose: CLOSE, loaded, assessment, council: null, now: NOW, env });
   const evidence = de.councilEvidence({ barClose: CLOSE, cards: assessment.cards, quorum: assessment.quorum, guards: assessment.guards });
   const messages = de.councilMessages(evidence);
-  const signal = ea.eaSignalFromDecision({ decision: record, now: NOW });
+  // E1 (2026-11-27): a pullback trade's signal adds the flat lf_* fields (test/limit-first.test.mjs pins them); the
+  // typing pins hold everything else byte for byte.
+  const signal = withoutLimitFirst(ea.eaSignalFromDecision({ decision: record, now: NOW }));
   const management = ea.managementFields(record);
   const recap = pp.publicRecap({ decision_key: key, bar_close: CLOSE, stance: record.stance, bias: record.bias, decision_json: JSON.stringify(record) });
   const analysis = pa.publicAnalysis(strategy.key_levels, { now: NOW });

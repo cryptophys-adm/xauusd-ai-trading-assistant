@@ -9,8 +9,11 @@ import { createHash } from "node:crypto";
 // CDG (2026-11-25) adds atr_range_ratio (a measurement, a number only) to the decision record: stripped the same way.
 // Z3a (2026-11-25) adds key_level_types (the key levels' zone words) to the management fields of a typed decision: the
 // same (test/omega-zone-mgmt.test.mjs pins the field itself and the untyped signal byte for byte).
+// E1 limit-first (2026-11-27) adds the flat lf_* fields (the 1H ATR, the zone type at the entry, the record-only gate and
+// the own-type zone) to a pullback strategy's EA signal: stripped the same way (test/limit-first.test.mjs pins them).
+export const LF_SIGNAL_KEYS = Object.freeze(["lf_atr", "lf_type", "lf_gate", "lf_zone_low", "lf_zone_high"]);
 export const withoutDsSources = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
-  if (k === "ds_sources" || k === "atr_range_ratio" || k === "key_level_types") return undefined;
+  if (k === "ds_sources" || k === "atr_range_ratio" || k === "key_level_types" || LF_SIGNAL_KEYS.includes(k)) return undefined;
   if (typeof x === "string" && /^[[{]/.test(x)) { try { return JSON.stringify(withoutDsSources(JSON.parse(x))); } catch { return x; } }
   return x;
 }));
@@ -69,7 +72,7 @@ export async function inertOutputs({ se, de, ea, gunzipJson }, fx, env) {
       messages: sha(de.councilMessages(evidence)),
       guards: sha({ long: side(a.guards.long), short: side(a.guards.short) }),
       trade: sha(record.trade), strategy_plans: sha(record.strategy_plans), record: sha(withoutDsSources(record)),
-      signal: sha(ea.eaSignalFromDecision({ decision: record, now: NOW })), management: sha(withoutDsSources(ea.managementFields(record))),
+      signal: sha(withoutDsSources(ea.eaSignalFromDecision({ decision: record, now: NOW }))), management: sha(withoutDsSources(ea.managementFields(record))),
       shadow: sha(de.shadowModeDecisions({ loaded: c.loaded, assessment: a, council: c.council, env, now: NOW })),
       stance: record.stance
     };
