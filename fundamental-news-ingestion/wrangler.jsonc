@@ -47,5 +47,17 @@
     // :04 (owner 2026-11-14, the TradingView quota): two minutes before the AI Worker's hourly news
     // analysis (:06), so its pull reads this pull's shared copy instead of calling the provider again.
     "crons": ["4 * * * *"]
+  },
+  // Workers Logs (2026-11-27, orchestrator): the O5 refusal log (`tv_quota_refusal`) and the ingest summaries are
+  // kept. Every console line of this Worker is sanitized or carries counts and codes only (sanitizeText).
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    }
   }
 }
