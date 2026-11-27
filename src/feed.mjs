@@ -28,6 +28,19 @@ export async function fallbackSourceOf(env) {
   } catch { return null; }
 }
 
+/**
+ * The running fallback's last broker bar (ms, its open) and its source while the 1m series holds broker bars, else null
+ * (2026-11-27: the stale-data alert named only the TradingView pause while the broker's bars had stopped too).
+ */
+export async function fallbackLastBar(env) {
+  try {
+    const r = JSON.parse((await env?.SIGNAL_CACHE?.get?.(M1_KEY)) || "null");
+    if (!Number.isFinite(Number(r?.fallback?.since_sec))) return null;
+    const t = Number(r?.candles?.at(-1)?.time);
+    return { last_ms: Number.isFinite(t) ? t * 1000 : null, source: typeof r.fallback.source === "string" ? r.fallback.source : null };
+  } catch { return null; }
+}
+
 /** "mt5_fallback" when a candle closing at `closeMs` was built on the broker's bars, else "tradingview". */
 export async function feedAt(env, closeMs) {
   const since = await fallbackSinceMs(env);

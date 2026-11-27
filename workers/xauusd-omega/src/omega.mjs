@@ -18,7 +18,8 @@
  *     JSON request; pause and kill need a reason, kill the typed KILL, live trading the typed LIVE.
  *     The person's Access email is the actor in the audit;
  *   - POST /api/bridge/sync accepts only the service token whose client id is OMEGA_BRIDGE_CLIENT_ID
- *     (empty: every bridge is refused).
+ *     (empty: every bridge is refused); POST /api/bridge/feed-sync (F1, a data-only feed bridge) only the one whose
+ *     client id is OMEGA_FEED_CLIENT_ID (empty: every feed is refused).
  * Unrelated to the legacy "omega" swarm of cryptophys-cloud-platform (prohibited, never migrated).
  */
 
@@ -227,6 +228,23 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.bridgeSync({ state: body.state ?? null, results: body.results ?? [], publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null, corpusMacro: body.corpus_macro ?? null, calendar: body.calendar ?? null, bridgeSymbol: body.bridge_symbol ?? null }), "sync_failed");
     }
 
+    // F1, a data-only feed bridge (src/feed-bridge.mjs in the AI Worker): its own Access service token, named by
+    // OMEGA_FEED_CLIENT_ID (empty: every feed is refused). It never reaches /api/bridge/sync, and the executor's token
+    // never reaches this route. The answer carries no intents.
+    if (path === "/api/bridge/feed-sync") {
+      if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+      const expected = String(env.OMEGA_FEED_CLIENT_ID || "");
+      if (!expected) return json({ error: "feed_not_configured" }, 403);
+      if (identity.type !== "service_token" || identity.subject !== expected) return json({ error: "forbidden", hint: "only a feed bridge's service token syncs here" }, 403);
+      if (typeof env.OMEGA.feedSync !== "function") return json({ error: "feed_unavailable" }, 503);
+      const text = await request.text();
+      if (text.length > BRIDGE_BODY_MAX) return json({ error: "body_too_large" }, 413);
+      let body;
+      try { body = JSON.parse(text); } catch { return json({ error: "invalid_json" }, 400); }
+      if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "body must be a JSON object" }, 400);
+      return rpc(() => env.OMEGA.feedSync({ bridgeId: body.bridge_id, state: body.state ?? null, publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null }), "feed_sync_failed");
+    }
+
     if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
     // The Nexus badge (UI audit DEF-10): connected, armed, server and open positions, from one bridge row.
     if (route === "GET /api/status") {
@@ -384,6 +402,19 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
       return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
+    }
+    // F1: a feed bridge's login, sealed in the browser to that feed's key (like POST /api/connection); a person only.
+    if (route === "POST /api/feed-connection") {
+      const r = await personJson(request, url, identity, 16384);
+      if (r.response) return r.response;
+      if (typeof env.OMEGA.setFeedConnection !== "function") return json({ ok: false, error: "feed_unavailable" }, 503);
+      return rpc(() => env.OMEGA.setFeedConnection({ bridgeId: r.body.bridge_id, envelope: r.body.envelope, server: r.body.server, actor: identity.subject }), "feed_connection_failed");
+    }
+    if (route === "DELETE /api/feed-connection") {
+      const r = await personJson(request, url, identity, 2048);
+      if (r.response) return r.response;
+      if (typeof env.OMEGA.clearFeedConnection !== "function") return json({ ok: false, error: "feed_unavailable" }, 503);
+      return rpc(() => env.OMEGA.clearFeedConnection({ bridgeId: r.body.bridge_id, reason: r.body.reason, actor: identity.subject }), "feed_connection_failed");
     }
     // The MT5 fallback switch (owner 2026-11-11): read by anyone signed in, changed by a person with a reason.
     if (route === "GET /api/feed-fallback") {

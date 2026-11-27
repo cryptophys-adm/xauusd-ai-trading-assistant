@@ -309,6 +309,7 @@ import { organismDna } from "./organism.mjs";
 import { sendOmegaTelegram, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
 import { ownerModeAction, relayModeChanges, modeStatus, modeEvidenceStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
+import { feedSync, setFeedConnection, clearFeedConnection, feedOverview } from "./feed-bridge.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
 import { feedAt, keyCloseOf, readFeedFallback, setFeedFallback } from "./feed.mjs";
 import { storeBrokerTrigger } from "./broker-trigger.mjs";
@@ -1763,11 +1764,12 @@ export class LocalComputationIngress extends WorkerEntrypoint<Env> {
     await this.fs();
     return recordBrokerShadow(this.env, payload);
   }
-  async corpusBars(request: { since_ms?: number; limit?: number; base?: string } = {}): Promise<Record<string, unknown>> {
+  async corpusBars(request: { since_ms?: number; limit?: number; base?: string; prefer_feed?: boolean } = {}): Promise<Record<string, unknown>> {
     await this.fs();
     // With a base (stage 2: XAGUSD, USOIL, the DXY pairs): that macro symbol's bars; else the traded pair's.
     if (typeof request?.base === "string" && request.base) return readMacroBars(this.env, { base: request.base, sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
-    return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined });
+    // F1: the MT5 fallback asks for a fresh feed bridge's bars first (prefer_feed); the broker shadow lane does not.
+    return readCorpusBars(this.env, { sinceMs: Number(request?.since_ms) || 0, limit: Number(request?.limit) || undefined, preferFeed: request?.prefer_feed === true });
   }
 }
 
@@ -1873,6 +1875,8 @@ export class OmegaHealth extends WorkerEntrypoint<Env> {
 async function omegaOverviewBody(env: Env): Promise<JsonObject> {
     const ea = (await omegaOverview(env)) as Record<string, any>;
     const broker = (await brokerOverview(env)) as Record<string, any>;
+    // F1: the data-only feed bridges (their key, freshness and connection; no account data).
+    broker.feeds = await feedOverview(env);
     const eaDeals = Array.isArray(ea?.deals) ? ea.deals : [];
     const bridgeDeals = Array.isArray(broker?.bridge?.deals) ? broker.bridge.deals : [];
     const dealsMap = new Map();
@@ -2066,6 +2070,19 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   async clearConnection(input: { reason?: unknown; actor: string }): Promise<JsonObject> {
     await this.fs();
     return clearConnection(this.env, { reason: input?.reason, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  }
+  /** F1: a data-only feed bridge's sync (POST /api/bridge/feed-sync, the feed's own service token). Never returns intents. */
+  async feedSync(input: { bridgeId?: unknown; state?: unknown; publicKey?: unknown; kid?: unknown; bridgeVersion?: unknown; corpus?: unknown }): Promise<JsonObject> {
+    await this.fs();
+    return feedSync(this.env, (input ?? {}) as Record<string, unknown>) as Promise<JsonObject>;
+  }
+  async setFeedConnection(input: { bridgeId?: unknown; envelope?: unknown; server?: unknown; actor: string }): Promise<JsonObject> {
+    await this.fs();
+    return setFeedConnection(this.env, { bridgeId: input?.bridgeId, envelope: input?.envelope, server: input?.server, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
+  }
+  async clearFeedConnection(input: { bridgeId?: unknown; reason?: unknown; actor: string }): Promise<JsonObject> {
+    await this.fs();
+    return clearFeedConnection(this.env, { bridgeId: input?.bridgeId, reason: input?.reason, actor: String(input?.actor ?? "") }) as Promise<JsonObject>;
   }
   async bridgeKey(): Promise<JsonObject | null> {
     await this.fs();

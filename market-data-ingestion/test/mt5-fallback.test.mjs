@@ -53,6 +53,7 @@ test("F2. while TradingView is down the broker's minutes feed 1m, and 5m, 15m an
   const r = await applyMt5Fallback(env, "mcp_quota_cooldown_active", { now });
   assert.equal(r.status, "active", JSON.stringify(r));
   assert.equal(ai.calls[0].since_ms, (T0 - 60) * 1000, "from the last TradingView minute");
+  assert.equal(ai.calls[0].prefer_feed, true, "F1: a fresh feed bridge's bars first (another broker than the executor's)");
   const m1 = await readSeries(kv, spec("OANDA:XAUUSD|1m"));
   assert.equal(m1.candles.at(-1).close, 4020.5, "the broker's raw price");
   assert.equal(m1.candles.at(-1).src, "mt5");

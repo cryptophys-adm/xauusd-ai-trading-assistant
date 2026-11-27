@@ -85,7 +85,8 @@ export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {
     const m1 = await readSeries(kv, sourceSpec);
     if (!gatewayDown(pullStatus, m1, nowSec)) return { status: m1?.fallback ? "healing" : "inactive" };
     const lastSec = m1?.candles?.at(-1)?.time ?? nowSec - 24 * 3600;
-    const corpus = await env.AI_WORKER.corpusBars({ since_ms: lastSec * 1000, limit: 1500 });
+    // F1: a fresh feed bridge's bars first (another broker than the executor's), else the executor's own.
+    const corpus = await env.AI_WORKER.corpusBars({ since_ms: lastSec * 1000, limit: 1500, prefer_feed: true });
     const incoming = brokerCandles(corpus?.bars, nowSec).filter((c) => c.time > lastSec);
     if (!incoming.length) return { status: "no_broker_bars", source: corpus?.source ?? null, pull_status: pullStatus ?? null };
     const since = Math.min(m1?.fallback?.since_sec ?? Infinity, incoming[0].time);

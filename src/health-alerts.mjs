@@ -22,7 +22,7 @@ import { aetherSyncStatus, syncAlerts } from "./aether-sync.mjs";
 import { executionReportIssue } from "./aether-push.mjs";
 import { auditNotifyIssue } from "./change-notify.mjs";
 import { goldCheckOf, goldSymbolText } from "./gold-symbol.mjs";
-import { readFallbackCause, fallbackSourceLabel } from "./feed.mjs";
+import { readFallbackCause, fallbackSourceLabel, fallbackLastBar } from "./feed.mjs";
 
 export const HEALTH_AGENT_ID = "xauusd-risk-manager";
 export const HEALTH_REPORTS_PER_HOUR = 3;
@@ -110,6 +110,16 @@ export async function marketDataIssue(env, now = Date.now()) {
   const cause = Number.isFinite(until) && until > now
     ? `; the TradingView gateway is paused until ${iso(until).slice(0, 16).replace("T", " ")} UTC (${gw.cooldown_reason === "provider_quota_exceeded" ? "the provider's quota is used up" : String(gw.cooldown_reason || "cooldown").replace(/_/g, " ")})`
     : gw && gw.oauth_authorized === false ? "; the TradingView gateway is not authorized (OAuth)" : "";
+  // The MT5 fallback stalled too (2026-11-27): its broker's bars stopped (the terminal's account changed, the terminal is
+  // down), so it cannot cover the outage. Said only while the fallback runs and its last broker bar is itself stale.
+  let broker = "";
+  try {
+    const fb = await fallbackLastBar(env);
+    if (fb && Number.isFinite(fb.last_ms) && now - fb.last_ms > MARKET_DATA_STALE_MS) {
+      const label = fallbackSourceLabel(fb.source);
+      broker = ` The MT5 fallback has no new broker bars either: the last${label ? ` ${label}` : ""} bar opened ${whenUtc(fb.last_ms, now)}.`;
+    }
+  } catch { broker = ""; }
   // The gateway's own count of today's TradingView calls per caller (2026-11-11: nothing said who had spent
   // the quota). Calls made outside this system on the same account are not in it.
   const calls = gw?.calls_today && Number(gw.calls_today.total) > 0 ? gw.calls_today : null;
@@ -118,7 +128,7 @@ export async function marketDataIssue(env, now = Date.now()) {
     : "";
   return {
     key: "market_data_stale", kind: "market_data_stale",
-    subject: `Market data stopped: the last XAUUSD 5m bar closed ${whenUtc(lastMs, now)}${cause}. Rooms, news and parity wait; the Decision Engine holds WAIT while its rooms are stale.${spent}`,
+    subject: `Market data stopped: the last XAUUSD 5m bar closed ${whenUtc(lastMs, now)}${cause}. Rooms, news and parity wait; the Decision Engine holds WAIT while its rooms are stale.${broker}${spent}`,
     detail: { last_m5_close: iso(lastMs), gateway: gw ? { cooldown_until: gw.cooldown_until ?? null, cooldown_reason: gw.cooldown_reason ?? null, oauth_authorized: gw.oauth_authorized ?? null, calls_today: calls } : null }
   };
 }

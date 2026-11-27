@@ -153,6 +153,13 @@ test("the market data stopping is an alert that names the gateway's cooldown, an
   const withCalls = await marketDataIssue(counted, at);
   assert.match(withCalls.subject, / This system made 412 TradingView calls today \(pull adapter 300, news cron 72, calendar 40\)\.$/);
   assert.equal(withCalls.detail.gateway.calls_today.quota_exceeded_by, "pull_adapter");
+  assert.doesNotMatch(issue.subject, /MT5 fallback/, "no fallback running: nothing said about it");
+  // The MT5 fallback stalled as well (2026-11-27: the terminal's account changed): the alert says the broker's bars stopped too.
+  const m1 = (lastSec) => JSON.stringify({ fallback: { since_sec: lastSec - 3600, source: "mt5:anybroker-demo:XAUUSD.M" }, candles: [{ time: lastSec }] });
+  const stalled = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1h": series(at - 2 * H, H), "market-data:v2:series:OANDA:XAUUSD|5m": series(Date.parse("2026-11-11T12:55:00.000Z"), M5), "market-data:v2:series:OANDA:XAUUSD|1m": m1(Date.parse("2026-11-11T13:13:00.000Z") / 1000) }), NEWS_INGESTION: gateway });
+  assert.match((await marketDataIssue(stalled, at)).subject, / The MT5 fallback has no new broker bars either: the last anybroker-demo XAUUSD\.M bar opened 13:13 UTC\./);
+  const flowing = env({ SIGNAL_CACHE: kv({ "market-data:v2:series:OANDA:XAUUSD|1h": series(at - 2 * H, H), "market-data:v2:series:OANDA:XAUUSD|5m": series(Date.parse("2026-11-11T12:55:00.000Z"), M5), "market-data:v2:series:OANDA:XAUUSD|1m": m1(at / 1000 - 120) }), NEWS_INGESTION: gateway });
+  assert.doesNotMatch((await marketDataIssue(flowing, at)).subject, /MT5 fallback/, "fallback bars still arriving: not blamed");
   const r = await runHealthAlerts(stale, { now: at });
   assert.ok(r.opened_alerts.some((a) => a.kind === "market_data_stale" && /^Market data stopped/.test(a.subject)), "the sweep sends this one to Telegram");
 
