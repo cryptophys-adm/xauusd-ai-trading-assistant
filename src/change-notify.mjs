@@ -28,6 +28,9 @@ export const AUDIT_ACTIONS = Object.freeze({
   position_manual_close_requested: "Manual close requested",
   connection_set: "Broker connection set",
   connection_cleared: "Broker connection cleared",
+  // F1: a data-only feed bridge's login (src/feed-bridge.mjs).
+  feed_connection_set: "Feed bridge connection set",
+  feed_connection_cleared: "Feed bridge connection cleared",
   connection_needs_reentry: "Broker connection needs re-entry",
   bridge_symbol: "Bridge symbol set",
   bridge_key_changed: "Bridge key changed",

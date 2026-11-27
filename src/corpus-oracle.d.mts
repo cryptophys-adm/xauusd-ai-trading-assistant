@@ -11,7 +11,7 @@ export function resetCorpusSchemaCacheForTests(): void;
 export function ingestCorpus(env: any, corpus: any, options?: { executor?: any; now?: number }): Promise<Record<string, any>>;
 export function corpusStatus(env: any, options?: { now?: number }): Promise<Record<string, any>>;
 export const CORPUS_READ_MAX: number;
-export function readCorpusBars(env: any, options?: { sinceMs?: number; limit?: number }): Promise<{ source: string | null; server?: string; symbol?: string; bars: Array<{ t: number; o: number; h: number; l: number; c: number; v: number | null }> }>;
+export function readCorpusBars(env: any, options?: { sinceMs?: number; limit?: number; preferFeed?: boolean; now?: number }): Promise<{ source: string | null; server?: string; symbol?: string; bars: Array<{ t: number; o: number; h: number; l: number; c: number; v: number | null }> }>;
 export const MACRO_BASES: readonly string[];
 export function macroSource(server: unknown, base: string): string;
 export function validateCorpusMacro(payload: any, options?: { executor?: any; connection?: any; now?: number }): Record<string, any>;
@@ -22,3 +22,6 @@ export function ingestMt5Calendar(env: any, payload: any, options?: { executor?:
 export function readMt5Calendar(env: any, options?: { fromMs: number; toMs: number }): Promise<Array<Record<string, any>>>;
 export function recordBrokerShadow(env: any, payload: any, options?: { now?: number }): Promise<Record<string, any>>;
 export function brokerShadowSummary(env: any, options?: { now?: number; days?: number }): Promise<Record<string, any>>;
+export function validateFeedCorpus(corpus: any, options?: { connection?: any; state?: any; now?: number }): any;
+export function ingestFeedCorpus(env: any, corpus: any, options: { bridgeId: string; connection?: any; state?: any; now?: number }): Promise<any>;
+export const FEED_FRESH_MS: number;

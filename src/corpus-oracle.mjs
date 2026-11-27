@@ -131,6 +131,12 @@ export const CORPUS_SCHEMA_SQL = Object.freeze([
     refused INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     updated_ms INTEGER NOT NULL
+  )`,
+  // F1: the sources a feed bridge (data-only, src/feed-bridge.mjs) sent, by bridge id. The executor's reads leave them out.
+  `CREATE TABLE IF NOT EXISTS corpus_feeds (
+    source TEXT PRIMARY KEY,
+    bridge_id TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL
   )`
 ]);
 let ready = false;
@@ -180,6 +186,59 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
   return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null };
 }
 
+/**
+ * Pure (F1): a feed bridge's corpus, checked against the feed's own stored connection and terminal state (never Omega's
+ * active broker: a feed is another broker by design). The symbol must be the feed terminal's own chart symbol.
+ */
+export function validateFeedCorpus(corpus, { connection = null, state = null, now = Date.now() } = {}) {
+  if (!corpus || typeof corpus !== "object") return { ok: false, error: "no_corpus" };
+  if (corpus.timeframe !== CORPUS_TIMEFRAME) return { ok: false, error: "timeframe_must_be_M1" };
+  if (!connection || connection.status !== "stored" || !finite(Number(connection.version))) return { ok: false, error: "no_feed_connection" };
+  const server = clean(corpus.server), symbol = clean(corpus.symbol, 32);
+  if (!server || !symbol) return { ok: false, error: "server_and_symbol_required" };
+  if (server !== clean(connection.server)) return { ok: false, error: "broker_mismatch" };
+  if (!state || clean(state.server) !== server) return { ok: false, error: "feed_broker_mismatch" };
+  if (clean(state.symbol?.name, 32) !== symbol) return { ok: false, error: "pair_mismatch" };
+  const { bars, refused } = validBars(corpus.bars, now);
+  return { ok: true, source: corpusSource(server, symbol), server, symbol, connection_version: Number(connection.version), bars, refused };
+}
+
+/**
+ * F1: a feed bridge's gold M1 bars into the corpus, as their own source, marked a feed (corpus_feeds). A source that is
+ * already an executor's (the same server and symbol stored without the mark) is refused: a feed never writes into the
+ * executor's own series. No account archive (a feed has no account). Never throws; off with the corpus.
+ */
+export async function ingestFeedCorpus(env, corpus, { bridgeId, connection = null, state = null, now = Date.now() } = {}) {
+  if (corpusMode(env) === "off" || !corpus) return { mode: corpusMode(env), cursor_ms: null };
+  const db = env.DB;
+  await ensureSchema(db);
+  const v = validateFeedCorpus(corpus, { connection, state, now });
+  if (!v.ok) return { mode: "shadow", error: v.error, cursor_ms: null };
+  // A feed on the executor's own server is no independent source (and would hide the executor's bars): refused.
+  const exec = await db.prepare("SELECT server FROM omega_connection WHERE id = 1").first().catch(() => null);
+  if (exec?.server && clean(exec.server) === v.server) return { mode: "shadow", error: "feed_on_executor_server", cursor_ms: null };
+  const mark = await db.prepare("SELECT bridge_id FROM corpus_feeds WHERE source = ?").bind(v.source).first();
+  if (!mark) {
+    const owned = await db.prepare("SELECT 1 AS x FROM corpus_sources WHERE source = ?").bind(v.source).first();
+    if (owned) return { mode: "shadow", error: "source_is_executor", cursor_ms: null };
+  } else if (mark.bridge_id !== bridgeId) return { mode: "shadow", error: "source_of_another_feed", cursor_ms: null };
+  await db.prepare("INSERT INTO corpus_feeds (source, bridge_id, updated_ms) VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET updated_ms = excluded.updated_ms").bind(v.source, bridgeId, now).run();
+  let stored = 0;
+  for (const b of v.bars) {
+    const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(v.source, b.t, b.o, b.h, b.l, b.c, b.v, b.s, v.connection_version, now).run();
+    if (Number(r?.meta?.changes)) stored += 1;
+  }
+  const last = await db.prepare("SELECT MAX(minute_ms) AS t FROM corpus_bars WHERE source = ?").bind(v.source).first();
+  await db.prepare(`INSERT INTO corpus_sources (source, server, symbol, connection_version, last_minute_ms, stored, refused, last_error, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+    ON CONFLICT(source) DO UPDATE SET connection_version = excluded.connection_version, last_minute_ms = excluded.last_minute_ms, stored = stored + excluded.stored, refused = refused + excluded.refused, last_error = NULL, updated_ms = excluded.updated_ms`)
+    .bind(v.source, v.server, v.symbol, v.connection_version, last?.t ?? null, stored, v.refused, now).run();
+  return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null };
+}
+
+/** F1: a feed source is preferred by the MT5 fallback while its newest bar is at most this old. */
+export const FEED_FRESH_MS = 3 * 60_000;
+
 /** The most bars one corpusBars read returns (about a day of M1). */
 export const CORPUS_READ_MAX = 1500;
 
@@ -189,13 +248,18 @@ export const CORPUS_READ_MAX = 1500;
  * Only bars from Omega's active broker, pair and user are ever stored, so the source is that user's.
  * Returns { source, bars: [{ t, o, h, l, c, v }] }; an empty list when the corpus is off or empty.
  */
-export async function readCorpusBars(env, { sinceMs = 0, limit = CORPUS_READ_MAX } = {}) {
+export async function readCorpusBars(env, { sinceMs = 0, limit = CORPUS_READ_MAX, preferFeed = false, now = Date.now() } = {}) {
   const db = env?.DB;
   if (corpusMode(env) === "off" || !db) return { source: null, bars: [] };
   try {
     await ensureSchema(db);
-    // The traded pair's source (mt5:...), never a macro symbol's (mt5macro:...).
-    const src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL AND source LIKE 'mt5:%' ORDER BY updated_ms DESC LIMIT 1").first();
+    // F1: the MT5 fallback (preferFeed) reads a fresh feed source first (another broker than the executor's); every other
+    // reader (the ladder, the gates, the basis) reads the executor's own source only, never a feed's.
+    let src = preferFeed
+      ? await db.prepare("SELECT s.source, s.server, s.symbol FROM corpus_sources s JOIN corpus_feeds f ON f.source = s.source WHERE s.last_minute_ms IS NOT NULL AND s.last_minute_ms >= ? AND s.source LIKE 'mt5:%' ORDER BY s.last_minute_ms DESC, s.updated_ms DESC LIMIT 1").bind(now - FEED_FRESH_MS).first()
+      : null;
+    // The traded pair's source (mt5:...), never a macro symbol's (mt5macro:...), never a feed's.
+    if (!src) src = await db.prepare("SELECT source, server, symbol FROM corpus_sources WHERE last_minute_ms IS NOT NULL AND source LIKE 'mt5:%' AND source NOT IN (SELECT source FROM corpus_feeds) ORDER BY updated_ms DESC LIMIT 1").first();
     if (!src) return { source: null, bars: [] };
     const n = Math.max(1, Math.min(CORPUS_READ_MAX, Number(limit) || CORPUS_READ_MAX));
     const since = finite(Number(sinceMs)) ? Number(sinceMs) : 0;

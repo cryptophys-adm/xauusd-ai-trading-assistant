@@ -93,9 +93,9 @@ function storedDeals(db) {
   if (set.size > 2000) set.clear();
   return set;
 }
-const SERVER_RE = /^[A-Za-z0-9._ -]{1,64}$/;
-const KID_RE = /^[0-9a-f]{16}$/;
-const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+export const SERVER_RE = /^[A-Za-z0-9._ -]{1,64}$/;
+export const KID_RE = /^[0-9a-f]{16}$/;
+export const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 let schemaReady = false;
 export function resetOmegaBrokerSchemaForTests() { schemaReady = false; resetAccountSpecSchemaForTests(); }
@@ -601,7 +601,7 @@ export async function readSettingsKeyMeta(env) {
 
 // ---------------------------------------------------------------- connection
 
-function envelopeError(envelope) {
+export function envelopeError(envelope) {
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return "envelope must be an object";
   if (envelope.v !== 1) return "envelope.v must be 1";
   if (typeof envelope.kid !== "string" || !KID_RE.test(envelope.kid)) return "envelope.kid is invalid";

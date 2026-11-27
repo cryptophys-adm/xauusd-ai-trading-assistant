@@ -409,3 +409,24 @@ test("Modify and Delegate (owner 2026-11-19): the owner alone, same origin, JSON
     assert.equal((await handle(req(path, { token: owner }), env, opts)).status, 405);
   }
 });
+
+test("F1: the feed sync takes only the feed's own service token, never the executor's, and only on its own route", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const O = { overview: async () => ({}), feedSync: async (input) => { calls.push(input); return { ok: true, role: "feed", bridge_id: input.bridgeId, connection: null }; }, bridgeSync: async () => { throw new Error("never"); } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const FEED_ID = "9f00aa.access";
+  const body = { bridge_id: "oanda", kid: "0123456789abcdef", public_key: "AAAA", bridge_version: "1.8.0", state: { connected: true }, corpus: null, intents: [{ x: 1 }] };
+  const feed = async (claims, env, path = "/api/bridge/feed-sync") => handle(new Request(`https://omega.cryptophys.work${path}`, {
+    method: "POST", body: JSON.stringify(body), headers: { "cf-access-jwt-assertion": await jwt(claims), "content-type": "application/json" }
+  }), env, opts);
+  const off = await feed({ common_name: FEED_ID }, { ...ENV_BASE, OMEGA: O, OMEGA_BRIDGE_CLIENT_ID: BRIDGE_ID });
+  assert.deepEqual([off.status, (await off.json()).error], [403, "feed_not_configured"], "no feed token configured: every feed refused");
+  const env = { ...ENV_BASE, OMEGA: O, OMEGA_BRIDGE_CLIENT_ID: BRIDGE_ID, OMEGA_FEED_CLIENT_ID: FEED_ID };
+  assert.equal((await feed({ common_name: BRIDGE_ID }, env)).status, 403, "the executor's token never syncs as a feed");
+  assert.equal((await feed({ email: "owner@example.com" }, env)).status, 403, "a person never syncs as a feed");
+  assert.equal((await feed({ common_name: FEED_ID }, env, "/api/bridge/sync")).status, 403, "the feed's token never reaches the executor's sync");
+  const ok = await feed({ common_name: FEED_ID }, env);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(calls.at(-1), { bridgeId: "oanda", state: { connected: true }, publicKey: "AAAA", kid: "0123456789abcdef", bridgeVersion: "1.8.0", corpus: null }, "only these fields are forwarded (no intents, no results)");
+});

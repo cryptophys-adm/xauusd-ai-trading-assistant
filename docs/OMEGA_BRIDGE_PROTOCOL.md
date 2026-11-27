@@ -128,6 +128,17 @@ Errors: 400 `{ "ok": false, "error": … }` for a bad body (e.g. `kid and public
 `state_too_large`), 413 above 64 KiB, 502 `sync_failed` when the AI Worker is unreachable (retry with
 backoff).
 
+## Feed bridges (F1)
+
+A data-only feed bridge (a second MT5 terminal, `OMEGA_ROLE=feed` in a later bridge release) syncs at
+`POST /api/bridge/feed-sync` with its own Access service token (`OMEGA_FEED_CLIENT_ID`). Body: `bridge_id` (1-24
+lower-case letters, digits or dashes, the unit's instance name), `kid`, `public_key`, `bridge_version`, `state`
+(connected, server, symbol quote; anything else is dropped) and `corpus` (gold M1 bars, the same shape as the executor's).
+Response: `{ ok, role: "feed", bridge_id, connection, connection_version, corpus_cursor_ms }`, where `connection` is the
+feed's own sealed login (`{ version, server, envelope }`) when it is stored for this key, else null. There is no
+`intents` key: a feed is never told to trade. The login is set at `POST /api/feed-connection` (`bridge_id`, `server`,
+`envelope` sealed to the feed's kid) and cleared at `DELETE /api/feed-connection` (`bridge_id`, `reason`).
+
 ## Intent ids and idempotency
 
 - Ids are deterministic and at most **31 characters** (the MT5 order comment): `open:<issued_ms>:<B|S>`,
