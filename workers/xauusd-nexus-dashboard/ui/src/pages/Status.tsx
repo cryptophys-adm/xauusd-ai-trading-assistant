@@ -186,7 +186,7 @@ function Parity() {
   const rows: any[] = (p.registry ?? []).filter((r: any) => older || r.current);
   return (
     <>
-      <Panel title="Parity registry" icon={<ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint={`Local engines vs the TradingView alert per candle. Approved after ${p.policy?.promote_after ?? 24} matches in a row; a mismatch revokes.`}
+      <Panel title="Parity registry" icon={<ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />} poll={poll} live hint={`Local engines vs the TradingView alert per candle. Recorded until the TradingView alerts were retired (S3); no new comparisons. Approved after ${p.policy?.promote_after ?? 24} matches in a row; a mismatch revokes.`}
         right={<span className="flex gap-1">{cal?.due ? <Badge tone="late">calibration due</Badge> : null}<Badge tone="ok">{(p.registry ?? []).filter((r: any) => r.current && r.status === "approved").length} approved</Badge></span>}>
         <label className="mb-2 inline-flex cursor-pointer items-center gap-2 text-[11.5px] text-slate-300"><input type="checkbox" checked={older} onChange={(e) => setOlder(e.target.checked)} /> Show older identities</label>
         <div className="table-wrap">
