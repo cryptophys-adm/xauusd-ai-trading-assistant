@@ -18,6 +18,11 @@ export interface ConfirmOptions {
    * Absent: the dialog is as before.
    */
   typed?: string;
+  /**
+   * F4: a reason the person must write before the confirm button works (the Data feeds page's disconnect); it is passed
+   * to `onDone` trimmed. Absent: the dialog is as before.
+   */
+  reason?: { label: string; placeholder?: string };
 }
 
 /** Border, glow, icon and button per tone: the tokens' fills (#22d3ee, #fbbf24, #ef4444) and text colours. */
@@ -27,18 +32,22 @@ const TONES = {
   fault: { border: "border-fault-fill/40", glow: "shadow-[0_0_60px_rgba(239,68,68,0.22)]", icon: "border-fault-fill/40 bg-fault-fill/10 text-fault", button: "bg-fault-fill/20 text-fault ring-fault-fill/50 hover:bg-fault-fill/30" }
 } as const;
 
-export function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (ok: boolean) => void }) {
+export function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (ok: boolean, reason?: string) => void }) {
   const t = TONES[options.tone ?? "ok"];
   const confirmRef = useRef<HTMLButtonElement>(null);
   const typedRef = useRef<HTMLInputElement>(null);
+  const reasonRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
-  const ready = options.typed == null || text === options.typed;
+  const [why, setWhy] = useState("");
+  const hasReason = options.reason != null;
+  const ready = (options.typed == null || text === options.typed) && (!hasReason || why.trim() !== "");
+  const confirm = () => { if (ready) onDone(true, hasReason ? why.trim() : undefined); };
   useEffect(() => {
-    (options.typed != null ? typedRef.current : confirmRef.current)?.focus();
+    (hasReason ? reasonRef.current : options.typed != null ? typedRef.current : confirmRef.current)?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onDone(false); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onDone, options.typed]);
+  }, [onDone, options.typed, hasReason]);
   const Icon = options.tone === "fault" || options.tone === "late" ? AlertTriangle : CheckCircle2;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" onClick={() => onDone(false)}>
@@ -56,13 +65,22 @@ export function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; on
           <div className="mt-3">
             <label htmlFor="confirm-typed" className="block text-[11.5px] font-medium text-fault">Type the key to confirm</label>
             <input id="confirm-typed" ref={typedRef} value={text} onChange={(e) => setText(e.target.value)} autoComplete="off" spellCheck={false}
-              onKeyDown={(e) => { if (e.key === "Enter" && ready) onDone(true); }}
+              onKeyDown={(e) => { if (e.key === "Enter") confirm(); }}
               className="mono mt-1.5 w-full rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-[12px] text-fg outline-hidden focus:border-fault-fill/50" />
+          </div>
+        ) : null}
+        {options.reason != null ? (
+          <div className="mt-3">
+            <label htmlFor="confirm-reason" className="block text-[11.5px] font-medium text-slate-300">{options.reason.label}</label>
+            <input id="confirm-reason" ref={reasonRef} value={why} maxLength={200} onChange={(e) => setWhy(e.target.value)} autoComplete="off" spellCheck={false}
+              placeholder={options.reason.placeholder} aria-required="true"
+              onKeyDown={(e) => { if (e.key === "Enter") confirm(); }}
+              className="mt-1.5 w-full rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-[12px] text-fg outline-hidden focus:border-fault-fill/50" />
           </div>
         ) : null}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={() => onDone(false)} className="rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold text-slate-300 ring-1 ring-slate-600/60 transition hover:bg-white/5 hover:text-white">{options.cancelLabel ?? "Cancel"}</button>
-          <button ref={confirmRef} type="button" disabled={!ready} onClick={() => { if (ready) onDone(true); }} className={`rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold ring-1 transition disabled:cursor-not-allowed disabled:opacity-40 ${t.button}`}>{options.confirmLabel ?? "Confirm"}</button>
+          <button ref={confirmRef} type="button" disabled={!ready} onClick={confirm} className={`rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold ring-1 transition disabled:cursor-not-allowed disabled:opacity-40 ${t.button}`}>{options.confirmLabel ?? "Confirm"}</button>
         </div>
       </div>
     </div>

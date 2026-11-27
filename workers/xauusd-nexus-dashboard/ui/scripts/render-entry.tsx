@@ -75,6 +75,13 @@ import pmError from "../../../../test/fixtures/nexus-pm-lines/lines-error.json";
 import pmReplies from "../../../../test/fixtures/nexus-pm-lines/post-replies.json";
 import { PmLinesFrame, PmLinesLoading, PmLinesView, type PmLinesProps } from "../src/components/PmLines";
 import { replyResult } from "../src/lib/pmLines";
+import f4Empty from "../../../../test/fixtures/nexus-f4/overview-empty.json";
+import f4Fresh from "../../../../test/fixtures/nexus-f4/overview-fresh.json";
+import f4Viewer from "../../../../test/fixtures/nexus-f4/overview-viewer.json";
+import f4Stale from "../../../../test/fixtures/nexus-f4/overview-stale.json";
+import f4Replies from "../../../../test/fixtures/nexus-f4/replies.json";
+import { DisconnectDialog, FeedsView, type FeedMsg, type FeedUi } from "../src/pages/Feeds";
+import { LOCAL_ERRORS, errorWords as feedErrorWords, replyResult as feedReply } from "../src/lib/feeds";
 import { councilOpinionTarget, councilOptionsTarget, emptyDraft, engineTarget, errorOf, gateOf, replyOf, roomConclusionTarget, roomMessageTarget, strategyVerdictTarget, type Draft, type Target } from "../src/lib/corrections";
 
 export type Entry = {
@@ -454,6 +461,55 @@ export const PM_VIEWS: Entry[] = [
   { name: "PmLinesLoading", View: () => <PmLinesLoading />, fixture: pmOn, shows: ["Position Manager lines", "animate-pulse"], hides: ["Last 15"] }
 ];
 
+/**
+ * F4, the Data feeds page (Live › Data feeds, #/feeds; test/fixtures/nexus-f4/*.json, the seed's answers of the real Omega
+ * routes and AI Worker: test/support/nexus-f4-seed.mjs). Every state of the card: no feed bridge yet, one fresh feed
+ * (owner and viewer), a stale feed whose login is sealed to an old key beside a fresh feed with its terminal down and
+ * its login cleared, sending, saved, disconnected, each code the POST and DELETE answer and the page's own refusals,
+ * and the disconnect's confirm box (a reason required). The feeds-only entries vary every feed path (the overview's are
+ * capped). Status tones only: no bull, bear or green; no value attribute on any input; no account data.
+ */
+type F4Reply = { status: number; body: any };
+const F4_REPLIES = f4Replies as unknown as Record<string, F4Reply>;
+const esc = (t: string) => t.replace(/'/g, "&#x27;");
+const f4Ui = (id: string, u: FeedUi) => ({ [id]: u });
+const f4Msg = (r: any, cleared = false): FeedMsg => { const x = feedReply(Number(r?.status) || 0, r?.body); return x.ok ? (cleared ? { kind: "cleared" } : { kind: "saved", version: x.version, server: x.server }) : { kind: "error", code: x.error }; };
+const feedsOnly = (base: any) => ({ d }: { d: any }) => <FeedsView d={{ ...base, broker: { ...(base as any).broker, feeds: d?.feeds }, viewer: d?.viewer }} />;
+// The panel's own entry animation (framer-motion) is the only style in the markup; the browser sets it through the CSSOM.
+const F4_NO_DIRECTION = ["text-bull", "text-bear", "emerald", "green", "rose-", "value=\"", "Balance", "Equity", "balance", "equity"];
+const F4_FRESH_SHOWS = ["Data feeds", "oanda", "Data feed (no trading)", ">fresh<", "synced 12s ago", ">connected<", "OANDA-Demo-1", "XAUUSD", "stored · v1", "Fri 27 Nov 04:59 UTC · 11:59 GMT+7", "ccd56eb1e2d15266", "1.9.0", "text-ok"];
+const F4_ERROR_FIXTURES: [string, F4Reply, any][] = Object.entries(F4_REPLIES).filter(([, r]) => r.status !== 200).map(([k, r]) => [k, r, k === "kid_mismatch" ? f4Stale : f4Fresh]);
+export const F4_VIEWS: Entry[] = [
+  { name: "F4Empty", View: FeedsView, fixture: f4Empty, shows: ["Data feeds", "No feed bridge has connected yet", "A feed bridge shows here after its first sync from the VPS.", "owner"], hides: ["Save feed login", "<form", ...F4_NO_DIRECTION] },
+  { name: "F4Fresh", View: FeedsView, fixture: f4Fresh,
+    shows: [...F4_FRESH_SHOWS, "owner", "Feed login · data only", "Save feed login", ">Disconnect<", 'type="password"', 'autoComplete="new-password"', 'name="login"', 'name="server"', 'placeholder="OANDA-Demo-1"'],
+    hides: ["Login sealed to an old key", "Refused", "read only", ...F4_NO_DIRECTION] },
+  { name: "F4FreshFeeds", View: feedsOnly(f4Fresh), fixture: { feeds: (f4Fresh as any).broker.feeds, viewer: (f4Fresh as any).viewer }, shows: [...F4_FRESH_SHOWS, "Save feed login"] },
+  { name: "F4Viewer", View: FeedsView, fixture: f4Viewer, shows: [...F4_FRESH_SHOWS, "read only"], hides: ["<form", "<input", "<button", "Save feed login", "Disconnect", "Feed login", ...F4_NO_DIRECTION] },
+  { name: "F4StaleOldKey", View: FeedsView, fixture: f4Stale,
+    shows: [">stale<", "last sync 6 min ago", "Login sealed to an old key", "The feed gets no login until it is entered again.", "stored to an old key · v1", "text-late", "border-late-fill/35", "97f95ff94b0dbbdc",
+      "backup", "synced 10s ago", ">not connected<", "text-fault", "disconnected · v1", "Fri 27 Nov 05:06 UTC · 12:06 GMT+7", "Backup-Demo"],
+    hides: ["Refused", ...F4_NO_DIRECTION] },
+  { name: "F4StaleFeeds", View: feedsOnly(f4Stale), fixture: { feeds: (f4Stale as any).broker.feeds, viewer: (f4Stale as any).viewer }, shows: ["Login sealed to an old key", ">stale<"] },
+  { name: "F4StaleViewer", View: ({ d }) => <FeedsView d={{ ...d, viewer: (f4Viewer as any).viewer }} />, fixture: f4Stale, shows: ["Login sealed to an old key", "read only"], hides: ["<form", "<button"] },
+  { name: "F4Sending", View: ({ d }) => <FeedsView d={d} ui={f4Ui("oanda", { phase: "sending" })} />, fixture: f4Fresh, shows: ["Encrypting…", 'disabled=""'], hides: ["Save feed login", "Refused"] },
+  { name: "F4Saved", View: ({ d }) => <FeedsView d={f4Fresh} ui={f4Ui("oanda", { msg: f4Msg(d) })} />, fixture: F4_REPLIES.stored, shows: [esc("Saved v1 for OANDA-Demo-1; applied at the feed's next sync.")], hides: ["Refused"] },
+  { name: "F4Cleared", View: ({ d }) => <FeedsView d={f4Stale} ui={f4Ui("backup", { msg: f4Msg(d, true) })} />, fixture: F4_REPLIES.cleared, shows: ["Disconnected; the feed gets no login from its next sync."], hides: ["Refused"] },
+  ...F4_ERROR_FIXTURES.map(([k, r, base]) => {
+    const code = String(r.body.error);
+    return { name: `F4Error_${k}`, View: ({ d }: { d: any }) => <FeedsView d={base} ui={f4Ui("oanda", { msg: f4Msg(d) })} />, fixture: r,
+      shows: ['role="alert"', `Refused: ${esc(code)}`, esc(feedErrorWords(code)), "text-fault",
+        ...(k === "feed_bridge_not_seen" ? ["The feed bridge has not synced yet. Start it on the VPS first, then retry."] : []),
+        ...(k === "kid_mismatch" ? [esc("The feed's key changed. Reload the page and retry.")] : [])], hides: ["Saved v"] };
+  }),
+  ...LOCAL_ERRORS.map((code) => ({ name: `F4Local_${code}`, View: ({ d }: { d: any }) => <FeedsView d={f4Fresh} ui={f4Ui("oanda", { msg: { kind: "error", code: String(d?.error ?? code) } })} />, fixture: { error: code },
+    shows: ['role="alert"', `Refused: ${code}`, esc(feedErrorWords(code))] })),
+  { name: "F4RefusedNoBody", View: ({ d }) => <FeedsView d={f4Fresh} ui={f4Ui("oanda", { msg: f4Msg(d) })} />, fixture: { status: 503, body: {} }, shows: ["Refused: HTTP 503", "Nothing changed."] },
+  { name: "F4ViewerMessage", View: ({ d }) => <FeedsView d={f4Viewer} ui={f4Ui("oanda", { msg: f4Msg(d) })} />, fixture: F4_REPLIES.forbidden, shows: ["Refused: forbidden", "A person makes this change, never a service token."], hides: ["<form"] },
+  { name: "F4DisconnectDialog", View: ({ d }) => <DisconnectDialog feed={{ bridge_id: typeof d?.bridge_id === "string" ? d.bridge_id : "oanda" }} onDone={() => {}} />, fixture: { bridge_id: "oanda" },
+    shows: ["Disconnect the oanda feed?", "Reason (required)", 'aria-required="true"', 'placeholder="e.g. rotate the feed login"', 'disabled=""', ">Disconnect<", "border-fault-fill/40", "Trading is not affected: this is a data feed."], hides: ["Type the key to confirm"] }
+];
+
 export const VIEWS: Entry[] = [
   {
     name: "ZonesHeld", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: zonesHeld,
@@ -670,6 +726,7 @@ export const VIEWS: Entry[] = [
   { name: "OrbUnread404", View: ({ d }) => <OrbUnread poll={orbUnread(`/api/orb 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/orb 404 Not found"] },
   { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] },
   ...PM_VIEWS,
+  ...F4_VIEWS,
   ...H3F_VIEWS
 ];
 
