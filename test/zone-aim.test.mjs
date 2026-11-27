@@ -401,9 +401,9 @@ test("ZA-16 the frozen 2026-11-20 22:00 capture: Z2b moves no price there, label
   }
 });
 
-test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 4dcd1ac9… (E1 limit-first moved it, after K1, after Track B PR 19, Track B PR 18, Track B PR 17, Track A PR 5, the Z6 sd marker, Z6, B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
+test("ZA-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 99850b00… (E1 limit-first moved it, after K1, after Track B PR 19, Track B PR 18, Track B PR 17, Track A PR 5, the Z6 sd marker, Z6, B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "4dcd1ac934afa5703fb5f0a9b58becf2f812ecbca44640d447b89f44047e47df");
+  assert.equal(ENGINE_CODE_HASH, "99850b0021dc294e537d1adcc49d646162dcd01bfb8a3726cc4a34c40d507777");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });
 

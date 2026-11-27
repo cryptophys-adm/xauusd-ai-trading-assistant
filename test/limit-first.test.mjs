@@ -73,7 +73,8 @@ test("LF-2 a pullback strategy never yields a market intent: the council's enter
 test("LF-3 a limit that cannot rest is no entry, never a market fallback", () => {
   // The zone passed: price already below the demand zone's far edge.
   const passed = plan({ executor: { ...EXECUTOR, symbol: { ...EXECUTOR.symbol, bid: 4097.8, ask: 4098 } }, entryCouncil: answered("enter_market") });
-  assert.deepEqual([kinds(passed), codes(passed)], [[], ["zone_passed"]]);
+  assert.deepEqual([kinds(passed), codes(passed)], [[], ["limit_first_refused", "zone_passed"]]);
+  assert.equal(passed.notes[0].detail, "zone_passed", "the refusal's own code rides on the limit-first note (the hourly digest counts it)");
   // A netting account: no limit, no market.
   const net = plan({ executor: { ...EXECUTOR, account: { ...EXECUTOR.account, margin_mode: "netting" } }, entryCouncil: answered("enter_market") });
   assert.deepEqual([kinds(net), codes(net).at(-1)], [[], "netting_account"]);
@@ -240,4 +241,33 @@ test("LF-10 the record-only own-type gate's evidence and GET /api/limit-first: p
   assert.deepEqual([v.status, v.setting, v.zone_type_gate.mode, v.zone_type_gate.pass.n, v.zone_type_gate.block.n, v.zone_type_gate.edge_r, v.revert.status], ["ok", "on", "record", 1, 1, 1, "waiting"]);
   assert.deepEqual(v.orders, { placed: 0, filled: 0 });
   assert.equal((await lf.limitFirstStatus({})).status, "unavailable");
+});
+
+test("LF-11 a refusal is never silent: the plan note limit_first_refused (with its code) and one Telegram line an hour with the counts", async () => {
+  const db = d1(), store = kv(), lines = [];
+  const T = Date.parse("2026-11-27T17:00:00Z");
+  const ev = db.raw.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, 'engine', 'plan', ?)");
+  ev.run(T - 50 * 60_000, JSON.stringify({ notes: "limit_first_refused,zone_passed", details: { limit_first_refused: "zone_passed", zone_passed: "the own demand zone 1-2 is passed" } }));
+  ev.run(T - 30 * 60_000, JSON.stringify({ notes: "limit_first_refused,zone_passed", details: { limit_first_refused: "zone_passed" } }));
+  ev.run(T - 20 * 60_000, JSON.stringify({ notes: "limit_first_refused,limit_out_of_band", details: { limit_first_refused: "limit_out_of_band" } }));
+  ev.run(T - 10 * 60_000, JSON.stringify({ notes: "no_side" }));
+  const env = { DB: db, SIGNAL_CACHE: store };
+  const out = await lf.limitFirstRefusalDigest(env, { now: T, send: async (t) => lines.push(t) });
+  assert.deepEqual([out.status, out.total, out.counts], ["sent", 3, { zone_passed: 2, limit_out_of_band: 1 }]);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^XAUUSD OMEGA · Limit-first: 3 pullback entries in the last hour could not rest a limit \(zone_passed x2, limit_out_of_band x1\)/);
+  assert.doesNotMatch(lines[0], /\d{4}\.\d/, "no price");
+  // Within the hour: nothing more, whatever happens.
+  ev.run(T + 60_000, JSON.stringify({ notes: "limit_first_refused,zone_rr", details: { limit_first_refused: "zone_rr" } }));
+  assert.equal((await lf.limitFirstRefusalDigest(env, { now: T + 30 * 60_000, send: async (t) => lines.push(t) })).status, "waiting");
+  // The next hour counts only what came after the last digest; a quiet hour sends nothing.
+  const next = await lf.limitFirstRefusalDigest(env, { now: T + 61 * 60_000, send: async (t) => lines.push(t) });
+  assert.deepEqual([next.status, next.total], ["sent", 1]);
+  assert.equal((await lf.limitFirstRefusalDigest(env, { now: T + 122 * 60_000, send: async (t) => lines.push(t) })).status, "quiet");
+  assert.equal(lines.length, 2);
+  // The plan's own note on a refusal in council mode (and under entry_order "limit").
+  const r = plan({ executor: { ...EXECUTOR, account: { ...EXECUTOR.account, margin_mode: "netting" } }, entryCouncil: answered("place_limit") });
+  assert.deepEqual(codes(r), ["limit_first_refused", "netting_account"]);
+  const l = plan({ settings: { ...ON, entry_order: "limit" }, signal: sig({ feed_basis_known: false }) });
+  assert.deepEqual(codes(l), ["limit_first_refused", "basis_unknown"]);
 });

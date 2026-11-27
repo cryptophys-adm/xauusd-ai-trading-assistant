@@ -1948,7 +1948,7 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
     };
     if (S.entry_order === "limit") {
       // A missed limit is a missed trade: no market fallback.
-      if (!lim.ok) { note(lim.code, lim.detail); return done(); }
+      if (!lim.ok) { if (lf) note("limit_first_refused", lim.code); note(lim.code, lim.detail); return done(); }
       if (!council) return request();
       if (council.status !== "answered") { note("council_unavailable", council.rule ?? null); return done(); }
       if (council.choice !== "place_limit") { note("council_skip", council.reason ?? null); return done(); }
@@ -1959,7 +1959,8 @@ export function planIntents({ signal = null, control = null, settings = OMEGA_DE
       // E1: the council's skip stays a skip; its enter_market, its place_limit and a silent council (whose default is
       // today's market path, as no_measured_reason's) all rest the limit-first limit, or nothing when it cannot rest.
       if (council?.status === "answered" && council.choice === "skip") { note("council_skip", council.reason ?? null); return done(); }
-      if (!lim.ok) { note(lim.code, lim.detail); return done(); }
+      // No entry at all (no market fallback): said in the plan's notes, and in the hourly digest (limitFirstRefusalDigest).
+      if (!lim.ok) { note("limit_first_refused", lim.code); note(lim.code, lim.detail); return done(); }
       note("limit_first", council?.status === "answered" ? `the council's ${council.choice}${council.rule ? ` (${council.rule})` : ""} rests the limit` : `no council answer (${council?.rule ?? "no_answer"}): the limit rests`);
       route = "limit";
     } else if (!council || council.status !== "answered") {

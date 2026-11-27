@@ -189,6 +189,42 @@ export async function limitFirstStatus(env, { now = Date.now(), days = 30 } = {}
   }
 }
 
+export const LIMIT_FIRST_DIGEST_KEY = "limit-first:refusals:v1";
+const HOUR_MS = 3_600_000;
+
+/** Pure: the hourly digest's line (codes and counts only, no price). */
+export function limitFirstRefusalLine(counts, total) {
+  const parts = Object.entries(counts).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([c, n]) => `${c} x${n}`).join(", ");
+  return `XAUUSD OMEGA · Limit-first: ${total} pullback ${total === 1 ? "entry" : "entries"} in the last hour could not rest a limit (${parts}), so no order was placed: pullback strategies never enter at market. The plan notes on the Omega page say why for each.`;
+}
+
+/**
+ * The hourly digest of limit-first refusals (the 5-minute ledger step): the Omega plan events (omega_events action
+ * 'plan', written when the plan's notes change) since the last digest that carry limit_first_refused, counted by their
+ * refusal code; one Telegram line an hour at most, only when there was one. One KV read a run. Never throws.
+ */
+export async function limitFirstRefusalDigest(env, { now = Date.now(), send = null } = {}) {
+  const db = env?.DB, kv = env?.SIGNAL_CACHE;
+  if (!db || !kv) return { status: "unavailable" };
+  try {
+    const state = parse(await kv.get(LIMIT_FIRST_DIGEST_KEY), null) ?? {};
+    const last = Number(state.at_ms) || 0;
+    if (now - last < HOUR_MS) return { status: "waiting" };
+    // Everything since the last digest (the first one: the last hour).
+    const since = last > 0 ? last : now - HOUR_MS;
+    const rows = (await db.prepare("SELECT detail FROM omega_events WHERE action = 'plan' AND ms > ? AND detail LIKE '%limit_first_refused%' ORDER BY id LIMIT 200").bind(since).all()).results ?? [];
+    const counts = {};
+    for (const r of rows) { const code = parse(r.detail, {})?.details?.limit_first_refused; if (typeof code === "string" && code) counts[code] = (counts[code] || 0) + 1; }
+    const total = Object.values(counts).reduce((a, n) => a + n, 0);
+    await kv.put(LIMIT_FIRST_DIGEST_KEY, JSON.stringify({ at_ms: now, total }));
+    if (!total) return { status: "quiet" };
+    if (typeof send === "function") { try { await send(limitFirstRefusalLine(counts, total)); } catch { /* best effort */ } }
+    return { status: "sent", total, counts };
+  } catch (e) {
+    return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
 const parse = (s, fallback = null) => { if (s == null) return fallback; if (typeof s !== "string") return s; try { return JSON.parse(s); } catch { return fallback; } };
 
 /**

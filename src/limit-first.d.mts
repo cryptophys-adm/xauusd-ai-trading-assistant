@@ -18,3 +18,6 @@ export function setupZoneTypeGate(side: string, entryZoneType: string | null): "
 export const ZONE_TYPE_GATE_PROMOTION: { readonly min_n: number; readonly min_edge_r: number };
 export function zoneTypeGateEvidence(setups: Record<string, any>[]): Record<string, any>;
 export function limitFirstStatus(env: unknown, options?: { now?: number; days?: number }): Promise<Record<string, any>>;
+export const LIMIT_FIRST_DIGEST_KEY: string;
+export function limitFirstRefusalLine(counts: Record<string, number>, total: number): string;
+export function limitFirstRefusalDigest(env: unknown, options?: { now?: number; send?: ((text: string) => unknown) | null }): Promise<Record<string, any>>;
