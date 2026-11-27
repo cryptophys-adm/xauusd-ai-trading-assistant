@@ -1,0 +1,127 @@
+{
+  "feed_bridge_not_seen": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "feed_bridge_not_seen"
+    }
+  },
+  "stored": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "bridge_id": "oanda",
+      "version": 1,
+      "status": "stored",
+      "server": "OANDA-Demo-1"
+    }
+  },
+  "server_invalid": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "server must be 1-64 letters, digits, dot, dash, underscore or space"
+    }
+  },
+  "bridge_id_invalid": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "bridge_id must be 1-24 lower-case letters, digits or dashes"
+    }
+  },
+  "envelope_invalid": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "envelope.v must be 1"
+    }
+  },
+  "forbidden": {
+    "status": 403,
+    "body": {
+      "error": "forbidden",
+      "hint": "a person makes this change, never a service token"
+    }
+  },
+  "access_denied": {
+    "status": 403,
+    "body": {
+      "error": "access_denied",
+      "hint": "Omega is reached through Cloudflare Access"
+    }
+  },
+  "cross_origin_refused": {
+    "status": 403,
+    "body": {
+      "error": "cross_origin_refused"
+    }
+  },
+  "content_type_must_be_json": {
+    "status": 415,
+    "body": {
+      "error": "content_type_must_be_json"
+    }
+  },
+  "body_too_large": {
+    "status": 413,
+    "body": {
+      "error": "body_too_large"
+    }
+  },
+  "invalid_json": {
+    "status": 400,
+    "body": {
+      "error": "invalid_json"
+    }
+  },
+  "not_an_object": {
+    "status": 400,
+    "body": {
+      "error": "body must be a JSON object"
+    }
+  },
+  "feed_unavailable": {
+    "status": 503,
+    "body": {
+      "ok": false,
+      "error": "feed_unavailable"
+    }
+  },
+  "feed_connection_failed": {
+    "status": 502,
+    "body": {
+      "error": "feed_connection_failed"
+    }
+  },
+  "delete_reason_required": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "a reason is required to disconnect"
+    }
+  },
+  "delete_forbidden": {
+    "status": 403,
+    "body": {
+      "error": "forbidden",
+      "hint": "a person makes this change, never a service token"
+    }
+  },
+  "kid_mismatch": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "kid_mismatch"
+    }
+  },
+  "cleared": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "bridge_id": "backup",
+      "version": 1,
+      "status": "cleared"
+    }
+  }
+}

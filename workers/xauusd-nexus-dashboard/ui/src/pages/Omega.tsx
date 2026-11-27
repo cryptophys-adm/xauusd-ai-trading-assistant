@@ -80,7 +80,7 @@ async function keyId(publicKeySpkiBase64: string) {
   return Array.from(digest.slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function buildEnvelope(publicKeySpkiBase64: string, kid: string, creds: { server: string; login: string; password: string }) {
+export async function buildEnvelope(publicKeySpkiBase64: string, kid: string, creds: { server: string; login: string; password: string }) {
   if ((await keyId(publicKeySpkiBase64)) !== kid) throw new Error("the bridge key does not match its id");
   const publicKey = await crypto.subtle.importKey("spki", unb64(publicKeySpkiBase64), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
   const aesKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);

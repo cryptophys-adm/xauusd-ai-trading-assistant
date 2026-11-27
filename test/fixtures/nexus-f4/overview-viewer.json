@@ -1,0 +1,468 @@
+{
+  "server_ms": 1795755600000,
+  "signal": {
+    "version": "cryptophys.ea-signal.v1",
+    "kill": false,
+    "kill_source": "",
+    "paused": false,
+    "blackout": false,
+    "blackout_reason": "",
+    "signal_id": "",
+    "side": "NONE",
+    "action": "",
+    "entry": 0,
+    "stop": 0,
+    "tp1": 0,
+    "risk_reward": 0,
+    "confidence": 0,
+    "issued_ms": 0,
+    "expires_ms": 0,
+    "market_price": 0,
+    "market_ms": 0,
+    "server_ms": 1795755600000,
+    "trading_mode": "",
+    "power": 0,
+    "power_ms": 0,
+    "key_levels": "",
+    "feed_basis": 0,
+    "feed_basis_known": false,
+    "strategy_execution": false,
+    "trade_agent": "",
+    "agent_conf": "",
+    "agent_conf_prev": "",
+    "quorum_long_share": -1,
+    "quorum_short_share": -1,
+    "veto_long": false,
+    "veto_short": false,
+    "liquidity_on": false,
+    "liquidity_weight": 0,
+    "liquidity_levels": "",
+    "liquidity_spread_median": 0,
+    "liquidity_spread_widen": 0,
+    "liquidity_sweep": "",
+    "liquidity_sweep_age_min": -1,
+    "liquidity_thin": false,
+    "source": "decision_engine"
+  },
+  "control": {
+    "mode": "active",
+    "reason": "",
+    "actor": "",
+    "at": null
+  },
+  "heartbeat": null,
+  "ea": {
+    "connected": false,
+    "heartbeat_age_ms": null,
+    "stale_after_ms": 900000
+  },
+  "deals": [],
+  "stats": {
+    "today": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "net": 0,
+      "profit_factor": null,
+      "average_win": null,
+      "average_loss": null,
+      "max_drawdown": 0
+    },
+    "week": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "net": 0,
+      "profit_factor": null,
+      "average_win": null,
+      "average_loss": null,
+      "max_drawdown": 0
+    },
+    "month": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate": null,
+      "net": 0,
+      "profit_factor": null,
+      "average_win": null,
+      "average_loss": null,
+      "max_drawdown": 0
+    }
+  },
+  "control_events": [],
+  "broker": {
+    "engine": {
+      "env_enabled": false,
+      "enabled": false,
+      "live_armed": false,
+      "risk_pct": 0.5,
+      "max_positions": 1,
+      "max_daily_loss_pct": 2,
+      "max_spread_points": 60,
+      "max_signal_age_ms": 600000,
+      "policy_auto": false,
+      "trailing_stop_r": 0,
+      "tight_stop_max_lot_factor": 1.5,
+      "adaptive_volatility": true,
+      "sor_mode": "auto_failover",
+      "tp_ladder": true,
+      "partial_min_pct": 25,
+      "partial_max_pct": 50,
+      "ladder_lock_pips": 30,
+      "ladder_max_partials": 3,
+      "reentry_cooldown_bars": 1,
+      "ladder_r_intraday": 0.5,
+      "ladder_r_swing": 0.3,
+      "entry_order": "market",
+      "pm_loosen_enabled": false,
+      "positioning_enabled": true,
+      "liquidity_enabled": true,
+      "profit_lock_gate": "on",
+      "change_thresholds": "conf,tpw,limit,skip,stance",
+      "pm_fast_1m": "on",
+      "reentry_1m": "on",
+      "limit_supersede": "on",
+      "cd_gate": "on",
+      "zone_mgmt": "off",
+      "zone_sd": "on",
+      "settings_version": 0,
+      "updated_by": null,
+      "updated_ms": null
+    },
+    "engine_defaults": {
+      "risk_pct": 0.5,
+      "max_positions": 1,
+      "max_daily_loss_pct": 2,
+      "max_spread_points": 60,
+      "max_signal_age_min": 10
+    },
+    "entry_order": {
+      "mode": "market",
+      "ea_version": null,
+      "ea_min_version": "1.21",
+      "ea_ok": false,
+      "options": [
+        {
+          "value": "market",
+          "enabled": true,
+          "reason": null
+        },
+        {
+          "value": "limit",
+          "enabled": false,
+          "reason": "needs OmegaExecutor 1.21 (the terminal reports no version)"
+        },
+        {
+          "value": "council",
+          "enabled": false,
+          "reason": "needs OmegaExecutor 1.21 (the terminal reports no version)"
+        }
+      ],
+      "pending": [],
+      "recent": []
+    },
+    "delegation": {
+      "tickets": [],
+      "rows": [],
+      "mode": {
+        "on": false,
+        "since_ms": null,
+        "actor": null,
+        "at_ms": null
+      },
+      "supported": false,
+      "ea_min_version": "1.18"
+    },
+    "pm_loosen": {
+      "enabled": false,
+      "loosened": []
+    },
+    "probation": {
+      "enabled": true,
+      "reverted": {},
+      "risk_scale": 0.5,
+      "revert_last_n": 5,
+      "agents": [
+        "sweep_reversal"
+      ]
+    },
+    "connection": {
+      "version": 0,
+      "status": "none",
+      "server": null,
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": null,
+      "updated_ms": null
+    },
+    "bridge": {
+      "seen": false,
+      "synced_age_ms": 600000,
+      "kid": "9a4580a8c7f04541",
+      "bridge_version": "1.8.0",
+      "terminal_connected": false,
+      "trade_allowed": false,
+      "terminal_error": null,
+      "broker": null,
+      "executor": {
+        "status": "unknown",
+        "version": null,
+        "auto_break_even": null,
+        "trailing_stop": null,
+        "note": "OmegaExecutor does not report its version or inputs: install 1.12 or newer"
+      },
+      "ea_version_gate": {
+        "on": false,
+        "min_version": "1.16",
+        "met": false
+      },
+      "leverage": null,
+      "margin_mode": null,
+      "margin_free": null,
+      "freeze_level_points": null,
+      "symbol_trade_mode": null,
+      "margin_per_lot": null,
+      "server": null,
+      "trade_mode": null,
+      "currency": "USD",
+      "cent": false,
+      "owner_symbol": null,
+      "money": {
+        "currency": "USD",
+        "units_per_usd": 1,
+        "source": "usd",
+        "measured": null,
+        "problem": null
+      },
+      "money_text": "USD",
+      "balance": null,
+      "equity": null,
+      "day_start_balance": null,
+      "day_realized_pl": null,
+      "symbol": "XAUUSD",
+      "bid": null,
+      "ask": null,
+      "spread_points": null,
+      "digits": null,
+      "point": null,
+      "tick_size": null,
+      "tick_value": null,
+      "volume_min": null,
+      "volume_max": null,
+      "volume_step": null,
+      "stops_level_points": null,
+      "atr_value": null,
+      "atr_points": null,
+      "symbol_check": {
+        "ok": false,
+        "problem": "currency_not_reported",
+        "text": "XAUUSD refused: the EA did not report the profit currency (OmegaExecutor 1.14 or later needed). No new entries.",
+        "chart_symbol": null,
+        "currency_profit": null,
+        "contract_size": null,
+        "symbol_error": null,
+        "resolution": null,
+        "reference": {
+          "kind": "feed",
+          "server": null,
+          "text": "reference: the TradingView feed"
+        }
+      },
+      "positions": [],
+      "orders": [],
+      "deals": [],
+      "state_age_ms": 601000
+    },
+    "accounts": [
+      {
+        "account_ref": "acct_877384a4ee8d0982",
+        "server": "ExecBroker-Demo",
+        "legacy_ref": true,
+        "identity": {
+          "currency": "USD",
+          "cent": false,
+          "symbol": "XAUUSD",
+          "contract_size": null,
+          "label": "USD account · XAUUSD"
+        },
+        "spec_status": "invalid",
+        "spec_problem": "digits",
+        "spec_hash": "20af06416223da29",
+        "spec_since_ms": 1795755000000,
+        "spec_validated_ms": null,
+        "spec_text": "Broker spec not usable: digits. No new entries.",
+        "profile": "custom",
+        "profile_label": "Custom",
+        "ceiling": "custom",
+        "agent_mode": "autonomous",
+        "custom": {
+          "risk_pct": 0.5,
+          "max_positions": 1,
+          "max_daily_loss_pct": 2
+        },
+        "profile_limits": {
+          "target_risk_pct": null,
+          "max_positions": null,
+          "daily_loss_pct": null
+        },
+        "profile_by": "system",
+        "profile_ms": 1795755000000,
+        "pending_upgrade": null,
+        "upgrade_block_until_ms": null,
+        "last_upgrade_ms": null,
+        "pending_downgrade": null,
+        "council_veto": null,
+        "council_reviews": [],
+        "history": {
+          "first_seen_ms": 1795755000000,
+          "last_seen_ms": 1795755000000,
+          "first_time": true,
+          "balance_peak": null,
+          "dd_ref": null,
+          "baseline_ms": null,
+          "losses_in_a_row": 0,
+          "changes": 0
+        },
+        "connected": true,
+        "upgrade_block_reason": null,
+        "day_pl_pct": null
+      }
+    ],
+    "trading_mode": {
+      "mode": "intraday",
+      "auto": true,
+      "pinned": false,
+      "baseline": "intraday",
+      "last_switch": null,
+      "history": [],
+      "probation": null
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": null
+    },
+    "tca": {
+      "samples_count": 0,
+      "avg_latency_ms": null,
+      "avg_slippage_points": null,
+      "max_slippage_points": null,
+      "quality": "DEGRADED"
+    },
+    "route": {
+      "active_route": null,
+      "status": "no_connection",
+      "failover": "none",
+      "bridge_sync_age_ms": 600000
+    },
+    "management": {
+      "key_levels": "SL+ behind the key levels price has passed; trailing TP to the next key level with a strong power; close a winner when the power turns strongly against it",
+      "break_even_r": null,
+      "fallback": "without key levels: the stop trails the broker's 5m swing",
+      "scale_out": "a position of 0.02 lots or more banks half at 1.5R or its target, once",
+      "adaptive_stop": "a stop closer than 0.75 x ATR widens to it; the target keeps the plan's reward-to-risk (scalp: the target stays at the key level)",
+      "no_stacking": "a second position on a side opens only once the first is protected"
+    },
+    "macro_risk": {
+      "blackout": false,
+      "reason": null,
+      "upcoming_count": 0,
+      "upcoming_24h": 0,
+      "next_event": null,
+      "window_minutes": {
+        "before": 120,
+        "after": 30
+      }
+    },
+    "volatility": {
+      "atr_points": null,
+      "atr_value": null,
+      "regime": "NORMAL",
+      "adaptive_enabled": true
+    },
+    "intents": [],
+    "events": [
+      {
+        "ms": 1795755585000,
+        "actor": "owner@example.com",
+        "action": "feed_connection_set",
+        "detail": {
+          "bridge_id": "oanda",
+          "server": "OANDA-Demo-1",
+          "version": 1
+        }
+      },
+      {
+        "ms": 1795755000000,
+        "actor": "engine",
+        "action": "plan",
+        "detail": {
+          "notes": "engine_off"
+        }
+      },
+      {
+        "ms": 1795755000000,
+        "actor": "engine",
+        "action": "account_seen",
+        "detail": {
+          "account_ref": "acct_877384a4ee8d0982",
+          "profile": "custom",
+          "ceiling": "custom",
+          "agent_mode": "autonomous",
+          "spec_hash": "20af06416223da29",
+          "spec_problem": "digits"
+        }
+      },
+      {
+        "ms": 1795755000000,
+        "actor": "bridge",
+        "action": "symbol_refused",
+        "detail": {
+          "server": "ExecBroker-Demo",
+          "symbol": "XAUUSD",
+          "problem": "currency_not_reported",
+          "currency_profit": null,
+          "contract_size": null
+        }
+      }
+    ],
+    "planner": {
+      "since_ms": 1795755000000,
+      "codes": [
+        "engine_off"
+      ],
+      "details": {}
+    },
+    "feeds": [
+      {
+        "bridge_id": "oanda",
+        "role": "feed",
+        "kid": "ccd56eb1e2d15266",
+        "public_key": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn4Zw0PGypKtwoIIcJWLAUbC1xZ4JcsK5dqaBtM3OnKq7le3mOAaCMgaq4cC3rhMkrRXvQceWHHPOKrgjw5B9azLG+oGUbWAjERcqJ2i17iyq1deQn0nOpfbVHHlyyqW4JVTHwg3pwMtVD1ptnkG4ikKRXSdEWHRHZITwHW15l4HySRYwaTNKwr/u3WWgjeRsPMl3XtFoZWIe1tdr9IoTNRAzDiIckTBHfBf3EC+aUJImOpKcGXC7AdBXH5UpOnJTPrq6QebLNRcEaCzmeAgoi1q/WgDjLmocLmd8vY6UtLMh8Uor0F6yc6P2I70r4VAliDAJ/HC8SOPWbr3wF45tQnprFSjKmt82zP6LZCmEh0TM8Wiy7qayqxunwqUcfWyn7/wroygTPgbvAvhyAz1jSUeShvdgNNF/HXY4g7/j4NTniK05HMA3PLBOCpU7Nc1K+2Z9Exfl5dgstIAQ7P4l4DCybPNG48uNrodnoCIzO05mBoJHv7BTQcUTvYAqoRCLAgMBAAE=",
+        "bridge_version": "1.9.0",
+        "synced_age_ms": 12000,
+        "fresh": true,
+        "terminal_connected": true,
+        "server": "OANDA-Demo-1",
+        "symbol": "XAUUSD",
+        "connection": {
+          "version": 1,
+          "status": "stored",
+          "server": "OANDA-Demo-1",
+          "sealed_to_current_key": true,
+          "updated_ms": 1795755585000
+        }
+      }
+    ]
+  },
+  "viewer": {
+    "subject": "ci.access",
+    "type": "service_token",
+    "can_control": false
+  }
+}

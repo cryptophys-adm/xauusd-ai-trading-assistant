@@ -200,8 +200,10 @@ test("FSU7 the confirms say what changes: ZONE_PRIORITY: off → on, the era lin
   assert.equal(u.inSentence("TP1 at the nearest key zone"), "TP1 at the nearest key zone", "an acronym keeps its capitals");
   // The typed key: the confirm button stays disabled until the key is typed (ConfirmDialog's typed option).
   const cd = src("components/ConfirmDialog.tsx");
-  assert.match(cd, /const ready = options\.typed == null \|\| text === options\.typed;/);
-  assert.match(cd, /disabled=\{!ready\} onClick=\{\(\) => \{ if \(ready\) onDone\(true\); \}\}/);
+  // F4 added an optional required reason (the Data feeds page's disconnect): without one, ready is the typed key as before.
+  assert.match(cd, /const ready = \(options\.typed == null \|\| text === options\.typed\) && \(!hasReason \|\| why\.trim\(\) !== ""\);/);
+  assert.match(cd, /const confirm = \(\) => \{ if \(ready\) onDone\(true, hasReason \? why\.trim\(\) : undefined\); \};/);
+  assert.match(cd, /disabled=\{!ready\} onClick=\{confirm\}/);
   assert.match(cd, /Type the key to confirm/);
   const names = u.VIEWS.map((v) => v.name);
   for (const n of ["FS1ConfirmNormal", "FS1ConfirmEra", "FS1ConfirmEv", "FS1ConfirmEmergency", "FS1ConfirmReset", "FS1ConfirmTokens"]) assert.ok(names.includes(n), n);
