@@ -41,6 +41,7 @@ import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
 import { cdGateOn, readCdGateLive, recordCdEvents } from "./cd-gate.mjs";
+import { recoveryHold, heldDetail, holdRecovery, RECOVERY_RESTART_CAP } from "./recovery-hold.mjs";
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -1019,6 +1020,11 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       .bind(kid, publicKey, version, stateText, now).run();
   }
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
+  // Recovery backoff: the terminal reporting connected again (a change of the stored state, so once per reconnect)
+  // re-arms Cerebrum's restarts (src/recovery-hold.mjs).
+  if (executor?.connected === true && prev?.state && parse(prev.state)?.connected === false && conn?.status === "stored") {
+    await event(db, now, "bridge", "terminal_connected", { conn_version: Number(conn.version) });
+  }
   // The light path (owner 2026-11-19: "Keduanya, bertahap", step 1): a sync with nothing to manage and nothing new
   // reuses the last full plan of this isolate, at most LIGHT_SYNC_MAX_AGE_MS old, and only delivers the open intents.
   const lightKey = `${bridgeStateKey(executor)}|${conn?.version ?? ""}|${conn?.status ?? ""}|${kid}|${version}`;
@@ -1446,9 +1452,19 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     }
 
     if (candidateDirective) {
-      const lastRec = await db.prepare("SELECT ms FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
-      const lastMs = Number(lastRec?.ms || 0);
-      if (now - lastMs >= 180_000) {
+      const recent = (await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT ?").bind(RECOVERY_RESTART_CAP + 1).all()).results ?? [];
+      const lastMs = Number(recent[0]?.ms || 0);
+      // Recovery backoff (src/recovery-hold.mjs): after RECOVERY_RESTART_CAP restarts on this connection version with
+      // no connected terminal since, no more restarts: one "held" event, then "hold" on every sync until it re-arms.
+      let hold = { hold: false, recorded: false, streak: 0 };
+      if (candidateDirective === "restart_terminal") {
+        const lastConnected = await db.prepare("SELECT ms FROM omega_events WHERE action = 'terminal_connected' ORDER BY id DESC LIMIT 1").first();
+        hold = recoveryHold({ recent, connVersion: conn.version, connectedMs: Number(lastConnected?.ms || 0) });
+      }
+      if (hold.hold) {
+        recovery = holdRecovery(conn.version);
+        if (!hold.recorded) await event(db, now, "agent:cerebrum", "autonomous_recovery", heldDetail({ connVersion: conn.version, streak: hold.streak, reason: candidateReason }));
+      } else if (now - lastMs >= 180_000) {
         const actionId = `rec:${now}`;
         recovery = {
           directive: candidateDirective,
@@ -1460,6 +1476,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           reason: candidateReason,
           action_id: actionId,
           status: "dispatched",
+          conn_version: Number(conn.version),
         });
         // Owner 2026-11-16: EA health goes to the Cryptophys-Cerebrum chat, not Nexus. The event above is relayed
         // through the platform kernel (src/ea-heartbeat-relay.mjs, topic "ea_heartbeat"); nothing is sent here.
