@@ -1010,6 +1010,28 @@
       "emergency_stop": false,
       "read_only": false,
       "write": "omega-settings"
+    },
+    {
+      "key": "limit_first",
+      "label": "Limit-first for pullback strategies (E1)",
+      "description": "E1: with entry_order limit or council, a pullback strategy (zone pullback, break and retest) always rests a limit 0.1 ATR(1H) behind its entry or inside its own demand/supply zone, never a market order; the council's skip stays a skip. Reverts itself to off once if its first 30 closed trades average worse than the plan replay at the plan's own entry. off: the engine as before.",
+      "group": "omega",
+      "worker": "omega",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "default",
+      "config_value": null,
+      "default_value": "on",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": true,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "omega-settings"
     }
   ]
 }

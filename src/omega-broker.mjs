@@ -41,6 +41,7 @@ import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
 import { cdGateOn, readCdGateLive, recordCdEvents } from "./cd-gate.mjs";
+import { limitFirstWords } from "./limit-first.mjs";
 import { serverCheck, nearMatch, loggedInOn } from "./server-check.mjs";
 import { recoveryHold, heldDetail, holdRecovery, shouldRearm, RECOVERY_RESTART_CAP, REARM_FRESH_MS } from "./recovery-hold.mjs";
 // Recovery backoff: per database binding, when this isolate last checked for a re-arm (src/recovery-hold.mjs).
@@ -416,9 +417,10 @@ async function eaDeletedLine(env, db, executor, r, now) {
 }
 
 /** Pure: the Telegram line of a limit event (placed, moved, cancelled, filled). The owner's private chat only: it carries levels. */
-export function limitLine(kind, { label = "", side = "", ticket = null, lot = null, price = null, sl = null, tp = null, reason = null, expiry_ms = null, from = null, fill = null, gap_r = null, guard = null } = {}) {
+export function limitLine(kind, { label = "", side = "", ticket = null, lot = null, price = null, sl = null, tp = null, reason = null, expiry_ms = null, from = null, fill = null, gap_r = null, guard = null, how = null } = {}) {
   const t = ticket != null ? ` #${ticket}` : "";
-  if (kind === "placed") return `⏳ <b>Omega Limit Placed · ${label}</b>\nOrder:<code>${t}</code> ${side} ${lot ?? "—"} lot @ <code>${price}</code>\nSL: <code>${sl}</code> | TP: <code>${tp}</code>\nExpires: <code>${expiry_ms ? new Date(expiry_ms).toISOString().slice(11, 16) : "—"} UTC</code>`;
+  // E1: a limit-first order says why it waits ("limit (limit-first, demand zone)").
+  if (kind === "placed") return `⏳ <b>Omega Limit Placed · ${label}</b>\nOrder:<code>${t}</code> ${side} ${lot ?? "—"} lot @ <code>${price}</code>${how ? `\nEntry: ${escHtml(how)}` : ""}\nSL: <code>${sl}</code> | TP: <code>${tp}</code>\nExpires: <code>${expiry_ms ? new Date(expiry_ms).toISOString().slice(11, 16) : "—"} UTC</code>`;
   if (kind === "moved") return `↔️ <b>Omega Limit Moved · ${label}</b>\nOrder:<code>${t}</code> ${side} <code>${from ?? "—"}</code> → <code>${price}</code>\nSL: <code>${sl}</code> | TP: <code>${tp}</code>${reason ? `\nReason: <code>${escHtml(reason)}</code>` : ""}`;
   if (kind === "cancelled") return `✖️ <b>Omega Limit Cancelled · ${label}</b>\nOrder:<code>${t}</code>${side ? ` ${side}` : ""}\nReason: <code>${escHtml(reason ?? "—")}</code>`;
   return `🟢 <b>Omega Limit Filled · ${label}</b>\nTicket:<code>${t}</code> ${side} ${lot ?? "—"} lot\nLimit: <code>${price ?? "—"}</code> | Fill: <code>${fill ?? "—"}</code>${gap_r != null ? ` (gap ${gap_r >= 0 ? "+" : ""}${gap_r}R)` : ""}\nSL: <code>${sl ?? "—"}</code> | TP: <code>${tp ?? "—"}</code>${guard ? `\n<b>Closed at once:</b> <code>fill_guard_${guard}</code>` : ""}`;
@@ -1229,8 +1231,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
           await sendOmegaTelegram(env, `🎯 <b>Extended TP Expanded (Runner) · ${label}</b>\nTicket: <code>#${p.ticket}</code>\nNew TP: <code>${p.tp}</code>`);
         } else if (p?.kind === "place_limit") {
           // Limit entries (docs/RFC_OMEGA_LIMIT_ENTRY.md §5): placed, moved, cancelled and filled, to the owner's private chat.
-          await event(db, now, "engine", "limit_placed", { intent_id: r.id, ticket: result.ticket, side: p.side, mode: p.mode ?? null, entry_order: p.entry_order ?? null, away_r: p.away_r ?? null, life_min: p.knobs?.max_pending_life ?? null });
-          await sendOmegaTelegram(env, limitLine("placed", { label, side: p.side, ticket: result.ticket, lot: p.lot, price: p.entry, sl: p.sl, tp: p.tp, expiry_ms: p.expiry_ms }));
+          await event(db, now, "engine", "limit_placed", { intent_id: r.id, ticket: result.ticket, side: p.side, mode: p.mode ?? null, entry_order: p.entry_order ?? null, away_r: p.away_r ?? null, life_min: p.knobs?.max_pending_life ?? null,
+            ...(p.limit_first === true ? { limit_first: true, entry_basis: p.entry_basis ?? null, entry_zone_type: p.entry_zone_type ?? null, zone_type_gate: p.zone_type_gate ?? null } : {}) });
+          await sendOmegaTelegram(env, limitLine("placed", { label, side: p.side, ticket: result.ticket, lot: p.lot, price: p.entry, sl: p.sl, tp: p.tp, expiry_ms: p.expiry_ms, how: p.limit_first === true ? limitFirstWords(p) : null }));
         } else if (p?.kind === "delete_order") {
           await event(db, now, "engine", "limit_cancelled", { intent_id: r.id, ticket: p.ticket, reason: p.reason ?? null });
           await sendOmegaTelegram(env, limitLine("cancelled", { label, ticket: p.ticket, side: p.side ?? "", reason: p.reason }));
@@ -2118,6 +2121,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
         delete back.reentry_1m;
         delete back.limit_supersede;
         delete back.cd_gate;
+        delete back.limit_first;
         delete back.zone_mgmt;
         delete back.zone_sd;
         const r = await writeSettings(env, { body: back, actor: "aether-rollback" }, { now });
@@ -2141,7 +2145,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   const body = { ...current.settings };
   // Aether's policy never writes entry_order (docs/RFC_OMEGA_LIMIT_ENTRY.md §2) nor pm_loosen_enabled (ADR-0020
   // Amendment 8) nor profit_lock_gate (SLG1) nor change_thresholds (CH1) nor pm_fast_1m (PM-1M) nor reentry_1m (RE1)
-  // nor limit_supersede (SS1) nor cd_gate (CDG) nor zone_mgmt (Z3a) nor zone_sd (Z6): the owner's switches are carried
+  // nor limit_supersede (SS1) nor cd_gate (CDG) nor limit_first (E1) nor zone_mgmt (Z3a) nor zone_sd (Z6): the owner's switches are carried
   // as stored.
   delete body.entry_order;
   delete body.pm_loosen_enabled;
@@ -2151,6 +2155,7 @@ export async function applyOmegaPolicy(env, { now = Date.now(), notify = null } 
   delete body.reentry_1m;
   delete body.limit_supersede;
   delete body.cd_gate;
+  delete body.limit_first;
   delete body.zone_mgmt;
   delete body.zone_sd;
   for (const k of POLICY_FIELDS) {

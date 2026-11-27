@@ -15,6 +15,7 @@ export interface OmegaSettings {
   cd_gate?: "on" | "off";
   zone_mgmt?: "off" | "omega";
   zone_sd?: "off" | "on";
+  limit_first?: "on" | "off";
 }
 export const OMEGA_DEFAULTS: Readonly<OmegaSettings>;
 export const RISK_PCT_MAX: number;

@@ -128,6 +128,7 @@
       "cd_gate": "on",
       "zone_mgmt": "off",
       "zone_sd": "on",
+      "limit_first": "on",
       "settings_version": 0,
       "updated_by": null,
       "updated_ms": null

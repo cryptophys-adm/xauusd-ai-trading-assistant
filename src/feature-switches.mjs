@@ -290,6 +290,12 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "zone_sd", label: "Supply/demand box levels in management (Z6)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
     description: "Z6: on lets the signal's /sd box levels into SL+ (only ever tighter than without them, a box counts as passed once wholly passed), the trailing TP (only ever nearer) and the TP ladder's rungs (at a box's far edge); the Position Council still sees 12 levels. off drops them: the engine as before. The owner's switch only.",
     values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
+  }),
+  entry({
+    // E1 (owner 2026-11-27): OMEGA_DEFAULTS.limit_first, settingsFrom's check and ERA_SWITCHES' entry (src/limit-first.mjs).
+    key: "limit_first", label: "Limit-first for pullback strategies (E1)", group: "omega", worker: "omega", write: "omega-settings", resolve: "omega-settings", era_switch: true,
+    description: "E1: with entry_order limit or council, a pullback strategy (zone pullback, break and retest) always rests a limit 0.1 ATR(1H) behind its entry or inside its own demand/supply zone, never a market order; the council's skip stays a skip. Reverts itself to off once if its first 30 closed trades average worse than the plan replay at the plan's own entry. off: the engine as before.",
+    values: ["on", "off"], default_value: "on", config_value: null, read: (raw) => raw
   })
 ]);
 
