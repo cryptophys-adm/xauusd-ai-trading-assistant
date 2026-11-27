@@ -129,7 +129,7 @@ export async function applyMt5Fallback(env, pullStatus, { now = Date.now() } = {
 //   TVC:DXY 4H              the ICE dollar index computed from the broker's six pairs:
 //                           50.14348112 x EURUSD^-0.576 x USDJPY^0.136 x GBPUSD^-0.119 x USDCAD^0.091
 //                           x USDSEK^0.042 x USDCHF^0.036, per minute where all six have a bar.
-// US10Y and USDT dominance have no broker source and stay stale. Every rebuilt series carries the
+// US10Y and the USDT market cap have no broker source and stay stale. Every rebuilt series carries the
 // fallback mark, so the native pulls heal it as gold's.
 const DXY_WEIGHTS = Object.freeze({ EURUSD: -0.576, USDJPY: 0.136, GBPUSD: -0.119, USDCAD: 0.091, USDSEK: 0.042, USDCHF: 0.036 });
 const DXY_CONSTANT = 50.14348112;

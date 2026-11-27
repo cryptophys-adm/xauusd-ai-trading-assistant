@@ -171,9 +171,10 @@ export async function macroEvidence(env, { now = Date.now(), at = null } = {}) {
       news: news ?? { available: false },
       dollar: (() => {
         const d = assetData(asset("dxy"), "A stronger dollar usually weighs on gold; a weaker dollar supports it.");
-        // USDT dominance (the Nexus Macro drivers card, owner 2026-11-10): money parked in the dollar stablecoin, a risk-off gauge.
+        // USDT market cap (TradingView CRYPTOCAP:USDT, Tether's market capitalisation; the Nexus Macro drivers card, owner 2026-11-10;
+        // labelled "market cap" since 2026-11-27, owner: "pilih A, betulkan label USDT market cap").
         const usdt = daily?.context?.usdt?.change_24h_percent;
-        return typeof usdt === "number" && Number.isFinite(usdt) ? { ...d, usdt_dominance_change_24h_percent: Math.round(usdt * 100) / 100, usdt_rule: "Rising USDT dominance means money moving to the dollar stablecoin (risk-off in crypto); read it beside the dollar index." } : d;
+        return typeof usdt === "number" && Number.isFinite(usdt) ? { ...d, usdt_market_cap_change_24h_percent: Math.round(usdt * 100) / 100, usdt_rule: "This is the USDT (Tether) market cap: the dollars held in the Tether stablecoin. Read its 24-hour change beside the dollar index." } : d;
       })(),
       rates: assetData(asset("us10y"), "Higher yields raise the cost of holding gold, which pays no interest; falling yields support it."),
       silver: assetData(asset("silver"), "Silver moving with gold confirms a metals move; silver diverging weakens it."),
