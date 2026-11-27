@@ -86,3 +86,28 @@ test("below 400 broker bars: only the structure (not ready); stale, refused, off
   assert.equal((await runBrokerTrigger({ AI_WORKER: {} }, { bundle: tv, now: NOW })).status, "unavailable");
   assert.equal((await runBrokerTrigger({ MARKET_DATA_CACHE: new MemoryKV(), AI_WORKER: aiWorker([]) }, { bundle: tv, now: NOW })).status, "no_broker_bars");
 });
+
+test("C1 shadow: the full producer stays live, the R38-only result is compared and tallied per UTC day", async () => {
+  const { R38_SHADOW_KEY, recordShadow } = await import("../src/broker-trigger.mjs");
+  const tv = bundle();
+  const tvR38 = buildM5LocalCalculations(tv, { now: NOW }).records.find((r) => r.engine === "prophet").values.comparable.prophet_r38;
+  for (const mode of ["shadow", "on", "off"]) {
+    const ai = aiWorker(minutesOf(tv.timeframes.M5.candles.slice(-500)));
+    const env = { MARKET_DATA_CACHE: new MemoryKV(), AI_WORKER: ai, BROKER_TRIGGER_R38_ONLY: mode };
+    const r = await runBrokerTrigger(env, { bundle: tv, now: NOW });
+    assert.equal(r.status, "sent", mode);
+    assert.deepEqual([ai.sent[0].ready, ai.sent[0].buy_confirmed, ai.sent[0].sell_confirmed], [true, tvR38.buy_confirmed === true, tvR38.sell_confirmed === true], mode);
+    const tally = env.MARKET_DATA_CACHE.map.get(R38_SHADOW_KEY);
+    if (mode === "shadow") {
+      assert.equal(r.r38_shadow, "match");
+      assert.deepEqual(JSON.parse(tally).days["2026-11-03"], { compared: 1, mismatched: 0, failed: 0, last_mismatch_close: null });
+    } else { assert.equal(r.r38_shadow, undefined); assert.equal(tally, undefined, `${mode}: no tally`); }
+  }
+  const kv = new MemoryKV();
+  await recordShadow(kv, { now: NOW, closeMs: NOW, outcome: "match" });
+  await recordShadow(kv, { now: NOW, closeMs: NOW, outcome: "mismatch" });
+  await recordShadow(kv, { now: NOW, closeMs: NOW, outcome: "failed" });
+  assert.deepEqual(JSON.parse(kv.map.get(R38_SHADOW_KEY)).days["2026-11-03"], { compared: 2, mismatched: 1, failed: 1, last_mismatch_close: new Date(NOW).toISOString() });
+  for (let i = 1; i <= 20; i++) await recordShadow(kv, { now: NOW + i * 86_400_000, closeMs: NOW, outcome: "match" });
+  assert.equal(Object.keys(JSON.parse(kv.map.get(R38_SHADOW_KEY)).days).length, 14, "14 days kept");
+});

@@ -26,8 +26,9 @@ export function brokerTriggerMode(env) {
 // producer's arguments (m5-local-producer.mjs: the last 1000 bars, confirmed, 5 minutes, closed-only HTF, the
 // mintick), each HTF series trimmed to start HTF_KEEP_BEFORE bars before the HTF bar the first chart bar reads. The
 // HTF z-score at bar j reads only bars j-49..j (kwwAt, length 50) and the bar a chart bar reads only moves forward in
-// time, so every selected z, and so every output, is unchanged (trimHigherTimeframes; tests BT-C1). "shadow" also runs
-// the full producer and logs a mismatch; "off" runs the full producer as before.
+// time, so every selected z, and so every output, is unchanged (trimHigherTimeframes; tests BT-C1). "shadow" keeps the
+// full producer live, computes the R38-only result beside it and counts matches (recordShadow); "off" is the full
+// producer alone.
 export const M5_WINDOW = 1000;
 export const HTF_KEEP_BEFORE = 60;
 const HTF_MINUTES = Object.freeze({ M15: 15, H1: 60, H4: 240, D1: 1440, W1: 10080 });
@@ -78,6 +79,26 @@ export function brokerR38(bundle, candles, { now = Date.now(), mintick = 0.001, 
   return { buy: o.confirmation?.buy_confirmed === true, sell: o.confirmation?.sell_confirmed === true };
 }
 
+/**
+ * The "shadow" tally per UTC day (KV R38_SHADOW_KEY, 14 days): bars compared, mismatches, failed full runs and the
+ * last mismatch's close; the evidence for switching to "on". One small write per broker 5m close while in shadow.
+ */
+export const R38_SHADOW_KEY = "market-data:v2:broker-trigger:r38-shadow";
+export async function recordShadow(kv, { now = Date.now(), closeMs, outcome }) {
+  if (!kv?.get || !kv?.put) return null;
+  let doc = null;
+  try { doc = JSON.parse((await kv.get(R38_SHADOW_KEY)) || "null"); } catch { doc = null; }
+  const days = doc && typeof doc.days === "object" && doc.days ? { ...doc.days } : {};
+  const day = new Date(now).toISOString().slice(0, 10);
+  const d = { compared: 0, mismatched: 0, failed: 0, last_mismatch_close: null, ...(days[day] || {}) };
+  if (outcome === "failed") d.failed += 1;
+  else { d.compared += 1; if (outcome === "mismatch") { d.mismatched += 1; d.last_mismatch_close = new Date(closeMs).toISOString(); } }
+  days[day] = d;
+  const kept = Object.fromEntries(Object.entries(days).sort(([a], [b]) => a.localeCompare(b)).slice(-14));
+  await kv.put(R38_SHADOW_KEY, JSON.stringify({ v: 1, days: kept }), { expirationTtl: 60 * 60 * 24 * 30 });
+  return d;
+}
+
 /** Pure: the swing high and low of the last `n` bars and the ATR(14), or null. */
 export function structureOf(bars, n = 3) {
   if (!Array.isArray(bars) || bars.length < 15) return null;
@@ -106,7 +127,7 @@ export async function runBrokerTrigger(env, { bundle, now = Date.now() } = {}) {
     if (Number((await kv.get(LAST_KEY)) || 0) === closeMs) return { status: "already_sent" };
     const structure = structureOf(broker.candles);
     if (!structure) return { status: "insufficient_history", broker_bars: broker.candles.length };
-    let ready = false, buy = false, sell = false, error = null;
+    let ready = false, buy = false, sell = false, error = null, shadow = null;
     if (broker.candles.length >= MIN_BARS && bundle?.timeframes) {
       const mintick = Number(env.CHART_MINTICK) || 0.001;
       const full = () => {
@@ -116,17 +137,21 @@ export async function runBrokerTrigger(env, { bundle, now = Date.now() } = {}) {
       };
       const mode = brokerTriggerR38Mode(env);
       try {
-        const got = mode === "off" ? full() : brokerR38(bundle, broker.candles, { now, mintick });
+        // "shadow": the full producer stays the live path; the R38-only result is computed beside it and compared.
+        const got = mode === "on" ? brokerR38(bundle, broker.candles, { now, mintick }) : full();
         if (got) { ready = true; buy = got.buy; sell = got.sell; }
         if (mode === "shadow" && got) {
-          try { const ref = full(); if (!ref || ref.buy !== got.buy || ref.sell !== got.sell) console.log("broker_trigger_r38_mismatch", JSON.stringify({ close: new Date(closeMs).toISOString(), r38_only: got, full: ref })); }
-          catch (e) { console.log("broker_trigger_r38_shadow_failed", String(e?.code || e?.message || e).slice(0, 80)); }
+          let outcome = "match";
+          try { const cut = brokerR38(bundle, broker.candles, { now, mintick }); if (cut.buy !== got.buy || cut.sell !== got.sell) { outcome = "mismatch"; console.log("broker_trigger_r38_mismatch", JSON.stringify({ close: new Date(closeMs).toISOString(), full: got, r38_only: cut })); } }
+          catch (e) { outcome = "failed"; console.log("broker_trigger_r38_shadow_failed", String(e?.code || e?.message || e).slice(0, 80)); }
+          shadow = outcome;
+          await recordShadow(kv, { now, closeMs, outcome });
         }
       } catch (e) { error = String(e?.code || e?.message || e).slice(0, 80); }
     }
     const result = await env.AI_WORKER.submitBrokerTrigger({ close_ms: closeMs, ready, buy_confirmed: buy, sell_confirmed: sell, ...structure, bars: broker.candles.length, source: broker.source });
     if (result?.ok) await kv.put(LAST_KEY, String(closeMs), { expirationTtl: 3600 });
-    return { status: result?.ok ? "sent" : "refused", close: new Date(closeMs).toISOString(), ready, buy, sell, broker_bars: broker.candles.length, ...(error ? { engine_error: error } : {}) };
+    return { status: result?.ok ? "sent" : "refused", close: new Date(closeMs).toISOString(), ready, buy, sell, broker_bars: broker.candles.length, ...(shadow ? { r38_shadow: shadow } : {}), ...(error ? { engine_error: error } : {}) };
   } catch (error) {
     return { status: "failed", error: String(error?.message ?? error).slice(0, 160) };
   }

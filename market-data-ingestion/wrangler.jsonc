@@ -31,8 +31,9 @@
     // "auto" replaces the 1m chart source with the broker's bars while TradingView is down; "off" never.
     "FEED_FALLBACK_MODE": "auto",
     // C1 (cost brief 2026-11-27): the broker 5m trigger runs only Prophet R38 with the HTF series trimmed (identical
-    // outputs); "shadow" also runs the full 5m producer and logs a mismatch; "off" runs the full producer as before.
-    "BROKER_TRIGGER_R38_ONLY": "on",
+    // outputs); "shadow" also runs the full 5m producer, counts matches in KV and logs a mismatch; "off" runs the full
+    // producer as before. Shipped in "shadow" (orchestrator): "on" after 24 trading hours with 0 mismatches.
+    "BROKER_TRIGGER_R38_ONLY": "shadow",
     // Owner 2026-11-14 ("sesuaikan batas dengan kuota TV agar sama"): the same number as the account's
     // TradingView provider quota (fundamental-news-ingestion PROVIDER_DAILY_LIMIT, 500 a day, which the news
     // Worker's chart reserve also uses); test/tv-quota-alignment.test.mjs keeps the two equal. Was 800

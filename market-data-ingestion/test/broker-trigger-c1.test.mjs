@@ -95,14 +95,14 @@ test("BT-C1-4: the trim keeps HTF_KEEP_BEFORE bars before the selected one; out-
   assert.deepEqual(trimHigherTimeframes([], h).H1.length, h.H1.length, "no chart bar: nothing trimmed");
 });
 
-test("BT-C1-5: the switch: on by default, 'off' runs the full producer, 'shadow' runs both with the same result", async () => {
+test("BT-C1-5: the switch: on by default in code, production ships 'shadow' (full producer live, R38-only compared), 'off' the full producer", async () => {
   assert.equal(brokerTriggerR38Mode({}), "on");
   assert.equal(brokerTriggerR38Mode({ BROKER_TRIGGER_R38_ONLY: " Shadow " }), "shadow");
   assert.equal(brokerTriggerR38Mode({ BROKER_TRIGGER_R38_ONLY: "off" }), "off");
   assert.equal(brokerTriggerR38Mode({ BROKER_TRIGGER_R38_ONLY: "junk" }), "on");
   const src = readFileSync(new URL("../src/broker-trigger.mjs", import.meta.url), "utf8");
-  assert.match(src, /mode === "off" \? full\(\) : brokerR38\(bundle, broker\.candles, \{ now, mintick \}\)/);
+  assert.match(src, /mode === "on" \? brokerR38\(bundle, broker\.candles, \{ now, mintick \}\) : full\(\)/, "only \"on\" makes R38-only live");
   assert.ok(typeof runBrokerTrigger === "function");
   const cfg = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(cfg, /"BROKER_TRIGGER_R38_ONLY": "on"/);
+  assert.match(cfg, /"BROKER_TRIGGER_R38_ONLY": "shadow"/, "shipped in shadow first (orchestrator)");
 });
