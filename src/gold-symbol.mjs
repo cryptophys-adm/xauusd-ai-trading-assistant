@@ -221,22 +221,85 @@ export function moneyText(m) {
 /**
  * The reference OmegaExecutor finds gold by (orchestrator review of #477): the feed's last 5-minute close and its time,
  * and its last REFERENCE_H4_CLOSES closed 4-hour closes ([close_ms, close], oldest first) for the EA's price-path check.
- * Null while the feed runs on the broker's own bars (the MT5 fallback, `fallbackSinceMs`): a broker is never checked
- * against itself. Pure: `h4` is the cached 4h series ({ candles }), `fallbackSince` the fallback's start or null.
+ * Null while the feed runs on the account's own broker's bars (the MT5 fallback, `fallbackSinceMs`): a broker is never
+ * checked against itself. Pure: `h4` is the cached 4h series ({ candles }), `fallbackSince` the fallback's start or null.
+ * MX1 (owner 2026-11-27, "monex ubah aturan dulu agar bisa eksekusi"): a fallback on ANOTHER broker's bars is still a
+ * reference. `fallbackSource` is the fallback's corpus source ("mt5:<server>:<symbol>") and `accountServer` the
+ * account's server; only when both are known and name different brokers (sameBroker false) are the fallback's price and
+ * its H4 closes kept. Same broker, an unknown source or an unknown account server: withheld, as before (fail closed).
  */
 export const REFERENCE_H4_CLOSES = 12;
 // `excluded`: [from_ms, to_ms] intervals the feed ran on the broker's bars (the last recorded MT5 fallback, until the
 // series is healed from TradingView): a 4h bar overlapping one is the broker's own and is left out.
-export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, excluded = [], now = Date.now() } = {}) {
+export function referenceFrom({ price, marketMs = null, h4 = null, fallbackSince = null, excluded = [], fallbackSource = null, accountServer = null, now = Date.now() } = {}) {
   const p = Number(price), at = Number(marketMs);
   if (!(p > 0)) return null;
-  if (fallbackSince != null && (!(at > 0) || at > fallbackSince)) return null;
-  const spans = (Array.isArray(excluded) ? excluded : []).filter((x) => Array.isArray(x) && Number(x[0]) > 0).map(([a, b]) => [Number(a), Number(b) > 0 ? Number(b) : now]);
+  const origin = referenceOrigin({ fallbackSince, fallbackSource, accountServer });
+  // The running fallback is on another broker's bars: its price and its 4h closes may check this account's symbol.
+  const foreign = origin.kind === "fallback_other_broker";
+  if (fallbackSince != null && !foreign && (!(at > 0) || at > fallbackSince)) return null;
+  // An open interval ([from, null]) is the running fallback: another broker's, it is not excluded. A closed one is a past
+  // fallback whose broker is not recorded: excluded, as before.
+  const spans = (Array.isArray(excluded) ? excluded : []).filter((x) => Array.isArray(x) && Number(x[0]) > 0 && !(foreign && !(Number(x[1]) > 0)))
+    .map(([a, b]) => [Number(a), Number(b) > 0 ? Number(b) : now]);
   if (spans.some(([a, b]) => at > 0 && at > a && at <= b + 300_000)) return null;
   const closes = (Array.isArray(h4?.candles) ? h4.candles : [])
     .map((c) => [Date.parse(c?.close_time), Number(c?.close)])
-    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || t <= fallbackSince)
+    .filter(([t, c]) => Number.isFinite(t) && t <= now && c > 0 && (fallbackSince == null || foreign || t <= fallbackSince)
       && !spans.some(([a, b]) => t > a && t - 14_400_000 < b))
     .sort((a, b) => a[0] - b[0]).slice(-REFERENCE_H4_CLOSES);
-  return { price: p, market_ms: at > 0 ? at : null, closes };
+  // Where the reference came from, for the Omega page (MX1): the native feed, or the fallback on another broker.
+  return { price: p, market_ms: at > 0 ? at : null, closes, source: foreign ? origin : { kind: "feed", server: null } };
+}
+
+/**
+ * Pure (MX1): where a reference would come from. "feed" with no fallback running; "fallback_other_broker" (with the
+ * fallback's server) when the fallback runs on a broker the account's server is not; else "withheld" with why:
+ * "same_broker", "fallback_source_unknown" or "account_server_unknown".
+ */
+export function referenceOrigin({ fallbackSince = null, fallbackSource = null, accountServer = null } = {}) {
+  if (fallbackSince == null) return { kind: "feed", server: null };
+  const server = fallbackServerOf(fallbackSource);
+  if (server == null) return { kind: "withheld", server: null, why: "fallback_source_unknown" };
+  if (typeof accountServer !== "string" || accountServer.trim() === "") return { kind: "withheld", server, why: "account_server_unknown" };
+  return sameBroker(server, accountServer) ? { kind: "withheld", server, why: "same_broker" } : { kind: "fallback_other_broker", server };
+}
+
+// ---------------------------------------------------------------- broker identity (MX1, 2026-11-27)
+// Words a broker's MT5 server name carries that do not name the broker ("FxPro-MT5 Demo", "OANDA-Live-1"): the platform,
+// the account type, a server number. Stripped before two servers are compared.
+const SERVER_NOISE = new Set(["mt", "mt4", "mt5", "metatrader", "metatrader4", "metatrader5", "demo", "live", "real", "trade", "trading", "server", "srv", "main", "prod", "ecn", "stp", "pro", "raw", "standard", "std", "cent", "micro", "mini", "global", "intl", "international", "ltd", "llc", "inc", "markets", "market", "fx", "forex", "capital", "group"]);
+
+/** Pure: a broker's identity from its MT5 server name: lower-case words, platform/account-type/number words dropped. */
+export function brokerIdentity(server) {
+  const words = String(server ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  return words.map((w) => w.replace(/\d+$/, "")).filter((w) => w.length > 1 && !SERVER_NOISE.has(w));
+}
+
+/**
+ * Pure: whether two MT5 servers may belong to one broker. Conservative (MX1): true unless both name a broker and no word
+ * of one is a word, or the start of a word, of the other. "FxPro-MT5" and "FxPro-MT5 Demo" are one broker; so are an empty
+ * name and anything. True means "withhold".
+ */
+export function sameBroker(a, b) {
+  const x = brokerIdentity(a), y = brokerIdentity(b);
+  if (!x.length || !y.length) return true;
+  const joinX = x.join(""), joinY = y.join("");
+  if (joinX.includes(joinY) || joinY.includes(joinX)) return true;
+  return x.some((w) => y.some((v) => w.startsWith(v) || v.startsWith(w)));
+}
+
+/** Pure: the server of a corpus source "mt5:<server>:<symbol>", or null when it is not one. */
+export function fallbackServerOf(source) {
+  const m = /^mt5:(.+):([^:]+)$/.exec(String(source ?? ""));
+  return m && m[1].trim() ? m[1].trim() : null;
+}
+
+/** Pure: the Omega page's line for a referenceOrigin (MX1), e.g. "reference: fxpro-mt5 (fallback, another broker)". */
+export function referenceOriginText(origin) {
+  if (origin?.kind === "feed") return "reference: the TradingView feed";
+  if (origin?.kind === "fallback_other_broker") return `reference: ${origin.server} (fallback, another broker)`;
+  const why = { same_broker: `the fallback runs on this broker's own bars (${origin?.server})`, fallback_source_unknown: "the fallback's broker is not recorded",
+    account_server_unknown: "the account's server is not known yet" }[origin?.why] ?? "no reference";
+  return `no reference: ${why}`;
 }

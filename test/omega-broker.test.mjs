@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from "node:crypto";
-import { bridgeSync, brokerOverview, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS, closePosition, lastWeakeningExit } from "../src/omega-broker.mjs";
+import { bridgeSync, brokerOverview, resetReferenceSourcesForTests, setConnection, clearConnection, writeSettings, readSettings, bridgeKey, executorFrom, resetOmegaBrokerSchemaForTests, INTENT_TTL_MS, closePosition, lastWeakeningExit } from "../src/omega-broker.mjs";
 import { buildEnvelope, keyId } from "../workers/xauusd-omega/public/omega-crypto.js";
 
 function d1() {
@@ -430,4 +430,29 @@ test("the latest weakening exit for the re-entry guard: side and exit from the d
   assert.equal(r?.side, "SELL");
   assert.equal(r?.entry_conf, 0.7);
   assert.equal(await lastWeakeningExit(e.DB, NOW + 7 * 3_600_000), null, "older than 6 hours");
+});
+
+test("MX1: a fallback on another broker's bars is sent as the reference; the account's own broker's is not", async () => {
+  const sig = { ...SIGNAL, market_price: 4100.5, market_ms: NOW - 60_000 };
+  const h4 = JSON.stringify({ candles: Array.from({ length: 14 }, (_, i) => ({ close_time: new Date(NOW - (14 - i) * 14_400_000).toISOString(), close: 4080 + i })) });
+  const run = async (source, server) => {
+    resetReferenceSourcesForTests();
+    const e = env();
+    e.SIGNAL_CACHE.map.set("market-data:v2:series:OANDA:XAUUSD|4h", h4);
+    e.SIGNAL_CACHE.map.set("market-data:v2:series:OANDA:XAUUSD|1m", JSON.stringify({ candles: [], fallback: { since_sec: (NOW - 10 * 3_600_000) / 1000, ...(source ? { source } : {}) } }));
+    const r = await sync(e, { state: { ...STATE, server } }, { signal: sig });
+    const view = await brokerOverview(e, { now: NOW });
+    return { reference: r.reference, view: view.bridge?.symbol_check?.reference ?? null };
+  };
+  const other = await run("mt5:otherbroker-mt5:GOLD", "AnyBroker-Demo");
+  assert.equal(other.reference.price, 4100.5);
+  assert.ok(other.reference.closes.length >= 10, "the other broker's 4h closes go with it");
+  assert.deepEqual(other.view, { kind: "fallback_other_broker", server: "otherbroker-mt5", text: "reference: otherbroker-mt5 (fallback, another broker)" });
+  const same = await run("mt5:anybroker-live:XAUUSD", "AnyBroker-Demo");
+  assert.equal(same.reference, null, "the account's own broker, demo or live, is never its reference");
+  assert.equal(same.view.why, "same_broker");
+  const unknown = await run(null, "AnyBroker-Demo");
+  assert.equal(unknown.reference, null, "a fallback whose broker is not recorded: withheld");
+  assert.equal(unknown.view.why, "fallback_source_unknown");
+  resetReferenceSourcesForTests();
 });

@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText, snapPowerOfTen, referenceFrom, REFERENCE_H4_CLOSES, eaRefusalText } from "../src/gold-symbol.mjs";
+import { GOLD_CONTRACT_SIZE_MIN, GOLD_CONTRACT_SIZE_MAX, goldSymbolCheck, goldSymbolText, goldPriceProblem, accountMoney, measuredUnitsPerUsd, moneyText, snapPowerOfTen, referenceFrom, referenceOrigin, referenceOriginText, sameBroker, brokerIdentity, fallbackServerOf, REFERENCE_H4_CLOSES, eaRefusalText } from "../src/gold-symbol.mjs";
 import { GOLD_CONTRACT_SIZE_MIN as BRIDGE_MIN, GOLD_CONTRACT_SIZE_MAX as BRIDGE_MAX } from "../bridge/omega-bridge/src/symbols.mjs";
 import { executorFrom, bridgeSymbolFrom, toUsd, redactAccount, liveBridgeFields } from "../src/omega-broker.mjs";
 import { planIntents, OMEGA_DEFAULTS } from "../src/omega-engine.mjs";
@@ -310,4 +310,52 @@ test("G14. OmegaExecutor 1.20: a chosen symbol is checked again; choosing needs 
   assert.match(ea, /if\(SymbolInfoInteger\(sym, SYMBOL_EXPIRATION_TIME\) > 0\) return "expiring_contract";/);
   assert.match(ea, /if\(best != "" && sizesDiffer\)\s*\{\s*lastProblem = "ambiguous_gold_symbols \(/);
   assert.match(ea, /bool fresh = price > 0\.0 && priceMs > 0 && nowMs - priceMs <= \(long\)REFERENCE_MAX_AGE_SEC \* 1000;/, "aged on the price's own time");
+});
+
+test("MX1. a fallback on another broker's bars is a reference; the same broker, an unknown source or server is not", () => {
+  const NOW = Date.parse("2026-11-27T03:00:00Z");
+  const h4 = { candles: Array.from({ length: 20 }, (_, i) => ({ close_time: new Date(NOW - (20 - i) * 14_400_000).toISOString(), close: 3550 + i })) };
+  const since = NOW - 10 * 3_600_000;
+  const base = { price: 3594.2, marketMs: NOW - 60_000, h4, fallbackSince: since, excluded: [[since - 900_000, null]], now: NOW };
+  // Same broker: withheld, demo or live alike.
+  assert.equal(referenceFrom({ ...base, fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: "FxPro-MT5" }), null);
+  assert.equal(referenceFrom({ ...base, fallbackSource: "mt5:fxpro-mt5 demo:GOLD", accountServer: "FxPro-MT5 Live02" }), null, "FxPro demo vs live is one broker");
+  // Another broker: sent, with its 4h closes after the fallback's start.
+  const other = referenceFrom({ ...base, fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: "Monex-Demo" });
+  assert.deepEqual([other.price, other.market_ms, other.closes.length], [3594.2, NOW - 60_000, 12]);
+  assert.ok(other.closes.some(([t]) => t > since), "the H4 closes of the other broker's bars are kept");
+  assert.deepEqual(other.source, { kind: "fallback_other_broker", server: "fxpro-mt5" });
+  // Unknown source or account server: withheld (fail closed).
+  assert.equal(referenceFrom({ ...base, fallbackSource: null, accountServer: "Monex-Demo" }), null);
+  assert.equal(referenceFrom({ ...base, fallbackSource: "tradingview", accountServer: "Monex-Demo" }), null);
+  assert.equal(referenceFrom({ ...base, fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: "" }), null);
+  assert.equal(referenceFrom({ ...base, fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: null }), null);
+  // A past fallback whose broker is not recorded (a closed interval) is still left out, whoever ran the current one.
+  const past = [NOW - 40 * 3_600_000, NOW - 30 * 3_600_000];
+  const mixed = referenceFrom({ ...base, excluded: [past], fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: "Monex-Demo" });
+  assert.ok(mixed.closes.every(([t]) => !(t > past[0] && t - 14_400_000 < past[1])));
+  // Not on fallback: unchanged by the account's server or any source.
+  const feed = referenceFrom({ price: 3594.2, marketMs: NOW - 60_000, h4, fallbackSince: null, now: NOW });
+  const feed2 = referenceFrom({ price: 3594.2, marketMs: NOW - 60_000, h4, fallbackSince: null, fallbackSource: "mt5:monex-demo:XAUUSD", accountServer: "Monex-Demo", now: NOW });
+  assert.deepEqual(feed2, feed);
+  assert.deepEqual(feed.source, { kind: "feed", server: null });
+});
+
+test("MX1. broker identity: platform, account type and server numbers do not name a broker; unsure means the same", () => {
+  assert.deepEqual(brokerIdentity("FxPro-MT5 Demo"), ["fxpro"]);
+  assert.deepEqual(brokerIdentity("OANDA-Live-1"), ["oanda"]);
+  assert.equal(sameBroker("FxPro-MT5", "FxPro-MT5 Demo"), true);
+  assert.equal(sameBroker("ICMarketsSC-Demo", "ICMarkets-Live"), true, "a word starting the other's is one broker");
+  assert.equal(sameBroker("fxpro-mt5", "Monex-Demo"), false);
+  assert.equal(sameBroker("OANDA-Demo-1", "Monex-MT5"), false);
+  assert.equal(sameBroker("", "Monex-Demo"), true, "an empty name is unsure");
+  assert.equal(sameBroker("MT5-Demo", "Monex-Demo"), true, "a name of noise words only is unsure");
+  assert.equal(fallbackServerOf("mt5:fxpro-mt5:GOLD"), "fxpro-mt5");
+  assert.equal(fallbackServerOf("mt5::GOLD"), null);
+  assert.equal(fallbackServerOf(null), null);
+  // The Omega page's line.
+  assert.equal(referenceOriginText(referenceOrigin({ fallbackSince: 1, fallbackSource: "mt5:fxpro-mt5:GOLD", accountServer: "Monex-Demo" })), "reference: fxpro-mt5 (fallback, another broker)");
+  assert.equal(referenceOriginText(referenceOrigin({ fallbackSince: null })), "reference: the TradingView feed");
+  assert.match(referenceOriginText(referenceOrigin({ fallbackSince: 1, fallbackSource: "mt5:monex-demo:XAUUSD.M", accountServer: "Monex-Demo" })), /^no reference: the fallback runs on this broker's own bars/);
+  assert.equal(referenceOriginText(referenceOrigin({ fallbackSince: 1, fallbackSource: null, accountServer: "Monex-Demo" })), "no reference: the fallback's broker is not recorded");
 });
