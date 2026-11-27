@@ -170,6 +170,14 @@ test("stage 2: the macro symbols' bars and the MQL5 calendar, only from Omega's 
   assert.equal((await ingestMt5Calendar(env, cal, { executor: EXECUTOR, now: NOW })).events, 1, "USD within 30 days only");
   const events = await readMt5Calendar(env, { fromMs: Date.parse("2026-11-06T00:00:00Z"), toMs: Date.parse("2026-11-06T23:59:59Z") });
   assert.deepEqual(events.map((e) => [e.title, e.time, e.actual, e.forecast, e.source]), [["Nonfarm Payrolls", "2026-11-06T13:30:00.000Z", 119, 50, "mt5"]]);
+  // CG1: an unchanged event is not rewritten (the EA sends its window every 5 minutes); a changed value is.
+  const receivedOf = async () => (await db.prepare("SELECT received_ms FROM mt5_calendar WHERE value_id = '1'").first()).received_ms;
+  const first = await receivedOf();
+  await ingestMt5Calendar(env, { ...cal, written_ms: NOW + 1000 }, { executor: EXECUTOR, now: NOW + 1000 });
+  assert.equal(await receivedOf(), first, "same values: no write");
+  await ingestMt5Calendar(env, { ...cal, written_ms: NOW + 2000, events: [{ ...cal.events[0], actual: 120 }] }, { executor: EXECUTOR, now: NOW + 2000 });
+  assert.equal(await receivedOf(), NOW + 2000, "a revised value is written");
+  assert.equal((await readMt5Calendar(env, { fromMs: Date.parse("2026-11-06T00:00:00Z"), toMs: Date.parse("2026-11-06T23:59:59Z") }))[0].actual, 120);
 });
 
 test("phase 2: the broker shadow lane's agreement per 15m bar and engine, summarised on the corpus status; never a price", async () => {

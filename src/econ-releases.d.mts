@@ -16,3 +16,12 @@ export function refreshEconReleases(env: any, options?: { now?: number; gatedEve
 export function calendarIntel(env: any, options?: { now?: number }): Promise<Record<string, any>>;
 export function applyMt5Actuals(db: any, events: any[], options?: { now?: number }): Promise<number>;
 export function goldHistoryForTests(env: any): Promise<{ t: number[]; o: number[]; h: number[]; l: number[]; c: number[] } | null>;
+export function periodOf(title: string): "mm" | "yy" | "qq" | null;
+export const MT5_SCALE_MAX_RATIO: number;
+export function sameScale(a: number, b: number): boolean | null;
+export function mt5RowMatches(e: any, row: any): boolean;
+export const TITLE_QUALIFIERS: readonly string[];
+export function titleWords(title: string): string[];
+export const TITLE_MIN_JACCARD: number;
+export function titlesAgree(a: string, b: string): boolean;
+export const MT5_TITLE_SUFFIX: string;
