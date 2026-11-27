@@ -696,7 +696,9 @@ export const ENGINE_CODE = Object.freeze({
   "position-actions": [positionActions, ["pendingPositionActions", "ACTION_TTL_MS"]],
   "ea-signal": [eaSignalModule, ["eaSignal", "eaSignalFrom", "eaSignalFromDecision", "entryTriggerFor", "managementFields", "applyArmGate", "entryZoneFields",
     // CH1 (2026-11-23): the signal's decision history.
-    "historyFields", "decisionRowsBefore", "withHistory"]],
+    "historyFields", "decisionRowsBefore", "withHistory",
+    // K1 (2026-11-27): the feed bars the signal's price and basis come from (the 5m tail, or the series).
+    "readFeedCandles", "eaSignalTailMode", "EA_TAIL_MAX_AGE_MS", "EA_TAIL_KEY", "EA_SERIES_KEY"]],
   "omega-broker": [omegaBroker, ["lastClosedCandle", "ladderCandles", "lastWeakeningExit", "positionMeta", "positionAgents", "limitInputs", "pmLoosenInputs",
     // Fail closed (2026-11-21): a limit intent the EA never answered or answered without a ticket sends Omega to market.
     "recordLimitFault", "clearNoAnswerFault", "limitFault", "LIMIT_FAULT_KINDS", "LIMIT_FAULT_NO_TICKET", "LIMIT_FAULT_NO_ANSWER",
@@ -747,7 +749,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "20e78488c48760c1d8391e1284edd5e308dd80f98dca080237c9433cbd66e3e3";
+export const ENGINE_CODE_HASH = "440970c92d4446d958b3f3d7badd557b6388e87ae5f7bea27f82548695d225c1";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

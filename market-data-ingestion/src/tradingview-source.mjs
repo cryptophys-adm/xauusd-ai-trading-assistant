@@ -236,8 +236,28 @@ export async function readSeries(kv, spec) {
   return readJson(kv, SERIES_KEY_PREFIX + spec.key);
 }
 
+/**
+ * K1 (cost brief 2026-11-27, orchestrator OK): the AI Worker's EA signal reads the gold 5m series on every bridge sync
+ * only for its last closed bars (the market price and the 2-hour basis), and parsing the ~880 KB record was most of a
+ * sync's CPU. Beside the series, in the same write, a small tail record holds its last TAIL_BARS candles, filtered and
+ * ordered exactly as the reader does (a positive finite close and a close_time, by close_time).
+ */
+export const TAIL_KEY_PREFIX = "market-data:v2:tail:";
+export const TAIL_SERIES = Object.freeze(["OANDA:XAUUSD|5m"]);
+export const TAIL_BARS = 48;
+const tailPrice = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+export function tailOf(record, bars = TAIL_BARS) {
+  const candles = (Array.isArray(record?.candles) ? record.candles : []).filter((c) => tailPrice(c?.close) && c.close_time)
+    .sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time)).slice(-bars);
+  return {
+    series: record?.series ?? null, fetched_at: record?.fetched_at ?? null, tail_of: Number(record?.candle_count) || candles.length,
+    ...(record?.fallback ? { fallback: record.fallback } : {}), candles
+  };
+}
+
 export async function writeSeries(kv, spec, record) {
   await kv.put(SERIES_KEY_PREFIX + spec.key, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
+  if (TAIL_SERIES.includes(spec.key)) await kv.put(TAIL_KEY_PREFIX + spec.key, JSON.stringify(tailOf(record)), { expirationTtl: 60 * 60 * 24 * 30 });
 }
 
 /**

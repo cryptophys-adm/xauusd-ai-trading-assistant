@@ -268,7 +268,7 @@ test("AD-11 the hashes: V14 and ENGINE_CODE_HASH unchanged (no Omega or Position
   assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH);
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "20e78488c48760c1d8391e1284edd5e308dd80f98dca080237c9433cbd66e3e3");
+  assert.equal(ENGINE_CODE_HASH, "440970c92d4446d958b3f3d7badd557b6388e87ae5f7bea27f82548695d225c1");
   for (const id of ["prophet", "gmi", "gmi_hud", "prophet_m15", "prophet_h4", "prophet_d1"]) {
     for (const f of ENGINE_PROVENANCE[id].files.implementation) assert.equal(createHash("sha256").update(readFileSync(new URL(f.path, ROOT))).digest("hex"), f.sha256, `${id}: ${f.path}`);
   }

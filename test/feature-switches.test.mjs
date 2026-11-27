@@ -292,7 +292,7 @@ test("FS-5 no override: decisions, council messages, the EA signal and plans byt
   await store.put(FEATURE_SWITCH_OVERRIDE_KEY, JSON.stringify({ ZONE_PRIORITY: { value: "off", actor: "owner", at: "2026-11-25T09:00:00.000Z" } }));
   assert.equal(await hashOf(strip(await withFeatureSwitches(env))), await hashOf({ ...CONFIG_ENV, ZONE_PRIORITY: "off" }));
   // The engine's hashes do not move (V13/V14 recompute them).
-  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "20e78488");
+  assert.equal(ENGINE_CODE_HASH.slice(0, 8), "440970c9");
   assert.equal(ENGINE_BEHAVIOUR_HASH.slice(0, 8), "ecfe3f90");
 });
 
