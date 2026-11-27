@@ -36,20 +36,6 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
       tone: ai.local_lane?.fresh ? "ok" : reEarning ? "late" : closed ? "off" : "fault",
       detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}${h1[0]?.promote_after ? `/${h1[0].promote_after}` : " matches"}` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
     });
-    // TradingView alerts (owner report 2026-11-09): every alert since the week open answered 401 and
-    // nothing here said so. Fault (red) while alerts are rejected; the reason, never the secret.
-    const wh = ai.webhook;
-    if (wh) {
-      const lastOk = age(wh.last_accepted_at);
-      const rejecting = Number(wh.rejected_last_hour) > 0 && (lastOk == null || (age(wh.last_rejected_at) ?? Infinity) < lastOk);
-      items.push({
-        key: "webhook", label: "TradingView alerts", worker: WORKERS.ai.name,
-        tone: rejecting ? "fault" : lastOk != null && lastOk <= 2 * 3_600_000 ? "ok" : closed ? "off" : "late",
-        detail: rejecting
-          ? `${wh.rejected_last_hour} rejected (401) in the last hour: ${wh.top_reason_text ?? wh.top_reason}; last accepted ${mins(lastOk)}`
-          : lastOk != null && lastOk <= 2 * 3_600_000 ? `last alert accepted ${mins(lastOk)} (${wh.last_accepted_source})` : closed ? "market closed" : lastOk == null ? "no alert accepted yet" : `no alert accepted for ${mins(lastOk).replace(" ago", "")}`
-      });
-    }
     if (ai.local_lane?.calibration?.due) items.push({ key: "calibration", label: "Calibration", tone: "late", detail: "an approved engine has not been compared for its interval" });
   }
   if (lane) {
