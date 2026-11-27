@@ -82,6 +82,19 @@ import f4Stale from "../../../../test/fixtures/nexus-f4/overview-stale.json";
 import f4Replies from "../../../../test/fixtures/nexus-f4/replies.json";
 import { DisconnectDialog, FeedsView, type FeedMsg, type FeedUi } from "../src/pages/Feeds";
 import { LOCAL_ERRORS, errorWords as feedErrorWords, replyResult as feedReply } from "../src/lib/feeds";
+import os1Pending from "../../../../test/fixtures/nexus-os1/overview-pending.json";
+import os1Ok from "../../../../test/fixtures/nexus-os1/overview-ok.json";
+import os1Disconnected from "../../../../test/fixtures/nexus-os1/overview-disconnected.json";
+import os1NotSeen from "../../../../test/fixtures/nexus-os1/overview-not-seen.json";
+import os1NotSeenViewer from "../../../../test/fixtures/nexus-os1/overview-not-seen-viewer.json";
+import os1NotSeenSpace from "../../../../test/fixtures/nexus-os1/overview-not-seen-space.json";
+import os1NotSeenPlain from "../../../../test/fixtures/nexus-os1/overview-not-seen-plain.json";
+import os1Feeds from "../../../../test/fixtures/nexus-os1/overview-feeds.json";
+import os1FeedsViewer from "../../../../test/fixtures/nexus-os1/overview-feeds-viewer.json";
+import os1Replies from "../../../../test/fixtures/nexus-os1/replies.json";
+import { ConnectionMessage, RecoveryHeldChip, RecoveryHeldLine, ServerCheckLine } from "../src/components/OmegaStatus";
+import { RECOVERY_HELD_HINT, SERVER_CHECK_HINT, recoveryHeldOf, savedMsg, serverCheckOf } from "../src/lib/omegaStatus";
+import { BARS_STOPPED_HINT } from "../src/pages/Feeds";
 import { councilOpinionTarget, councilOptionsTarget, emptyDraft, engineTarget, errorOf, gateOf, replyOf, roomConclusionTarget, roomMessageTarget, strategyVerdictTarget, type Draft, type Target } from "../src/lib/corrections";
 
 export type Entry = {
@@ -510,6 +523,52 @@ export const F4_VIEWS: Entry[] = [
     shows: ["Disconnect the oanda feed?", "Reason (required)", 'aria-required="true"', 'placeholder="e.g. rotate the feed login"', 'disabled=""', ">Disconnect<", "border-fault-fill/40", "Trading is not affected: this is a data feed."], hides: ["Type the key to confirm"] }
 ];
 
+/**
+ * OS1, three backend fields shown (test/fixtures/nexus-os1/*.json, the seed's answers of the real Omega routes and AI
+ * Worker: test/support/nexus-os1-seed.mjs). The Omega page's Broker connection card: the server check in each status
+ * (none, pending, ok, disconnected, not_seen with a hyphen or a space for the hint, not_seen with no hint, a viewer); the
+ * Save's answer with and without the near-match warning; the Last recovery card's hold with and without its cause, and a
+ * plain dispatch. The Data feeds card: a feed whose bars stopped, one that never sent a bar, one with a fresh bar (owner
+ * and viewer). Each view is framed by its card's title, so a state that shows nothing still renders. Status tones only.
+ */
+const OS1_NO_DIRECTION = ["text-bull", "text-bear", "emerald", "green", "rose-", "dangerouslySetInnerHTML"];
+const OS1_REPLIES = os1Replies as unknown as Record<string, { status: number; body: any }>;
+const os1Check = ({ d }: { d: any }) => <section><h2>Broker connection</h2><ServerCheckLine sc={serverCheckOf(d)} /></section>;
+const os1Saved = ({ d }: { d: any }) => <section><h2>Broker connection</h2><ConnectionMessage msg={savedMsg(d?.body)} /></section>;
+const os1Held = ({ d }: { d: any }) => { const h = recoveryHeldOf(d); return <section><h4>Last recovery</h4><RecoveryHeldChip held={h} /><RecoveryHeldLine held={h} /></section>; };
+const os1FeedsOnly = (base: any) => ({ d }: { d: any }) => <FeedsView d={{ ...base, broker: { ...(base as any).broker, feeds: d?.feeds }, viewer: d?.viewer }} />;
+const OS1_HELD_HINT = esc(RECOVERY_HELD_HINT), OS1_CHECK_HINT = esc(SERVER_CHECK_HINT);
+const os1Exact = (name: string) => `<code class="mono whitespace-pre rounded-sm border border-white/10 bg-black/30 px-1 text-[11.5px] text-slate-100">${name}</code>`;
+export const OS1_VIEWS: Entry[] = [
+  { name: "OS1ServerCheckNone", View: os1Check, fixture: f4Fresh, shows: ["Broker connection"], hides: ["Server check", "chip"] },
+  { name: "OS1ServerCheckPending", View: os1Check, fixture: os1Pending, shows: ["Server check", ">checking server<", "text-late", OS1_CHECK_HINT, esc("Waiting for the terminal's first login on this name.")], hides: ["did you mean", "Check spaces", "text-fault", ...OS1_NO_DIRECTION] },
+  { name: "OS1ServerCheckOk", View: os1Check, fixture: os1Ok, shows: [">server seen<", "text-ok", "Logged in on the exact stored server name."], hides: ["did you mean", "text-late", "text-fault", ...OS1_NO_DIRECTION] },
+  { name: "OS1ServerCheckDisconnected", View: os1Check, fixture: os1Disconnected, shows: [">disconnected<", "text-off", "Logged in on this name before; not connected now."], hides: ["did you mean", "Check", "check the", "exactly", "text-fault", ...OS1_NO_DIRECTION] },
+  { name: "OS1ServerCheckNotSeen", View: os1Check, fixture: os1NotSeen,
+    shows: [">server not seen<", "text-fault", esc("The terminal has not logged into a server named exactly 'Placeholder-Live-2'. Check spaces, hyphens and case, then enter the connection again."), `did you mean ${os1Exact("Placeholder-Live 2")}?`], hides: OS1_NO_DIRECTION },
+  { name: "OS1ServerCheckNotSeenSpace", View: os1Check, fixture: os1NotSeenSpace, shows: [esc("named exactly 'Placeholder-Live2'"), `did you mean ${os1Exact("Placeholder-Live 2")}?`] },
+  { name: "OS1ServerCheckNotSeenPlain", View: os1Check, fixture: os1NotSeenPlain, shows: [">server not seen<", esc("named exactly 'Other-Server'")], hides: ["did you mean"] },
+  { name: "OS1ServerCheckNotSeenViewer", View: os1Check, fixture: os1NotSeenViewer, shows: [">server not seen<", `did you mean ${os1Exact("Placeholder-Live 2")}?`], hides: ["<button", "<form", "<input"] },
+  { name: "OS1ServerCheckExactHint", View: os1Check, fixture: merged(os1NotSeen, { broker: { server_check: { did_you_mean: " placeholder_LIVE 2" } } }), shows: [`did you mean ${os1Exact(" placeholder_LIVE 2")}?`] },
+  { name: "OS1ServerCheckUnknown", View: os1Check, fixture: merged(os1Ok, { broker: { server_check: { status: "later" } } }), shows: ["Broker connection"], hides: ["Server check"] },
+  { name: "OS1SaveNearMatch", View: os1Saved, fixture: OS1_REPLIES.near_match,
+    shows: ["Saved v1 for Placeholder-Live-2; applied at next bridge sync.", "text-ok", "text-late", esc("A server named 'Placeholder-Live 2' was seen before; the name entered is 'Placeholder-Live-2'. Saved as entered."), `did you mean ${os1Exact("Placeholder-Live 2")}?`],
+    hides: ["Refused", ...OS1_NO_DIRECTION] },
+  { name: "OS1SaveNearMatchSpace", View: os1Saved, fixture: OS1_REPLIES.near_match_space, shows: ["Saved v1 for Placeholder-Live2; applied at next bridge sync.", esc("the name entered is 'Placeholder-Live2'"), `did you mean ${os1Exact("Placeholder-Live 2")}?`] },
+  { name: "OS1SaveNoWarning", View: os1Saved, fixture: OS1_REPLIES.saved, shows: ["Saved v1 for Placeholder-Live 2; applied at next bridge sync.", "text-ok"], hides: ["did you mean", "text-late", "Saved as entered"] },
+  { name: "OS1RecoveryHeldCause", View: os1Held, fixture: os1NotSeen,
+    shows: [">recovery held<", "text-late", OS1_HELD_HINT, "border-late-fill/35", esc("3 terminal restarts did not reconnect: the terminal has not logged into a server named exactly 'Placeholder-Live-2'."),
+      "3 dispatches · connection v1 · server not seen · since Fri 27 Nov 04:51 UTC · 11:51 GMT+7"], hides: OS1_NO_DIRECTION },
+  { name: "OS1RecoveryHeldNoCause", View: os1Held, fixture: os1Disconnected, shows: [">recovery held<", "3 terminal restarts did not reconnect; no more restarts until the connection is entered again or the terminal is healthy again.", "3 dispatches · connection v1 · since Fri 27 Nov 04:51 UTC · 11:51 GMT+7"], hides: ["server not seen"] },
+  { name: "OS1RecoveryDispatched", View: os1Held, fixture: os1NotSeenSpace, shows: ["Last recovery"], hides: ["recovery held", "dispatches"] },
+  { name: "OS1RecoveryNone", View: os1Held, fixture: os1Ok, shows: ["Last recovery"], hides: ["recovery held"] },
+  { name: "OS1FeedsStale", View: FeedsView, fixture: os1Feeds,
+    shows: ["Bars stopped", esc(BARS_STOPPED_HINT), "Last bar 21 min ago, while the feed keeps syncing.", "Re-enter the feed login below.", "text-late", "border-late-fill/35", ">Last bar<", ">21 min ago<", ">2 min ago<", ">—<", "Save feed login"],
+    hides: [">0 s<", ">0s ago<", ...OS1_NO_DIRECTION] },
+  { name: "OS1FeedsStaleFeeds", View: os1FeedsOnly(os1Feeds), fixture: { feeds: (os1Feeds as any).broker.feeds, viewer: (os1Feeds as any).viewer }, shows: ["Bars stopped", "Re-enter the feed login below."] },
+  { name: "OS1FeedsStaleViewer", View: FeedsView, fixture: os1FeedsViewer, shows: ["Bars stopped", "Last bar 21 min ago, while the feed keeps syncing.", "Re-enter the feed login.", "read only"], hides: ["login below", "<form", "<button", "<input", ...OS1_NO_DIRECTION] }
+];
+
 export const VIEWS: Entry[] = [
   {
     name: "ZonesHeld", View: ({ d }) => <ZonesView d={d} switches={zonesSwitches} />, fixture: zonesHeld,
@@ -727,6 +786,7 @@ export const VIEWS: Entry[] = [
   { name: "LiquidityViewDecision", View: ({ d }) => <LiquidityView d={LIQUIDITY_FULL} lens={lens} decision={d} now={LIQUIDITY_NOW} />, fixture: decision, shows: ["Quorum", "WAIT"] },
   ...PM_VIEWS,
   ...F4_VIEWS,
+  ...OS1_VIEWS,
   ...H3F_VIEWS
 ];
 

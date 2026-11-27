@@ -1,0 +1,41 @@
+{
+  "broker": {
+    "connection": {
+      "version": 1,
+      "status": "stored",
+      "server": "Other-Server",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": "owner@example.com",
+      "updated_ms": 1795754760000
+    },
+    "bridge": {
+      "terminal_connected": false,
+      "server": "Other-Server"
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": {
+        "ms": 1795755540000,
+        "directive": "restart_terminal",
+        "reason": "terminal_disconnected",
+        "action_id": "rec:1795755540000",
+        "status": "dispatched",
+        "conn_version": 1
+      }
+    },
+    "server_check": {
+      "status": "not_seen",
+      "message": "The terminal has not logged into a server named exactly 'Other-Server'. Check spaces, hyphens and case, then enter the connection again."
+    },
+    "feeds": []
+  },
+  "viewer": {
+    "subject": "owner@example.com",
+    "type": "user",
+    "can_control": true
+  }
+}

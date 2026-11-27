@@ -21,6 +21,8 @@ import { Badge, ChartCredit, Dot, Empty, Hint, Kpi, Panel, Skeleton } from "../c
 import { ExitConfirmModal, type ExitTargetPosition } from "../components/ExitConfirmModal";
 import OmegaWhy from "../components/OmegaWhy";
 import PmLines from "../components/PmLines";
+import { ConnectionMessage, RecoveryHeldChip, RecoveryHeldLine, ServerCheckLine } from "../components/OmegaStatus";
+import { recoveryHeldOf, savedMsg, serverCheckOf, type ConnectionMsg } from "../lib/omegaStatus";
 import { CHART_READ, get } from "../lib/api";
 import { C } from "../components/charts";
 import { CANDLE, T, tagText, volumeColor } from "../lib/tokens";
@@ -543,7 +545,7 @@ export default function Omega() {
   const [bServer, setBServer] = useState("");
   const [bLogin, setBLogin] = useState("");
   const [bPassword, setBPassword] = useState("");
-  const [brokerMsg, setBrokerMsg] = useState<{ tone: string; text: string } | null>(null);
+  const [brokerMsg, setBrokerMsg] = useState<ConnectionMsg | null>(null);
 
   // Engine settings form state
   const [engineDirty, setEngineDirty] = useState(false);
@@ -671,10 +673,8 @@ export default function Omega() {
       const key = await omegaJson("/omega/api/bridge/key");
       const envelope = await buildEnvelope(key.public_key, key.kid, { server, login, password });
       const out = await omegaJson("/omega/api/connection", "POST", { server, envelope, trade_symbol: tradeSymbol, units_per_usd: units });
-      setBrokerMsg({
-        tone: "text-ok",
-        text: `Saved v${out.version} for ${out.server}${out.trade_symbol ? ` (gold symbol ${out.trade_symbol})` : ""}; applied at next bridge sync.`,
-      });
+      // OS1: a saved near match (server_name_near_match) shows its warning inline; it is saved all the same.
+      setBrokerMsg(savedMsg(out));
     } catch (e: any) {
       setBrokerMsg({ tone: "text-fault", text: `Refused: ${e?.message || "failed"}` });
     } finally {
@@ -820,6 +820,9 @@ export default function Omega() {
   const profileAttention = account?.pending_upgrade?.to && !(account.pending_upgrade.expires_ms && account.pending_upgrade.expires_ms <= Date.now())
     ? `The profile agent proposes ${account.pending_upgrade.to}` : account?.pending_downgrade?.to ? "A downgrade is waiting for the profile council" : "";
   const watchdog = b?.autonomous_watchdog || null;
+  // OS1: the server check (#650) and the recovery hold (#647), status lines for every reader.
+  const serverCheck = serverCheckOf(data);
+  const recoveryHeld = recoveryHeldOf(data);
   // Every amount is in US dollars once the account's units per dollar are known (USD, measured or the owner's value:
   // the backend converted them once); otherwise the amounts are the account's own and carry its currency (owner
   // 2026-11-19: no currency code decides).
@@ -2071,7 +2074,9 @@ export default function Omega() {
                     <ShieldCheck className="h-4 w-4 text-ok" />
                     Last recovery
                   </h4>
+                  <RecoveryHeldChip held={recoveryHeld} />
                 </div>
+                <RecoveryHeldLine held={recoveryHeld} />
 
                 {watchdog?.last_recovery ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -2095,8 +2100,8 @@ export default function Omega() {
                     </div>
                     <div className="rounded-sm border border-white/5 bg-black/30 p-2.5">
                       <div className="text-[11px] font-medium text-muted">Status</div>
-                      <div className="mono mt-1 text-[12px] font-semibold text-ok">
-                        {Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
+                      <div className={`mono mt-1 text-[12px] font-semibold ${recoveryHeld ? "text-late" : "text-ok"}`}>
+                        {recoveryHeld ? "Held" : Date.now() - watchdog.last_recovery.ms > (watchdog.anti_flapping_cooldown_sec ?? 180) * 1000 ? "Done" : "Cooling down"}
                       </div>
                     </div>
                   </div>
@@ -2560,6 +2565,7 @@ export default function Omega() {
               <dt className="text-slate-500">By</dt><dd className="mono text-slate-300">{conn.updated_by || "—"}</dd>
               <dt className="text-slate-500">At</dt><dd className="mono text-slate-300">{timeUtc(conn.updated_ms)}</dd>
             </dl>
+            <ServerCheckLine sc={serverCheck} />
             <form id="broker-form" onSubmit={connectBroker} autoComplete="off" className="space-y-2.5 border-t border-white/10 pt-3">
               {/* Active Connection Locked Banner */}
               {configLocked ? (
@@ -2738,7 +2744,7 @@ export default function Omega() {
                 </div>
               ) : null}
 
-              {brokerMsg ? <p className={`text-[11.5px] ${brokerMsg.tone}`}>{brokerMsg.text}</p> : null}
+              <ConnectionMessage msg={brokerMsg} />
             </form>
           </Panel>
           ) : null}

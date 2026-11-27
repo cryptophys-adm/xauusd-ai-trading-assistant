@@ -6,7 +6,7 @@ import { usePoll, type Poll } from "../lib/usePoll";
 import { TEXT } from "../lib/tokens";
 import { buildEnvelope } from "./Omega";
 import {
-  FEEDS_READS, canControlOf, disconnectFeed, errorWords, feedsOf, loginOf, loginWhen, oldKey, readFeeds, submitFeedLogin, syncOf, terminalOf,
+  FEEDS_READS, barsStoppedOf, canControlOf, disconnectFeed, errorWords, feedsOf, lastBarOf, loginOf, loginWhen, oldKey, readFeeds, submitFeedLogin, syncOf, terminalOf,
   type Feed, type FeedForm, type WriteResult
 } from "../lib/feeds";
 
@@ -25,6 +25,7 @@ export const CARD_HINT = "A data feed is a second MT5 terminal on the VPS that s
 export const FORM_HINT = "Encrypted in this browser to this feed bridge's own key; Omega stores only the sealed envelope and cannot read it. A data feed never trades: a demo or investor login is enough.";
 export const OLD_KEY_HINT = "The feed bridge was reinstalled with a new key after its login was stored, so it gets no login until the login is entered again.";
 export const DATA_ONLY = "Data feed (no trading)";
+export const BARS_STOPPED_HINT = "The feed bridge keeps syncing but its newest bar is more than 5 minutes old in gold's trading hours: the feed EA is probably not attached. Analysis uses the executor's bars meanwhile; entering the login again restarts the feed terminal with its EA.";
 
 /** A feed's message after the owner's last write. */
 export type FeedMsg = { kind: "saved"; version: number | null; server: string | null } | { kind: "cleared" } | { kind: "error"; code: string };
@@ -58,7 +59,7 @@ function Message({ msg }: { msg: FeedMsg }) {
 
 /** One feed bridge: its status, and for the owner its login form and disconnect. */
 export function FeedCard({ f, canControl, ui = {}, onSubmit, onDisconnect }: { f: Feed; canControl: boolean; ui?: FeedUi; onSubmit?: FeedsViewProps["onSubmit"]; onDisconnect?: FeedsViewProps["onDisconnect"] }) {
-  const sync = syncOf(f), term = terminalOf(f), login = loginOf(f);
+  const sync = syncOf(f), term = terminalOf(f), login = loginOf(f), bar = lastBarOf(f), stopped = barsStoppedOf(f, canControl);
   const sending = ui.phase === "sending";
   const id = `feed-${f.bridge_id}`;
   const submit = (ev: FormEvent<HTMLFormElement>) => { ev.preventDefault(); if (!sending) onSubmit?.(f, ev.currentTarget); };
@@ -73,6 +74,7 @@ export function FeedCard({ f, canControl, ui = {}, onSubmit, onDisconnect }: { f
       </div>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12px]">
         <Row k="Sync" className={TEXT[sync.tone]}>{sync.text}</Row>
+        <Row k="Last bar" className={bar.tone ? TEXT[bar.tone] : "text-slate-200"}>{bar.text}</Row>
         <Row k="Terminal" className={TEXT[term.tone]}>{term.text}</Row>
         <Row k="Server">{f.server ?? "—"}</Row>
         <Row k="Symbol">{f.symbol ?? "—"}</Row>
@@ -81,6 +83,13 @@ export function FeedCard({ f, canControl, ui = {}, onSubmit, onDisconnect }: { f
         <Row k="Key ID" className="text-slate-300">{f.kid ?? "—"}</Row>
         <Row k="Bridge version" className="text-slate-400">{f.bridge_version ?? "—"}</Row>
       </dl>
+      {stopped ? (
+        <div role="status" className="mt-2.5 rounded-md border border-late-fill/35 bg-late-fill/10 p-2.5 text-[11.5px] text-late">
+          <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />Bars stopped<Hint text={BARS_STOPPED_HINT} /></div>
+          <p className="mt-1 text-slate-300">{stopped.age}, while the feed keeps syncing.</p>
+          <p className="mt-0.5 text-slate-200">{stopped.remedy}</p>
+        </div>
+      ) : null}
       {oldKey(f) ? (
         <div role="status" className="mt-2.5 rounded-md border border-late-fill/35 bg-late-fill/10 p-2.5 text-[11.5px] text-late">
           <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />Login sealed to an old key<Hint text={OLD_KEY_HINT} /></div>

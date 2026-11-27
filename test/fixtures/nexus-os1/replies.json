@@ -1,0 +1,45 @@
+{
+  "saved": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live 2",
+      "trade_symbol": null,
+      "units_per_usd": null
+    }
+  },
+  "near_match": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live-2",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "warning": {
+        "code": "server_name_near_match",
+        "did_you_mean": "Placeholder-Live 2",
+        "message": "A server named 'Placeholder-Live 2' was seen before; the name entered is 'Placeholder-Live-2'. Saved as entered."
+      }
+    }
+  },
+  "near_match_space": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live2",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "warning": {
+        "code": "server_name_near_match",
+        "did_you_mean": "Placeholder-Live 2",
+        "message": "A server named 'Placeholder-Live 2' was seen before; the name entered is 'Placeholder-Live2'. Saved as entered."
+      }
+    }
+  }
+}
