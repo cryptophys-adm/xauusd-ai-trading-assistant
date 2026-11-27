@@ -160,10 +160,11 @@ test("MS1-4 every daily outcome is one recorded event with each mode's evidence 
   assert.deepEqual([ev.day, ev.status, ev.action, ev.reason, ev.mode, ev.to, ev.proposed, ev.regime], ["2026-11-18", "unchanged", "none", "current_mode_best", "intraday", null, null, "trend"]);
   assert.deepEqual(Object.keys(ev.evidence), ["scalp", "intraday", "swing", "range"]);
   // MS2: with shadow evidence on (the default) each mode adds its live/shadow split (n_live, n_shadow).
-  for (const m of Object.keys(ev.evidence)) assert.deepEqual(Object.keys(ev.evidence[m]).sort(), ["mean_r", "n", "n_live", "n_shadow", "scope", "status"], m);
+  // Range shadow c2: range adds its range_both count, its status without them and each cell's status both ways.
+  for (const m of Object.keys(ev.evidence)) assert.deepEqual(Object.keys(ev.evidence[m]).sort(), m === "range" ? ["cells", "mean_r", "n", "n_both", "n_live", "n_shadow", "scope", "status", "without_both"] : ["mean_r", "n", "n_live", "n_shadow", "scope", "status"], m);
   assert.deepEqual(ev.evidence.intraday, { n: 40, mean_r: 0.4, status: "pass", scope: "regime", n_live: 40, n_shadow: 0 });
   assert.deepEqual(ev.evidence.scalp, { n: 0, mean_r: null, status: "collecting", scope: "all", n_live: 0, n_shadow: 0 });
-  assert.deepEqual(ev.evidence.range, { n: 0, mean_r: null, status: "collecting", scope: "cells", n_live: 0, n_shadow: 0 });
+  assert.deepEqual(ev.evidence.range, { n: 0, mean_r: null, status: "collecting", scope: "cells", n_live: 0, n_shadow: 0, n_both: 0, without_both: { status: "collecting", n: 0, mean_r: null, best_cell: null }, cells: [] });
   assert.doesNotMatch(JSON.stringify(ev), /median_stop|price|lot|entry|stop"/);
   // fresh: the same day again records nothing.
   assert.equal((await runModeSelector(e, { now: T + 3_600_000, regime: "trend", log: a.log })).status, "fresh");
