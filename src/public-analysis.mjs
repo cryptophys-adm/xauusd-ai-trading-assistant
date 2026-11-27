@@ -16,7 +16,25 @@ import { patternInfo } from "./chart-patterns.mjs";
 export const PUBLIC_ANALYSIS_VERSION = "cryptophys.public-analysis.v1";
 /** The charts whose patterns may be posted, and their public names. */
 export const ANALYSIS_CHARTS = Object.freeze({ "60": "H1", "240": "H4", D: "D1", "1D": "D1" });
-const r2 = (x) => (Number.isFinite(Number(x)) ? Math.round(Number(x) * 100) / 100 : null);
+// A number, or null: null, undefined, "", booleans and non-finite values are no number (Number(null) is 0, which put a
+// "Measured projection: 0.00" on a gap pattern without a measure on 2026-11-27, BP1).
+const numOrNull = (x) => (x === null || x === undefined || x === "" || typeof x === "boolean" || !Number.isFinite(Number(x)) ? null : Number(x));
+const r2 = (x) => { const n = numOrNull(x); return n === null ? null : Math.round(n * 100) / 100; };
+/**
+ * BP1 (2026-11-27): a confirmed pattern's measured projection, or null. Only a positive price on the side the pattern
+ * broke out to (above its upper line going up, below its lower line going down) and within PROJECTION_MAX_HEIGHTS of
+ * the pattern's own height from that line; anything else (no measure, 0, the wrong side, absurdly far) is left out.
+ */
+export const PROJECTION_MAX_HEIGHTS = 10;
+export function publicProjectionOf(p) {
+  if (p?.status !== "confirmed") return null;
+  const t = r2(p.target), up = r2(p.upper), lo = r2(p.lower), dir = Number(p.direction);
+  if (t === null || !(t > 0) || up === null || lo === null || !(up > 0) || !(lo > 0) || up < lo) return null;
+  const height = up - lo, reach = Math.max(height, 0.01) * PROJECTION_MAX_HEIGHTS;
+  if (dir > 0) return t > up && t - up <= reach ? t : null;
+  if (dir < 0) return t < lo && lo - t <= reach ? t : null;
+  return null;
+}
 const ROLE = Object.freeze({ support: "demand", resistance: "supply", "at price": "at_price" });
 
 /**
@@ -61,7 +79,7 @@ export function titleOf(name) {
 }
 
 /** A zone the public may see: its role, band, strength, number of families and metric names. */
-const isPublicZone = (z) => Number.isFinite(Number(z?.low)) && Number.isFinite(Number(z?.high)) && ROLE[z.role];
+const isPublicZone = (z) => numOrNull(z?.low) !== null && numOrNull(z?.high) !== null && Number(z.low) > 0 && Number(z.high) > 0 && ROLE[z.role];
 const publicZone = (z) => ({ role: ROLE[z.role], low: r2(z.low), high: r2(z.high), strength: typeof z.strength === "string" ? z.strength : null, sources: Number(z.sources) || null, metrics: zoneMetrics(z) });
 
 /** The charts of zones_by_chart and closed (KM1). */
@@ -111,14 +129,14 @@ export function publicAnalysis(keyLevels, { structure = null, now = Date.now(), 
         chart: ANALYSIS_CHARTS[String(p.tf)], pattern: p.id, name: titleOf(info?.name ?? p.id.replace(/_/g, " ")), chapter: info?.n ?? null,
         status: p.status, direction: dir, upper: r2(p.upper), lower: r2(p.lower),
         // The book's measure rule applied to this pattern: an analysis of where the move could reach, never a trade target.
-        projection: p.status === "confirmed" ? r2(p.target) : null,
+        projection: publicProjectionOf(p),
         // The pattern's two lines as drawn (owner 2026-11-15: "gambar juga garis pattern di chart"): from the start
         // bar's close time to the last bar's, each line's price at both ends (fitted lines slope; others are flat).
         ...(typeof p.line_from === "string" && typeof p.line_to === "string" && r2(p.upper_from) != null && r2(p.lower_from) != null
           ? { lines: { from: p.line_from, to: p.line_to, upper: [r2(p.upper_from), r2(p.upper)], lower: [r2(p.lower_from), r2(p.lower)] } } : {})
       };
     })
-    .filter((p) => p.upper != null && p.lower != null);
+    .filter((p) => p.upper != null && p.lower != null && p.upper > 0 && p.lower > 0);
   const st = {};
   for (const [k, name] of [["h4", "H4"], ["h1", "H1"], ["m15", "15m"]]) {
     const s = structure?.[k];
