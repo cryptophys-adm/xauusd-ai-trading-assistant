@@ -122,6 +122,20 @@ The bridge refuses to start while the placeholder is still in the file.
    ```
 
    The expected output is a line like `Result: 0 errors, 0 warnings`. Any error: stop and report the log lines, which hold no secrets.
+
+   **OmegaFeed 1.01 (macro export, 2026-11-27).** The same three steps (copy, compile, check) install 1.01 over 1.00. Then restart only the feed's own terminal unit, never the executor's:
+
+   ```bash
+   systemctl restart "$(grep -E '^TERMINAL_SERVICE=' /etc/omega-bridge/oanda.env | cut -d= -f2)"
+   ```
+
+   1.01 also writes `omega/corpus_macro.json` once per closed gold M1 bar. It holds the closed M1 bars of the symbols in the input `MacroSymbols` (`XAGUSD=XAGUSD,USOIL=USOIL.sml,EURUSD=EURUSD.sml,GBPUSD=GBPUSD.sml,USDJPY=USDJPY.sml,USDCAD=USDCAD,USDCHF=USDCHF`; explicit names, nothing guessed; `MacroEnabled=false` turns it off). After two minutes, check that the file names all seven bases. The command prints bases, symbols and bar counts only, no prices:
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print([(s["base"], s["symbol"], len(s["bars"])) for s in d["series"]])' "$T/MQL5/Files/omega/corpus_macro.json"
+   ```
+
+   A base missing from the list means that symbol has no name or no bars on this server: report which one. Until the bridge step of the macro export ships, the file is written but not sent.
 2. The login ini starts the chart with `Expert=OmegaFeed` and `Symbol=XAUUSD.sml`. The bridge writes these when it applies the login.
 3. Algo trading stays **off** in that terminal (`AllowLiveTrading=0`):
    - the bridge forces it on every sync;
