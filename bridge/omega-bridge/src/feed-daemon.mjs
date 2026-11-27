@@ -1,0 +1,168 @@
+// F2 (OF1; owner 2026-11-27 "Setuju"): the bridge's data-only FEED role, selected with OMEGA_ROLE=feed. A separate
+// loop from the executor's daemon (src/daemon.mjs, unchanged: the default role stays the executor, byte for byte). A
+// feed bridge reads its own terminal's state.json and corpus.json (written by OmegaFeed.mq5, which has no trade code),
+// syncs them to POST {OMEGA_URL}/api/bridge/feed-sync with its bridge id, applies its own sealed login to its own
+// terminal ini and service, and clears the password from the ini once the terminal reports it logged in. It never
+// writes intents.txt, never a reference file, never the executor's terminal; algo trading stays off in its ini.
+import { execFile as nodeExecFile } from "node:child_process";
+import nodeFs from "node:fs";
+import path from "node:path";
+import { openEnvelope } from "./envelope.mjs";
+import { readState, readCorpus, resolveOmegaDir } from "./files.mjs";
+import { applyFeedCredentials, clearCredentials, ensureFeedSettings } from "./ini.mjs";
+import { loadOrCreateKeyPair } from "./keys.mjs";
+import { BRIDGE_VERSION, DEFAULT_OMEGA_URL } from "./daemon.mjs";
+
+export const FEED_ID_RE = /^[a-z0-9-]{1,24}$/;
+export const DEFAULT_FEED_SYNC_MS = 15_000;
+export const DEFAULT_FEED_EXPERT = "OmegaFeed";
+const MAX_BODY_BYTES = 65_536;
+
+/** The feed's configuration from its env file (one per instance, e.g. /etc/omega-bridge/oanda.env). */
+export function resolveFeedConfig(options = {}) {
+  const env = options.env || process.env;
+  const bridgeId = String(options.bridgeId ?? env.OMEGA_FEED_ID ?? "").trim().toLowerCase();
+  const syncRaw = Number(options.syncMs ?? env.OMEGA_SYNC_MS ?? DEFAULT_FEED_SYNC_MS);
+  const mt5FilesDir = String(options.mt5FilesDir ?? env.MT5_FILES_DIR ?? "");
+  return {
+    role: "feed",
+    bridgeId,
+    omegaUrl: String(options.omegaUrl ?? env.OMEGA_URL ?? DEFAULT_OMEGA_URL).replace(/\/+$/, ""),
+    cfAccessClientId: String(options.cfAccessClientId ?? env.CF_ACCESS_CLIENT_ID ?? ""),
+    cfAccessClientSecret: String(options.cfAccessClientSecret ?? env.CF_ACCESS_CLIENT_SECRET ?? ""),
+    stateDir: String(options.stateDir ?? env.OMEGA_STATE_DIR ?? ""),
+    omegaFilesDir: mt5FilesDir ? resolveOmegaDir(mt5FilesDir) : "",
+    terminalIni: String(options.terminalIni ?? env.TERMINAL_INI ?? ""),
+    terminalService: String(options.terminalService ?? env.TERMINAL_SERVICE ?? ""),
+    // The gold symbol's name on the feed's server (OANDA: "XAUUSD.sml"); the EA's chart symbol.
+    symbol: String(options.symbol ?? env.OMEGA_SYMBOL ?? "XAUUSD"),
+    expert: String(options.expert ?? env.OMEGA_FEED_EXPERT ?? DEFAULT_FEED_EXPERT),
+    syncMs: Number.isFinite(syncRaw) && syncRaw >= 1000 ? syncRaw : DEFAULT_FEED_SYNC_MS
+  };
+}
+
+/** Pure: why a feed configuration cannot run, or null. Every path is the feed's own: none may be left to a default. */
+export function feedConfigProblem(c) {
+  if (!FEED_ID_RE.test(c.bridgeId)) return "OMEGA_FEED_ID must be 1-24 lower-case letters, digits or dashes";
+  if (!c.cfAccessClientId || !c.cfAccessClientSecret) return "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required";
+  if (!c.cfAccessClientSecret || /__OWNER_FILLS__/.test(c.cfAccessClientSecret)) return "CF_ACCESS_CLIENT_SECRET is still the placeholder";
+  for (const k of ["stateDir", "omegaFilesDir", "terminalIni", "terminalService"]) if (!c[k]) return `${k} is required for a feed (its own terminal)`;
+  if (!/^[A-Za-z0-9._#+-]{1,32}$/.test(c.symbol)) return "OMEGA_SYMBOL is invalid";
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(c.expert)) return "OMEGA_FEED_EXPERT is invalid";
+  return null;
+}
+
+/** Pure: the feed-sync body (bridge id, key, a state without any account data, the gold bars), bounded in size. */
+export function buildFeedBody({ bridgeId, kid, publicKeyBase64, state, corpus }) {
+  const s = state && typeof state === "object" ? state : null;
+  const sym = s?.symbol && typeof s.symbol === "object" ? s.symbol : {};
+  const lean = s ? {
+    connected: s.connected === true, server: s.server ?? null, terminal_error: s.terminal_error ?? null,
+    symbol: { name: sym.name ?? null, bid: sym.bid ?? null, ask: sym.ask ?? null, digits: sym.digits ?? null, contract_size: sym.contract_size ?? null, currency_profit: sym.currency_profit ?? null }
+  } : null;
+  let bars = corpus?.bars ?? null;
+  const make = () => JSON.stringify({ bridge_id: bridgeId, bridge_version: BRIDGE_VERSION, kid, public_key: publicKeyBase64, state: lean, ...(bars && bars.length ? { corpus: { ...corpus, bars } } : {}) });
+  let body = make();
+  while (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES && bars && bars.length) { bars = bars.length > 1 ? bars.slice(0, Math.floor(bars.length / 2)) : null; body = make(); }
+  return body;
+}
+
+function readJson(p, fs) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
+function writeJson(p, v, fs) { const tmp = `${p}.tmp.${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 }); fs.renameSync(tmp, p); }
+function writeIni(p, text, fs) {
+  let mode = 0o600;
+  try { mode = fs.statSync(p).mode & 0o777; } catch { /* new file */ }
+  const tmp = `${p}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, text, { mode });
+  fs.renameSync(tmp, p);
+}
+
+/**
+ * A feed bridge. `start()` loops: sync, then apply what the server sent. Testable with injected fs, fetch, exec, clock.
+ * Never writes intents: there is no code here that could.
+ */
+export function createFeedDaemon(options = {}) {
+  const fs = options.fs || nodeFs;
+  const fetchImpl = options.fetch || globalThis.fetch;
+  const execFn = options.execFile || ((cmd, args) => new Promise((resolve, reject) => nodeExecFile(cmd, args, (e, out) => (e ? reject(e) : resolve(out)))));
+  const now = options.now || (() => Date.now());
+  const log = options.log || ((o) => process.stdout.write(`${JSON.stringify({ ts: now(), ...o })}\n`));
+  const config = resolveFeedConfig(options);
+  const secrets = [config.cfAccessClientSecret];
+  let corpusCursorMs = null;
+  let stopped = false;
+  let keys = null;
+  const appliedPath = () => path.join(config.stateDir, "feed-applied.json");
+
+  async function restartTerminal() { await execFn("systemctl", ["restart", config.terminalService]); }
+
+  /** Keep algo trading off in the feed terminal's ini (whatever wrote it). Returns whether it changed. */
+  function enforceFeedSettings() {
+    if (!fs.existsSync(config.terminalIni)) return false;
+    const cur = fs.readFileSync(config.terminalIni, "utf8");
+    const next = ensureFeedSettings(cur);
+    if (next !== cur) { writeIni(config.terminalIni, next, fs); return true; }
+    return false;
+  }
+
+  async function syncOnce() {
+    if (!keys) keys = loadOrCreateKeyPair(config.stateDir, { fs });
+    const state = readState(config.omegaFilesDir, { fs });
+    const corpus = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
+    const body = buildFeedBody({ bridgeId: config.bridgeId, kid: keys.kid, publicKeyBase64: keys.publicKeyBase64, state, corpus });
+    let res;
+    try {
+      res = await fetchImpl(`${config.omegaUrl}/api/bridge/feed-sync`, {
+        method: "POST", body,
+        headers: { "content-type": "application/json", "CF-Access-Client-Id": config.cfAccessClientId, "CF-Access-Client-Secret": config.cfAccessClientSecret }
+      });
+    } catch (err) {
+      log({ level: "warn", event: "feed_sync_failed", error: err instanceof Error ? err.message.replace(secrets[0] || "\u0000", "***") : "fetch_failed" });
+      return { ok: false };
+    }
+    if (!res.ok) { log({ level: "warn", event: "feed_sync_http", status: res.status }); return { ok: false, status: res.status }; }
+    let payload;
+    try { payload = await res.json(); } catch { log({ level: "warn", event: "feed_sync_invalid_json" }); return { ok: false }; }
+    if (Number.isFinite(payload?.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
+    if (payload?.corpus_error) log({ level: "info", event: "feed_corpus_refused", reason: String(payload.corpus_error).slice(0, 60) });
+
+    const applied = readJson(appliedPath(), fs) || { version: 0, server: null, cleared_ms: null };
+    const conn = payload?.connection;
+    if (conn && typeof conn === "object" && Number(conn.version) > Number(applied.version)) {
+      try {
+        const creds = openEnvelope(conn.envelope, keys.privateKey, keys.kid);
+        const cur = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
+        writeIni(config.terminalIni, applyFeedCredentials(cur, { server: creds.server, login: creds.login, password: creds.password, symbol: config.symbol, expert: config.expert }), fs);
+        await restartTerminal();
+        writeJson(appliedPath(), { version: Number(conn.version), server: creds.server, applied_ms: now(), cleared_ms: null }, fs);
+        log({ level: "info", event: "feed_connection_applied", version: Number(conn.version), server: creds.server, symbol: config.symbol, service: config.terminalService });
+      } catch (err) {
+        log({ level: "error", event: "feed_connection_apply_failed", version: Number(conn.version), error: err instanceof Error ? err.message.slice(0, 120) : "apply_failed" });
+      }
+    } else if (applied.server && !applied.cleared_ms && state?.connected === true && String(state.server ?? "") === String(applied.server)) {
+      // Logged in on the stored server: the password leaves the ini (MT5 keeps the session; run.sh passes /config only
+      // while Password= is non-empty, so the next start needs no login file).
+      try {
+        const cur = fs.readFileSync(config.terminalIni, "utf8");
+        writeIni(config.terminalIni, clearCredentials(cur), fs);
+        writeJson(appliedPath(), { ...applied, cleared_ms: now() }, fs);
+        log({ level: "info", event: "feed_credentials_cleared", server: applied.server });
+      } catch (err) {
+        log({ level: "warn", event: "feed_credentials_clear_failed", error: err instanceof Error ? err.message.slice(0, 120) : "clear_failed" });
+      }
+    }
+    if (enforceFeedSettings()) log({ level: "warn", event: "feed_algo_trading_forced_off" });
+    return { ok: true };
+  }
+
+  async function start() {
+    const problem = feedConfigProblem(config);
+    if (problem) throw new Error(problem);
+    log({ level: "info", event: "feed_started", bridge_id: config.bridgeId, version: BRIDGE_VERSION, service: config.terminalService });
+    while (!stopped) {
+      try { await syncOnce(); } catch (err) { log({ level: "error", event: "feed_loop_error", error: err instanceof Error ? err.message.slice(0, 120) : "error" }); }
+      await new Promise((r) => setTimeout(r, config.syncMs));
+    }
+  }
+  return { config, syncOnce, start, stop: () => { stopped = true; } };
+}

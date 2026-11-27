@@ -35,7 +35,8 @@ import {
 } from "./symbols.mjs";
 import { DEFAULT_STATE_DIR, loadOrCreateKeyPair } from "./keys.mjs";
 
-export const BRIDGE_VERSION = "1.7.1";
+// 1.8.0 (F2): the data-only feed role, a separate loop (src/feed-daemon.mjs, OMEGA_ROLE=feed); this executor unchanged.
+export const BRIDGE_VERSION = "1.8.0";
 export const DEFAULT_OMEGA_URL = "https://nexus.cryptophys.work/omega";
 export const DEFAULT_TERMINAL_INI = "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini";
 export const DEFAULT_TERMINAL_SERVICE = "mt5-terminal.service";
