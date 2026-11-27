@@ -347,6 +347,7 @@
       "anti_flapping_cooldown_sec": 180,
       "last_recovery": null
     },
+    "server_check": null,
     "tca": {
       "samples_count": 0,
       "avg_latency_ms": null,
