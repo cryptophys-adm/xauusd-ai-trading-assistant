@@ -95,6 +95,14 @@ async function lastFeedBarMs(db, bridgeId) {
     return Number.isFinite(Number(r?.ms)) && Number(r?.ms) > 0 ? Number(r.ms) : null;
   } catch { return null; }
 }
+// FS3: the executor's corpus (gold sources that are not a feed; mt5macro:* never matches 'mt5:%'): its newest bar, or
+// null when there is none, so a market-wide stop does not page (src/feed-stale.mjs).
+async function executorBarMs(db) {
+  try {
+    const r = await db.prepare("SELECT MAX(last_minute_ms) AS ms FROM corpus_sources WHERE source LIKE 'mt5:%' AND source NOT IN (SELECT source FROM corpus_feeds)").first();
+    return Number.isFinite(Number(r?.ms)) && Number(r?.ms) > 0 ? Number(r.ms) : null;
+  } catch { return null; }
+}
 async function checkFeedStale(db, { bridgeId, now }) {
   const at = STALE_CHECKED.get(bridgeId);
   if (Number.isFinite(at) && now >= at && now - at < STALE_CHECK_MS) return;
@@ -102,6 +110,8 @@ async function checkFeedStale(db, { bridgeId, now }) {
   try {
     const lastBarMs = await lastFeedBarMs(db, bridgeId);
     if (!feedContentStale({ syncedMs: now, lastBarMs, now })) return;
+    // FS3: the executor's corpus is read only when the feed's own bars look stale (no extra read otherwise).
+    if (!feedContentStale({ syncedMs: now, lastBarMs, now, executorBarMs: await executorBarMs(db) })) return;
     const ev = await db.prepare("SELECT ms FROM omega_events WHERE action = 'feed_stale' AND json_extract(detail, '$.bridge_id') = ? ORDER BY id DESC LIMIT 1").bind(bridgeId).first();
     if (!newStaleEpisode({ lastEventMs: Number(ev?.ms || 0), lastBarMs })) return;
     await audit(db, now, "agent:cerebrum", "feed_stale", staleDetail({ bridgeId, lastBarMs, now }));
@@ -158,6 +168,7 @@ export async function feedOverview(env, { now = Date.now() } = {}) {
     await ensureFeedSchema(db);
     const rows = (await db.prepare("SELECT b.bridge_id, b.kid, b.public_key, b.bridge_version, b.state, b.synced_ms, c.version, c.status, c.server, c.kid AS conn_kid, c.updated_ms FROM omega_feed_bridges b LEFT JOIN omega_feed_connections c ON c.bridge_id = b.bridge_id ORDER BY b.bridge_id").all()).results ?? [];
     const out = [];
+    const execBar = rows.length ? await executorBarMs(db) : null;
     for (const r of rows) {
       const st = parse(r.state);
       const age = finite(Number(r.synced_ms)) ? now - Number(r.synced_ms) : null;
@@ -169,7 +180,7 @@ export async function feedOverview(env, { now = Date.now() } = {}) {
         terminal_connected: st?.connected === true, server: st?.server ?? null, symbol: st?.symbol?.name ?? null,
         connection: { version: Number(r.version) || 0, status: r.status ?? "none", server: r.server ?? null, sealed_to_current_key: r.status === "stored" && r.conn_kid === r.kid, updated_ms: r.updated_ms ?? null },
         last_bar_age_ms: lastBarMs != null ? now - lastBarMs : null,
-        content_stale: feedContentStale({ syncedMs: Number(r.synced_ms), lastBarMs, now })
+        content_stale: feedContentStale({ syncedMs: Number(r.synced_ms), lastBarMs, now, executorBarMs: execBar })
       });
     }
     return out;
