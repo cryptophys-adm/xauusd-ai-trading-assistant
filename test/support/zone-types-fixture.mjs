@@ -140,7 +140,11 @@ export async function zoneScenario({ se, de, ea, pp, pa, pl }, { db, kv, modes =
   const signal = withoutLimitFirst(ea.eaSignalFromDecision({ decision: record, now: NOW }));
   const management = ea.managementFields(record);
   const recap = pp.publicRecap({ decision_key: key, bar_close: CLOSE, stance: record.stance, bias: record.bias, decision_json: JSON.stringify(record) });
-  const analysis = pa.publicAnalysis(strategy.key_levels, { now: NOW });
+  // PT1 (2026-11-27) adds the M15 patterns and the busted ones to the public analysis; the zone pins (Z0-9, Z1a-6, Z1b-6,
+  // ZS-8, ZA-15) compare the zone switches with main's output before it, so they read it without those entries.
+  // test/public-patterns.test.mjs (PT1-1) pins on this same fixture that everything else is byte for byte unchanged.
+  const full = pa.publicAnalysis(strategy.key_levels, { now: NOW });
+  const analysis = { ...full, patterns: full.patterns.filter((p) => p.chart !== "M15" && p.status !== "busted") };
   // One decision through the engine and the plan learner on a sqlite D1.
   pl.resetPlanLearningSchemaCacheForTests?.(); de.resetDecisionSchemaCacheForTests?.();
   const run = { DB: db(), SIGNAL_CACHE: kv(), AI: { run: async () => { throw new Error("model down"); } }, ...env };

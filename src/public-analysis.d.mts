@@ -10,3 +10,6 @@ export function publicAnalysis(keyLevels: unknown, options?: { structure?: unkno
 export function analysisLeaks(value: unknown, path?: string): string[];
 export const PROJECTION_MAX_HEIGHTS: number;
 export function publicProjectionOf(p: any): number | null;
+/** PT1: the public projection of the Projection Agent's patterns (publicAnalysis's `patterns`). */
+export const PUBLIC_PATTERN_STATUSES: readonly string[];
+export function publicPatterns(list: unknown): Record<string, any>[];
