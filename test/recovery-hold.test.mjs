@@ -23,13 +23,14 @@ test("RH-1: the streak counts consecutive restarts on this connection version si
   // A new connection version re-arms; so does a reconnect after the restarts; so does another directive in between.
   assert.equal(recoveryHold({ recent: [disp(T + 6 * M, 7), disp(T + 3 * M, 7), disp(T, 7)], connVersion: 8 }).hold, false);
   assert.equal(recoveryHold({ recent: [disp(T + 6 * M, 7), disp(T + 3 * M, 7), disp(T, 7)], connVersion: 7, connectedMs: T + M }).streak, 2, "only the restarts after the reconnect");
-  assert.equal(recoveryHold({ recent: [disp(T + 6 * M, 7), disp(T + 3 * M, 7, "remediate_algo_trading"), disp(T, 7)], connVersion: 7 }).streak, 1);
+  assert.equal(recoveryHold({ recent: [disp(T + 6 * M, 7), disp(T + 3 * M, 7, "remediate_algo_trading"), disp(T, 7)], connVersion: 7 }).streak, 2, "another directive is skipped, not a break");
   // Events from before this change carry no conn_version: they never count.
   assert.equal(recoveryHold({ recent: [row(T, { directive: "restart_terminal", status: "dispatched" })], connVersion: 7 }).streak, 0);
   // The held event is found, so it is recorded once.
   const held = row(T + 9 * M, heldDetail({ connVersion: 7, streak: 3, reason: "terminal_disconnected" }));
   assert.deepEqual(recoveryHold({ recent: [held, disp(T + 6 * M, 7)], connVersion: 7 }), { hold: true, recorded: true, streak: 3 });
   assert.equal(recoveryHold({ recent: [held], connVersion: 7, connectedMs: T + 10 * M }).hold, false, "a reconnect after the hold re-arms");
+  assert.equal(recoveryHold({ recent: [disp(T + 12 * M, 7, "remediate_algo_trading"), held], connVersion: 7 }).hold, true, "a remediate dispatch after the hold does not lift it");
   assert.deepEqual(holdRecovery(7), { directive: HOLD_DIRECTIVE, reason: "recovery_held", action_id: "hold:7" });
   // Only a tight run counts (review of #647): two dispatches more than 15 minutes apart, or a last one that old.
   assert.equal(RECOVERY_STREAK_GAP_MS, 15 * M);

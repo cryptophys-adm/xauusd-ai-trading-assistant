@@ -41,10 +41,20 @@ import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
 import { cdGateOn, readCdGateLive, recordCdEvents } from "./cd-gate.mjs";
+import { serverCheck, nearMatch, loggedInOn } from "./server-check.mjs";
 import { recoveryHold, heldDetail, holdRecovery, shouldRearm, RECOVERY_RESTART_CAP, REARM_FRESH_MS } from "./recovery-hold.mjs";
 // Recovery backoff: per database binding, when this isolate last checked for a re-arm (src/recovery-hold.mjs).
 const REARM_CHECKED = new WeakMap();
 const REARM_CHECK_MS = 5 * 60_000;
+// Wrong server name: per database binding, the connection version whose server_not_seen event is known to exist, and
+// the version known to have been seen logged in (its server_seen event exists).
+const NOT_SEEN_RECORDED = new WeakMap();
+const SERVER_SEEN = new WeakMap();
+/** Whether the terminal was seen logged in on the stored server since this connection version (one small read). */
+async function serverSeenFor(db, version) {
+  const r = await db.prepare("SELECT detail FROM omega_events WHERE action = 'server_seen' ORDER BY id DESC LIMIT 1").first();
+  return Number(parse(r?.detail, {})?.conn_version) === Number(version);
+}
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -652,7 +662,18 @@ export async function setConnection(env, { envelope, server, actor, trade_symbol
   await env.DB.prepare("UPDATE omega_connection SET version = ?, status = 'stored', server = ?, kid = ?, envelope = ?, updated_by = ?, updated_ms = ?, trade_symbol = ?, units_per_usd = ? WHERE id = 1")
     .bind(version, name, envelope.kid, text, actor, now, tradeSymbol, unitsPerUsd).run();
   await event(env.DB, now, actor, "connection_set", { server: name, version, trade_symbol: tradeSymbol, units_per_usd: unitsPerUsd });
-  return { ok: true, version, status: "stored", server: name, trade_symbol: tradeSymbol, units_per_usd: unitsPerUsd };
+  // A near-match hint (src/server-check.mjs): a warning, never a refusal; the name may be new.
+  const didYouMean = nearMatch(name, await knownServerNames(env.DB));
+  return { ok: true, version, status: "stored", server: name, trade_symbol: tradeSymbol, units_per_usd: unitsPerUsd,
+    ...(didYouMean ? { warning: { code: "server_name_near_match", did_you_mean: didYouMean, message: `A server named '${didYouMean}' was seen before; the name entered is '${name}'. Saved as entered.` } } : {}) };
+}
+
+/** The server names the terminal has reported before (accounts seen and the current state), for the near-match hint. */
+async function knownServerNames(db) {
+  const out = [];
+  try { for (const r of (await db.prepare("SELECT DISTINCT server FROM omega_accounts WHERE server IS NOT NULL LIMIT 50").all()).results ?? []) out.push(String(r.server)); } catch { /* no accounts yet */ }
+  try { const st = parse((await db.prepare("SELECT state FROM omega_bridge WHERE id = 1").first())?.state); if (st?.connected === true && st?.server) out.push(String(st.server)); } catch { /* no state */ }
+  return out;
 }
 
 export async function clearConnection(env, { actor, reason }, { now = Date.now() } = {}) {
@@ -999,7 +1020,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   const db = env.DB;
   if (typeof kid !== "string" || !KID_RE.test(kid) || typeof publicKey !== "string" || !B64_RE.test(publicKey) || publicKey.length > 1024) return { ok: false, error: "kid and public_key are required" };
   // The connection the bridge must apply (read once: its owner-set gold symbol and money value go with the state too).
-  const conn = await db.prepare("SELECT version, status, server, kid, envelope, trade_symbol, units_per_usd FROM omega_connection WHERE id = 1").first();
+  const conn = await db.prepare("SELECT version, status, server, kid, envelope, trade_symbol, units_per_usd, updated_ms FROM omega_connection WHERE id = 1").first();
   const executor = executorFrom(state, { ownerUnitsPerUsd: conn?.status === "stored" ? Number(conn.units_per_usd) || null : null });
   const ownerSymbol = conn?.status === "stored" ? ownerTradeSymbol(conn.trade_symbol) : null;
   if (executor) executor.owner_symbol = ownerSymbol;
@@ -1023,6 +1044,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       .bind(kid, publicKey, version, stateText, now).run();
   }
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
+  // Wrong server name, the latch (src/server-check.mjs; review of #648): the first sync logged in on the exact stored
+  // name after a connection is set writes one server_seen per version; a later disconnect is then never "not_seen".
+  if (conn?.status === "stored" && loggedInOn(conn, executor) && SERVER_SEEN.get(db) !== Number(conn.version)) {
+    try {
+      if (!(await serverSeenFor(db, conn.version))) await event(db, now, "bridge", "server_seen", { conn_version: Number(conn.version) });
+      SERVER_SEEN.set(db, Number(conn.version));
+    } catch { /* the next sync tries again */ }
+  }
   // Recovery backoff (src/recovery-hold.mjs): a healthy state (connected, a fresh quote) after a recovery re-arms
   // Cerebrum's restarts, once per recovery episode (event recovery_rearmed). Checked before the light path, at most
   // once per REARM_CHECK_MS per isolate while healthy (two small reads), at once after this isolate wrote a recovery.
@@ -1444,6 +1473,20 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
   // Cerebrum Autonomous Watchdog: evaluate MT5 terminal health & dispatch self-healing directives
   let recovery = null;
+  // Wrong server name (src/server-check.mjs): five minutes after a connection with no login on that exact server, one
+  // server_not_seen event (to the Cerebrum Telegram, once per connection version); the hold below names the cause.
+  const srvCheck = conn?.status === "stored" && !loggedInOn(conn, executor)
+    ? serverCheck({ conn, executor, now, seen: SERVER_SEEN.get(db) === Number(conn.version) || await serverSeenFor(db, conn.version).catch(() => false) })
+    : serverCheck({ conn, executor, now });
+  if (srvCheck?.status === "not_seen" && NOT_SEEN_RECORDED.get(db) !== Number(conn.version)) {
+    try {
+      const last = await db.prepare("SELECT detail FROM omega_events WHERE action = 'server_not_seen' ORDER BY id DESC LIMIT 1").first();
+      if (Number(parse(last?.detail, {})?.conn_version) !== Number(conn.version)) {
+        await event(db, now, "agent:cerebrum", "server_not_seen", { conn_version: Number(conn.version), server: conn.server, message: srvCheck.message });
+      }
+      NOT_SEEN_RECORDED.set(db, Number(conn.version));
+    } catch { /* the next sync tries again */ }
+  }
   if (conn?.status === "stored") {
     const recentFailedAlgo = (Array.isArray(results) ? results : []).some(
       (r) => typeof r?.error === "string" && (r.error.includes("algo_trading_disabled") || r.error.includes("automated trading disabled"))
@@ -1479,7 +1522,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       }
       if (hold.hold) {
         recovery = holdRecovery(conn.version);
-        if (!hold.recorded) { await event(db, now, "agent:cerebrum", "autonomous_recovery", heldDetail({ connVersion: conn.version, streak: hold.streak, reason: candidateReason })); REARM_CHECKED.delete(db); }
+        if (!hold.recorded) { await event(db, now, "agent:cerebrum", "autonomous_recovery", heldDetail({ connVersion: conn.version, streak: hold.streak, reason: candidateReason, ...(srvCheck?.status === "not_seen" ? { cause: "server_not_seen", server: conn.server } : {}) })); REARM_CHECKED.delete(db); }
       } else if (now - lastMs >= 180_000) {
         REARM_CHECKED.delete(db);
         const actionId = `rec:${now}`;
@@ -1970,6 +2013,13 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
       anti_flapping_cooldown_sec: 180,
       last_recovery: lastRec ? { ms: lastRec.ms, ...parse(lastRec.detail, {}) } : null,
     },
+    // Wrong server name (src/server-check.mjs): ok | pending | not_seen, with a near-match hint on this page only.
+    server_check: await (async () => {
+      const c = serverCheck({ conn: connection, executor: st, now, seen: !loggedInOn(connection, st) && connection.status === "stored" ? await serverSeenFor(db, connection.version).catch(() => false) : false });
+      if (!c) return null;
+      const hint = c.status === "not_seen" ? nearMatch(connection.server, await knownServerNames(db)) : null;
+      return { ...c, ...(hint ? { did_you_mean: hint } : {}) };
+    })(),
     tca,
     route,
     management,

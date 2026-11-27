@@ -44,6 +44,8 @@ export const TOLD_ELSEWHERE = Object.freeze([
   "profile_downgrade_vetoed", "profile_upgrade_refused", "mode_changed", "spec_changed", "position_closed", "probation_set",
   "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed", "limit_fault_cleared",
   "pm_stop_loosened", "pm_tp_moved", "autonomous_recovery",
+  // Wrong server name (src/server-check.mjs): told once to the Cerebrum Telegram by src/ea-heartbeat-relay.mjs.
+  "server_not_seen",
   // Feed content staleness (src/feed-stale.mjs): told once per episode by the relay.
   "feed_stale",
   // MS2: the mode probation passed (src/mode-selector.mjs tells it in one line; its failure is a mode_changed).
@@ -58,7 +60,9 @@ export const NOT_A_CHANGE = Object.freeze([
   // MS1: the mode selector's daily outcome (src/mode-selector.mjs), a reading; a change is its own mode_changed.
   "mode_selector_run",
   // Recovery backoff (src/recovery-hold.mjs): a healthy state after a recovery, which re-arms the watchdog.
-  "recovery_rearmed"
+  "recovery_rearmed",
+  // Wrong server name, the latch (src/server-check.mjs): logged in on the stored server once per connection version.
+  "server_seen"
 ]);
 
 /** The settings keys in words (anything else is shown by its own name). */
