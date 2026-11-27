@@ -41,6 +41,10 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
   WEBHOOK_SECRET?: string;
+  /** S3 (2026-11-27): "on" restores the TradingView webhook handler; default "off" answers POST /webhook with 410. */
+  WEBHOOK_INGEST?: string;
+  CMC_API_KEY?: string;
+  CMC_USDT_SHADOW?: string;
   CONFLUENCE_HANDOFF_SECRET?: string;
   // SB1 model router (src/model-router.mjs): the Worker secret the owner sets through the platform; MODEL_BASE_URL and
   // MODEL_ID default to Reflection's endpoint and Beam. SHADOW_MODEL_ROUTER is the FS1 switch (off by default).
@@ -244,6 +248,7 @@ import { readLiquidityView } from "./liquidity-view.mjs";
 import { readChartPatternsView } from "./chart-patterns-view.mjs";
 import { readOrbView } from "./orb-view.mjs";
 import { runCotStep } from "./positioning-lens.mjs";
+import { runCmcUsdtStep } from "./cmc-usdt-shadow.mjs";
 import { loadDecisionCards } from "./decision-cards.mjs";
 import { marketIdleAt, idleHeartbeatDue } from "./market-idle.mjs";
 import { readNeuronAllocation } from "./neuron-allocation.mjs";
@@ -266,6 +271,7 @@ import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
+import { webhookIngestMode, retiredWebhookResponse } from "./webhook-retirement.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, m15KeyForClose } from "./agent-threads.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
@@ -3167,6 +3173,11 @@ async function runLedgerStep(env: Env): Promise<void> {
   }
 }
 
+// CMC USDT shadow log: counts, status codes and error statistics only (no key, no value).
+function logCmcUsdt(r: Record<string, unknown>): void {
+  if (r.status !== "not_due" && r.status !== "off" && r.status !== "no_key") console.log("cmc_usdt_shadow", JSON.stringify(r));
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -3275,6 +3286,8 @@ export default {
       }
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
+      // S3: retired (410 before the body or the secret is read; nothing written). WEBHOOK_INGEST "on" restores it.
+      if (webhookIngestMode(env) !== "on") return retiredWebhookResponse();
       return handleWebhook(request, env);
     }
     if (request.method === "POST" && url.pathname === "/evidence/local-calculation") {
@@ -3426,6 +3439,8 @@ export default {
             const cot = await runCotStep(env, { allowBackfill: false });
             if (cot.status !== "fresh" && cot.status !== "not_due" && cot.status !== "backfill_pending") console.log("cot_reports", JSON.stringify(cot));
           } catch (e) { console.error("cot_reports_failed", e instanceof Error ? e.message : String(e)); }
+          // CMC USDT shadow (src/cmc-usdt-shadow.mjs): crypto trades on the weekend too, so the hourly sample runs here.
+          try { logCmcUsdt(await runCmcUsdtStep(env, { now: event.scheduledTime || Date.now() })); } catch (e) { console.error("cmc_usdt_shadow_failed", e instanceof Error ? e.message : String(e)); }
           // The Knowledge Council's facts (src/doctrine-facts.mjs), hourly while the market is closed too: on 2026-11-21 the
           // council of 03:52 UTC read an old build's facts (91 → 21) and amended the doctrine; the next council needs this
           // build's facts, fresh (under 3 hours), before the Sunday reopen.
@@ -3628,6 +3643,8 @@ export default {
           // backfilled once, then fetched only while a new week's report is due (at most one request per series an hour).
           const cot = await runCotStep(env);
           if (cot.status !== "fresh" && cot.status !== "not_due") console.log("cot_reports", JSON.stringify(cot));
+          // CMC USDT shadow (src/cmc-usdt-shadow.mjs): at most one sample per UTC hour; feeds nothing live.
+          try { logCmcUsdt(await runCmcUsdtStep(env, { now: event.scheduledTime || Date.now() })); } catch (e) { console.error("cmc_usdt_shadow_failed", e instanceof Error ? e.message : String(e)); }
           // The released values, surprises and gold's reactions (src/econ-releases.mjs, owner 2026-11-10).
           const releases = await refreshEconReleases(env, { gatedEvents: await gatedEvents(env), readMt5: readMt5Calendar });
           if (releases.live || releases.backfill || releases.reactions || releases.status !== "ok") console.log("econ_releases", JSON.stringify(releases));

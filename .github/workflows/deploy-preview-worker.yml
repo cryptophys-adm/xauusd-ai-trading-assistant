@@ -310,53 +310,25 @@ jobs:
             prophet_r37_ssot: { direction: 1, d_enc: -1, b_enc: 2, structure_subtype: 0, bull_event: true, bear_event: false },
             gmi_v12_70: { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false }
           };
-          for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
-            // `wrangler secret put` creates a new Worker version that reaches isolates gradually:
-            // a request can still land on an isolate without WEBHOOK_SECRET for a few seconds
-            // after /health already saw it. Retry only that specific 503.
-            let response, result;
-            for (let attempt = 0; attempt < 15; attempt++) {
+          // S3 (2026-11-27): the TradingView alert webhooks are retired. POST /webhook answers 410 with and without the
+          // secret, for every source and timeframe, before reading the body; the chain below runs on the local records.
+          for (const [source, tf, withSecret] of [["prophet_r38", timeframe, true], ["prophet_r37_ssot", timeframe, true], ["gmi_v12_70", timeframe, true], ["prophet_r38", "15", true], ["prophet_r38_hud", "60", true], ["prophet_r38", timeframe, false]]) {
+            let response;
+            for (let attempt = 0; attempt < 10; attempt++) {
               response = await fetch(base + "/webhook", {
                 method: "POST",
-                headers,
-                body: JSON.stringify({
-                  source, ticker: symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
-                  ...bar, ...webhookValues[source],
-                  metrics: { bias: "NEUTRAL", fixture_only: true }
-                })
+                headers: withSecret ? headers : { "content-type": "application/json" },
+                body: JSON.stringify({ source, ticker: symbol, timeframe: tf, candle_time: candleTime, candle_key: candleKey, ...bar, ...(webhookValues[source] || {}) })
               });
               // A fresh preview Worker can still answer from an edge with an HTML page; retry it.
-              if (!(response.headers.get("content-type") || "").includes("application/json")) {
-                console.log("::warning::webhook " + source + " got a non-JSON edge answer (HTTP " + response.status + "), retrying");
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                continue;
-              }
-              result = await response.json();
-              if (!(response.status === 503 && /WEBHOOK_SECRET is not configured/.test(String(result?.error)))) break;
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              if ((response.headers.get("content-type") || "").includes("application/json")) break;
+              console.log("::warning::webhook " + source + " got a non-JSON edge answer (HTTP " + response.status + "), retrying");
+              await new Promise(resolve => setTimeout(resolve, 3000));
             }
-            assert.ok(response.status === 202 || response.status === 200, "webhook rejected: " + JSON.stringify(result));
+            const result = await response.json();
+            assert.equal(response.status, 410, "retired webhook " + source + "/" + tf + ": " + JSON.stringify(result));
+            assert.deepEqual(result, { error: "gone", reason: "tradingview_webhooks_retired" });
           }
-
-          // A webhook on a non-analysis timeframe (15m) is stored for parity only and never starts the AI chain.
-          const m15Response = await fetch(base + "/webhook", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ source: "prophet_r38", ticker: symbol, timeframe: "15", candle_time: candleTime, ...bar, ...webhookValues.prophet_r38 })
-          });
-          const m15Result = await m15Response.json();
-          assert.equal(m15Response.status, 202, "15m webhook: " + JSON.stringify(m15Result));
-          assert.equal(m15Result.analysis_status, "stored_only", "a 15m webhook must not start the AI chain");
-          assert.equal(m15Result.queued, false);
-          // A HUD comparator source on H1 is stored for parity only and never starts the AI chain.
-          const hudResponse = await fetch(base + "/webhook", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ source: "prophet_r38_hud", ticker: symbol, timeframe: "60", candle_time: candleTime, ...bar, cshi_score: 0.5 })
-          });
-          const hudResult = await hudResponse.json();
-          assert.equal(hudResponse.status, 202, "hud webhook: " + JSON.stringify(hudResult));
-          assert.equal(hudResult.analysis_status, "stored_only", "a *_hud webhook must not start the AI chain");
 
           // local_computation lane: outputs that reproduce the webhook values on the same raw bar.
           // Trust comes from the frozen table (S1), whose identities (per chart) these records carry; since S2
@@ -650,7 +622,7 @@ jobs:
 
           // H1 HUD snapshot verification on a real H1 candle (local-primary chain). A HUD
           // snapshot (the preview twin of the RPC submitHud) is stored first, then the
-          // calibration webhooks and the local records of the previous closed hour; they carry the
+          // (retired, S3: they answer 410) calibration webhooks and the local records of the previous closed hour; they carry the
           // frozen H1 identities (trusted since S1, no comparison since S2), and the H1 HUD readings are then
           // verified against the trusted local record. The per-H1 HUD agents are
           // retired while the War Room runs (owner decision 2026-11-05).
@@ -667,7 +639,7 @@ jobs:
           const h1Bar = { o: 4001.1, h: 4006.2, l: 3999.0, c: 4004.4, volume: 1800 };
           for (const source of ["prophet_r38", "prophet_r37_ssot", "gmi_v12_70"]) {
             const r = await fetch(base + "/webhook", { method: "POST", headers, body: JSON.stringify({ source, ticker: symbol, timeframe: "60", candle_time: String(hourOpen), ...h1Bar, ...webhookValues[source] }) });
-            assert.equal(r.status, 202, "H1 calibration webhook " + source);
+            assert.equal(r.status, 410, "S3: the H1 calibration webhook " + source + " is retired");
           }
           for (const engine of ["mizan", "prophet", "gmi"]) {
             const record = { ...localPayload(engine, "60"), timeframe: "60", candle_time: new Date(hourOpen).toISOString(), candle_key: key60, computed_at: new Date().toISOString(), values: { bias: "NEUTRAL", fixture_only: true, candle: h1Bar, comparable: comparableFor[engine] } };

@@ -41,6 +41,9 @@
     // Local-primary (owner decision 2026-11-05): approved local records drive the chain;
     // TradingView webhooks only calibrate the local engines, for example monthly.
     "INDICATOR_SOURCE": "local",
+    // S3 (2026-11-27): the TradingView alert webhooks are retired: POST /webhook answers 410 and stores nothing; "on" restores them.
+    "WEBHOOK_INGEST": "off",
+    "CMC_USDT_SHADOW": "off",
     "CALIBRATION_INTERVAL_DAYS": "30",
     "PARITY_PROMOTE_AFTER": "1",
     // The isolated preview runs the news threads so preview-e2e can prove real model output.

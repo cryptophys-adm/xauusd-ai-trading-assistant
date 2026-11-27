@@ -8,3 +8,5 @@ export function titleOf(name: string): string;
 export function cutAtWord(s: string, max: number): string;
 export function publicAnalysis(keyLevels: unknown, options?: { structure?: unknown; now?: number; charts?: unknown }): Record<string, any>;
 export function analysisLeaks(value: unknown, path?: string): string[];
+export const PROJECTION_MAX_HEIGHTS: number;
+export function publicProjectionOf(p: any): number | null;

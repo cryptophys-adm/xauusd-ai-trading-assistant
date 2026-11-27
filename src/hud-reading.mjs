@@ -260,7 +260,7 @@ export function readHud(agentId, hud = {}) {
       const z = f.z_by_timeframe && typeof f.z_by_timeframe === "object" ? Object.entries(f.z_by_timeframe).filter(([, v]) => isNum(v)) : [];
       if (z.length) add(`Per timeframe the z-scores are ${z.map(([k, v]) => `${{ M15: "15-minute", H1: "1-hour", H4: "4-hour", D1: "daily", W1: "weekly" }[k] ?? k} ${fixed(v)}`).join(", ")}.`);
       if (isNum(f.global_hurst)) add(`The weighted global Hurst exponent is ${fixed(f.global_hurst)}, ${f.global_hurst > 0.5 ? "a persistent, trending macro regime" : "an anti-persistent macro regime"}.`);
-      if (f.macro_cycle) add(`The macro cycle from the dollar index and USDT dominance is ${f.macro_cycle === "risk_on" ? "risk on, both falling, which is safe for gold" : "risk off: the dollar or USDT dominance is rising, a headwind for gold"}.`);
+      if (f.macro_cycle) add(`The macro cycle from the dollar index and the USDT market cap is ${f.macro_cycle === "risk_on" ? "risk on, both falling, which is safe for gold" : "risk off: the dollar or the USDT market cap is rising, a headwind for gold"}.`);
       if (f.macro_shift) {
         const shift = { reversal_due: isNum(f.macro_shift_bars_4h) ? `a macro reversal is projected in about ${f.macro_shift_bars_4h} four-hour bars` : "a macro reversal is projected", stagnant: "the macro kinematics are stagnant", accelerating_dollar_up: "the dollar and USDT side is accelerating up, against gold", accelerating_dollar_down: "the dollar and USDT side is accelerating down, in favour of gold", neutral: "the macro kinematics are neutral" }[f.macro_shift];
         if (shift) add(`On the macro shift, ${shift}.`);

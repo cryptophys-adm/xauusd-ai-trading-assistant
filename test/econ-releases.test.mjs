@@ -75,9 +75,12 @@ test("the sweep: the released value right after the event, a history window an h
     DB: fakeD1(), SIGNAL_CACHE: kv(),
     NEWS_INGESTION: {
       economicCalendar: async (req) => { calls.push(req); return { status: 200, body: { events: [{ title: "CPI m/m", time: CPI, currency: "USD", importance: 1, actual: 0.4, forecast: 0.3, previous: 0.3, unit: "%" }, { title: "Core CPI m/m", time: CPI, currency: "USD", importance: 1, actual: 0.3, forecast: 0.3, previous: 0.2 }] } }; },
-      goldHistory: async () => ({ status: 200, body: { results: [{ ok: true, bars: bars(Date.parse("2026-11-09T00:00:00Z"), 80, (i) => 4000 - i) }] } })
+      // TradingView cleanup, step 1: gold's history is never pulled from TradingView any more.
+      goldHistory: async () => { throw new Error("goldHistory must not be called"); }
     }
   };
+  // The stored 1H history (pulled from TradingView until 2026-11-26).
+  await env.SIGNAL_CACHE.put("econ:gold-1h-history:v1", JSON.stringify(bars(Date.parse("2026-11-09T00:00:00Z"), 80, (i) => 4000 - i)));
   const gated = [{ title: "CPI m/m", currency: "USD", impact: "High", time: CPI }];
   const r = await refreshEconReleases(env, { now, gatedEvents: gated });
   assert.equal(r.status, "ok", JSON.stringify(r));
@@ -186,4 +189,71 @@ test("MT5 fallback stage 2: while TradingView's calendar is down, the broker ter
   resetEconSchemaCacheForTests();
   const none = await refreshEconReleases({ DB: fakeD1(), SIGNAL_CACHE: kv(), NEWS_INGESTION: env.NEWS_INGESTION }, { now, gatedEvents: [{ title: "x", currency: "USD", impact: "High", time: NFP }], readMt5: async () => [] });
   assert.deepEqual(none.live, { day: "2026-11-06", error: "mcp_quota_cooldown_active" }, "nothing from the broker: the error stands");
+});
+
+test("ER-TV1 (TradingView cleanup, step 1): gold's 1H history grows from the pull adapter's 1H series and is kept without expiry; no TradingView pull", async () => {
+  const { goldHistoryForTests } = await import("../src/econ-releases.mjs");
+  const store = kv();
+  const puts = [];
+  const spy = { get: store.get, put: async (k, v, opts) => { puts.push({ k, opts }); return store.put(k, v); } };
+  const start = Date.parse("2026-11-09T00:00:00Z");
+  await store.put("econ:gold-1h-history:v1", JSON.stringify(bars(start, 10, (i) => 4000 + i)));
+  // The adapter's 1H series overlaps the last two stored hours and adds three new ones.
+  const candles = Array.from({ length: 5 }, (_, i) => ({ open_time: new Date(start + (8 + i) * 3_600_000).toISOString(), open: 5000 + i, high: 5001 + i, low: 4999 + i, close: 5000 + i }));
+  await store.put("market-data:v2:series:OANDA:XAUUSD|1h", JSON.stringify({ candles }));
+  const env = { SIGNAL_CACHE: spy, NEWS_INGESTION: { goldHistory: async () => { throw new Error("goldHistory must not be called"); } } };
+  const h = await goldHistoryForTests(env);
+  assert.equal(h.t.length, 13, "10 stored + 3 new hours");
+  assert.equal(h.c[8], 5000, "the adapter's bar wins on an overlapping hour");
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].k, "econ:gold-1h-history:v1");
+  assert.equal(puts[0].opts, undefined, "no expiry: the history is kept");
+  assert.equal(JSON.parse(store.m.get("econ:gold-1h-history:v1")).t.length, 13);
+  // Nothing new: no write.
+  await goldHistoryForTests(env);
+  assert.equal(puts.length, 1, "written back only when it gained an hour");
+  // No stored history and no series: null, no throw.
+  assert.equal(await goldHistoryForTests({ SIGNAL_CACHE: kv() }), null);
+});
+
+test("CG1 (2026-11-27): an MQL5 value goes to a stored row only when its period and scale agree; otherwise it gets its own MQL5 title and series", async () => {
+  const { periodOf, sameScale, mt5RowMatches, MT5_TITLE_SUFFIX, seriesOf } = await import("../src/econ-releases.mjs");
+  assert.deepEqual(["Core PCE Price Index m/m", "Core PCE Price Index MoM", "PCE Price Index y/y", "GDP Growth Rate QoQ 2nd Est", "GDP q/q", "Housing Starts"].map(periodOf), ["mm", "mm", "yy", "qq", "qq", null]);
+  assert.equal(sameScale(1.3, 1_320_000), false, "Housing Starts: millions against units");
+  assert.equal(sameScale(0.3, 0.2), true);
+  assert.equal(sameScale(-118.4, -134.9), true);
+  assert.equal(sameScale(null, 1), null);
+  // Production pairs (D1, 2026-11-18 and 11-25): the same minute, the same indicator, other units or another period.
+  assert.equal(mt5RowMatches({ title: "Housing Starts", forecast: 1.3, actual: 1.309 }, { title: "Housing Starts", forecast: 1_320_000 }), false, "scale");
+  assert.equal(mt5RowMatches({ title: "PCE Price Index y/y", forecast: 3.7, actual: 3.8 }, { title: "PCE Price Index MoM", forecast: 0.3 }), false, "period");
+  assert.equal(mt5RowMatches({ title: "Core PCE Price Index m/m", forecast: 0.3, actual: 0.3 }, { title: "Core PCE Price Index MoM", forecast: 0.3 }), true);
+  assert.equal(mt5RowMatches({ title: "Durable Goods Orders m/m", forecast: 0.4, actual: 0.2 }, { title: "Durable Goods Orders MoM", forecast: 0.5 }), true);
+  assert.equal(mt5RowMatches({ title: "Housing Starts m/m", actual: 9.9 }, { title: "Housing Starts", forecast: 1_320_000 }), false, "the only row of the minute is guarded too");
+  // The replay's wrong pairs (2026-11-05..25): another series of the same kind is never matched.
+  const { titlesAgree } = await import("../src/econ-releases.mjs");
+  for (const [a, b] of [["CPI m/m", "Core Inflation Rate MoM"], ["U6 Unemployment Rate", "Unemployment Rate"], ["Michigan Consumer Expectations", "Michigan Consumer Sentiment Prel"],
+    ["Core Retail Sales m/m", "Retail Sales MoM"], ["Retail Control m/m", "Retail Sales MoM"], ["Import Price Index m/m", "Retail Sales MoM"], ["Core Durable Goods Orders m/m", "Durable Goods Orders MoM"],
+    ["GDP Sales q/q", "GDP Growth Rate QoQ 2nd Est"], ["Private Nonfarm Payrolls", "Non Farm Payrolls"], ["PCE Price Index m/m", "Core PCE Price Index MoM"]]) assert.equal(titlesAgree(a, b), false, `${a} / ${b}`);
+  for (const [a, b] of [["Core CPI m/m", "Core Inflation Rate MoM"], ["CPI m/m", "Inflation Rate MoM"], ["Unemployment Rate", "Unemployment Rate"], ["Michigan Consumer Sentiment", "Michigan Consumer Sentiment Prel"],
+    ["PPI m/m", "PPI MoM"], ["Retail Sales m/m", "Retail Sales MoM"], ["Durable Goods Orders m/m", "Durable Goods Orders MoM"], ["Core PCE Price Index m/m", "Core PCE Price Index MoM"],
+    ["GDP q/q", "GDP Growth Rate QoQ 2nd Est"], ["Nonfarm Payrolls", "Non Farm Payrolls"], ["Personal Spending m/m", "Personal Spending MoM"]]) assert.equal(titlesAgree(a, b), true, `${a} / ${b}`);
+  assert.equal(mt5RowMatches({ title: "Core PCE Price Index m/m", actual: 0.3 }, { title: "Core PCE Price Index MoM" }), false, "nothing to compare: refused");
+  assert.notEqual(seriesOf(`Housing Starts${MT5_TITLE_SUFFIX}`), seriesOf("Housing Starts"), "its own series history");
+
+  resetEconSchemaCacheForTests();
+  const T = "2026-11-18T13:30:00.000Z";
+  const db = fakeD1();
+  await upsertReleases(db, [{ title: "Housing Starts", time: T, currency: "USD", importance: 1, forecast: 1_320_000, previous: 1_300_000 }, { title: "PCE Price Index MoM", time: T, currency: "USD", importance: 1, forecast: 0.3, previous: 0.2 }]);
+  await applyMt5Actuals(db, [
+    { title: "Housing Starts", time: T, currency: "USD", actual: 1.309, forecast: 1.3, previous: 1.31, source: "mt5" },
+    { title: "PCE Price Index y/y", time: T, currency: "USD", actual: 3.8, forecast: 3.7, previous: 3.6, source: "mt5" },
+    { title: "PCE Price Index m/m", time: T, currency: "USD", actual: 0.4, forecast: 0.3, previous: 0.2, source: "mt5" }
+  ]);
+  const rows = db.raw.prepare("SELECT title, actual, forecast FROM econ_releases ORDER BY title").all().map((r) => [r.title, r.actual, r.forecast]);
+  assert.deepEqual(rows, [
+    ["Housing Starts", null, 1_320_000],
+    ["Housing Starts MQL5", 1.309, 1.3],
+    ["PCE Price Index MoM", 0.4, 0.3],
+    ["PCE Price Index y/y MQL5", 3.8, 3.7]
+  ], "the m/m value fills TradingView's MoM row; the other-scale and other-period values keep their own titles");
 });

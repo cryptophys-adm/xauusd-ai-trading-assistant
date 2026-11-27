@@ -70,12 +70,12 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
   - **Aggregation:** buckets are epoch-aligned. A bar takes the first open, the highest high, the lowest low, the last close and the summed volume.
   - **Completeness:** a bucket is stored only when it has ended and the source has been observed through its end. A bucket without source bars (market closed) produces no bar.
   - **History:** history stays in the cached series. A derived series is pulled natively only to bootstrap an empty cache or to fill a gap the source no longer reaches.
-  - **Daily check:** once per UTC day from 01:00, `verifyDerivedSeries` pulls a few native bars of each derived series (4 calls) and compares them. The result is in the diagnostics as `derived_check`.
+  - **Daily check:** retired on 2026-11-27 (TradingView cleanup, step 1). `verifyDerivedSeries` and the diagnostics field `derived_check` are gone.
 - **Native pulls:**
   - XAUUSD M1, H1, H4, D1 and W1.
   - USOIL 5m, for Macro & Aether's WTI RSI at the chart timeframe.
   - DXY and USDT 4h, which GMI reads only at 240.
-- **Steady-state usage:** about **620 calls per day**. That is M1 288, USOIL 5m 288, H1 24, the 4h series 6 each, D1 1 and the daily check 4. `market-data-ingestion/test/derived-series.test.mjs` fails above 80% of the cap.
+- **Steady-state usage:** about **620 calls per day**. That is M1 288, USOIL 5m 288, H1 24, the 4h series 6 each, D1 1 (the daily check, 4 calls, retired on 2026-11-27). `market-data-ingestion/test/derived-series.test.mjs` fails above 80% of the cap.
 - The account is shared with news ingestion's hourly calls. If TradingView suspends it, the shared cooldown stops both Workers.
 
 ## Worker endpoints (`xauusd-tradingview-pull-adapter`)
@@ -146,12 +146,12 @@ RPC method `TvGateway.ohlcv(requests)` on `xauusd-fundamental-news-ingestion`, e
   - **Aggregation:** buckets are epoch-aligned. A bar takes the first open, the highest high, the lowest low, the last close and the summed volume.
   - **Completeness:** a bucket is stored only when it has ended and the source has been observed through its end. A bucket without source bars (market closed) produces no bar.
   - **History:** history stays in the cached series. A derived series is pulled natively only to bootstrap an empty cache or to fill a gap the source no longer reaches.
-  - **Daily check:** once per UTC day from 01:00, `verifyDerivedSeries` pulls a few native bars of each derived series (4 calls) and compares them. The result is in the diagnostics as `derived_check`.
+  - **Daily check:** retired on 2026-11-27 (TradingView cleanup, step 1). `verifyDerivedSeries` and the diagnostics field `derived_check` are gone.
 - **Native pulls:**
   - XAUUSD M1, H1, H4, D1 and W1.
   - USOIL 5m, for Macro & Aether's WTI RSI at the chart timeframe.
   - DXY and USDT 4h, which GMI reads only at 240.
-- **Steady-state usage:** about **620 calls per day**. That is M1 288, USOIL 5m 288, H1 24, the 4h series 6 each, D1 1 and the daily check 4. `market-data-ingestion/test/derived-series.test.mjs` fails above 80% of the cap.
+- **Steady-state usage:** about **620 calls per day**. That is M1 288, USOIL 5m 288, H1 24, the 4h series 6 each, D1 1 (the daily check, 4 calls, retired on 2026-11-27). `market-data-ingestion/test/derived-series.test.mjs` fails above 80% of the cap.
 - The account is shared with news ingestion's hourly calls. If TradingView suspends it, the shared cooldown stops both Workers.
 
 ## Worker endpoints (`xauusd-tradingview-pull-adapter`)

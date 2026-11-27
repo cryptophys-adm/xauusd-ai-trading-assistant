@@ -55,7 +55,8 @@ test("rejections are stored with their context, capped per hour, pruned after 14
 test("the health check opens a webhook_rejected alert while alerts are refused", async () => {
   const db = d1();
   for (const ms of [NOW - 40 * 60_000, NOW - 5 * 60_000]) await recordRejection(db, classifyRejection({ bodySecret: "short", expected: EXPECTED }), { source: "gmi_v12_70_hud" }, ms);
-  const env = { DB: db, TF_THREADS_ENABLED: "false", NEWS_DAILY_ENABLED: "false", WAR_ROOM_ENABLED: "false" };
+  const env = { DB: db, TF_THREADS_ENABLED: "false", NEWS_DAILY_ENABLED: "false", WAR_ROOM_ENABLED: "false", WEBHOOK_INGEST: "on" };
+  assert.equal((await detectHealthIssues({ ...env, WEBHOOK_INGEST: undefined }, NOW)).some((i) => i.kind === "webhook_rejected"), false, "S3: no rejection alert while the webhooks are retired");
   const issues = await detectHealthIssues(env, NOW);
   const a = issues.find((i) => i.kind === "webhook_rejected");
   assert.ok(a);

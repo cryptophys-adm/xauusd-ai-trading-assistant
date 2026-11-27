@@ -36,7 +36,8 @@ export function publicDelayHours(env) {
 }
 
 const parse = (v, d) => { if (v && typeof v === "object") return v; try { return JSON.parse(v); } catch { return d; } };
-const round2 = (x) => (Number.isFinite(Number(x)) ? Math.round(Number(x) * 100) / 100 : null);
+// BP1: null, undefined and "" stay null (Number(null) is 0).
+const round2 = (x) => (x === null || x === undefined || x === "" || typeof x === "boolean" || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 100) / 100);
 const clip = (s, n) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 
 /** Pure: the sentences of a text that name no price and use no order wording. */

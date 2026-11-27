@@ -11,7 +11,7 @@
 //      Its effect on gold follows the Calendar Agent's fixed rule of the event kind (src/calendar-agent.mjs).
 //   3. Reaction and horizon: gold's move 1, 2, 4, 8 and 24 hours after each release, in 1H ATR, signed by
 //      the rule's direction (positive = gold moved the way the rule says), from gold's 1-hour history
-//      (one TradingView pull a day). Per event kind: the mean signed move and the hit rate at each
+//      (stored, and grown from the pull adapter's 1H series; no TradingView pull since 2026-11-27). Per event kind: the mean signed move and the hit rate at each
 //      horizon; the learned horizon is the longest one whose hit rate is at least 55 % with a positive
 //      mean (null below 5 releases: the fixed 4 hours stand).
 // Advisory context only: no price level, no order. The Decision Engine, the Calendar Agent and the
@@ -32,7 +32,6 @@ const BACKFILL_WINDOW_DAYS = 14;
 const HOUR = 3_600_000, DAY = 86_400_000;
 const LIVE_LOOKBACK_MS = 3 * HOUR;
 const HISTORY_KEY = "econ:gold-1h-history:v1";
-const HISTORY_MARKER = "econ:gold-1h-history:fetched";
 const CURSOR_KEY = "econ:backfill:cursor";
 const LIVE_MARKER = (day) => `econ:live-pull:${day}`;
 
@@ -293,11 +292,68 @@ export async function upsertReleases(db, events, { now = Date.now() } = {}) {
   return n;
 }
 
+/** CG1 (2026-11-27): the period a release title names: "mm" (m/m, MoM), "yy" (y/y, YoY), "qq" (q/q, QoQ), or null. */
+export function periodOf(title) {
+  const t = String(title || "");
+  if (/\bm\/m\b|\bmom\b/i.test(t)) return "mm";
+  if (/\by\/y\b|\byoy\b/i.test(t)) return "yy";
+  if (/\bq\/q\b|\bqoq\b/i.test(t)) return "qq";
+  return null;
+}
+/** CG1: the MQL5 values are on the row's scale (Housing Starts 1.309 for 1309000 is not): within 10x, or both small. */
+export const MT5_SCALE_MAX_RATIO = 10;
+export function sameScale(a, b) {
+  if (!isNum(a) || !isNum(b)) return null;
+  const x = Math.abs(a), y = Math.abs(b);
+  if (x < 1 && y < 1) return true;
+  const lo = Math.min(x, y), hi = Math.max(x, y);
+  return lo > 0 && hi / lo <= MT5_SCALE_MAX_RATIO;
+}
+/**
+ * CG1: a release title as comparable words. Synonyms first ("non farm" is "nonfarm", "inflation rate" and "consumer price
+ * index" are "cpi"), then the period and edition words and filler are dropped. QUALIFIERS make another series of the
+ * same indicator (Core CPI is not CPI, U6 is not the unemployment rate, private payrolls are not payrolls).
+ */
+const TITLE_FILLER = new Set(["m", "mom", "y", "yoy", "q", "qoq", "prel", "preliminary", "final", "flash", "advance", "1st", "2nd", "3rd", "est", "growth", "rate", "index", "change", "the", "of", "s", "a", "sa", "us", "usd"]);
+export const TITLE_QUALIFIERS = Object.freeze(["core", "private", "u6", "real", "excl", "ex", "control", "nsa", "import", "export"]);
+export function titleWords(title) {
+  const t = String(title || "").toLowerCase().replace(/non[\s-]*farm/g, "nonfarm").replace(/n\.s\.a\.?/g, "nsa").replace(/inflation rate|consumer price index/g, "cpi").replace(/[^a-z0-9]+/g, " ");
+  return t.split(" ").filter((w) => w && !TITLE_FILLER.has(w));
+}
+/** CG1: two titles name the same series: the same qualifiers and at least TITLE_MIN_JACCARD of their words shared. */
+export const TITLE_MIN_JACCARD = 0.6;
+export function titlesAgree(a, b) {
+  const x = new Set(titleWords(a)), y = new Set(titleWords(b));
+  if (!x.size || !y.size) return false;
+  if (TITLE_QUALIFIERS.some((q) => x.has(q) !== y.has(q))) return false;
+  const inter = [...x].filter((w) => y.has(w)).length;
+  return inter / new Set([...x, ...y]).size >= TITLE_MIN_JACCARD;
+}
+
+/**
+ * Pure (CG1): may an MQL5 event's values go to this stored row? The same series by name (titlesAgree), the same
+ * period words, and the same scale (the MQL5 forecast against the row's forecast, else its previous, else the MQL5
+ * actual against them). A row with nothing to compare is refused: a wrong value is worse than a second title.
+ */
+export function mt5RowMatches(e, row) {
+  // The same series by name (the event kind alone matched CPI to Core CPI and U6 to the unemployment rate: replay 2026-11-27).
+  if (!titlesAgree(e?.title, row?.title)) return false;
+  if (periodOf(e?.title) !== periodOf(row?.title)) return false;
+  const ref = isNum(row?.forecast) ? row.forecast : isNum(row?.previous) ? row.previous : null;
+  const mine = isNum(e?.forecast) ? e.forecast : isNum(e?.previous) ? e.previous : e?.actual;
+  return sameScale(mine, ref) === true;
+}
+/** CG1: the title an unmatched MQL5 event is stored under, its own series (seriesOf strips "(...)", so no brackets). */
+export const MT5_TITLE_SUFFIX = " MQL5";
+
 /**
  * The MT5 fallback, stage 2 (2026-11-11): released values from the MQL5 calendar (src/corpus-oracle.mjs
  * readMt5Calendar) while TradingView's calendar is down. MQL5 names the events its own way ("Nonfarm
  * Payrolls" for "Non Farm Payrolls"), so a value goes to the row of the same minute and kind when one
  * waits for its actual (the series' history stays one), else it is stored under its own title.
+ * CG1 (2026-11-27): MQL5 gives some series in other units (Housing Starts 1.309 for 1309000) and gives m/m and y/y
+ * of one indicator at the same minute, so a value goes to a row only when its name, period and scale agree (mt5RowMatches);
+ * otherwise it is stored under its own title with the MQL5 suffix, its own forecast and its own series history.
  */
 export async function applyMt5Actuals(db, events, { now = Date.now() } = {}) {
   await ensureEconSchema(db);
@@ -305,10 +361,10 @@ export async function applyMt5Actuals(db, events, { now = Date.now() } = {}) {
   for (const e of events || []) {
     if (!isNum(e?.actual) || !e?.title || !Number.isFinite(Date.parse(e.time))) continue;
     const t = Date.parse(e.time);
-    const rows = ((await db.prepare("SELECT title FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NULL").bind(new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString()).all()).results || []);
-    const kind = ruleOf(e.title).kind;
-    const match = rows.find((r) => kind !== "other" && ruleOf(r.title).kind === kind) || (rows.length === 1 ? rows[0] : null);
-    n += await upsertReleases(db, [{ ...e, title: match ? match.title : e.title, time: new Date(t).toISOString() }], { now });
+    const rows = ((await db.prepare("SELECT title, forecast, previous FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NULL").bind(new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString()).all()).results || []);
+    const match = rows.find((r) => mt5RowMatches(e, r)) || null;
+    const title = match ? match.title : /mql5$/i.test(e.title) ? e.title : `${e.title}${MT5_TITLE_SUFFIX}`;
+    n += await upsertReleases(db, [{ ...e, title, time: new Date(t).toISOString() }], { now });
   }
   return n;
 }
@@ -324,33 +380,33 @@ async function callCalendar(env, request) {
   } catch (e) { return { ok: false, error: String(e?.message ?? e).slice(0, 120) }; }
 }
 
-/** Gold's 1H history (KV, refreshed once a day from TradingView), as columns, or null. */
-async function goldHistory(env, now) {
+/**
+ * Gold's 1H history as columns, or null. TradingView cleanup, step 1 (2026-11-27): no TradingView call. The stored
+ * history (KV, 6000 hours pulled from TradingView until 2026-11-26) is kept and grows from the pull adapter's 1H
+ * series: the newest hours are merged in and the result is written back whenever it gained an hour, without an
+ * expiry, so the reactions and drifts of old releases keep their hours.
+ */
+async function goldHistory(env) {
   const kv = env?.SIGNAL_CACHE;
-  let cached = safeParse((await kv?.get?.(HISTORY_KEY)) || "null");
-  const fetched = Date.parse((await kv?.get?.(HISTORY_MARKER)) || "");
-  if ((!cached || !Number.isFinite(fetched) || now - fetched > DAY) && typeof env?.NEWS_INGESTION?.goldHistory === "function") {
-    try {
-      await kv?.put?.(HISTORY_MARKER, new Date(now).toISOString(), { expirationTtl: 3 * DAY });
-      const r = await env.NEWS_INGESTION.goldHistory(6000);
-      const bars = r?.status === 200 ? r.body?.results?.[0]?.bars : null;
-      if (bars?.t?.length) { cached = { t: bars.t, o: bars.o, h: bars.h, l: bars.l, c: bars.c }; await kv?.put?.(HISTORY_KEY, JSON.stringify(cached), { expirationTtl: 8 * DAY }); }
-    } catch { /* keep the cache */ }
-  }
-  // The newest hours from the pull adapter's 1H series (no TradingView call).
+  let cached = null;
+  try { cached = safeParse((await kv?.get?.(HISTORY_KEY)) || "null"); } catch { cached = null; }
   try {
     const rec = safeParse((await kv?.get?.("market-data:v2:series:OANDA:XAUUSD|1h")) || "null");
     const recent = (rec?.candles || []).filter((b) => [b.open, b.high, b.low, b.close].every(isNum) && b.open_time);
     if (recent.length) {
       const map = new Map();
       if (cached?.t) cached.t.forEach((t, k) => map.set(t, [cached.o[k], cached.h[k], cached.l[k], cached.c[k]]));
+      const before = map.size;
       for (const b of recent) map.set(Math.floor(Date.parse(b.open_time) / 1000), [b.open, b.high, b.low, b.close]);
       const ts = [...map.keys()].sort((a, b) => a - b);
-      cached = { t: ts, o: ts.map((t) => map.get(t)[0]), h: ts.map((t) => map.get(t)[1]), l: ts.map((t) => map.get(t)[2]), c: ts.map((t) => map.get(t)[3]) };
+      const merged = { t: ts, o: ts.map((t) => map.get(t)[0]), h: ts.map((t) => map.get(t)[1]), l: ts.map((t) => map.get(t)[2]), c: ts.map((t) => map.get(t)[3]) };
+      if (map.size > before) { try { await kv?.put?.(HISTORY_KEY, JSON.stringify(merged)); } catch { /* the merged copy still serves this sweep */ } }
+      cached = merged;
     }
   } catch { /* history only */ }
   return cached?.t?.length ? cached : null;
 }
+export const goldHistoryForTests = goldHistory;
 
 /**
  * Sweep step. Never throws. (1) The day of a High-impact USD event released 2 minutes to 3 hours ago
@@ -406,7 +462,7 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
     // (3) Reactions: releases with an actual whose 24 hours have passed and no reaction yet.
     const pending = ((await db.prepare("SELECT * FROM econ_releases WHERE actual IS NOT NULL AND reaction_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 25 * HOUR).toISOString()).all()).results || []);
     let history;
-    const historyOnce = async () => (history === undefined ? (history = await goldHistory(env, now)) : history);
+    const historyOnce = async () => (history === undefined ? (history = await goldHistory(env)) : history);
     if (pending.length) {
       const bars = await historyOnce();
       if (bars) {

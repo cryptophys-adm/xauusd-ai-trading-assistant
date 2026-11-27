@@ -14,6 +14,7 @@
 // for the next sweep. `critical` is never used here: it opens a GitHub issue on the platform.
 // Nexus shows the open alerts as its Priority Queue (GET /api/health/alerts). Read-only towards
 // the trading chain: an alert never changes a decision, a room or a parity status.
+import { webhookIngestMode } from "./webhook-retirement.mjs";
 import { lensHealthIssues } from "./lens-steps.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { engineLabel } from "./engine-names.mjs";
@@ -150,7 +151,7 @@ export async function marketDataFallbackIssue(env, now = Date.now()) {
   const back = cause.back_at ? `; TradingView expected back at ${hhmm(Date.parse(cause.back_at))}` : "";
   return {
     key: "market_data_fallback", kind: "market_data_fallback",
-    subject: `Market data from the broker's MT5 bars${label ? ` (${label})` : ""} since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC: ${cause.text}${back}. Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
+    subject: `Market data from the broker's MT5 bars${label ? ` (${label})` : ""} since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC: ${cause.text}${back}. Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and the USDT market cap wait.`,
     detail: { since: iso(since * 1000), source, cause: cause.code, back_at: cause.back_at }
   };
 }
@@ -265,7 +266,9 @@ export async function detectHealthIssues(env, now = Date.now()) {
   }
 
   // 8. TradingView alerts rejected by POST /webhook (401) in the last hour: the reason, never the secret.
-  const rej = await rejectionSummary(db, now - HOUR);
+  //    S3 (2026-11-27): only while the webhooks are ingested (WEBHOOK_INGEST "on"); retired, POST /webhook answers 410.
+  const ingesting = webhookIngestMode(env) === "on";
+  const rej = ingesting ? await rejectionSummary(db, now - HOUR) : { count: 0 };
   if (rej.count > 0) {
     const top = [rej.top_reason];
     const lengths = top[0] === "secret_missing" ? "" : `; secret length received ${rej.received_lengths.join("/")}, the Worker's ${rej.expected_len}`;
@@ -276,8 +279,9 @@ export async function detectHealthIssues(env, now = Date.now()) {
     });
   }
 
-  // 11. A TradingView alert that went silent while the others on its chart keep arriving.
-  const seen = await rows(db, "SELECT source, CASE WHEN candle_key LIKE '%:5:%' THEN '5' WHEN candle_key LIKE '%:15:%' THEN '15' WHEN candle_key LIKE '%:60:%' THEN '60' WHEN candle_key LIKE '%:240:%' THEN '240' ELSE NULL END AS tf, MAX(received_at) AS last FROM webhook_sources WHERE received_at >= ? GROUP BY source, tf", iso(now - 7 * 24 * HOUR).replace("T", " ").slice(0, 19));
+  // 11. A TradingView alert that went silent while the others on its chart keep arriving (S3: only while ingested;
+  //     retired, every alert stops at once and the owner deletes them).
+  const seen = !ingesting ? [] : await rows(db, "SELECT source, CASE WHEN candle_key LIKE '%:5:%' THEN '5' WHEN candle_key LIKE '%:15:%' THEN '15' WHEN candle_key LIKE '%:60:%' THEN '60' WHEN candle_key LIKE '%:240:%' THEN '240' ELSE NULL END AS tf, MAX(received_at) AS last FROM webhook_sources WHERE received_at >= ? GROUP BY source, tf", iso(now - 7 * 24 * HOUR).replace("T", " ").slice(0, 19));
   for (const s of silentWebhookSources(seen.filter((r) => r.tf), now)) {
     out.push({ key: `webhook_silent:${s.source}:${s.tf}`, kind: "webhook_silent", subject: `TradingView alert silent: ${SOURCE_NAMES[s.source] ?? s.source} ${TF_NAMES[s.tf]} has sent nothing since ${whenUtc(s.last_ms, now)} while the other ${TF_NAMES[s.tf]} alerts arrive; check or recreate it in TradingView (its parity record stands still)`, detail: { source: s.source, timeframe: s.tf, last: iso(s.last_ms), others_last: iso(s.others_ms) } });
   }

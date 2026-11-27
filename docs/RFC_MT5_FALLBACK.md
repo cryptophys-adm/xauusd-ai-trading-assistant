@@ -77,7 +77,7 @@ newer data, and the gap re-pull covers the outage, so the series heals itself.
      GBPUSD^-0.119 x USDCAD^0.091 x USDSEK^0.042 x USDCHF^0.036, only where all six have a bar), on
      their own grids and only for covered buckets. When TradingView's calendar fails, the released
      value comes from the MQL5 calendar, matched to the waiting row of the same minute and kind.
-   - US10Y, USDT dominance and news have no broker source. They stay stale, and their witnesses drop
+   - US10Y, the USDT market cap and news have no broker source. They stay stale, and their witnesses drop
      out.
    - News stays stale, so News Daily drops out. Weights renormalise as they already do.
 

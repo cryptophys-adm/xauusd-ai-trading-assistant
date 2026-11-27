@@ -154,7 +154,8 @@ test("the sweep measures the drift before every release whose hour has begun, hi
   DB.raw.exec("CREATE TABLE econ_releases (release_key TEXT PRIMARY KEY, series TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, currency TEXT NOT NULL, time TEXT NOT NULL, importance INTEGER, actual REAL, forecast REAL, previous REAL, unit TEXT, surprise REAL, surprise_z REAL, gold_direction INTEGER, reaction_json TEXT, fetched_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
   DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, forecast, previous, fetched_at, updated_at) VALUES ('k1', 'cpi', 'inflation', 'CPI m/m', 'USD', ?, 0.4, 0.3, 'x', 'x')").run(CPI);
   DB.raw.prepare("INSERT INTO econ_releases (release_key, series, kind, title, currency, time, forecast, previous, fetched_at, updated_at) VALUES ('k2', 'cpi', 'inflation', 'CPI m/m', 'USD', '2026-11-11T13:30:00.000Z', 0.4, 0.3, 'x', 'x')").run();
-  const env = { DB, SIGNAL_CACHE: kv(), NEWS_INGESTION: { goldHistory: async () => ({ status: 200, body: { results: [{ ok: true, bars: bars(Date.parse("2026-11-09T00:00:00Z"), 60, (i) => 4000 - i) }] } }) } };
+  const env = { DB, SIGNAL_CACHE: kv(), NEWS_INGESTION: { goldHistory: async () => { throw new Error("goldHistory must not be called"); } } };
+  await env.SIGNAL_CACHE.put("econ:gold-1h-history:v1", JSON.stringify(bars(Date.parse("2026-11-09T00:00:00Z"), 60, (i) => 4000 - i)));
   assert.equal((await refreshEconReleases(env, { now: Date.parse(CPI) + 10 * 60_000, gatedEvents: [] })).pre, undefined, "only at the first sweep of an hour");
   const r = await refreshEconReleases(env, { now: Date.parse("2026-11-10T14:10:00Z"), gatedEvents: [] });
   assert.equal(r.pre, 1, JSON.stringify(r));

@@ -3,7 +3,7 @@
 //
 //   1. Articles: the union of every hourly news analysis of the last 24 hours (the hourly
 //      pull keeps its own one-hour window; nothing extra is pulled from TradingView).
-//   2. Context: how gold, the dollar index, WTI oil and the USDT dominance moved over the
+//   2. Context: how gold, the dollar index, WTI oil and the USDT market cap moved over the
 //      same 24 hours, from the cached closed bars.
 //   3. Each article gets a gold bias, BULLISH, BEARISH or NEUTRAL, with one plain sentence
 //      why. A tagged article keeps its tag (cached), so each run tags only new articles.
@@ -34,7 +34,7 @@ const CONTEXT_SERIES = Object.freeze([
   ["gold", "OANDA:XAUUSD|1h", "gold (XAUUSD)"],
   ["dollar", "TVC:DXY|4h", "the US dollar index (DXY)"],
   ["oil", "TVC:USOIL|1h", "WTI oil (USOIL)"],
-  ["usdt", "CRYPTOCAP:USDT|4h", "the USDT dominance"]
+  ["usdt", "CRYPTOCAP:USDT|4h", "the USDT (Tether) market cap"]
 ]);
 
 export function newsDailyEnabled(env) {
