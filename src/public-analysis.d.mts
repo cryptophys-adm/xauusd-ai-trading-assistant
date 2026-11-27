@@ -10,3 +10,5 @@ export function publicAnalysis(keyLevels: unknown, options?: { structure?: unkno
 export function analysisLeaks(value: unknown, path?: string): string[];
 export const PROJECTION_MAX_HEIGHTS: number;
 export function publicProjectionOf(p: any): number | null;
+/** M15P: the public projection of the Projection Agent's patterns (publicAnalysis's `patterns`). */
+export function publicPatterns(list: unknown): Record<string, any>[];

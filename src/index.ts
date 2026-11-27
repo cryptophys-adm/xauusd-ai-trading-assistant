@@ -264,6 +264,7 @@ import { scoreModelArena, pruneModelArena, readModelArena } from "./model-arena.
 import { pruneModeShadowPlans } from "./mode-shadow.mjs";
 import { readPublicProjection, recapsLimit } from "./public-projection.mjs";
 import { publicAnalysis } from "./public-analysis.mjs";
+import { readM15Patterns, runM15PatternsStep } from "./public-m15-patterns.mjs";
 import { readPublicWarRoom, readPublicWarRoomScene } from "./public-warroom.mjs";
 import { readPublicTrackRecord } from "./public-track-record.mjs";
 import { ownerModify, setDelegation, setDelegateMode, ensureHitlSchema } from "./omega-hitl.mjs";
@@ -1844,6 +1845,14 @@ export class PublicProjection extends WorkerEntrypoint<Env> {
     return publicAnalysis((read as any)?.strategy?.key_levels ?? null, { structure: (latest as any)?.structure ?? null, charts: (read as any)?.charts ?? null }) as unknown as JsonObject;
   }
   /**
+   * M15P (2026-11-27, for CTA's fast pass: the confirmed M15 patterns as soon as their 15m bar closes): the public M15
+   * patterns the 5-minute step wrote, from one KV key and nothing else (no strategy, decision or feature-switch read;
+   * src/public-m15-patterns.mjs). `sinceCloseMs` equal to the stored close answers { unchanged: true }.
+   */
+  async m15Patterns(input?: { sinceCloseMs?: number }): Promise<JsonObject> {
+    return readM15Patterns(this.env, { sinceCloseMs: input?.sinceCloseMs ?? null }) as Promise<JsonObject>;
+  }
+  /**
    * The latest War Room reading of one source (owner 2026-11-18, confirmed: "Real-time analysis"): "15m", "1h", "4h",
    * "1d" (a room's bias, reasons and metrics) or "news" (the 24-hour digest). Never the decision, its confidence or a
    * price (src/public-warroom.mjs).
@@ -3042,6 +3051,12 @@ async function runLedgerStep(env: Env): Promise<void> {
     const step = await profileAgentTick(env) as { status?: string };
     if (step?.status === "changed" || step?.status === "proposed" || step?.status === "failed") console.log("profile_agent", JSON.stringify(step));
   } catch (e) { console.error("profile_agent_failed", e instanceof Error ? e.message : String(e)); }
+  // M15P (src/public-m15-patterns.mjs, 2026-11-27): the public M15 patterns for CTA's fast pass, on a new 15m close only
+  // (15m pattern detection alone, no strategy build), written to one KV key only when they changed.
+  try {
+    const m15 = await runM15PatternsStep(env) as { status?: string };
+    if (m15?.status === "written" || m15?.status === "failed") console.log("m15_patterns", JSON.stringify(m15));
+  } catch (e) { console.error("m15_patterns_failed", e instanceof Error ? e.message : String(e)); }
   // Range mode's breakout exit (owner 2026-11-18): back to the mode it came from once the 1H regime trends.
   try {
     const x = await rangeExitStep(env) as { status?: string };
