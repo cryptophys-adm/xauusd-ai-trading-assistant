@@ -45,6 +45,7 @@ export interface Env {
   WEBHOOK_INGEST?: string;
   CMC_API_KEY?: string;
   CMC_USDT_SHADOW?: string;
+  RANGE_SHADOW_MODE?: string;
   CONFLUENCE_HANDOFF_SECRET?: string;
   // SB1 model router (src/model-router.mjs): the Worker secret the owner sets through the platform; MODEL_BASE_URL and
   // MODEL_ID default to Reflection's endpoint and Beam. SHADOW_MODEL_ROUTER is the FS1 switch (off by default).
@@ -313,7 +314,7 @@ import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
 import { sendOmegaTelegram, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
-import { ownerModeAction, relayModeChanges, modeStatus, modeEvidenceStatus } from "./mode-selector.mjs";
+import { ownerModeAction, relayModeChanges, modeStatus, modeEvidenceStatus, rangeShadowStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { feedSync, setFeedConnection, clearFeedConnection, feedOverview } from "./feed-bridge.mjs";
 import { corpusStatus, readCorpusBars, readMacroBars, readMt5Calendar, recordBrokerShadow } from "./corpus-oracle.mjs";
@@ -2537,6 +2538,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         selector: await modeEvidenceStatus(env).catch(() => null) });
     }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
+  }
+  if (url.pathname === "/api/range-shadow") {
+    // Range shadow (src/range-shadow.mjs): range's cells with and without the both-side setups, the cap and the intraday
+    // range episodes. Read only; no price, no lot.
+    const view = await rangeShadowStatus(env) as Record<string, unknown>;
+    return dashboardJson(view, view.status === "failed" ? 500 : 200);
   }
   if (url.pathname === "/api/deals") {
     try {

@@ -26,7 +26,8 @@ import { CONTROL_ARM, readPlanLearning, ensurePlanLearningSchema } from "./plan-
 import { modeShadowEvidence, modeProbationMode, ruleVersionOf, MODE_PROBATION_RULES } from "./mode-shadow.mjs";
 import { walkForward } from "./strategy-council.mjs";
 import { TRADING_MODE_KEY, TRADING_MODES_LIST, tradingMode, readLatestDecision } from "./decision-engine.mjs";
-import { RANGE_GATED_AGENTS, isRanging, rangeEvidence, cellRecords } from "./htf-cells.mjs";
+import { RANGE_GATED_AGENTS, isRanging, rangeEvidence } from "./htf-cells.mjs";
+import { RANGE_BOTH_SOURCE, RANGE_BOTH_DAILY_CAP, RANGE_EPISODE_MIN_HOURS, rangeShadowMode, rangeKeyOf, rangeSetupsForEvidence, cellsOf, cellsTwice, episodeSetups, ensureRangeEpisodesSchema } from "./range-shadow.mjs";
 import { PROFILES } from "./account-spec.mjs";
 import { publishToPlatform, platformEnabled } from "./platform-reports.mjs";
 import { HEALTH_AGENT_ID } from "./health-alerts.mjs";
@@ -206,7 +207,9 @@ async function loadSetups(db, now) {
  * one per mode, opening bar (decision key) and agent, the live one first on a duplicate. Order kept (opened_at, setup_key).
  */
 export function unionSetups(setups, { ruleVersion }) {
-  const list = (setups || []).filter((s) => s.rule_version === ruleVersion);
+  // Range shadow c2: range_both setups are range evidence only (rangeShadowEvidence), never a mode's walk-forward or the
+  // probation's live count.
+  const list = (setups || []).filter((s) => s.rule_version === ruleVersion && s.source !== RANGE_BOTH_SOURCE);
   const live = new Set(list.filter((s) => s.source !== "shadow").map((s) => `${s.mode}|${s.decision_key}|${s.agent}`));
   return list.filter((s) => s.source !== "shadow" || !live.has(`${s.mode}|${s.decision_key}|${s.agent}`));
 }
@@ -219,23 +222,32 @@ async function loadAllSetups(db, now) {
   try {
     await ensurePlanLearningSchema(db);
     const rows = (await db.prepare("SELECT setup_key, decision_key, mode, regime, agent, side, htf, entry, stop, opened_at, results_json, source, rule_version FROM plan_setups WHERE status = 'resolved' AND opened_at >= ? ORDER BY opened_at, setup_key").bind(new Date(now - MODE_LEARN_DAYS * DAY).toISOString()).all()).results ?? [];
-    return rows.map((r) => ({ setup_key: r.setup_key, decision_key: r.decision_key, mode: r.mode, regime: r.regime, agent: r.agent ?? null, side: r.side, htf: r.htf ?? null, entry: Number(r.entry), stop: Number(r.stop), opened_ms: Date.parse(r.opened_at), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r), source: r.source === "shadow" ? "shadow" : "live", rule_version: r.rule_version ?? null })).filter((s) => finite(s.r));
+    return rows.map((r) => ({ setup_key: r.setup_key, decision_key: r.decision_key, mode: r.mode, regime: r.regime, agent: r.agent ?? null, side: r.side, htf: r.htf ?? null, entry: Number(r.entry), stop: Number(r.stop), opened_ms: Date.parse(r.opened_at), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r), f: Number(parse(r.results_json)?.[CONTROL_ARM]?.f) === 1 ? 1 : 0, source: r.source === "shadow" || r.source === RANGE_BOTH_SOURCE ? r.source : "live", rule_version: r.rule_version ?? null })).filter((s) => finite(s.r));
   } catch { return []; }
 }
 
 const medianStopOf = (list) => { const st = list.map((s) => Math.abs(s.entry - s.stop)).filter((x) => finite(x) && x > 0).sort((a, b) => a - b); return st.length ? st[Math.floor(st.length / 2)] : null; };
 
 /**
- * Pure (MS2): range's evidence from live and shadow setups: the range strategies' cells (src/htf-cells.mjs cellRecords on
- * the control arm) over their live setups in any mode and the shadow range setups, one per opening bar and agent (live
- * first), the rule in force only; then rangeEvidence as before, with the live/shadow split.
+ * Pure (MS2, range shadow c1/c2): range's evidence from live, shadow and range_both setups: the range strategies' cells
+ * (src/htf-cells.mjs cellRecords on the control arm) over their live setups in any mode, the shadow range setups and the
+ * range_both setups (src/range-shadow.mjs rangeSetupsForEvidence: one per opening bar, agent and side, live before
+ * shadow before range_both), of the range key in force (rangeKeyOf of `ruleVersion`); then rangeEvidence as before, with
+ * the live/shadow/both split. `without_both` is the same evidence without range_both, and `cells` each cell's status
+ * with and without it (the route and mode_selector_run show both).
  */
 export function rangeShadowEvidence(setups, { ruleVersion }) {
-  const list = (setups || []).filter((s) => s.rule_version === ruleVersion && RANGE_GATED_AGENTS.includes(s.agent) && (s.source !== "shadow" || s.mode === "range"));
-  const live = new Set(list.filter((s) => s.source !== "shadow").map((s) => `${s.decision_key}|${s.agent}`));
-  const use = list.filter((s) => s.source !== "shadow" || !live.has(`${s.decision_key}|${s.agent}`));
-  const cells = cellRecords(use.map((s) => ({ agent: s.agent, side: s.side, htf: s.htf, results: { [CONTROL_ARM]: { r: s.r } } })), { arm: CONTROL_ARM });
-  return { ...rangeEvidence(cells, { medianStop: medianStopOf(use) }), n_live: use.filter((s) => s.source !== "shadow").length, n_shadow: use.filter((s) => s.source === "shadow").length };
+  const rangeKey = rangeKeyOf(ruleVersion);
+  const use = rangeSetupsForEvidence(setups, { rangeKey, withBoth: true });
+  const bare = rangeSetupsForEvidence(setups, { rangeKey, withBoth: false });
+  const withCells = cellsOf(use, CONTROL_ARM), bareCells = cellsOf(bare, CONTROL_ARM);
+  const without = rangeEvidence(bareCells, { medianStop: medianStopOf(bare) });
+  return {
+    ...rangeEvidence(withCells, { medianStop: medianStopOf(use) }),
+    n_live: use.filter((s) => s.source === "live").length, n_shadow: use.filter((s) => s.source === "shadow").length, n_both: use.filter((s) => s.source === RANGE_BOTH_SOURCE).length,
+    without_both: { status: without.status, n: without.n, mean_r: without.mean_r, best_cell: without.best_cell ?? null },
+    cells: cellsTwice({ withBoth: withCells, without: bareCells, used: use })
+  };
 }
 
 /**
@@ -269,7 +281,9 @@ export function outcomeEvidence(evidence) {
     const e = evidence[m];
     return [m, e ? { n: Number.isFinite(Number(e.n)) ? Number(e.n) : null, mean_r: finite(e.mean_r) ? e.mean_r : null, status: e.status ?? null, scope: e.scope ?? null,
       // MS2: the live/shadow split, when the evidence has it (shadow evidence on).
-      ...(Number.isFinite(e.n_live) ? { n_live: e.n_live, n_shadow: Number.isFinite(e.n_shadow) ? e.n_shadow : 0 } : {}) } : null];
+      ...(Number.isFinite(e.n_live) ? { n_live: e.n_live, n_shadow: Number.isFinite(e.n_shadow) ? e.n_shadow : 0 } : {}),
+      // Range shadow c2: range's range_both count, its status without range_both and each cell's status both ways.
+      ...(m === "range" && Number.isFinite(e.n_both) ? { n_both: e.n_both, without_both: e.without_both ?? null, cells: (e.cells || []).map((c) => ({ cell: `${c.agent}|${c.side}|${c.context}`, status: c.status, setups: c.setups, status_without_both: c.without_both?.status ?? null, setups_without_both: c.without_both?.setups ?? 0 })) } : {}) } : null];
   }));
 }
 
@@ -496,6 +510,41 @@ export async function modeEvidenceStatus(env, { now = Date.now() } = {}) {
     learn_days: MODE_LEARN_DAYS, modes,
     probation: p ? { ...p, ...liveRecordOf(setups, p.mode, { sinceMs: p.started_ms }), rules: MODE_PROBATION_RULES } : null
   };
+}
+
+export const RANGE_SHADOW_EPISODES = 30;
+/**
+ * Range shadow (GET /api/range-shadow): range's evidence as the selector reads it with shadow evidence on (each cell's
+ * status with and without range_both, the source counts, the fill rate), today's range_both rows against the cap, and
+ * the last RANGE_SHADOW_EPISODES intraday range episodes with the range setups opened in each (open ones included), per
+ * agent and side. No price, no lot. Never throws.
+ */
+export async function rangeShadowStatus(env, { now = Date.now() } = {}) {
+  const db = env?.DB;
+  const ruleVersion = ruleVersionOf(env), rangeKey = rangeKeyOf(ruleVersion);
+  const head = { mode: rangeShadowMode(env), shadow_evidence: modeShadowEvidence(env), rule_version: ruleVersion, range_key: rangeKey, learn_days: MODE_LEARN_DAYS, episode_min_hours: RANGE_EPISODE_MIN_HOURS };
+  if (!db) return { ...head, status: "unavailable" };
+  try {
+    const ev = rangeShadowEvidence(await loadAllSetups(db, now), { ruleVersion });
+    const { cells, ...evidence } = ev;
+    const today = new Date(now).toISOString().slice(0, 10);
+    const n = await db.prepare("SELECT COUNT(*) AS n FROM plan_setups WHERE source = ? AND opened_at >= ?").bind(RANGE_BOTH_SOURCE, `${today}T00:00:00.000Z`).first();
+    await ensureRangeEpisodesSchema(db);
+    const eps = ((await db.prepare("SELECT start_ms, opened_ms, end_ms, hours, status FROM range_episodes ORDER BY start_ms DESC LIMIT ?").bind(RANGE_SHADOW_EPISODES).all()).results ?? [])
+      .map((e) => ({ start_ms: Number(e.start_ms), opened_ms: Number(e.opened_ms), end_ms: e.end_ms == null ? null : Number(e.end_ms), hours: Number(e.hours), status: e.status }));
+    const oldest = eps.length ? Math.min(...eps.map((e) => e.start_ms)) : now;
+    const rows = eps.length ? ((await db.prepare(`SELECT decision_key, mode, agent, side, htf, opened_at, results_json, source, rule_version FROM plan_setups WHERE agent IN (${RANGE_GATED_AGENTS.map(() => "?").join(", ")}) AND opened_at >= ? AND status IN ('open', 'resolved') ORDER BY opened_at, setup_key`).bind(...RANGE_GATED_AGENTS, new Date(oldest).toISOString()).all()).results ?? []) : [];
+    const setups = rangeSetupsForEvidence(rows.map((r) => ({ decision_key: r.decision_key, mode: r.mode, agent: r.agent, side: r.side, htf: r.htf ?? null, opened_ms: Date.parse(r.opened_at), r: Number(parse(r.results_json)?.[CONTROL_ARM]?.r), source: r.source === "shadow" || r.source === RANGE_BOTH_SOURCE ? r.source : "live", rule_version: r.rule_version ?? null })), { rangeKey, withBoth: true });
+    const at = (ms) => (finite(ms) ? new Date(ms).toISOString() : null);
+    return {
+      ...head, status: "ok",
+      range_both: { cap_per_day: RANGE_BOTH_DAILY_CAP, today: Number(n?.n) || 0 },
+      evidence, cells,
+      episodes: eps.map((e) => ({ start: at(e.start_ms), opened: at(e.opened_ms), end: at(e.end_ms), hours: e.hours, status: e.status, setups: episodeSetups(e, setups, { now }) }))
+    };
+  } catch (e) {
+    return { ...head, status: "failed", error: String(e?.message ?? e).slice(0, 200) };
+  }
 }
 
 /**

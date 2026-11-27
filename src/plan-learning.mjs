@@ -28,10 +28,11 @@
 // Shadow only: nothing here reaches a room, a decision, the EA signal or Omega. Applying a learned plan is
 // a later, owner-approved step. Switch: PLAN_LEARNING_MODE = "shadow" (default) | "off".
 
-import { RANGE_GATED_AGENTS, CELL_GATE, cellRecords, htfAt, htfContext, loadHtfBars } from "./htf-cells.mjs";
+import { RANGE_GATED_AGENTS, CELL_GATE, cellRecords, htfAt, htfContext, loadHtfBars, isRanging } from "./htf-cells.mjs";
 import { simulateSignal, ledgerSeries, toMs, decisionCloseMs, validSignal, FILL_WINDOW_MS, TRADING_MODES } from "./signal-ledger.mjs";
 import { signTestP, SHADOW_SIGNIFICANCE } from "./shadow-versions.mjs";
 import { modeShadowEvidence, ruleVersionOf, ensureModeShadowSchema } from "./mode-shadow.mjs";
+import { RANGE_BOTH_SOURCE, RANGE_BOTH_PREFIX, RANGE_BOTH_DAILY_CAP, RANGE_EPISODE_BACKFILL_DAYS, rangeShadowMode, rangeKeyOf, rangeRuleVersionOf, capRangeBoth, logRangeBothCapped, rangeEpisodesFrom, writableEpisodes, ensureRangeEpisodesSchema } from "./range-shadow.mjs";
 
 export const PLAN_LEARNING_VERSION = "cryptophys.plan-learning.v2";
 export const PLAN_LEARNING_KEY = "plan-learning:state:v1";
@@ -365,6 +366,64 @@ export function shadowSetupsFrom(decisions) {
 }
 
 /**
+ * Pure (range shadow c2, src/range-shadow.mjs): the range_both setups of engine decisions of any stance (`rows`:
+ * decision_key, decided_at, atr_h1, mode, regime, plans): while the 1H regime ranges, both sides' range strategy plans
+ * through the live setup rules (setupsFrom). The key is "rangeboth:" before the live rule's key (never a live or a
+ * shadow setup's key); source range_both; the range key in force (`rangeKey`). Oldest first.
+ */
+export function rangeBothSetupsFrom(rows, { rangeKey }) {
+  const plans = [];
+  for (const r of rows || []) {
+    if (!isRanging(r?.regime)) continue;
+    for (const side of ["BUY", "SELL"]) plans.push(...decisionPlans({ ...r, side }).filter((d) => RANGE_GATED_AGENTS.includes(d.agent)));
+  }
+  const list = plans.filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+  return setupsFrom(list).map((s) => ({ ...s, setup_key: `${RANGE_BOTH_PREFIX}${s.setup_key}`, source: RANGE_BOTH_SOURCE, rule_version: rangeKey }))
+    .sort((a, b) => a.opened_ms - b.opened_ms || (a.setup_key < b.setup_key ? -1 : 1));
+}
+
+/** Range shadow c2: the ranging engine decisions since `sinceIso`, any stance, with their plans (oldest first). */
+async function loadRangeDecisions(db, sinceIso) {
+  return (await db.prepare(`SELECT decision_key, decided_at, json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode,
+      json_extract(decision_json, '$.context.regime_1h') AS regime, json_extract(decision_json, '$.strategy_plans') AS plans
+    FROM engine_decisions WHERE bar_close >= ? AND json_extract(decision_json, '$.context.regime_1h') LIKE '%-ranging' ORDER BY bar_close`).bind(sinceIso).all()).results || [];
+}
+
+/**
+ * Range shadow c2: where the range_both setups start. Stored ones: the window (window_days), as the live setups. None
+ * yet: the backfill (backfill_days), from no earlier than the first live range setup of the range key in force (a
+ * decision of before would be stamped with a rule it was not planned under); no such setup: the window.
+ */
+async function rangeBothSince(db, { now, rangeKey }) {
+  const stored = await db.prepare("SELECT setup_key FROM plan_setups WHERE source = ? LIMIT 1").bind(RANGE_BOTH_SOURCE).first();
+  if (stored) return { since: now - PLAN_RULES.window_days * DAY, empty: false };
+  const rows = (await db.prepare(`SELECT rule_version, MIN(opened_at) AS first FROM plan_setups WHERE ${LIVE_SETUPS} AND rule_version IS NOT NULL AND agent IN (${RANGE_GATED_AGENTS.map(() => "?").join(", ")}) GROUP BY rule_version`).bind(...RANGE_GATED_AGENTS).all()).results || [];
+  const firsts = rows.filter((r) => rangeKeyOf(r.rule_version) === rangeKey).map((r) => toMs(r.first)).filter(finite);
+  if (!firsts.length) return { since: now - PLAN_RULES.window_days * DAY, empty: false };
+  return { since: Math.max(now - PLAN_RULES.backfill_days * DAY, Math.min(...firsts)), empty: true };
+}
+
+/**
+ * Range shadow b: the intraday range episodes (src/range-shadow.mjs rangeEpisodesFrom) from the hourly engine decisions'
+ * 1H regime, upserted into range_episodes. From the stored open episode's start (an hour before), else the window;
+ * the first run backfills RANGE_EPISODE_BACKFILL_DAYS. Returns { written, open }.
+ */
+async function updateRangeEpisodes(db, { now }) {
+  await ensureRangeEpisodesSchema(db);
+  const open = await db.prepare("SELECT start_ms FROM range_episodes WHERE status = 'open' ORDER BY start_ms DESC LIMIT 1").first();
+  const any = open || (await db.prepare("SELECT start_ms FROM range_episodes LIMIT 1").first());
+  const since = open ? Number(open.start_ms) - HOUR : now - (any ? PLAN_RULES.window_days : RANGE_EPISODE_BACKFILL_DAYS) * DAY;
+  const rows = (await db.prepare("SELECT bar_close, json_extract(decision_json, '$.context.regime_1h') AS regime FROM engine_decisions WHERE bar_close >= ? AND substr(bar_close, 15, 2) = '00' ORDER BY bar_close").bind(iso(since)).all()).results || [];
+  const closes = rows.map((r) => ({ close_ms: toMs(r.bar_close), regime: r.regime })).filter((c) => finite(c.close_ms));
+  if (!closes.length) return { written: 0, open: 0 };
+  const episodes = writableEpisodes(rangeEpisodesFrom(closes), { firstMs: open ? null : closes[0].close_ms });
+  const stamp = iso(now);
+  await runAll(db, episodes.map((e) => db.prepare("INSERT INTO range_episodes (start_ms, opened_ms, end_ms, hours, status, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(start_ms) DO UPDATE SET opened_ms = excluded.opened_ms, end_ms = excluded.end_ms, hours = excluded.hours, status = excluded.status, updated_at = excluded.updated_at")
+    .bind(e.start_ms, e.opened_ms, e.end_ms, e.hours, e.status, stamp)));
+  return { written: episodes.length, open: episodes.filter((e) => e.status === "open").length };
+}
+
+/**
  * Pure: the plans one directional decision row holds, one per strategy agent that saw its setup on the
  * decided side (`plans`: the record's strategy_plans, src/strategy-agents.mjs). A decision of before the
  * agents holds one: its trade, the default agent's.
@@ -422,6 +481,20 @@ const fromRow = (r) => {
 /** Pure (Z5): a stored row in plan_setups' columns as the setup the replay reads (the plan learner's own reader). */
 export const setupFromRow = (r) => fromRow(r);
 
+/** The statements that store one new setup (`source`, `ruleVersion`: its plan_setups.source and rule_version). */
+function setupInserts(db, s, { stamp, source, ruleVersion }) {
+  const values = [s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp, source, ruleVersion ?? null];
+  // Z0: a typed setup also writes its zone columns; an untyped one (KEY_LEVEL_ZONE_TYPES off) writes today's row.
+  const typed = ZONE_SETUP_COLUMNS.some((c) => c in s);
+  const out = [typed
+    ? db.prepare(`INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version, ${ZONE_SETUP_COLUMNS.join(", ")}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values, ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null))
+    : db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)").bind(...values)];
+  // Track A PR 6: the chart and the lapse, only for a setup that has them (every other row is written as before).
+  if (s.chart || finite(s.valid_until_ms)) out.push(db.prepare("UPDATE plan_setups SET chart = ?, valid_until_ms = ? WHERE setup_key = ?").bind(s.chart ?? null, finite(s.valid_until_ms) ? s.valid_until_ms : null, s.setup_key));
+  return out;
+}
+const setupExtend = (db, s, stamp) => db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key);
+
 /**
  * One run: new setups from the engine's decisions, the replay of the setups that ended, and the learned
  * state (KV). Never throws; never touches a decision.
@@ -449,38 +522,57 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       if (!k) {
         // A plan already running when the window starts is the tail of an older setup, not a new one.
         if (!empty && s.opened_ms - since < HOUR) continue;
-        const values = [s.setup_key, s.decision_key, s.agent, s.pattern ?? null, iso(s.opened_ms), iso(s.decided_ms), iso(s.last_seen_ms), s.decisions, s.side, s.entry, s.stop, s.tp1, s.atr_h1, s.mode, s.action, s.at_level ? 1 : 0, s.regime, s.context, PLAN_LEARNING_VERSION, stamp, isShadow ? "shadow" : "live", isShadow ? s.rule_version : liveRule];
-        // Z0: a typed setup also writes its zone columns; an untyped one (KEY_LEVEL_ZONE_TYPES off) writes today's row.
-        const typed = ZONE_SETUP_COLUMNS.some((c) => c in s);
-        writes.push(typed
-          ? db.prepare(`INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version, ${ZONE_SETUP_COLUMNS.join(", ")}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values, ...ZONE_SETUP_COLUMNS.map((c) => s[c] ?? null))
-          : db.prepare("INSERT OR IGNORE INTO plan_setups (setup_key, decision_key, agent, pattern, opened_at, decided_at, last_seen_at, decisions, side, entry, stop, tp1, atr_h1, mode, action, at_level, regime, context, status, version, updated_at, source, rule_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)").bind(...values));
-        // Track A PR 6: the chart and the lapse, only for a setup that has them (every other row is written as before).
-        if (s.chart || finite(s.valid_until_ms)) writes.push(db.prepare("UPDATE plan_setups SET chart = ?, valid_until_ms = ? WHERE setup_key = ?").bind(s.chart ?? null, finite(s.valid_until_ms) ? s.valid_until_ms : null, s.setup_key));
+        writes.push(...setupInserts(db, s, { stamp, source: isShadow ? "shadow" : "live", ruleVersion: isShadow ? s.rule_version : liveRule }));
         if (isShadow) shadow.added += 1; else added += 1;
       } else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) {
-        writes.push(db.prepare("UPDATE plan_setups SET last_seen_at = ?, decisions = ?, updated_at = ? WHERE setup_key = ? AND status = 'open'").bind(iso(s.last_seen_ms), s.decisions, stamp, s.setup_key));
+        writes.push(setupExtend(db, s, stamp));
         if (isShadow) shadow.extended += 1; else extended += 1;
       }
     }
     await runAll(db, writes);
+    // Range shadow c2 (src/range-shadow.mjs): both sides' range plans while the 1H regime ranges, in their own rows
+    // (source range_both), at most RANGE_BOTH_DAILY_CAP a day; only the mode selector's range evidence reads them.
+    const rangeOn = rangeShadowMode(env) === "on";
+    const both = { added: 0, extended: 0, resolved: 0, unavailable: 0, capped: [] };
+    if (rangeOn) {
+      const rangeKey = rangeRuleVersionOf(env), stamp = iso(now);
+      const rs = await rangeBothSince(db, { now, rangeKey });
+      const bothKnown = new Map(((await db.prepare("SELECT setup_key, last_seen_at, status FROM plan_setups WHERE source = ? AND opened_at >= ?").bind(RANGE_BOTH_SOURCE, iso(rs.since)).all()).results || []).map((r) => [r.setup_key, r]));
+      const fresh = [], bothWrites = [];
+      for (const s of rangeBothSetupsFrom(await loadRangeDecisions(db, iso(rs.since)), { rangeKey })) {
+        const k = bothKnown.get(s.setup_key);
+        if (!k) { if (!rs.empty && s.opened_ms - rs.since < HOUR) continue; fresh.push(s); }
+        else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) { bothWrites.push(setupExtend(db, s, stamp)); both.extended += 1; }
+      }
+      const counts = Object.fromEntries(((await db.prepare("SELECT substr(opened_at, 1, 10) AS day, COUNT(*) AS n FROM plan_setups WHERE source = ? AND opened_at >= ? GROUP BY day").bind(RANGE_BOTH_SOURCE, iso(rs.since - DAY)).all()).results || []).map((r) => [r.day, Number(r.n) || 0]));
+      const capped = capRangeBoth(fresh, counts, RANGE_BOTH_DAILY_CAP);
+      for (const s of capped.kept) bothWrites.push(...setupInserts(db, s, { stamp, source: RANGE_BOTH_SOURCE, ruleVersion: s.rule_version }));
+      both.added = capped.kept.length;
+      both.capped = capped.capped;
+      logRangeBothCapped(capped.capped);
+      await runAll(db, bothWrites);
+    }
     // A setup replayed by an older version of the rules is replayed again.
     await db.prepare("UPDATE plan_setups SET status = 'open', results_json = NULL, resolved_at = NULL, version = ? WHERE version <> ? AND status IN ('resolved', 'unavailable')").bind(PLAN_LEARNING_VERSION, PLAN_LEARNING_VERSION).run();
     // The setups the engine no longer repeats are replayed until every arm is final.
     const open = ((await db.prepare(`SELECT * FROM plan_setups WHERE status = 'open' AND ${LIVE_SETUPS} AND last_seen_at <= ? ORDER BY opened_at LIMIT 200`).bind(iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map(fromRow);
     // MS2: the shadow setups in their own queue (they never crowd out a live one), on the control arm only.
     const openShadow = shadowOn ? ((await db.prepare("SELECT * FROM plan_setups WHERE status = 'open' AND source = 'shadow' AND last_seen_at <= ? ORDER BY opened_at LIMIT 200").bind(iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map((r) => ({ ...fromRow(r), source: "shadow" })) : [];
+    // Range shadow c2: the range_both setups in a queue of their own too, on the control arm only, by the same replay
+    // (a limit entry fills only when a bar trades through it within fillWindowOf; an at-level plan's market band).
+    const openBoth = rangeOn ? ((await db.prepare("SELECT * FROM plan_setups WHERE status = 'open' AND source = ? AND last_seen_at <= ? ORDER BY opened_at LIMIT 200").bind(RANGE_BOTH_SOURCE, iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map((r) => ({ ...fromRow(r), source: RANGE_BOTH_SOURCE })) : [];
     let resolved = 0, unavailable = 0;
-    if (open.length || openShadow.length) {
+    if (open.length || openShadow.length || openBoth.length) {
       const series = bars ?? (await ledgerSeries(env)).bars;
       const updates = [];
       const controlOnly = PLAN_ARMS.filter((a) => a.id === CONTROL_ARM);
-      for (const s of [...open, ...openShadow]) {
-        const isShadow = s.source === "shadow";
-        const out = replaySetup(s, series, isShadow ? { now, arms: controlOnly } : { now });
+      for (const s of [...open, ...openShadow, ...openBoth]) {
+        const isShadow = s.source === "shadow", isBoth = s.source === RANGE_BOTH_SOURCE;
+        const out = replaySetup(s, series, isShadow || isBoth ? { now, arms: controlOnly } : { now });
         if (out.status === "open") continue;
         updates.push(db.prepare("UPDATE plan_setups SET status = ?, resolved_at = ?, results_json = ?, updated_at = ? WHERE setup_key = ?").bind(out.status, iso(out.resolved_ms ?? now), out.status === "resolved" ? JSON.stringify(out.results) : null, iso(now), s.setup_key));
         if (isShadow) shadow[out.status === "resolved" ? "resolved" : "unavailable"] += 1;
+        else if (isBoth) both[out.status === "resolved" ? "resolved" : "unavailable"] += 1;
         else if (out.status === "resolved") resolved += 1; else unavailable += 1;
       }
       await runAll(db, updates);
@@ -494,9 +586,12 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       await runAll(db, untagged.map((r) => db.prepare("UPDATE plan_setups SET htf = ? WHERE setup_key = ? AND htf IS NULL").bind(htfContext(r.side, htfAt(htfBars, toMs(r.decided_at)).trend), r.setup_key)));
       tagged = untagged.length;
     }
+    // Range shadow b: the intraday range episodes (their own table; a failure here fails nothing else).
+    let episodes = null;
+    if (rangeOn) { try { episodes = await updateRangeEpisodes(db, { now }); } catch (e) { episodes = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; } }
     const previous = await readPlanLearning(env);
-    // The learned state is the live setups' only: shadow work alone leaves it as it is.
-    const shadowOut = shadowOn ? { shadow } : {};
+    // The learned state is the live setups' only: shadow and range_both work alone leave it as it is.
+    const shadowOut = { ...(shadowOn ? { shadow } : {}), ...(rangeOn ? { range_both: both, range_episodes: episodes } : {}) };
     if (!added && !extended && !resolved && !unavailable && !tagged && previous?.version === PLAN_LEARNING_VERSION && Array.isArray(previous?.cells)) return { status: "unchanged", setups: previous.setups?.resolved ?? 0, ...shadowOut };
     const state = await buildState(db, { now });
     await env.SIGNAL_CACHE?.put?.(PLAN_LEARNING_KEY, JSON.stringify(state));
