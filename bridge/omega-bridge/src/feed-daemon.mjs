@@ -11,7 +11,7 @@ import { openEnvelope } from "./envelope.mjs";
 import { readState, readCorpus, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
 import { applyFeedCredentials, clearCredentials, ensureFeedSettings } from "./ini.mjs";
 import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
-import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE } from "./daemon.mjs";
+import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE, writeTerminalIniPreservingOwner } from "./daemon.mjs";
 
 export const FEED_ID_RE = /^[a-z0-9-]{1,24}$/;
 export const DEFAULT_FEED_SYNC_MS = 15_000;
@@ -81,13 +81,9 @@ export function buildFeedBody({ bridgeId, kid, publicKeyBase64, state, corpus })
 
 function readJson(p, fs) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
 function writeJson(p, v, fs) { const tmp = `${p}.tmp.${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 }); fs.renameSync(tmp, p); }
-function writeIni(p, text, fs) {
-  let mode = 0o600;
-  try { mode = fs.statSync(p).mode & 0o777; } catch { /* new file */ }
-  const tmp = `${p}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, text, { mode });
-  fs.renameSync(tmp, p);
-}
+// The feed terminal's ini is owned by its unit's user (mt5): this root daemon keeps its owner and mode 600, as the
+// executor does (writeTerminalIniPreservingOwner), or the terminal and run.sh could no longer read it (VPS, 2026-11-27).
+function writeIni(p, text, fs) { writeTerminalIniPreservingOwner(p, text, fs); }
 
 /**
  * A feed bridge. `start()` loops: sync, then apply what the server sent. Testable with injected fs, fetch, exec, clock.

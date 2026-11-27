@@ -100,7 +100,7 @@ The bridge refuses to start while the placeholder is still in the file.
 1. Before step 4, confirm the terminal directory and the MetaEditor binary. If the `ls` fails, the install path differs: report it and stop.
 
    ```bash
-   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; ls -d "$T/MQL5/Experts" "$T/MQL5/Files" "$T/metaeditor64.exe"
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; ls -d "$T/MQL5/Experts" "$T/MQL5/Files" "$T/MetaEditor64.exe"
    ```
 
 2. Copy the EA from the merged repo checkout into that Experts directory, owned by `mt5`:
@@ -112,7 +112,7 @@ The bridge refuses to start while the placeholder is still in the file.
 3. Compile it under Wine as user `mt5`, on the feed's display `:2` and in the feed's own prefix. Never use the executor's prefix or `:99`.
 
    ```bash
-   cd "/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5" && sudo -u mt5 env HOME=/opt/mt5-oanda WINEPREFIX=/opt/mt5-oanda/prefix DISPLAY=:2 wine metaeditor64.exe /portable /compile:"MQL5\Experts\OmegaFeed.mq5" /log:"MQL5\Experts\OmegaFeed.log"
+   cd "/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5" && sudo -u mt5 env HOME=/opt/mt5-oanda WINEPREFIX=/opt/mt5-oanda/prefix DISPLAY=:2 wine MetaEditor64.exe /portable /compile:"MQL5\Experts\OmegaFeed.mq5" /log:"MQL5\Experts\OmegaFeed.log"
    ```
 
 4. Check that the `.ex5` exists and the log reports 0 errors. The log is UTF-16, hence `iconv`.
