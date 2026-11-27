@@ -88,12 +88,13 @@ test("PT1-3 the cheap path gives the patterns the strategy gives, on every chart
   for (const p of patternsOf(barsOf(inputs)).patterns) assert.ok(!PRICE_LIKE.test(`${p.name} ${p.status} ${p.direction}`), p.name);
 });
 
-test("PT1-4 the writer: five KV reads per 5m run; a new close of any chart computes once and writes once; the same closes stop before computing", async () => {
+test("PT1-4 the writer: five KV reads per 5m run; a chart is detected only on its own new close (the others keep their stored patterns); the same closes stop before computing", async () => {
   const inputs = zoneInputs();
   const kv = seriesKv(inputs);
   const env = { SIGNAL_CACHE: kv };
   const first = await runPatternsStep(env, { now: NOW });
   assert.equal(first.status, "written", JSON.stringify(first));
+  assert.deepEqual(first.detected, ["M15", "H1", "H4", "D1"], "no stored value: every chart");
   assert.deepEqual(kv.puts.map((p) => [p.k, p.o.expirationTtl > 0]), [[PATTERNS_KEY, true]]);
   assert.deepEqual([...kv.gets].sort(), [...Object.values(PATTERN_SERIES).map(seriesKey), PATTERNS_KEY].sort(), "the four series and the stored value, nothing else (no DB: no released figures read)");
   const stored = JSON.parse(kv.map.get(PATTERNS_KEY));
@@ -105,8 +106,16 @@ test("PT1-4 the writer: five KV reads per 5m run; a new close of any chart compu
   // A late H1 series (its close arrives after the 15m one): recomputed although the 15m close is the same.
   const h1 = { ...inputs.h1Bars.at(-1), close_time: new Date(barCloseMs(inputs.h1Bars.at(-1)) + 3_600_000).toISOString() };
   kv.map.set(seriesKey("1h"), JSON.stringify({ candles: [...inputs.h1Bars, h1] }));
-  assert.equal((await runPatternsStep(env, { now: NOW })).status, "written", "a chart's new close is a new value (its closed time)");
-  assert.equal(JSON.parse(kv.map.get(PATTERNS_KEY)).closed.H1, barCloseMs(h1));
+  const late = await runPatternsStep(env, { now: NOW });
+  assert.deepEqual([late.status, late.detected], ["written", ["H1"]], "only H1 is detected again; a chart's new close is a new value (its closed time)");
+  const afterH1 = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.equal(afterH1.closed.H1, barCloseMs(h1));
+  assert.equal(JSON.stringify(afterH1.patterns.filter((p) => p.chart !== "H1")), JSON.stringify(stored.patterns.filter((p) => p.chart !== "H1")), "M15, H4 and D1 kept as stored");
+  assert.equal(JSON.stringify(afterH1.patterns), JSON.stringify(patternsOf({ ...barsOf(inputs), H1: [...inputs.h1Bars, h1] }).patterns), "and the whole value equals a full detection");
+  // A new 15m close with the same 15m bars otherwise: only M15 is detected.
+  const m15 = { ...inputs.m15Bars.at(-1), close_time: new Date(barCloseMs(inputs.m15Bars.at(-1)) + 900_000).toISOString() };
+  kv.map.set(seriesKey("15m"), JSON.stringify({ candles: [...inputs.m15Bars, m15] }));
+  assert.deepEqual((await runPatternsStep(env, { now: NOW })).detected, ["M15"]);
   assert.equal((await runPatternsStep(env, { now: NOW })).status, "same_close");
   // The owner's CHART_PATTERNS_MODE off rewrites to no patterns once, then stops.
   const off = { SIGNAL_CACHE: kv, CHART_PATTERNS_MODE: "off" };
