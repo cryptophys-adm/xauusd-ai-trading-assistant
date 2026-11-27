@@ -15,3 +15,10 @@ export function eaSignalFromDecision(input: Record<string, any>): Record<string,
 export function entryTriggerFor(decision: any, options?: { live?: any; broker?: any }): { required: boolean; fired: boolean; source: string | null; note: string | null; at_ms?: number | null };
 export function blackoutWindow(env: unknown): { beforeMs: number; afterMs: number };
 export function applyArmGate(signal: Record<string, any>, arms: { known?: boolean; ids?: string[] } | null): Record<string, any>;
+export const EA_TAIL_KEY: string;
+export const EA_SERIES_KEY: string;
+export const EA_TAIL_MAX_AGE_MS: number;
+export const EA_TAIL_COMPARE_BARS: number;
+export function eaSignalTailMode(env: unknown): "on" | "shadow" | "off";
+export const tailShadowStats: { compared: number; mismatched: number };
+export function readFeedCandles(env: unknown, options?: { now?: number }): Promise<Array<Record<string, any>>>;

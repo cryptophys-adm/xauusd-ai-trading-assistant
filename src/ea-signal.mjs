@@ -304,6 +304,40 @@ export function blackoutWindow(env) {
   return { beforeMs, afterMs };
 }
 
+// K1 (cost brief 2026-11-27, orchestrator OK): the signal needs only the last closed 5m bars of the feed (the market price
+// and the 2-hour basis, 24 bars). The pull adapter writes a tail of the series' last 48 bars in the same write
+// (market-data-ingestion/src/tradingview-source.mjs `writeSeries`, `tailOf`), so a sync no longer parses the ~880 KB
+// series. EA_SIGNAL_TAIL: "on" (default) reads the tail, and the full series when the tail is missing, empty or older
+// than EA_TAIL_MAX_AGE_MS (7 minutes: one 5m bar plus margin; a closed market, a failed or late write); "shadow" reads
+// both, uses the series and logs a mismatch; "off" reads the series as before.
+export const EA_TAIL_KEY = `market-data:v2:tail:${SYMBOL}|5m`;
+export const EA_SERIES_KEY = `market-data:v2:series:${SYMBOL}|5m`;
+export const EA_TAIL_MAX_AGE_MS = 7 * 60_000;
+export const EA_TAIL_COMPARE_BARS = 24;
+export function eaSignalTailMode(env) {
+  const v = String(env?.EA_SIGNAL_TAIL ?? "on").trim().toLowerCase();
+  return v === "off" || v === "shadow" ? v : "on";
+}
+const feedCandlesOf = (rec) => (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+const parseRecord = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
+export const tailShadowStats = { compared: 0, mismatched: 0 };
+export async function readFeedCandles(env, { now = Date.now() } = {}) {
+  const kv = env?.SIGNAL_CACHE;
+  const mode = eaSignalTailMode(env);
+  if (mode === "off") return feedCandlesOf(parseRecord(await kv?.get?.(EA_SERIES_KEY)));
+  const tail = parseRecord(await kv?.get?.(EA_TAIL_KEY));
+  const at = Date.parse(tail?.fetched_at ?? "");
+  const fresh = Array.isArray(tail?.candles) && tail.candles.length > 0 && Number.isFinite(at) && now - at <= EA_TAIL_MAX_AGE_MS;
+  if (mode === "on" && fresh) return feedCandlesOf(tail);
+  const full = feedCandlesOf(parseRecord(await kv?.get?.(EA_SERIES_KEY)));
+  if (mode === "shadow" && fresh) {
+    tailShadowStats.compared += 1;
+    const a = JSON.stringify(feedCandlesOf(tail).slice(-EA_TAIL_COMPARE_BARS)), b = JSON.stringify(full.slice(-EA_TAIL_COMPARE_BARS));
+    if (a !== b) { tailShadowStats.mismatched += 1; console.log("ea_signal_tail_mismatch", JSON.stringify(tailShadowStats)); }
+  }
+  return full;
+}
+
 export async function eaSignal(env, { now = Date.now(), control: controlIn = null } = {}) {
   const envKill = String(env?.EA_SIGNALS_ENABLED ?? "true").trim().toLowerCase() === "false";
   // The bridge sync passes the control it read in the same moment, so the kill switch is read once a sync.
@@ -332,8 +366,7 @@ export async function eaSignal(env, { now = Date.now(), control: controlIn = nul
   } catch { blackout = false; }
   let marketPrice = null, marketMs = null, feedCandles = [];
   try {
-    const rec = JSON.parse((await env.SIGNAL_CACHE?.get?.(`market-data:v2:series:${SYMBOL}|5m`)) || "null");
-    feedCandles = (Array.isArray(rec?.candles) ? rec.candles : []).filter((c) => isPrice(c?.close) && c.close_time).sort((a, b) => Date.parse(a.close_time) - Date.parse(b.close_time));
+    feedCandles = await readFeedCandles(env, { now });
     const last = feedCandles.at(-1);
     if (last) { marketPrice = last.close; marketMs = Date.parse(last.close_time); }
   } catch { marketPrice = null; }

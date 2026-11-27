@@ -114,6 +114,8 @@
     // TradingView cleanup (2026-11-27): the hourly CoinMarketCap USDT sampler, shadow only (src/cmc-usdt-shadow.mjs);
     // dormant without the CMC_API_KEY secret, "off" stops it.
     "CMC_USDT_SHADOW": "on",
+    // K1 (cost brief 2026-11-27): the EA signal reads the 48-bar tail of the gold 5m series ("shadow" compares, "off" as before).
+    "EA_SIGNAL_TAIL": "on",
     // B11 (RFC_INDICATOR_ADOPTION): accept the adoption records for group parity only; "off" refuses them at ingest.
     "ADOPT_INGEST": "on",
     "CALIBRATION_INTERVAL_DAYS": "30",
