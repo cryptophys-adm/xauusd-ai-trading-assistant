@@ -10,10 +10,13 @@
 //     4 hours, D1 daily; detectPatterns with the released figures, as buildKeyLevels' chartPatterns does) and projected
 //     (publicPatterns, BP1's guards included); the other charts keep their stored patterns. It writes
 //     { version, at_close_ms, closed, mode, price, price_at, patterns } to one KV key only when that value changed.
-//     PT1b (2026-11-27, for CTA's "Price when read" and its projection checks): `price` is the close of the latest
-//     15m bar of the series it already reads (two decimals, as the analysis's price) and `price_at` that bar's close
-//     time (ms); no new read. The version is unchanged: both fields are optional, a value written before PT1b has
-//     neither until the next 15m close rewrites it.
+//     PT1b (2026-11-27, for CTA's "Price when read" and its projection checks; the owner: "5m itu mungkin harga sudah
+//     bergerak ke target proyeksi"): `price` is the freshest price the step can read, the latest bar of the 1m series
+//     (one more KV read), else the latest 15m close; `price_tf` says which ("1m" or "15m"); `price_at` is that bar's
+//     close time (ms; a 1m bar still forming: the time it was read). It is refreshed on every 5-minute run, even when
+//     no chart closed, so the value is rewritten about every 5 minutes while the market trades. The patterns and
+//     `closed` are untouched by it. The version is unchanged: the price fields are optional, a value written before
+//     PT1b has none until the next run rewrites it.
 //   - Reader (readPatterns, PublicProjection.patterns()): that one KV key and nothing else. With `sinceCloseMs` equal to
 //     the stored at_close_ms it answers { unchanged: true } without the patterns.
 // The patterns are publicAnalysis().patterns' shape: no decision, plan, entry, stop, trade target, account or price
@@ -31,6 +34,9 @@ export const PATTERN_SERIES = Object.freeze({ M15: "15m", H1: "1h", H4: "4h", D1
 /** The Projection Agent's timeframe of each chart (key-level-agent.mjs chartPatterns), in its order. */
 const CHART_TF = Object.freeze({ M15: "15", H1: "60", H4: "240", D1: "D" });
 export const seriesKey = (interval) => `market-data:v2:series:OANDA:XAUUSD|${interval}`;
+/** PT1b: the freshest series the price is read from (src/feed.mjs M1_KEY). */
+export const PRICE_SERIES = "1m";
+const M1_MS = 60_000;
 export const PATTERN_BARS = 60;
 /** The stored value lives a day; a closed market keeps the last value until the next close rewrites it. */
 export const PATTERNS_TTL_S = 86_400;
@@ -43,6 +49,23 @@ export function barCloseMs(bar) {
 }
 const lastClose = (bars) => (Array.isArray(bars) && bars.length ? barCloseMs(bars.at(-1)) : null);
 /** The close price of a bar (close, else c), to two decimals, or null; a non-positive or non-finite one is no price. */
+/**
+ * Pure: the freshest price { price, price_tf, price_at } from the 1m series' latest bar (close_time, else its open
+ * `time` in seconds plus a minute; a bar still forming is priced at `now`), else from the latest 15m bar, else nulls.
+ */
+export function freshPrice(m1Bars, m15Bars, now = Date.now()) {
+  const m1 = Array.isArray(m1Bars) && m1Bars.length ? m1Bars.at(-1) : null;
+  const p1 = barClosePrice(m1);
+  if (p1 !== null) {
+    const ct = Date.parse(String(m1?.close_time ?? ""));
+    const t = Number(m1?.time);
+    const close = Number.isFinite(ct) ? ct : Number.isFinite(t) && m1?.time !== null && m1?.time !== "" ? t * 1000 + M1_MS : null;
+    if (close !== null) return { price: p1, price_tf: "1m", price_at: Math.min(close, now) };
+  }
+  const m15 = Array.isArray(m15Bars) && m15Bars.length ? m15Bars.at(-1) : null;
+  const p15 = barClosePrice(m15);
+  return p15 === null ? { price: null, price_tf: null, price_at: null } : { price: p15, price_tf: "15m", price_at: barCloseMs(m15) };
+}
 export function barClosePrice(bar) {
   const raw = bar?.close ?? bar?.c;
   const n = raw === null || raw === undefined || raw === "" || typeof raw === "boolean" ? NaN : Number(raw);
@@ -60,13 +83,11 @@ export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
  * the patterns in the Projection Agent's chart order (M15, H1, H4, D1, as publicAnalysis lists them), `closed` each
  * chart's latest close (ms) and `at_close_ms` the latest of them.
  */
-function valueOf(byChart, closed, mode, m15Bars = []) {
+function valueOf(byChart, closed, mode, fresh = { price: null, price_tf: null, price_at: null }) {
   const known = Object.values(closed).filter((t) => t !== null);
-  const last = Array.isArray(m15Bars) && m15Bars.length ? m15Bars.at(-1) : null;
-  const price = barClosePrice(last);
   return {
     version: PATTERNS_VERSION, at_close_ms: known.length ? Math.max(...known) : null, closed, mode,
-    price, price_at: price === null ? null : barCloseMs(last),
+    price: fresh.price, price_tf: fresh.price_tf, price_at: fresh.price_at,
     patterns: mode === "off" ? [] : Object.keys(PATTERN_SERIES).flatMap((c) => byChart[c] ?? []),
   };
 }
@@ -75,40 +96,49 @@ function valueOf(byChart, closed, mode, m15Bars = []) {
  * Pure: the public patterns of the four charts' bars ({ M15, H1, H4, D1 }) as the analysis shows them, every chart
  * detected now. `mode` "off" (CHART_PATTERNS_MODE) leaves the patterns out, as the strategy does.
  */
-export function patternsOf(bars = {}, { events = [], mode = "on" } = {}) {
+export function patternsOf(bars = {}, { events = [], mode = "on", m1 = [], now = Date.now() } = {}) {
   const m = mode === "off" ? "off" : "on";
   const closed = Object.fromEntries(Object.keys(PATTERN_SERIES).map((c) => [c, lastClose(Array.isArray(bars?.[c]) ? bars[c].slice(-PATTERN_BARS) : [])]));
   const byChart = m === "off" ? {} : Object.fromEntries(Object.keys(PATTERN_SERIES).map((c) => [c, chartPublicPatterns(c, bars?.[c], { events })]));
-  return valueOf(byChart, closed, m, Array.isArray(bars?.M15) ? bars.M15.slice(-PATTERN_BARS) : []);
+  return valueOf(byChart, closed, m, freshPrice(m1, Array.isArray(bars?.M15) ? bars.M15.slice(-PATTERN_BARS) : [], now));
 }
 
 const readJson = async (kv, key) => { try { return JSON.parse((await kv?.get?.(key)) || "null"); } catch { return null; } };
 
 /**
- * The writer, once per 5-minute ledger run. Reads the four series and the stored value (5 KV reads); when every chart's
- * latest close and the mode are what is stored, it stops there ("same_close"). Otherwise it reads the released figures
- * and detects the patterns of the charts whose close changed only (a mode change or no stored value: every chart),
- * keeps the others' stored patterns, and writes the value only when it differs ("written", else "unchanged"). Returns
- * the charts it detected (`detected`). Never throws.
+ * The writer, once per 5-minute ledger run. Reads the four series, the 1m series and the stored value (6 KV reads).
+ * When every chart's latest close and the mode are what is stored, it detects nothing and only refreshes the price:
+ * it writes when the price moved ("price"), else stops ("same_close"). Otherwise it reads the released figures and
+ * detects the patterns of the charts whose close changed only (a mode change or no stored value: every chart), keeps
+ * the others' stored patterns, and writes the value only when it differs ("written", else "unchanged"). Returns the
+ * charts it detected (`detected`). Never throws.
  */
 export async function runPatternsStep(env, { now = Date.now() } = {}) {
   const kv = env?.SIGNAL_CACHE;
   if (!kv?.get || !kv?.put) return { status: "disabled" };
   try {
     const charts = Object.keys(PATTERN_SERIES);
-    const raws = await Promise.all([...charts.map((c) => readJson(kv, seriesKey(PATTERN_SERIES[c]))), readJson(kv, PATTERNS_KEY)]);
+    const raws = await Promise.all([...charts.map((c) => readJson(kv, seriesKey(PATTERN_SERIES[c]))), readJson(kv, seriesKey(PRICE_SERIES)), readJson(kv, PATTERNS_KEY)]);
     const stored = raws.pop();
+    const m1raw = raws.pop();
     const bars = Object.fromEntries(charts.map((c, i) => [c, Array.isArray(raws[i]?.candles) ? raws[i].candles.slice(-PATTERN_BARS) : []]));
     const closed = Object.fromEntries(charts.map((c) => [c, lastClose(bars[c])]));
     if (Object.values(closed).every((t) => t === null)) return { status: "no_bars" };
     const mode = chartPatternsMode(env);
-    if (stored?.version === PATTERNS_VERSION && stored.mode === mode && JSON.stringify(stored.closed) === JSON.stringify(closed)) return { status: "same_close", at_close_ms: stored.at_close_ms };
+    const fresh = freshPrice(Array.isArray(m1raw?.candles) ? m1raw.candles : [], bars.M15, now);
+    if (stored?.version === PATTERNS_VERSION && stored.mode === mode && JSON.stringify(stored.closed) === JSON.stringify(closed) && Array.isArray(stored.patterns)) {
+      // Only the price can differ: the stored patterns, by chart, with this run's price.
+      const value = valueOf(Object.fromEntries(charts.map((c) => [c, stored.patterns.filter((p) => p?.chart === c)])), closed, mode, fresh);
+      if (JSON.stringify(stored) === JSON.stringify(value)) return { status: "same_close", at_close_ms: stored.at_close_ms };
+      await kv.put(PATTERNS_KEY, JSON.stringify(value), { expirationTtl: PATTERNS_TTL_S });
+      return { status: "price", at_close_ms: stored.at_close_ms, price_tf: fresh.price_tf };
+    }
     const reuse = stored?.version === PATTERNS_VERSION && stored.mode === mode && Array.isArray(stored.patterns) && stored.closed && typeof stored.closed === "object";
     const detect = mode === "off" ? [] : charts.filter((c) => !reuse || stored.closed[c] !== closed[c]);
     const events = detect.length ? ((await recentReleases(env, { now }).catch(() => [])) ?? []) : [];
     const byChart = {};
     for (const c of charts) byChart[c] = detect.includes(c) ? chartPublicPatterns(c, bars[c], { events }) : (reuse ? stored.patterns.filter((p) => p?.chart === c) : []);
-    const value = valueOf(byChart, closed, mode, bars.M15);
+    const value = valueOf(byChart, closed, mode, fresh);
     if (stored && JSON.stringify(stored) === JSON.stringify(value)) return { status: "unchanged", at_close_ms: value.at_close_ms, detected: detect };
     await kv.put(PATTERNS_KEY, JSON.stringify(value), { expirationTtl: PATTERNS_TTL_S });
     return { status: "written", at_close_ms: value.at_close_ms, detected: detect, patterns: value.patterns.length };
@@ -119,17 +149,18 @@ export async function runPatternsStep(env, { now = Date.now() } = {}) {
 
 /**
  * The reader (PublicProjection.patterns): the one KV key, nothing else. `sinceCloseMs` equal to the stored at_close_ms
- * answers { version, at_close_ms, price, price_at, unchanged: true }. Without a stored value: no patterns, a null
- * close and no price. `price` and `price_at` are null for a value written before PT1b.
+ * answers { version, at_close_ms, price, price_tf, price_at, unchanged: true }. Without a stored value: no patterns,
+ * a null close and no price. The price fields are null for a value written before PT1b.
  */
 export async function readPatterns(env, { sinceCloseMs = null } = {}) {
   const v = await readJson(env?.SIGNAL_CACHE, PATTERNS_KEY);
-  if (!v || v.version !== PATTERNS_VERSION || !Array.isArray(v.patterns)) return { version: PATTERNS_VERSION, at_close_ms: null, closed: null, price: null, price_at: null, patterns: [] };
+  if (!v || v.version !== PATTERNS_VERSION || !Array.isArray(v.patterns)) return { version: PATTERNS_VERSION, at_close_ms: null, closed: null, price: null, price_tf: null, price_at: null, patterns: [] };
   const price = typeof v.price === "number" && Number.isFinite(v.price) && v.price > 0 ? v.price : null;
   const price_at = price !== null && Number.isFinite(v.price_at) ? v.price_at : null;
+  const price_tf = price !== null && (v.price_tf === "1m" || v.price_tf === "15m") ? v.price_tf : null;
   const since = Number(sinceCloseMs);
   if (sinceCloseMs !== null && sinceCloseMs !== undefined && Number.isFinite(since) && since === v.at_close_ms) {
-    return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, price, price_at, unchanged: true };
+    return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, price, price_tf, price_at, unchanged: true };
   }
-  return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, closed: v.closed ?? null, price, price_at, patterns: v.patterns };
+  return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, closed: v.closed ?? null, price, price_tf, price_at, patterns: v.patterns };
 }
