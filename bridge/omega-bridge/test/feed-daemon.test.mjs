@@ -60,7 +60,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.equal(calls[0].url, "https://feed.example.invalid/omega/api/bridge/feed-sync");
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.bridge_id, "oanda");
-  assert.equal(body.bridge_version, "1.8.0");
+  assert.equal(body.bridge_version, "1.8.1");
   assert.match(body.kid, /^[0-9a-f]{16}$/);
   assert.deepEqual(Object.keys(body.state).sort(), ["connected", "server", "symbol", "terminal_error"]);
   assert.equal(JSON.stringify(body).includes("balance"), false, "no account amounts leave the VPS");
@@ -142,4 +142,86 @@ test("FD-7. the feed terminal's ini keeps its owner (mt5) and mode 600 after the
   await d2.syncOnce();
   assert.ok(chowns.some(([p, uid, gid]) => p === s.terminalIni && uid === 1001 && gid === 1001), "ensureFeedSettings keeps the owner too");
   assert.match(fs.readFileSync(s.terminalIni, "utf8"), /AllowLiveTrading=0/);
+});
+
+// Macro export step 2 (bridge 1.8.1): the feed's corpus_macro.json (OmegaFeed 1.01) goes with the sync only once the
+// server answers its per-base cursors, only the bars after them, only when the file changed; the gold bars keep priority.
+const T0 = 1795750000000;
+const m1 = (n, from = T0, px = 30) => Array.from({ length: n }, (_, i) => [from + i * 60_000, px, px + 0.2, px - 0.1, px + 0.1, 10 + i, 20]);
+const MACRO_BASES = ["XAGUSD", "USOIL", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF"];
+function writeMacro(omega, n, { from = T0, mtimeSec = null } = {}) {
+  const p = path.join(omega, "corpus_macro.json");
+  fs.writeFileSync(p, JSON.stringify({ server: "OANDA-Demo-1", timeframe: "M1", utc_offset_s: 0, written_ms: from + n * 60_000,
+    series: MACRO_BASES.map((base) => ({ base, symbol: base + ".sml", digits: 5, bars: m1(n, from) })) }));
+  if (mtimeSec != null) fs.utimesSync(p, mtimeSec, mtimeSec);
+}
+
+test("FD-8. macro bars: none until the server answers cursors; then after each base's cursor, once per file change", async () => {
+  const { env, omega } = setup();
+  writeMacro(omega, 5, { mtimeSec: 1000 });
+  const bodies = [];
+  let reply = { ok: true, connection: null };
+  const d = createFeedDaemon({ env, fetch: async (url, init) => { bodies.push(JSON.parse(init.body)); return okJson(reply); }, execFile: async () => "", log: () => {} });
+  await d.syncOnce(); await d.syncOnce();
+  assert.equal(bodies.some((b) => "corpus_macro" in b), false, "a server that answers no macro cursors gets no macro bars");
+  reply = { ok: true, connection: null, corpus_macro_cursors: {} };
+  await d.syncOnce();
+  assert.equal("corpus_macro" in bodies.at(-1), false, "the first answer only arms it");
+  await d.syncOnce();
+  const sent = bodies.at(-1).corpus_macro;
+  assert.deepEqual(sent.series.map((x) => x.base), MACRO_BASES);
+  assert.ok(sent.series.every((x) => x.bars.length === 5));
+  assert.equal(sent.series[0].symbol, "XAGUSD.sml");
+  reply = { ok: true, connection: null, corpus_macro_cursors: Object.fromEntries(MACRO_BASES.map((b) => [b, T0 + 4 * 60_000])) };
+  await d.syncOnce();
+  assert.equal("corpus_macro" in bodies.at(-1), false, "the same file (same mtime) is not read or sent again");
+  writeMacro(omega, 7, { mtimeSec: 1060 });
+  await d.syncOnce();
+  const next = bodies.at(-1).corpus_macro;
+  assert.ok(next.series.every((x) => x.bars.length === 2 && x.bars[0][0] === T0 + 5 * 60_000), "only the bars after each cursor");
+  reply = { ok: true, connection: null };
+  writeMacro(omega, 9, { mtimeSec: 1120 });
+  await d.syncOnce(); await d.syncOnce();
+  assert.equal("corpus_macro" in bodies.at(-1), false, "a server that stops answering cursors gets no more macro bars");
+  assert.equal(JSON.stringify(bodies).includes("balance"), false);
+});
+
+test("FD-9. a failed sync leaves the macro file unsent; the 64 KB body keeps the gold bars whole and halves the macro bars", async () => {
+  const { env, omega } = setup();
+  fs.writeFileSync(path.join(omega, "corpus.json"), JSON.stringify({ server: "OANDA-Demo-1", symbol: "XAUUSD.sml", timeframe: "M1", bars: m1(240, T0, 4000.12345) }));
+  writeMacro(omega, 240, { mtimeSec: 2000 });
+  const bodies = [];
+  let fail = false;
+  const d = createFeedDaemon({ env, fetch: async (url, init) => { bodies.push(init.body); if (fail) throw new Error("offline"); return okJson({ ok: true, connection: null, corpus_macro_cursors: {} }); }, execFile: async () => "", log: () => {} });
+  await d.syncOnce();
+  fail = true;
+  await d.syncOnce();
+  const failed = JSON.parse(bodies.at(-1));
+  assert.ok(failed.corpus_macro, "macro bars were in the failed body");
+  fail = false;
+  await d.syncOnce();
+  const body = JSON.parse(bodies.at(-1));
+  assert.ok(body.corpus_macro, "and are sent again after the failure (same mtime, never reached the server)");
+  for (const raw of bodies.slice(1)) assert.ok(Buffer.byteLength(raw, "utf8") <= 65_536, "every body fits the Worker's 64 KB limit");
+  assert.equal(body.corpus.bars.length, 240, "the gold bars keep priority");
+  assert.ok(body.corpus_macro.series.every((x) => x.bars.length < 240 && x.bars.length >= 1 && x.bars[0][0] === T0), "macro halved, oldest kept so the cursors move forward");
+  // A cut body leaves the file unsent: the next sync sends the rest after the server's cursors, then the file is done.
+  const kept = body.corpus_macro.series[0].bars.length;
+  const lastKept = T0 + (kept - 1) * 60_000;
+  const d2bodies = [];
+  let cursors = {};
+  const d2 = createFeedDaemon({ env, fetch: async (url, init) => { const b = JSON.parse(init.body); d2bodies.push(b);
+    for (const x of b.corpus_macro?.series || []) cursors[x.base] = x.bars.at(-1)[0];
+    return okJson({ ok: true, connection: null, corpus_macro_cursors: { ...cursors } }); }, execFile: async () => "", log: () => {} });
+  for (let i = 0; i < 8; i++) await d2.syncOnce();
+  const withMacro = d2bodies.filter((b) => b.corpus_macro);
+  assert.ok(withMacro.length >= 2, "the rest follows on the next syncs");
+  assert.ok(withMacro[1].corpus_macro.series.every((x) => x.bars[0][0] === lastKept + 60_000), "from right after the first part");
+  assert.ok(MACRO_BASES.every((b) => cursors[b] === T0 + 239 * 60_000), "every bar reached the server");
+  assert.equal("corpus_macro" in d2bodies.at(-1), false, "then nothing until the file changes");
+  // Pure: a body too big even with one macro bar per series drops the macro bars before any gold bar.
+  const huge = { server: "S", series: MACRO_BASES.map((base) => ({ base, symbol: "x".repeat(32), bars: [[T0, 1, 1, 1, 1, 1, 1]] })) };
+  const tight = buildFeedBody({ bridgeId: "oanda", kid: "k", publicKeyBase64: "p".repeat(65_000), state: null, corpus: null, corpusMacro: huge });
+  assert.ok(Buffer.byteLength(tight, "utf8") <= 65_536);
+  assert.equal("corpus_macro" in JSON.parse(tight), false);
 });

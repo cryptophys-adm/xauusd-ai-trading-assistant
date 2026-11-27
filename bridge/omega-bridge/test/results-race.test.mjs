@@ -74,7 +74,7 @@ function daemonIn(root, extra = {}) {
 }
 
 test("RR0: the constants, the version and the event filter", () => {
-  assert.equal(BRIDGE_VERSION, "1.8.0");
+  assert.equal(BRIDGE_VERSION, "1.8.1");
   assert.equal(RESULTS_DEBOUNCE_MS, 400);
   assert.equal(RESULTS_REREAD_MS, 60_000);
   assert.ok(RESULT_IDS_TTL_MS >= RESULTS_PARTIAL_MAX_MS + RESULTS_REREAD_MS, "an id outlives every re-read of its line");
