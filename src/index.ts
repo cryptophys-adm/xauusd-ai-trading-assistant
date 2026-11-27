@@ -305,6 +305,7 @@ import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
+import { limitFirstRevert, limitFirstStatus, limitFirstRefusalDigest } from "./limit-first.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runZoneReadingsStep, runZoneBreaker, zonesView, zoneReadingsMode } from "./zone-readings.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
@@ -2549,6 +2550,12 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     }
     catch (error) { console.error("trading_mode_failed", error); return dashboardJson({ status: "error" }, 500); }
   }
+  if (url.pathname === "/api/limit-first") {
+    // E1 (src/limit-first.mjs): the switch, the limit-first orders, the revert and the record-only own-type gate's
+    // evidence (pass and block: n, mean R, fill; the promotion criterion). Read only; no price.
+    const view = await limitFirstStatus(env) as Record<string, unknown>;
+    return dashboardJson(view, view.status === "failed" ? 500 : 200);
+  }
   if (url.pathname === "/api/range-shadow") {
     // Range shadow (src/range-shadow.mjs): range's cells with and without the both-side setups, the cap and the intraday
     // range episodes. Read only; no price, no lot.
@@ -3177,6 +3184,15 @@ async function runLedgerStep(env: Env): Promise<void> {
     const cdg = await runCdGate(env, { send: (text: string) => sendTelegram(env, text), write: (body: Record<string, unknown>, actor: string) => writeSettings(env, { body, actor }) });
     if (cdg.gate.status === "changed" || cdg.gate.status === "failed" || cdg.revert.status === "reverted" || cdg.revert.status === "kept" || cdg.revert.status === "failed") console.log("cd_gate", JSON.stringify({ gate: cdg.gate.status, revert: cdg.revert }));
   } catch (e) { console.error("cd_gate_failed", e instanceof Error ? e.message : String(e)); }
+  // E1 (src/limit-first.mjs): limit-first's named auto-revert (limit_first back to "off" once, if its first 30 closed
+  // trades average worse than the plan replay at the plan's own entry). No cron of its own.
+  try {
+    const lfr = await limitFirstRevert(env, { send: (text: string) => sendTelegram(env, text), write: (body: Record<string, unknown>, actor: string) => writeSettings(env, { body, actor }) }) as { status?: string };
+    if (lfr.status === "reverted" || lfr.status === "kept" || lfr.status === "failed") console.log("limit_first_revert", JSON.stringify(lfr));
+    // A pullback signal whose limit cannot rest gets no entry at all: one Telegram line an hour says how many and why.
+    const lfd = await limitFirstRefusalDigest(env, { send: (text: string) => sendTelegram(env, text) }) as { status?: string };
+    if (lfd.status === "sent" || lfd.status === "failed") console.log("limit_first_refusals", JSON.stringify(lfd));
+  } catch (e) { console.error("limit_first_revert_failed", e instanceof Error ? e.message : String(e)); }
   // Council proposals, phase 2 (docs/RFC_COUNCIL_PROPOSALS.md, owner 2026-11-17: "Live otomatis + rollback otomatis"):
   // an accepted knob change is tested in shadow, goes live when it proves better, and rolls back by itself. Daily.
   const knobs = await runKnobProposals(env, { send: (text: string) => sendTelegram(env, text) });

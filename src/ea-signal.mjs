@@ -40,6 +40,7 @@ import { flatConfidences } from "./agent-confidence.mjs";
 import { decisionHistory } from "./change-thresholds.mjs";
 import { liquidityFields, readLiquidityState } from "./liquidity-lens.mjs";
 import { lensKnobs, readLensState } from "./lens-policy.mjs";
+import { limitFirstSignalFields } from "./limit-first.mjs";
 
 export const EA_SIGNAL_VERSION = "cryptophys.ea-signal.v1";
 const H1_MS = 3_600_000;
@@ -143,6 +144,10 @@ export function eaSignalFromDecision({ decision = null, kill = false, killSource
     ...entryZoneFields(t, side),
     // EZ1b: the decision's zone switch ("edge"), flat, only beside a zone. The EA never reads it.
     ...(decision?.entry_zone_mode === "edge" && Object.keys(entryZoneFields(t, side)).length ? { entry_zone_edge: true } : {}),
+    // E1 limit-first (src/limit-first.mjs): a pullback strategy's 1H ATR, the type of the zone at its entry, the record-only
+    // own-type gate and its own-type zone, flat, feed scale; only on zone_pullback and breakout_retest trades. The EA never
+    // reads these keys; Omega reads them only while its setting limit_first is on.
+    ...limitFirstSignalFields(decision, t, side),
     risk_reward: Number.isFinite(t.rrr) ? t.rrr : 0, confidence: Number.isFinite(decision.confidence) ? decision.confidence : 0,
     // A market entry triggered live by a later 5m candle is as fresh as that candle (Omega's signal-age gate).
     issued_ms: close, expires_ms: close + M15_MS, decided_ms: Number.isFinite(trigger.at_ms) && trigger.at_ms > decidedMs ? trigger.at_ms : decidedMs

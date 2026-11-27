@@ -749,7 +749,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "a699036655e5e2fc1af3870931d7343b9cfc20de09e5c7de0daa5457b4a6a1b6";
+export const ENGINE_CODE_HASH = "99850b0021dc294e537d1adcc49d646162dcd01bfb8a3726cc4a34c40d507777";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -825,7 +825,10 @@ export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941
 // change reaches the live engine only through the signal's "/sd" levels (SD_LEVELS "signal"), which v4 replays from
 // each decision's own record (sd_levels, sd_levels_mode), so live and v4 stay comparable; the owner setting it to "off"
 // writes "zone_sd=off" and starts a new era at the settings' updated_ms. The owner's switch only.
-export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd"]);
+// limit_first (E1, owner 2026-11-27) is "on" by default, the owner's word. It acts only with entry_order "limit" or
+// "council" on a pullback strategy's signal; the owner (or its automatic revert) setting it to "off" writes
+// "limit_first=off" and starts a new era at that time.
+export const ERA_SWITCHES = Object.freeze(["entry_order", "pm_loosen_enabled", "positioning_enabled", "liquidity_enabled", "profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd", "limit_first"]);
 /**
  * Engine code hashes from before the behaviour fingerprint whose switch-off behaviour is proven identical to the
  * first ENGINE_BEHAVIOUR_HASH: 7497aa51 (#502, limit entries stage 3; test/omega-limit-stage3.test.mjs S12 proves the
