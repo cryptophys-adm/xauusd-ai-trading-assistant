@@ -292,11 +292,68 @@ export async function upsertReleases(db, events, { now = Date.now() } = {}) {
   return n;
 }
 
+/** CG1 (2026-11-27): the period a release title names: "mm" (m/m, MoM), "yy" (y/y, YoY), "qq" (q/q, QoQ), or null. */
+export function periodOf(title) {
+  const t = String(title || "");
+  if (/\bm\/m\b|\bmom\b/i.test(t)) return "mm";
+  if (/\by\/y\b|\byoy\b/i.test(t)) return "yy";
+  if (/\bq\/q\b|\bqoq\b/i.test(t)) return "qq";
+  return null;
+}
+/** CG1: the MQL5 values are on the row's scale (Housing Starts 1.309 for 1309000 is not): within 10x, or both small. */
+export const MT5_SCALE_MAX_RATIO = 10;
+export function sameScale(a, b) {
+  if (!isNum(a) || !isNum(b)) return null;
+  const x = Math.abs(a), y = Math.abs(b);
+  if (x < 1 && y < 1) return true;
+  const lo = Math.min(x, y), hi = Math.max(x, y);
+  return lo > 0 && hi / lo <= MT5_SCALE_MAX_RATIO;
+}
+/**
+ * CG1: a release title as comparable words. Synonyms first ("non farm" is "nonfarm", "inflation rate" and "consumer price
+ * index" are "cpi"), then the period and edition words and filler are dropped. QUALIFIERS make another series of the
+ * same indicator (Core CPI is not CPI, U6 is not the unemployment rate, private payrolls are not payrolls).
+ */
+const TITLE_FILLER = new Set(["m", "mom", "y", "yoy", "q", "qoq", "prel", "preliminary", "final", "flash", "advance", "1st", "2nd", "3rd", "est", "growth", "rate", "index", "change", "the", "of", "s", "a", "sa", "us", "usd"]);
+export const TITLE_QUALIFIERS = Object.freeze(["core", "private", "u6", "real", "excl", "ex", "control", "nsa", "import", "export"]);
+export function titleWords(title) {
+  const t = String(title || "").toLowerCase().replace(/non[\s-]*farm/g, "nonfarm").replace(/n\.s\.a\.?/g, "nsa").replace(/inflation rate|consumer price index/g, "cpi").replace(/[^a-z0-9]+/g, " ");
+  return t.split(" ").filter((w) => w && !TITLE_FILLER.has(w));
+}
+/** CG1: two titles name the same series: the same qualifiers and at least TITLE_MIN_JACCARD of their words shared. */
+export const TITLE_MIN_JACCARD = 0.6;
+export function titlesAgree(a, b) {
+  const x = new Set(titleWords(a)), y = new Set(titleWords(b));
+  if (!x.size || !y.size) return false;
+  if (TITLE_QUALIFIERS.some((q) => x.has(q) !== y.has(q))) return false;
+  const inter = [...x].filter((w) => y.has(w)).length;
+  return inter / new Set([...x, ...y]).size >= TITLE_MIN_JACCARD;
+}
+
+/**
+ * Pure (CG1): may an MQL5 event's values go to this stored row? The same series by name (titlesAgree), the same
+ * period words, and the same scale (the MQL5 forecast against the row's forecast, else its previous, else the MQL5
+ * actual against them). A row with nothing to compare is refused: a wrong value is worse than a second title.
+ */
+export function mt5RowMatches(e, row) {
+  // The same series by name (the event kind alone matched CPI to Core CPI and U6 to the unemployment rate: replay 2026-11-27).
+  if (!titlesAgree(e?.title, row?.title)) return false;
+  if (periodOf(e?.title) !== periodOf(row?.title)) return false;
+  const ref = isNum(row?.forecast) ? row.forecast : isNum(row?.previous) ? row.previous : null;
+  const mine = isNum(e?.forecast) ? e.forecast : isNum(e?.previous) ? e.previous : e?.actual;
+  return sameScale(mine, ref) === true;
+}
+/** CG1: the title an unmatched MQL5 event is stored under, its own series (seriesOf strips "(...)", so no brackets). */
+export const MT5_TITLE_SUFFIX = " MQL5";
+
 /**
  * The MT5 fallback, stage 2 (2026-11-11): released values from the MQL5 calendar (src/corpus-oracle.mjs
  * readMt5Calendar) while TradingView's calendar is down. MQL5 names the events its own way ("Nonfarm
  * Payrolls" for "Non Farm Payrolls"), so a value goes to the row of the same minute and kind when one
  * waits for its actual (the series' history stays one), else it is stored under its own title.
+ * CG1 (2026-11-27): MQL5 gives some series in other units (Housing Starts 1.309 for 1309000) and gives m/m and y/y
+ * of one indicator at the same minute, so a value goes to a row only when its name, period and scale agree (mt5RowMatches);
+ * otherwise it is stored under its own title with the MQL5 suffix, its own forecast and its own series history.
  */
 export async function applyMt5Actuals(db, events, { now = Date.now() } = {}) {
   await ensureEconSchema(db);
@@ -304,10 +361,10 @@ export async function applyMt5Actuals(db, events, { now = Date.now() } = {}) {
   for (const e of events || []) {
     if (!isNum(e?.actual) || !e?.title || !Number.isFinite(Date.parse(e.time))) continue;
     const t = Date.parse(e.time);
-    const rows = ((await db.prepare("SELECT title FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NULL").bind(new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString()).all()).results || []);
-    const kind = ruleOf(e.title).kind;
-    const match = rows.find((r) => kind !== "other" && ruleOf(r.title).kind === kind) || (rows.length === 1 ? rows[0] : null);
-    n += await upsertReleases(db, [{ ...e, title: match ? match.title : e.title, time: new Date(t).toISOString() }], { now });
+    const rows = ((await db.prepare("SELECT title, forecast, previous FROM econ_releases WHERE time >= ? AND time <= ? AND actual IS NULL").bind(new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString()).all()).results || []);
+    const match = rows.find((r) => mt5RowMatches(e, r)) || null;
+    const title = match ? match.title : /mql5$/i.test(e.title) ? e.title : `${e.title}${MT5_TITLE_SUFFIX}`;
+    n += await upsertReleases(db, [{ ...e, title, time: new Date(t).toISOString() }], { now });
   }
   return n;
 }

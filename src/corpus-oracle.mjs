@@ -409,6 +409,7 @@ export function validateMt5Calendar(payload, { executor = null, connection = nul
 }
 
 /** Bridge sync step: stores the MQL5 calendar. Never throws; off with the corpus. */
+// CG1 (2026-11-27): an unchanged event is not rewritten (the EA sends its 9-day window every 5 minutes: ~50 rows a time).
 export async function ingestMt5Calendar(env, payload, { executor = null, now = Date.now() } = {}) {
   if (corpusMode(env) === "off" || !payload) return { mode: corpusMode(env) };
   try {
@@ -419,7 +420,8 @@ export async function ingestMt5Calendar(env, payload, { executor = null, now = D
     await db.prepare(CALENDAR_SCHEMA).run();
     for (const e of v.events) {
       await db.prepare(`INSERT INTO mt5_calendar (value_id, title, time, currency, importance, actual, forecast, previous, unit, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(value_id) DO UPDATE SET actual = COALESCE(excluded.actual, actual), forecast = COALESCE(excluded.forecast, forecast), previous = COALESCE(excluded.previous, previous), received_ms = excluded.received_ms`)
+        ON CONFLICT(value_id) DO UPDATE SET actual = COALESCE(excluded.actual, actual), forecast = COALESCE(excluded.forecast, forecast), previous = COALESCE(excluded.previous, previous), received_ms = excluded.received_ms
+        WHERE (excluded.actual IS NOT NULL AND excluded.actual IS NOT mt5_calendar.actual) OR (excluded.forecast IS NOT NULL AND excluded.forecast IS NOT mt5_calendar.forecast) OR (excluded.previous IS NOT NULL AND excluded.previous IS NOT mt5_calendar.previous)`)
         .bind(e.value_id, e.title, e.time, e.currency, e.importance, e.actual, e.forecast, e.previous, e.unit, now).run();
     }
     await db.prepare("DELETE FROM mt5_calendar WHERE time < ?").bind(new Date(now - CALENDAR_KEEP_MS).toISOString()).run();
