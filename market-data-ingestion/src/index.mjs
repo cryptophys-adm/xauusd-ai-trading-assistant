@@ -4,7 +4,7 @@ import { runBrokerShadow } from "./broker-shadow.mjs";
 import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, publishAdoptRecords, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
-import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, closureId, verifyDerivedSeries, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
+import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, closureId, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -295,12 +295,6 @@ const worker = {
       try {
         const pulled = await pull(env, { keep: records });
         pullStatus = pulled?.status ?? null;
-        // Daily derived-vs-native check (a few calls, once per UTC day); skipped while the
-        // gateway reports a quota cooldown.
-        if (!["mcp_quota_cooldown_active", "gateway_unavailable", "daily_budget_exhausted"].includes(pulled?.status)) {
-          const check = await verifyDerivedSeries(env);
-          if (check.status !== "not_due") console.log(JSON.stringify({ worker: WORKER_NAME, event: "derived_series_check", status: check.status, series: check.series?.map((x) => ({ series: x.series, compared: x.compared, mismatched: x.mismatched, error: x.error })) }));
-        }
       } catch (error) {
         pullStatus = asString(error?.code) || "market_data_pull_failed";
         // Keep logs sanitized: never log URLs, secrets, request headers or raw provider payloads.

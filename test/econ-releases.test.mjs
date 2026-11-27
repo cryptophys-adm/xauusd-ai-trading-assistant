@@ -75,9 +75,12 @@ test("the sweep: the released value right after the event, a history window an h
     DB: fakeD1(), SIGNAL_CACHE: kv(),
     NEWS_INGESTION: {
       economicCalendar: async (req) => { calls.push(req); return { status: 200, body: { events: [{ title: "CPI m/m", time: CPI, currency: "USD", importance: 1, actual: 0.4, forecast: 0.3, previous: 0.3, unit: "%" }, { title: "Core CPI m/m", time: CPI, currency: "USD", importance: 1, actual: 0.3, forecast: 0.3, previous: 0.2 }] } }; },
-      goldHistory: async () => ({ status: 200, body: { results: [{ ok: true, bars: bars(Date.parse("2026-11-09T00:00:00Z"), 80, (i) => 4000 - i) }] } })
+      // TradingView cleanup, step 1: gold's history is never pulled from TradingView any more.
+      goldHistory: async () => { throw new Error("goldHistory must not be called"); }
     }
   };
+  // The stored 1H history (pulled from TradingView until 2026-11-26).
+  await env.SIGNAL_CACHE.put("econ:gold-1h-history:v1", JSON.stringify(bars(Date.parse("2026-11-09T00:00:00Z"), 80, (i) => 4000 - i)));
   const gated = [{ title: "CPI m/m", currency: "USD", impact: "High", time: CPI }];
   const r = await refreshEconReleases(env, { now, gatedEvents: gated });
   assert.equal(r.status, "ok", JSON.stringify(r));
@@ -186,4 +189,29 @@ test("MT5 fallback stage 2: while TradingView's calendar is down, the broker ter
   resetEconSchemaCacheForTests();
   const none = await refreshEconReleases({ DB: fakeD1(), SIGNAL_CACHE: kv(), NEWS_INGESTION: env.NEWS_INGESTION }, { now, gatedEvents: [{ title: "x", currency: "USD", impact: "High", time: NFP }], readMt5: async () => [] });
   assert.deepEqual(none.live, { day: "2026-11-06", error: "mcp_quota_cooldown_active" }, "nothing from the broker: the error stands");
+});
+
+test("ER-TV1 (TradingView cleanup, step 1): gold's 1H history grows from the pull adapter's 1H series and is kept without expiry; no TradingView pull", async () => {
+  const { goldHistoryForTests } = await import("../src/econ-releases.mjs");
+  const store = kv();
+  const puts = [];
+  const spy = { get: store.get, put: async (k, v, opts) => { puts.push({ k, opts }); return store.put(k, v); } };
+  const start = Date.parse("2026-11-09T00:00:00Z");
+  await store.put("econ:gold-1h-history:v1", JSON.stringify(bars(start, 10, (i) => 4000 + i)));
+  // The adapter's 1H series overlaps the last two stored hours and adds three new ones.
+  const candles = Array.from({ length: 5 }, (_, i) => ({ open_time: new Date(start + (8 + i) * 3_600_000).toISOString(), open: 5000 + i, high: 5001 + i, low: 4999 + i, close: 5000 + i }));
+  await store.put("market-data:v2:series:OANDA:XAUUSD|1h", JSON.stringify({ candles }));
+  const env = { SIGNAL_CACHE: spy, NEWS_INGESTION: { goldHistory: async () => { throw new Error("goldHistory must not be called"); } } };
+  const h = await goldHistoryForTests(env);
+  assert.equal(h.t.length, 13, "10 stored + 3 new hours");
+  assert.equal(h.c[8], 5000, "the adapter's bar wins on an overlapping hour");
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].k, "econ:gold-1h-history:v1");
+  assert.equal(puts[0].opts, undefined, "no expiry: the history is kept");
+  assert.equal(JSON.parse(store.m.get("econ:gold-1h-history:v1")).t.length, 13);
+  // Nothing new: no write.
+  await goldHistoryForTests(env);
+  assert.equal(puts.length, 1, "written back only when it gained an hour");
+  // No stored history and no series: null, no throw.
+  assert.equal(await goldHistoryForTests({ SIGNAL_CACHE: kv() }), null);
 });

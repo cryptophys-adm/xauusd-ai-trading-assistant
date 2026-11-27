@@ -11,7 +11,7 @@
 //      Its effect on gold follows the Calendar Agent's fixed rule of the event kind (src/calendar-agent.mjs).
 //   3. Reaction and horizon: gold's move 1, 2, 4, 8 and 24 hours after each release, in 1H ATR, signed by
 //      the rule's direction (positive = gold moved the way the rule says), from gold's 1-hour history
-//      (one TradingView pull a day). Per event kind: the mean signed move and the hit rate at each
+//      (stored, and grown from the pull adapter's 1H series; no TradingView pull since 2026-11-27). Per event kind: the mean signed move and the hit rate at each
 //      horizon; the learned horizon is the longest one whose hit rate is at least 55 % with a positive
 //      mean (null below 5 releases: the fixed 4 hours stand).
 // Advisory context only: no price level, no order. The Decision Engine, the Calendar Agent and the
@@ -32,7 +32,6 @@ const BACKFILL_WINDOW_DAYS = 14;
 const HOUR = 3_600_000, DAY = 86_400_000;
 const LIVE_LOOKBACK_MS = 3 * HOUR;
 const HISTORY_KEY = "econ:gold-1h-history:v1";
-const HISTORY_MARKER = "econ:gold-1h-history:fetched";
 const CURSOR_KEY = "econ:backfill:cursor";
 const LIVE_MARKER = (day) => `econ:live-pull:${day}`;
 
@@ -324,33 +323,33 @@ async function callCalendar(env, request) {
   } catch (e) { return { ok: false, error: String(e?.message ?? e).slice(0, 120) }; }
 }
 
-/** Gold's 1H history (KV, refreshed once a day from TradingView), as columns, or null. */
-async function goldHistory(env, now) {
+/**
+ * Gold's 1H history as columns, or null. TradingView cleanup, step 1 (2026-11-27): no TradingView call. The stored
+ * history (KV, 6000 hours pulled from TradingView until 2026-11-26) is kept and grows from the pull adapter's 1H
+ * series: the newest hours are merged in and the result is written back whenever it gained an hour, without an
+ * expiry, so the reactions and drifts of old releases keep their hours.
+ */
+async function goldHistory(env) {
   const kv = env?.SIGNAL_CACHE;
-  let cached = safeParse((await kv?.get?.(HISTORY_KEY)) || "null");
-  const fetched = Date.parse((await kv?.get?.(HISTORY_MARKER)) || "");
-  if ((!cached || !Number.isFinite(fetched) || now - fetched > DAY) && typeof env?.NEWS_INGESTION?.goldHistory === "function") {
-    try {
-      await kv?.put?.(HISTORY_MARKER, new Date(now).toISOString(), { expirationTtl: 3 * DAY });
-      const r = await env.NEWS_INGESTION.goldHistory(6000);
-      const bars = r?.status === 200 ? r.body?.results?.[0]?.bars : null;
-      if (bars?.t?.length) { cached = { t: bars.t, o: bars.o, h: bars.h, l: bars.l, c: bars.c }; await kv?.put?.(HISTORY_KEY, JSON.stringify(cached), { expirationTtl: 8 * DAY }); }
-    } catch { /* keep the cache */ }
-  }
-  // The newest hours from the pull adapter's 1H series (no TradingView call).
+  let cached = null;
+  try { cached = safeParse((await kv?.get?.(HISTORY_KEY)) || "null"); } catch { cached = null; }
   try {
     const rec = safeParse((await kv?.get?.("market-data:v2:series:OANDA:XAUUSD|1h")) || "null");
     const recent = (rec?.candles || []).filter((b) => [b.open, b.high, b.low, b.close].every(isNum) && b.open_time);
     if (recent.length) {
       const map = new Map();
       if (cached?.t) cached.t.forEach((t, k) => map.set(t, [cached.o[k], cached.h[k], cached.l[k], cached.c[k]]));
+      const before = map.size;
       for (const b of recent) map.set(Math.floor(Date.parse(b.open_time) / 1000), [b.open, b.high, b.low, b.close]);
       const ts = [...map.keys()].sort((a, b) => a - b);
-      cached = { t: ts, o: ts.map((t) => map.get(t)[0]), h: ts.map((t) => map.get(t)[1]), l: ts.map((t) => map.get(t)[2]), c: ts.map((t) => map.get(t)[3]) };
+      const merged = { t: ts, o: ts.map((t) => map.get(t)[0]), h: ts.map((t) => map.get(t)[1]), l: ts.map((t) => map.get(t)[2]), c: ts.map((t) => map.get(t)[3]) };
+      if (map.size > before) { try { await kv?.put?.(HISTORY_KEY, JSON.stringify(merged)); } catch { /* the merged copy still serves this sweep */ } }
+      cached = merged;
     }
   } catch { /* history only */ }
   return cached?.t?.length ? cached : null;
 }
+export const goldHistoryForTests = goldHistory;
 
 /**
  * Sweep step. Never throws. (1) The day of a High-impact USD event released 2 minutes to 3 hours ago
@@ -406,7 +405,7 @@ export async function refreshEconReleases(env, { now = Date.now(), gatedEvents =
     // (3) Reactions: releases with an actual whose 24 hours have passed and no reaction yet.
     const pending = ((await db.prepare("SELECT * FROM econ_releases WHERE actual IS NOT NULL AND reaction_json IS NULL AND time <= ? ORDER BY time DESC LIMIT 400").bind(new Date(now - 25 * HOUR).toISOString()).all()).results || []);
     let history;
-    const historyOnce = async () => (history === undefined ? (history = await goldHistory(env, now)) : history);
+    const historyOnce = async () => (history === undefined ? (history = await goldHistory(env)) : history);
     if (pending.length) {
       const bars = await historyOnce();
       if (bars) {

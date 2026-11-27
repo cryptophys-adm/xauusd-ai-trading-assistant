@@ -153,5 +153,4 @@ test("a published bar's marker is read from KV once per binding, not every minut
   const markers = kv.gets.filter((k) => /:(hud|local)-published:/.test(k));
   // Only the H1 revision check reads its markers' content (the last closed H1 bars); no presence check reads KV.
   assert.ok(markers.every((k) => k.includes(":60:")), markers.join(", "));
-  assert.ok(!kv.gets.includes("market-data:v2:derived-check"), "the day's derived check is known done");
 });

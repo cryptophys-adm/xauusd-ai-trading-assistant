@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { aggregateCandles, sourceCovers, compareWithNative } from "../src/derived-series.mjs";
-import { SERIES, refreshSeries, verifyDerivedSeries, readSeries, SERIES_INTERNALS } from "../src/tradingview-source.mjs";
+import { SERIES, refreshSeries, readSeries, SERIES_INTERNALS } from "../src/tradingview-source.mjs";
 
 class MemoryKV {
   constructor() { this.map = new Map(); }
@@ -112,27 +112,11 @@ test("a derived cache the source no longer reaches is filled natively once", asy
   assert.ok(gw.calls.flat().some((x) => x.symbol === "OANDA:XAUUSD" && x.interval === "15m"), "gap fill for the stale 15m cache");
 });
 
-test("the daily check compares every derived series with a few native bars, once per UTC day from 01:00", async () => {
-  const kv = new MemoryKV();
-  const nowSec = T0 - (T0 % 86400) + 2 * 3600; // 02:00 UTC
-  for (const spec of SERIES.filter((s) => s.derived_from)) {
-    await kv.put(SERIES_INTERNALS.SERIES_KEY_PREFIX + spec.key, JSON.stringify({ candles: closed(spec.symbol, spec.seconds, 60, nowSec) }));
-  }
-  const gw = gateway(nowSec);
-  const env = { MARKET_DATA_CACHE: kv, TV_GATEWAY: gw, TV_DAILY_CALL_BUDGET: "800" };
-  const r = await verifyDerivedSeries(env, { now: nowSec * 1000 });
-  assert.equal(r.status, "match", JSON.stringify(r));
-  assert.equal(r.series.length, 5, "XAUUSD 5m, 15m and 1h (since 2026-11-14), USOIL 15m and 1h");
-  assert.ok(r.series.every((x) => x.compared > 0 && x.mismatched === 0));
-  assert.equal((await verifyDerivedSeries(env, { now: nowSec * 1000 + 60_000 })).status, "not_due", "once a day");
-  assert.equal(gw.calls.length, 1);
-});
-
 test("steady-state daily MCP demand of the chart fits the budget (the account cap, 480 = the quota 500 less the gateway's margin)", () => {
   // Each pulled series at its cadence (a cadence above the bar, as USOIL 5m pulled once per 15 minutes),
-  // over a full 24-hour day, plus the daily check of the derived series. Measured 2026-11-13: 379 calls.
+  // over a full 24-hour day (the daily derived check, five calls, was retired on 2026-11-27). Measured 2026-11-13: 379 calls.
   const cronSeconds = 300;
-  const perDay = SERIES.filter((s) => !s.derived_from).reduce((sum, s) => sum + 86400 / Math.max(cronSeconds, s.cadence ?? s.seconds), 0) + SERIES.filter((s) => s.derived_from).length;
+  const perDay = SERIES.filter((s) => !s.derived_from).reduce((sum, s) => sum + 86400 / Math.max(cronSeconds, s.cadence ?? s.seconds), 0);
   const budget = Number(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").match(/"TV_DAILY_CALL_BUDGET":\s*"(\d+)"/)[1]);
   assert.equal(budget, 480, "the account cap (test/tv-quota-alignment.test.mjs)");
   // The chart alone stays under the quota; what is left goes to the news pulls, which yield to the chart near

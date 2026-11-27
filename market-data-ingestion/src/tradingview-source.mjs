@@ -5,9 +5,10 @@
 // grant and quota cooldown). M1, H1, H4, D1, W1 and the 4h macro series are native
 // TradingView series. Since 2026-11-05 (owner decision, budget 800 calls a day) M5 and
 // M15 are aggregated locally from M1, and USOIL M15 and H1 from USOIL M5
-// (derived-series.mjs). verifyDerivedSeries compares them with native bars once a day.
+// (derived-series.mjs). The daily derived-vs-native check (verifyDerivedSeries) was retired on
+// 2026-11-27 (TradingView cleanup, step 1): five calls a day spent comparing against a feed being removed.
 
-import { aggregateCandles, sourceCovers, compareWithNative } from "./derived-series.mjs";
+import { aggregateCandles, sourceCovers } from "./derived-series.mjs";
 export const MARKET_DATA_SCHEMA = "cryptophys.market-data.v2";
 export const PROVIDER = "TradingView MCP (mcp-tv-get-ohlcv via xauusd-fundamental-news-ingestion gateway)";
 export const CANONICAL_SYMBOL = "OANDA:XAUUSD";
@@ -519,46 +520,4 @@ export async function buildBundle(env, now = Date.now(), known = null) {
   };
 }
 
-/** KV key of the last daily derived-vs-native comparison. */
-export const DERIVED_CHECK_KEY = "market-data:v2:derived-check";
-const VERIFY_COUNT = { 300: 48, 900: 32, 3600: 24 };
-
-/**
- * Once per UTC day (from 01:00), pulls a few native bars of every derived series and
- * compares them with the derived bars on the same open times. Never writes a series.
- */
-// The day whose check is known done, per KV binding (resource audit 2026-11-14: the record was read every
-// minute to learn it was done hours ago).
-const CHECKED_DAY = new WeakMap();
-export async function verifyDerivedSeries(env, { now = Date.now() } = {}) {
-  const kv = env.MARKET_DATA_CACHE;
-  if (!kv) return { status: "cache_not_configured" };
-  const today = new Date(now).toISOString().slice(0, 10);
-  if (new Date(now).getUTCHours() < 1 || (typeof kv === "object" && CHECKED_DAY.get(kv) === today)) return { status: "not_due" };
-  const previous = await readJson(kv, DERIVED_CHECK_KEY);
-  if (previous?.date === today) { if (typeof kv === "object") CHECKED_DAY.set(kv, today); return { status: "not_due" }; }
-  const specs = SERIES.filter((s) => s.derived_from);
-  const budget = await reserveBudget(kv, env, specs.length, now);
-  if (budget.allowed < specs.length) return { status: "daily_budget_exhausted", budget };
-  const nowSec = Math.floor(now / 1000);
-  let results;
-  try {
-    results = await callGateway(env, specs.map((spec) => ({ symbol: spec.symbol, interval: spec.interval, count: VERIFY_COUNT[spec.seconds] || 24 })));
-  } catch (error) {
-    return { status: asString(error?.code) || "gateway_error" };
-  }
-  const series = [];
-  for (const [i, spec] of specs.entries()) {
-    const result = results[i];
-    if (!result?.ok) { series.push({ series: spec.key, error: asString(result?.error) || "not_attempted" }); continue; }
-    const native = closedCandlesFromColumns(result.bars, spec, nowSec);
-    const derived = (await readSeries(kv, spec))?.candles || [];
-    series.push({ series: spec.key, ...compareWithNative(derived, native) });
-  }
-  const summary = { date: today, checked_at: new Date(now).toISOString(), status: series.every((x) => !x.error && x.mismatched === 0) ? "match" : "mismatch_or_error", series };
-  await kv.put(DERIVED_CHECK_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 14 });
-  if (typeof kv === "object") CHECKED_DAY.set(kv, today);
-  return summary;
-}
-
-export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, DERIVED_CHECK_KEY, GATEWAY_COOLDOWN_KEY, dailyBudget };
+export const SERIES_INTERNALS = { SERIES_KEY_PREFIX, BUDGET_KEY_PREFIX, GATEWAY_COOLDOWN_KEY, dailyBudget };
