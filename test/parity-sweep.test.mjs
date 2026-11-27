@@ -105,84 +105,66 @@ test("closedH1CandleKeys lists the most recently closed H1 candle opens, newest 
   assert.deepEqual(closedH1CandleKeys(now, { symbol: "OANDA:XAUUSD", timeframe: "60", lookback: 0 }), []);
 });
 
-test("sweep records the parity comparison for a candle whose per-event tasks missed it", async () => {
-  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
-  const now = Date.parse("2026-11-04T01:10:00.000Z");
-  const candleKey = "OANDA:XAUUSD:60:1793750400000";
-  await seedCandle(env, candleKey);
-
-  const result = await reconcileRecentCandles(env, { now });
-  assert.equal(result.candle_keys.length, PARITY_SWEEP_LOOKBACK_CANDLES);
-  assert.equal(result.results[candleKey].comparisons.prophet.result, "match");
-  assert.equal(result.results[candleKey].comparisons.prophet.counted, true);
-  assert.equal(result.results[candleKey].comparisons.gmi.result, "match");
-
-  const rows = env.DB.db.prepare("SELECT engine, candle_key, result FROM engine_parity_comparisons ORDER BY engine").all();
-  assert.equal(rows.length, 2);
-  assert.ok(rows.every((row) => row.candle_key === candleKey && row.result === "match"));
-  const registry = env.DB.db.prepare("SELECT engine, consecutive_matches, last_candle_key FROM engine_parity_registry ORDER BY engine").all().map((row) => ({ ...row }));
-  assert.deepEqual(registry, [
-    { engine: "gmi", consecutive_matches: 1, last_candle_key: candleKey },
-    { engine: "prophet", consecutive_matches: 1, last_candle_key: candleKey }
-  ]);
+// Parity removal S2: the sweep refreshes the trusted lane from the frozen table and compares nothing.
+const counts = (env) => ({
+  comparisons: env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").get().n,
+  registry: env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_registry").get().n
 });
 
-test("sweep is idempotent: re-running does not double count a candle", async () => {
+test("S2: the sweep refreshes the trusted lane of a candle its per-event task missed, and writes no comparison", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const now = Date.parse("2026-11-04T01:10:00.000Z");
   const candleKey = "OANDA:XAUUSD:60:1793750400000";
-  await seedCandle(env, candleKey);
+  await seedCandle(env, candleKey, "60", { trusted: true });
+  const before = counts(env);
+  const result = await reconcileRecentCandles(env, { now });
+  assert.equal(result.candle_keys.length, PARITY_SWEEP_LOOKBACK_CANDLES);
+  assert.deepEqual(result.results[candleKey].comparisons, {});
+  assert.deepEqual([result.results[candleKey].trust.prophet, result.results[candleKey].trust.gmi, result.results[candleKey].trust.mizan], [true, true, false], "mizan published nothing for this candle");
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet")).trust_status, "approved_by_parity");
+  assert.deepEqual(counts(env), { ...before, comparisons: 0 }, "no comparison row, no registry change");
+  assert.equal(result.intrabar_recheck, undefined, "the intrabar recheck is gone with the comparisons");
+});
 
+test("S2: the sweep is idempotent: a re-run writes the same trusted copies", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const now = Date.parse("2026-11-04T01:10:00.000Z");
+  const candleKey = "OANDA:XAUUSD:60:1793750400000";
+  await seedCandle(env, candleKey, "60", { trusted: true });
   await reconcileRecentCandles(env, { now });
+  const first = await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":gmi");
   const second = await reconcileRecentCandles(env, { now: now + 10 * 60 * 1000 });
-  assert.equal(second.results[candleKey].comparisons.prophet.result, "match");
-  assert.equal(second.results[candleKey].comparisons.prophet.counted, false);
-
-  assert.equal(env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").get().n, 2);
-  assert.equal(env.DB.db.prepare("SELECT consecutive_matches FROM engine_parity_registry WHERE engine = 'prophet'").get().consecutive_matches, 1);
+  assert.equal(second.results[candleKey].trust.gmi, true);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":gmi"), first);
+  assert.equal(counts(env).comparisons, 0);
 });
 
 test("sweep skips candles whose evidence never arrived, without failing the others", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const now = Date.parse("2026-11-04T01:10:00.000Z");
   const candleKey = "OANDA:XAUUSD:60:1793750400000";
-  await seedCandle(env, candleKey);
-
+  await seedCandle(env, candleKey, "60", { trusted: true });
   const result = await reconcileRecentCandles(env, { now });
   for (const older of ["OANDA:XAUUSD:60:1793746800000", "OANDA:XAUUSD:60:1793743200000"]) {
-    assert.deepEqual(result.results[older].comparisons, {});
+    assert.deepEqual(result.results[older], { comparisons: {}, trust: {} });
   }
-  assert.equal(env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").get().n, 2);
+  assert.equal(result.results[candleKey].trust.prophet, true);
 });
 
-test("reconcileLocalComputation puts records into the trusted lane only for a frozen identity, never through the registry's approval", async () => {
+test("reconcileLocalComputation puts records into the trusted lane only for a frozen identity; a synthetic identity never, whatever the registry holds", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const candleKey = "OANDA:XAUUSD:60:1793750400000";
   await seedCandle(env, candleKey);
-
-  const first = await reconcileLocalComputation(env, candleKey);
-  assert.equal(first.trust.prophet, false);
+  env.DB.db.prepare("UPDATE engine_parity_registry SET status = 'approved'").run();
+  const synthetic = await reconcileLocalComputation(env, candleKey);
+  assert.deepEqual([synthetic.trust.prophet, synthetic.trust.gmi], [false, false]);
   assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
-
-  // 24 consecutive matching candles approve the synthetic identity in the registry, which no longer trusts.
-  const base = 1793750400000;
-  for (let i = 1; i < 24; i += 1) {
-    const key = `OANDA:XAUUSD:60:${base - i * 3600000}`;
-    await seedCandle(env, key);
-    await reconcileLocalComputation(env, key);
-  }
-  const after = await reconcileLocalComputation(env, candleKey);
-  assert.equal(env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'prophet'").get().status, "approved", "the registry is still written");
-  assert.equal(after.trust.prophet, false);
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
-
-  // The frozen identity is trusted on its first candle, Mizan with it.
-  const frozenKey = `OANDA:XAUUSD:60:${base + 3600000}`;
+  const frozenKey = "OANDA:XAUUSD:60:" + (1793750400000 + 3600000);
   await seedCandle(env, frozenKey, "60", { trusted: true });
   const frozen = await reconcileLocalComputation(env, frozenKey);
   assert.deepEqual([frozen.trust.prophet, frozen.trust.gmi], [true, true]);
-  const trusted = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + frozenKey + ":prophet"));
-  assert.equal(trusted.trust_status, "approved_by_parity");
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + frozenKey + ":prophet")).trust_status, "approved_by_parity");
+  assert.equal(counts(env).comparisons, 0);
 });
 
 test("closedM5CandleKeys lists the most recently closed 5m candle opens, newest first", () => {
@@ -204,27 +186,29 @@ test("closedM15CandleKeys lists the most recently closed 15m candle opens; the s
   assert.deepEqual(result.m15_candle_keys, closedM15CandleKeys(now));
 });
 
-test("sweep reconciles 5m candles under timeframe-scoped ids and never touches the H1 registry rows", async () => {
+test("the sweep refreshes 5m candles under timeframe-scoped identities: a frozen 5m identity is trusted, an H1 identity on a 5m record is not", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const now = Date.parse("2026-11-04T01:10:00.000Z");
   const h1Key = "OANDA:XAUUSD:60:1793750400000";
   const m5Key = "OANDA:XAUUSD:5:" + Date.parse("2026-11-04T01:00:00.000Z");
-  await seedCandle(env, h1Key, "60");
-  await seedCandle(env, m5Key, "5");
-
+  await seedCandle(env, h1Key, "60", { trusted: true });
+  await seedCandle(env, m5Key, "5", { trusted: true });
   const result = await reconcileRecentCandles(env, { now });
   assert.ok(result.m5_candle_keys.includes(m5Key));
-  assert.equal(result.results[m5Key].comparisons.prophet.result, "match");
-  const registry = env.DB.db.prepare("SELECT engine, consecutive_matches, last_candle_key FROM engine_parity_registry ORDER BY engine").all().map((row) => ({ ...row }));
-  assert.deepEqual(registry, [
-    { engine: "gmi", consecutive_matches: 1, last_candle_key: h1Key },
-    { engine: "gmi_m5", consecutive_matches: 1, last_candle_key: m5Key },
-    { engine: "prophet", consecutive_matches: 1, last_candle_key: h1Key },
-    { engine: "prophet_m5", consecutive_matches: 1, last_candle_key: m5Key }
-  ]);
-  // A 5m candle with no local record is skipped without KV writes.
+  assert.deepEqual([result.results[m5Key].trust.prophet, result.results[m5Key].trust.gmi], [true, true]);
+  // The H1 identities' hashes on a 5m record are not the 5m identities.
+  for (const engine of ["prophet", "gmi"]) {
+    const k = "localcalc-observed:" + m5Key + ":" + engine;
+    const rec = JSON.parse(await env.WEBHOOK_BUFFER.get(k));
+    rec.provenance = frozenProvenance(engine, "60");
+    await env.WEBHOOK_BUFFER.put(k, JSON.stringify(rec));
+  }
+  const again = await reconcileLocalComputation(env, m5Key);
+  assert.deepEqual([again.trust.prophet, again.trust.gmi], [false, false]);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + m5Key + ":prophet"), null);
   const empty = result.m5_candle_keys.find((key) => key !== m5Key);
   assert.deepEqual(result.results[empty], { comparisons: {}, trust: {} });
+  assert.equal(counts(env).comparisons, 0);
 });
 
 test("reconcile never deletes a trusted copy just because its observed record is not visible yet", async () => {
@@ -263,15 +247,9 @@ test("H4/D1 sweep keys come from the cached native bars (22:00-anchored), newest
   assert.deepEqual(await closedHtfCandleKeys({}, now), [], "no cache: no keys, never guessed");
 });
 
-test("a candle whose local input bar differs never enters the trusted lane; the republished final bar does", async () => {
-  const env = { DB: d1(), WEBHOOK_BUFFER: kv(), PARITY_PROMOTE_AFTER: "1" };
-  const base = 1793750400000;
-  const approvedKey = `OANDA:XAUUSD:60:${base - 3600000}`;
-  await seedCandle(env, approvedKey, "60", { trusted: true });
-  await reconcileLocalComputation(env, approvedKey);
-
-  // The local record of the next candle was built on a provisional bar (close and volume differ).
-  const key = `OANDA:XAUUSD:60:${base}`;
+test("S2: with no comparison, a record built on a provisional bar enters the trusted lane, and its republished final bar replaces it", async () => {
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const key = `OANDA:XAUUSD:60:1793750400000`;
   await seedCandle(env, key, "60", { trusted: true });
   for (const engine of ["prophet", "gmi"]) {
     const rec = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc-observed:" + key + ":" + engine));
@@ -279,60 +257,29 @@ test("a candle whose local input bar differs never enters the trusted lane; the 
     await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":" + engine, JSON.stringify(rec));
   }
   const first = await reconcileLocalComputation(env, key);
-  assert.equal(first.comparisons.prophet.result, "input_mismatch");
-  assert.deepEqual([first.trust.prophet, first.trust.gmi, first.trust.mizan], [false, false, false]);
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"), null);
-  const status = env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'prophet'").get().status;
-  assert.equal(status, "approved", "the identity is not revoked for a bar-only difference");
-
-  // Republished on the final bar: it matches, counts, and enters the trusted lane.
+  assert.deepEqual(first.comparisons, {}, "no input-bar check: it needs TradingView's bar");
+  assert.equal(first.trust.prophet, true);
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet")).values.candle.volume, 2103 - 496);
+  // The pull adapter republishes the final bar; the next reconcile copies it.
   await seedCandle(env, key, "60", { trusted: true });
-  const second = await reconcileLocalComputation(env, key);
-  assert.equal(second.comparisons.prophet.result, "match");
-  assert.equal(second.comparisons.prophet.counted, true);
-  assert.equal(second.trust.prophet, true);
-  assert.ok(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"));
+  await reconcileLocalComputation(env, key);
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet")).values.candle.volume, 2103);
 });
 
-test("gmi_hud (Grid Bot comparator) is compared and approved apart in the registry, never trusted (not frozen); it never enters or blocks the decision lane", async () => {
+test("gmi_hud (Grid Bot comparator) is never trusted and never compared; it never enters or blocks the decision lane", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const HUD = { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false, cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true };
   const hudRecord = { engine: "gmi_hud", timeframe: "60", provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: HUD } } };
-  const seedHud = async (key, webhook) => {
-    await seedCandle(env, key, "60", { trusted: true });
-    if (webhook) await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify(webhook));
-    await registerIdentity(env.DB, identityOf(hudRecord));
-    await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
-  };
-  const base = 1793750400000;
-  // Without the candidate alert there is nothing to compare against.
-  await seedHud(`OANDA:XAUUSD:60:${base}`, null);
-  const none = await reconcileLocalComputation(env, `OANDA:XAUUSD:60:${base}`);
-  assert.equal(none.comparisons.gmi_hud.result, "not_comparable");
-  assert.equal(none.trust.gmi_hud, false);
-
-  for (let i = 23; i >= 0; i -= 1) {
-    const key = `OANDA:XAUUSD:60:${base - i * 3600000}`;
-    await seedHud(key, { ...HUD });
-    await reconcileLocalComputation(env, key);
-  }
-  const key = `OANDA:XAUUSD:60:${base}`;
-  const after = await reconcileLocalComputation(env, key);
-  const hudStatus = () => env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'gmi_hud'").get().status;
-  assert.equal(hudStatus(), "approved", "24 matching candles approve the HUD identity in the registry");
-  assert.equal(after.trust.gmi_hud, false, "gmi_hud is not in the frozen table");
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud"), null);
-
-  // A Grid Bot mismatch revokes gmi_hud only in the registry: the trusted gmi identity and its copy stay.
-  const next = `OANDA:XAUUSD:60:${base + 3600000}`;
-  await seedHud(next, { ...HUD, deploy_status: 2 });
-  const out = await reconcileLocalComputation(env, next);
-  assert.equal(out.comparisons.gmi_hud.result, "mismatch");
-  assert.equal(hudStatus(), "revoked");
+  const key = `OANDA:XAUUSD:60:1793750400000`;
+  await seedCandle(env, key, "60", { trusted: true });
+  await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify(HUD));
+  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
+  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi_hud", JSON.stringify({ ...hudRecord, trust_status: "approved_by_parity" }));
+  const out = await reconcileLocalComputation(env, key);
   assert.equal(out.trust.gmi_hud, false);
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + next + ":gmi_hud"), null);
-  assert.equal(out.trust.gmi, true);
-  assert.equal(out.trust.prophet, true);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud"), null, "a stale HUD copy is removed");
+  assert.deepEqual([out.trust.prophet, out.trust.gmi], [true, true]);
+  assert.equal(counts(env).comparisons, 0);
 });
 
 test("decisionLocalRecords: the approved copy where it exists, else the observed record labelled not_parity_approved", async () => {
@@ -347,18 +294,38 @@ test("decisionLocalRecords: the approved copy where it exists, else the observed
   assert.deepEqual(await decisionLocalRecords({}, key), []);
 });
 
-test("a record built on the MT5 fallback feed neither earns nor costs parity trust", async () => {
+test("a record built on the MT5 fallback feed keeps its trust (frozen identity) and is compared with nothing", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const candleKey = "OANDA:XAUUSD:60:1793750400000";
-  await seedCandle(env, candleKey);
+  await seedCandle(env, candleKey, "60", { trusted: true });
   for (const engine of ["prophet", "gmi"]) {
     const k = "localcalc-observed:" + candleKey + ":" + engine;
     await env.WEBHOOK_BUFFER.put(k, JSON.stringify({ ...JSON.parse(await env.WEBHOOK_BUFFER.get(k)), feed: "mt5_fallback" }));
   }
   const r = await reconcileLocalComputation(env, candleKey);
-  assert.equal(r.trust.prophet, false);
-  assert.deepEqual([r.comparisons.prophet.result, r.comparisons.gmi.result], ["fallback_skipped", "fallback_skipped"]);
-  const { n } = await env.DB.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").first();
-  assert.equal(Number(n), 0, "no comparison recorded");
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
+  assert.equal(r.trust.prophet, true, "as before S2: a fallback record of a trusted identity enters the lane");
+  assert.deepEqual(r.comparisons, {});
+  assert.equal(counts(env).comparisons, 0, "no comparison recorded");
+  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet")).feed, "mt5_fallback");
+});
+
+test("S2 ruling 1: an input-mismatch candle on a native bar enters the lane and its bars read verified; a fallback candle enters the lane but its bars do not (the 15m cap stays)", async () => {
+  const { barsVerified } = await import("../src/hud-store.mjs");
+  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  const native = "OANDA:XAUUSD:15:1793750400000";
+  const fallback = "OANDA:XAUUSD:15:1793751300000";
+  for (const [key, feed] of [[native, null], [fallback, "mt5_fallback"]]) {
+    await seedCandle(env, key, "15", { trusted: true });
+    for (const engine of ["prophet", "gmi"]) {
+      const k = "localcalc-observed:" + key + ":" + engine;
+      const rec = JSON.parse(await env.WEBHOOK_BUFFER.get(k));
+      rec.values.candle = { ...rec.values.candle, c: rec.values.candle.c + 0.33 }; // differs from the webhook bar
+      if (feed) rec.feed = feed;
+      await env.WEBHOOK_BUFFER.put(k, JSON.stringify(rec));
+    }
+    const r = await reconcileLocalComputation(env, key);
+    assert.deepEqual([r.trust.prophet, r.trust.gmi], [true, true], key);
+  }
+  assert.equal(await barsVerified(env, native), true, "native bar: verified, the 0.4 cap lifts for bar formulas");
+  assert.equal(await barsVerified(env, fallback), false, "MT5 fallback bar: not verified, the 0.4 cap stays");
 });

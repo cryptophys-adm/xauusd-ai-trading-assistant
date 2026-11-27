@@ -210,6 +210,7 @@ function asText(value: unknown): string {
 }
 
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
+import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
@@ -3180,7 +3181,10 @@ export default {
           local_calculation_contract: "cryptophys.local-calculation.v1",
           d1_analysis_runs: true,
           event_queue: Boolean(env.XAUUSD_EVENTS),
-          provenance_mode: "autonomous_parity_registry",
+          // Parity removal S2: trust is the frozen identity table (src/trusted-identities.mjs); the registry is
+          // kept read-only (no comparison writes it) until S6.
+          provenance_mode: "frozen_identity_registry",
+          trusted_identities: TRUSTED_IDENTITIES.length,
           parity_registry: PARITY_REGISTRY_VERSION,
           parity_policy: policyFromEnv(env as unknown as Record<string, unknown>),
           registry_status_counts: Object.fromEntries((counts.results || []).map(row => [row.status, Number(row.n)]))

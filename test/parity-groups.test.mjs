@@ -43,23 +43,17 @@ function kv() {
 
 test.beforeEach(() => resetSchemaCacheForTests());
 
-test("B7-1 parity bookkeeping is byte-identical to main for today's identities: sweep output, registry, comparisons and the parity view; only trust moved to the frozen table", async () => {
+test("B7-1 S2: the parity scenario runs through the sweep and compares nothing: no comparison, no promotion, no trusted copy for its synthetic identities, no one-shot marker", async () => {
   const now = await runParityScenario();
   const main = fixture("parity-b7-main.json");
-  // B11a adds the adoption rows' prune count to the sweep result (0 here); everything else is main's byte for byte.
+  assert.ok(main.comparisons.length > 0 && main.lane.length > 0, "before parity removal the scenario compared, promoted and filled the lane");
+  assert.deepEqual(now.comparisons, []);
+  assert.deepEqual(now.lane, []);
+  assert.ok(now.registry.length >= 8 && now.registry.every((r) => r.status === "candidate" && r.consecutive_matches === 0), "only the ingest's identity rows, never promoted");
+  assert.ok(now.reconciles.every(([, r]) => Object.keys(r.comparisons).length === 0 && !("groups" in r)), "no engine or group comparison");
+  assert.ok(now.reconciles.every(([, r]) => Object.values(r.trust).every((t) => t === false)), "synthetic identities are never trusted");
+  assert.deepEqual(now.signal_cache, [], "the reclassification and approved_at repair no longer run");
   assert.equal(now.sweep?.adopt_pruned, 0);
-  delete now.sweep.adopt_pruned;
-  // Parity removal S1 (owner 2026-11-26): trust is the frozen table, so the scenario's synthetic identities
-  // are never trusted however the registry approves them. Only the trust flags and the trusted lane differ.
-  const trusts = [];
-  const stripTrust = (o) => JSON.parse(JSON.stringify(o, (k, v) => (k === "trust" ? (trusts.push(v), undefined) : v)));
-  const bookkeeping = (o) => { const c = stripTrust(o); delete c.lane; return JSON.stringify(c); };
-  assert.equal(bookkeeping(now), bookkeeping(main));
-  assert.ok(trusts.length > 0 && trusts.slice(0, trusts.length / 2).every((t) => Object.values(t).every((x) => x === false)), "every trust flag of the scenario is false now");
-  assert.deepEqual(now.lane, [], "nothing enters the trusted lane for a synthetic identity");
-  assert.ok(main.lane.length > 0, "on main the registry's approval put them in it");
-  assert.ok(now.registry.length >= 8 && now.view.registry.length === now.registry.length, "the scenario covers prophet, gmi, gmi_hud and Mizan on 1H and 15m");
-  assert.ok(now.reconciles.every(([, r]) => !("groups" in r)), "no group path ran");
 });
 
 test("B7-2 compareWithWebhooks without the new options deep-equals main's", () => {
@@ -182,59 +176,26 @@ async function seed(env, key, hook, local = {}) {
 }
 const row = async (env, engine) => env.DB.prepare("SELECT status, consecutive_matches, total_matches, total_mismatches, total_incomplete FROM engine_parity_registry WHERE engine = ?").bind(engine).first();
 
-test("B7-8 each group earns its own 24-candle approval in the registry, and one bad field revokes only that group; no group is trusted (S1: the frozen table)", async () => {
-  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
-  const base = 1793750400000;
-  const at = (i) => `OANDA:XAUUSD:60:${base + i * 3600000}`;
-  for (let i = 0; i < 24; i += 1) {
-    await seed(env, at(i), {});
-    const r = await reconcileLocalComputation(env, at(i), { groups: TEST_GROUPS });
-    assert.equal(r.groups.comparisons.grid_core.result, "match");
-    assert.equal(r.groups.trust.grid_core, false, "a group identity is never in the frozen table");
-    assert.equal((await row(env, "grid_core")).status, i === 23 ? "approved" : "candidate", "approved in the registry at the 24th match, not before");
+test("B7-8 S2: a declared group is compared with nothing, gets no registry row and no trusted copy; a fallback record neither", async () => {
+  for (const feed of [undefined, "mt5_fallback"]) {
+    resetSchemaCacheForTests();
+    const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
+    const key = `OANDA:XAUUSD:60:1793750400000`;
+    await seed(env, key, {});
+    if (feed) {
+      const k = "localcalc-observed:" + key + ":gmi_hud";
+      await env.WEBHOOK_BUFFER.put(k, JSON.stringify({ ...JSON.parse(await env.WEBHOOK_BUFFER.get(k)), feed }));
+    }
+    const r = await reconcileLocalComputation(env, key, { groups: TEST_GROUPS });
+    assert.deepEqual(r.comparisons, {}, String(feed));
+    assert.equal(r.trust.gmi_hud, false);
+    assert.equal(r.groups, undefined);
+    for (const g of ["grid_core", "grid_flags", "grid_witness"]) {
+      assert.equal(await row(env, g), null, g);
+      assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + g), null, g);
+    }
+    assert.equal(await isTrusted(env.DB, groupIdentityOf(gmiHudRecord(), "grid_witness", TEST_GROUPS)), false);
   }
-  for (const g of ["grid_core", "grid_flags", "grid_witness"]) assert.equal((await row(env, g)).status, "approved", g);
-  assert.equal((await row(env, "gmi_hud")).status, "approved");
-
-  // grid_viable differs: grid_flags (and the whole gmi_hud identity, as today) are revoked; grid_core stays.
-  await seed(env, at(24), { grid_viable: false });
-  const out = await reconcileLocalComputation(env, at(24), { groups: TEST_GROUPS });
-  assert.equal(out.comparisons.gmi_hud.result, "mismatch");
-  assert.equal(out.trust.gmi_hud, false);
-  assert.deepEqual([out.groups.comparisons.grid_core.result, out.groups.comparisons.grid_flags.result, out.groups.comparisons.grid_witness.result], ["match", "mismatch", "match"]);
-  assert.deepEqual(out.groups.trust, { grid_core: false, grid_flags: false, grid_witness: false });
-  assert.equal((await row(env, "grid_flags")).status, "revoked");
-  assert.equal((await row(env, "grid_core")).status, "approved");
-  assert.equal((await row(env, "grid_core")).consecutive_matches, 25);
-
-  // Nothing enters the trusted lane for a group, and approvedComparable reads none.
-  for (const g of ["grid_core", "grid_flags", "gmi_hud"]) assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + at(24) + ":" + g), null, g);
-  assert.equal(await approvedComparable(env, at(24), { groups: TEST_GROUPS }), null);
-  assert.equal(await approvedComparable(env, at(24)), null, "the live registry reads no group key");
-});
-
-test("B7-9 a witness-like group with null on both sides records incomplete: neither advances nor resets its streak", async () => {
-  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
-  const key = (i) => `OANDA:XAUUSD:60:${1793750400000 + i * 3600000}`;
-  for (let i = 0; i < 3; i += 1) { await seed(env, key(i), {}); await reconcileLocalComputation(env, key(i), { groups: TEST_GROUPS }); }
-  await seed(env, key(3), { score: null }, { score: null });
-  const r = await reconcileLocalComputation(env, key(3), { groups: TEST_GROUPS });
-  assert.equal(r.groups.comparisons.grid_witness.result, "incomplete");
-  assert.deepEqual(r.groups.comparisons.grid_witness.null_fields, ["gmi_v12_70_hud:score"]);
-  assert.deepEqual({ ...(await row(env, "grid_witness")) }, { status: "candidate", consecutive_matches: 3, total_matches: 3, total_mismatches: 0, total_incomplete: 1 });
-  assert.equal(r.comparisons.gmi_hud.result, "match", "the engine identity does not compare the group's extra field");
-  assert.equal(await isTrusted(env.DB, groupIdentityOf(gmiHudRecord(), "grid_witness", TEST_GROUPS)), false);
-});
-
-test("B7-10 an MT5 fallback record skips the group comparisons too", async () => {
-  const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
-  const key = "OANDA:XAUUSD:60:1793750400000";
-  await seed(env, key, {});
-  const k = "localcalc-observed:" + key + ":gmi_hud";
-  await env.WEBHOOK_BUFFER.put(k, JSON.stringify({ ...JSON.parse(await env.WEBHOOK_BUFFER.get(k)), feed: "mt5_fallback" }));
-  const r = await reconcileLocalComputation(env, key, { groups: TEST_GROUPS });
-  assert.equal(r.groups.comparisons.grid_core.result, "fallback_skipped");
-  assert.equal(await row(env, "grid_core"), null, "nothing registered or counted");
 });
 
 test("B7-11 validateHudSnapshot drops an unknown HUD id and keeps the rest of the snapshot", async () => {

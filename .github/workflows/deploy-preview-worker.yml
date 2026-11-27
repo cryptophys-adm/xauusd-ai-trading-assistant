@@ -143,7 +143,7 @@ jobs:
           import assert from "node:assert/strict";
           import { pathToFileURL } from "node:url";
           // Parity removal S1 (owner 2026-11-26): trust is the frozen identity table, so the local records
-          // below carry the frozen identities' hashes; the registry still records and promotes them.
+          // below carry the frozen identities' hashes (since S2 nothing compares or promotes them in the registry).
           const { TRUSTED_IDENTITIES } = await import(pathToFileURL(process.cwd() + "/src/trusted-identities.mjs").href);
           const frozenH1 = (engine) => TRUSTED_IDENTITIES.find((t) => t.engine === engine);
           const frozenFor = (engine, tf) => frozenH1(engine + ({ M5: "_m5", "5": "_m5", "15": "_m15", "60": "" })[tf]);
@@ -359,8 +359,8 @@ jobs:
           assert.equal(hudResult.analysis_status, "stored_only", "a *_hud webhook must not start the AI chain");
 
           // local_computation lane: outputs that reproduce the webhook values on the same raw bar.
-          // With PARITY_PROMOTE_AFTER=1 a single matching candle still promotes Prophet and GMI in the registry
-          // (bookkeeping since S1); trust comes from the frozen table, whose identities (per chart) these records carry.
+          // Trust comes from the frozen table (S1), whose identities (per chart) these records carry; since S2
+          // nothing is compared with the webhooks and the registry is no longer written.
           // Mizan is trusted because both declare the same Mizan dependency.
           const frozenMizan = frozenH1("prophet").mizan;
           const mizanDependency = { mizan: { source_hash: frozenMizan.source_hash, implementation_hash: frozenMizan.implementation_hash } };
@@ -439,12 +439,13 @@ jobs:
               const candidate = await decisionResponse.json();
               if (candidate.status === "ok" && candidate.synthesis?.evidence_fusion) latestDecision = candidate.synthesis;
             }
-            if ((queueReady?.registry_status_counts?.approved ?? 0) >= 2 && latestDecision) break;
+            if (queueReady?.provenance_mode === "frozen_identity_registry" && latestDecision) break;
             await new Promise(resolve => setTimeout(resolve, 2000));
           }
 
-          assert.ok((queueReady?.registry_status_counts?.approved ?? 0) >= 2,
-            "Prophet and GMI identities must be promoted only after Queue-driven parity: " + JSON.stringify(queueReady));
+          // Parity removal S2: trust is the frozen table; nothing promotes in the registry any more.
+          assert.equal(queueReady?.provenance_mode, "frozen_identity_registry", "readiness reports the frozen identity table: " + JSON.stringify(queueReady));
+          assert.equal(queueReady?.trusted_identities, 8, "the eight frozen identities");
           assert.ok(latestDecision, "Queue consumer must persist an asynchronous analysis synthesis");
           // Quorum mode (owner decision 2026-11-09): missing news is noted, not blocking; only a
           // missing or stale closed candle stops the decision.
@@ -650,8 +651,8 @@ jobs:
           // H1 HUD snapshot verification on a real H1 candle (local-primary chain). A HUD
           // snapshot (the preview twin of the RPC submitHud) is stored first, then the
           // calibration webhooks and the local records of the previous closed hour; they carry the
-          // frozen H1 identities (trusted since S1; the registry still promotes them with
-          // PARITY_PROMOTE_AFTER=1), and the H1 HUD readings are then verified against the trusted local record. The per-H1 HUD agents are
+          // frozen H1 identities (trusted since S1, no comparison since S2), and the H1 HUD readings are then
+          // verified against the trusted local record. The per-H1 HUD agents are
           // retired while the War Room runs (owner decision 2026-11-05).
           const hourOpen = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000;
           const key60 = symbol + ":60:" + hourOpen;
@@ -711,7 +712,7 @@ jobs:
             authentication: "PASS",
             webhook_ingestion_ack_first: "PASS",
             local_calculation_queue_ack: "PASS",
-            asynchronous_parity_promotion: "PASS",
+            frozen_identity_trust: "PASS",
             missing_evidence_fail_closed: "PASS",
             duplicate_queue_idempotency: "PASS",
             old_h1_bus_retired: "PASS",

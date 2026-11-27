@@ -1,24 +1,17 @@
-// Scheduled parity reconciliation for the local_computation lane.
+// The trusted local_computation lane, refreshed per candle.
 //
-// The per-event reconcile tasks (webhook_reconcile / local_calculation_reconcile)
-// run within seconds of the evidence arriving. Because the evidence lives in KV
-// (eventually consistent, and a colo that recently read a missing key can serve
-// the cached miss for ~60s), those tasks can all observe a half-written lane and
-// skip — and no later task ever revisits that candle, so the parity comparison is
-// lost permanently (observed 2026-11-04 for the 23:00 and 00:00 UTC candles).
+// The per-event reconcile tasks (webhook_reconcile / local_calculation_reconcile) run within seconds of
+// the evidence arriving; KV is eventually consistent, so a cron sweep re-runs the same reconcile for the
+// recently closed candles after KV has settled. Re-running a candle is a no-op.
 //
-// This module provides an idempotent sweep: a cron re-runs the same
-// reconcileLocalComputation for the most recently closed H1 candles, after KV
-// has settled. recordComparison dedupes per (identity, candle), so re-running a
-// reconciled candle is a no-op.
+// Parity removal S2 (2026-11-26/27): the reconcile no longer compares anything with TradingView and
+// writes nothing to the parity registry. Trust is the frozen table (src/trusted-identities.mjs, S1).
+// The module keeps its name, the decision records' reader and the backfill until S6.
 
-import { LOCAL_ENGINES, HUD_ENGINES, INGEST_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
+import { LOCAL_ENGINES, HUD_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
 import {
-  identityOf, compareWithWebhooks, requiredSourcesFor, ensureSchema,
-  recordComparison, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt,
-  PARITY_GROUPS, groupsFor, groupIdentityOf, groupCompareOptions, registerIdentity
+  identityOf, ensureSchema, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt
 } from "./parity-registry.mjs";
-import { readIntrabars, recheckMismatchIntrabars } from "./parity-intrabars.mjs";
 
 export const OBSERVED_PREFIX = "localcalc-observed:";
 const TRUSTED_PREFIX = "localcalc:";
@@ -65,124 +58,37 @@ export async function decisionLocalRecords(env, candleKey) {
 }
 
 /**
- * Autonomous provenance reconciliation for one candle. Compares every observed
- * local engine output with TradingView's webhook outputs for the same candle,
- * records the result in the parity registry (promotion/revocation is a fixed
- * rule), then places into the trusted local_computation lane exactly those
- * observed records whose identity is currently approved.
+ * The trusted local_computation lane for one candle (parity removal S2, owner 2026-11-26: "Kita akan remove
+ * parity karena efeknya kecil dan sudah terbukti"; orchestrator PR1 plan). Nothing is compared with TradingView
+ * and nothing is written to the parity registry any more: each observed record of a decision engine whose
+ * identity is in the frozen table (src/trusted-identities.mjs) gets its trusted copy
+ * (localcalc:<candle>:<engine>, trust_status approved_by_parity); a visible record of an identity outside it
+ * loses its copy. HUD and group identities (gmi_hud, B7) are never trusted, so they never get one. The return
+ * keeps its shape ({ comparisons, trust }) for the callers; `comparisons` is always empty.
  */
-export async function reconcileLocalComputation(env, candleKey, { groups = PARITY_GROUPS } = {}) {
-  await ensureSchema(env.DB);
-  const policy = policyFromEnv(env);
+export async function reconcileLocalComputation(env, candleKey) {
   const observed = {};
-  await Promise.all(INGEST_ENGINES.map(async engine => {
+  await Promise.all([...LOCAL_ENGINES, ...HUD_ENGINES].map(async engine => {
     observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
   }));
-  // Nothing observed for this candle (for example a 5m candle with no local 5m
-  // producer yet): nothing to compare and no trusted record can exist.
-  if (!INGEST_ENGINES.some(engine => observed[engine])) return { comparisons: {}, trust: {} };
-  const comparisons = {};
-  // HUD identities (gmi_hud) are compared like the engines but never vouch for the decision lane.
-  for (const engine of ["prophet", "gmi", ...HUD_ENGINES]) {
-    const record = observed[engine];
-    const id = record ? identityOf(record) : null;
-    if (!record || !id) continue;
-    // Built on the broker's bars while TradingView was down (MT5 fallback, docs/RFC_MT5_FALLBACK.md):
-    // TradingView's output for this candle is computed on other bars, so the comparison neither earns
-    // nor costs an approval. The implementation is unchanged, so its trust stands.
-    if (record.feed === "mt5_fallback") { comparisons[engine] = { result: "fallback_skipped", counted: false, mismatches: [], missing: [] }; continue; }
-    const webhooks = {};
-    for (const source of requiredSourcesFor(engine)) {
-      const payload = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
-      if (payload) webhooks[source] = payload;
-    }
-    const comparison = compareWithWebhooks(record, webhooks, policy);
-    // A GMI mismatch keeps the intrabars its footprint read, as cached now (src/parity-intrabars.mjs);
-    // a later sweep reads them again and records whether any changed.
-    if (comparison.status === "mismatch" && String(engine).startsWith("gmi")) {
-      const intrabars = await readIntrabars(env, candleKey);
-      if (intrabars) comparison.intrabars = intrabars;
-    }
-    const outcome = await recordComparison(env.DB, id, candleKey, comparison, policy);
-    comparisons[engine] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
-  }
-  // Field groups (B7): each group a record carries is compared on its own fields only, under its own
-  // identity (groupIdentityOf), so it earns or loses trust apart from the engine and from the other
-  // groups. Only for an observed record of an engine that declares groups; none does today.
-  const groupRuns = [];
-  for (const engine of INGEST_ENGINES) {
-    const record = observed[engine];
-    if (!record) continue;
-    for (const groupId of groupsFor(engine, groups)) {
-      const gid = groupIdentityOf(record, groupId, groups);
-      if (gid) groupRuns.push({ engine, groupId, gid, record });
-    }
-  }
-  const groupComparisons = {};
-  const hookCache = {};
-  for (const { groupId, gid, record } of groupRuns) {
-    if (record.feed === "mt5_fallback") { groupComparisons[groupId] = { result: "fallback_skipped", counted: false, mismatches: [], missing: [] }; continue; }
-    const options = groupCompareOptions(groupId, groups);
-    const webhooks = {};
-    for (const source of Object.keys(options.fieldMap)) {
-      if (!(source in hookCache)) hookCache[source] = await readJsonKV(env.WEBHOOK_BUFFER, "candle:" + candleKey + ":" + source);
-      if (hookCache[source]) webhooks[source] = hookCache[source];
-    }
-    const comparison = compareWithWebhooks(record, webhooks, policy, options);
-    // The group's registry row exists once it has something to count (ingest registers only engines).
-    if (["match", "mismatch", "incomplete", "input_mismatch"].includes(comparison.status)) await registerIdentity(env.DB, gid);
-    const outcome = await recordComparison(env.DB, gid, candleKey, comparison, policy);
-    groupComparisons[groupId] = { result: outcome.result ?? comparison.status, counted: outcome.counted, mismatches: comparison.mismatches ?? [], missing: comparison.missing ?? [], ...(comparison.null_fields ? { null_fields: comparison.null_fields } : {}), ...(outcome.escalated ? { escalated: outcome.escalated } : {}) };
-  }
-  // A candle whose local input bar differs from TradingView's final bar never enters the trusted
-  // lane, whatever the identity's status: the H1 chain then reads the TradingView evidence for it,
-  // until the pull adapter republishes the candle on the final bar and it matches.
-  const inputDiffers = ["prophet", "gmi"].some((engine) => comparisons[engine]?.result === "input_mismatch");
+  if (![...LOCAL_ENGINES, ...HUD_ENGINES].some(engine => observed[engine])) return { comparisons: {}, trust: {} };
   const trust = {};
   for (const engine of LOCAL_ENGINES) {
     const record = observed[engine];
     const id = record ? identityOf(record) : null;
-    trust[engine] = id && !inputDiffers ? await isTrusted(env.DB, id) : false;
+    trust[engine] = id ? await isTrusted(env.DB, id) : false;
     const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
-    // A record that is not visible yet (KV is eventually consistent across locations) is
-    // left alone: deleting its trusted copy here would undo a reconcile that saw it. Only a
-    // visible record whose identity is not (or no longer) approved loses its trusted copy.
+    // A record that is not visible yet (KV is eventually consistent across locations) is left alone:
+    // deleting its trusted copy here would undo a reconcile that saw it.
     if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
     else if (record) await env.WEBHOOK_BUFFER.delete(trustedKey);
   }
-  // A HUD identity's trusted copy (localcalc:<candle>:gmi_hud) only marks HUD fields as verified
-  // (hud-store.mjs); the decision lane reads LOCAL_ENGINES and never sees it.
   for (const engine of HUD_ENGINES) {
-    const record = observed[engine];
-    const id = record ? identityOf(record) : null;
-    if (!record) continue;
-    const ownInputDiffers = comparisons[engine]?.result === "input_mismatch";
-    trust[engine] = id && !inputDiffers && !ownInputDiffers ? await isTrusted(env.DB, id) : false;
-    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + engine;
-    if (trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
-    else await env.WEBHOOK_BUFFER.delete(trustedKey);
+    if (!observed[engine]) continue;
+    trust[engine] = false;
+    await env.WEBHOOK_BUFFER.delete(TRUSTED_PREFIX + candleKey + ":" + engine);
   }
-  if (!groupRuns.length) return { comparisons, trust };
-  // A trusted group's copy (localcalc:<candle>:<group id>) carries only that group's fields, so
-  // approvedComparable (hud-store.mjs) reads them as verified even while another group of the same
-  // source, or the engine itself, is revoked. Never a LOCAL_ENGINES key: the decision lane never sees it.
-  const groupTrust = {};
-  for (const { groupId, gid, record } of groupRuns) {
-    const ownInputDiffers = groupComparisons[groupId]?.result === "input_mismatch";
-    groupTrust[groupId] = !inputDiffers && !ownInputDiffers ? await isTrusted(env.DB, gid) : false;
-    const trustedKey = TRUSTED_PREFIX + candleKey + ":" + groupId;
-    if (groupTrust[groupId]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify(groupRecord(record, groupId, groups)), LOCAL_TTL);
-    else await env.WEBHOOK_BUFFER.delete(trustedKey);
-  }
-  return { comparisons, trust, groups: { comparisons: groupComparisons, trust: groupTrust } };
-}
-
-/** The trusted copy of one group: the record with only the group's own comparable fields. */
-function groupRecord(record, groupId, groups) {
-  const g = groups[groupId];
-  const local = record?.values?.comparable?.[g.source];
-  const fields = local && typeof local === "object" ? Object.fromEntries(Object.keys(g.fields).filter((f) => f in local).map((f) => [f, local[f]])) : {};
-  return { ...record, group: groupId, values: { candle: record?.values?.candle, comparable: { [g.source]: fields } }, trust_status: "approved_by_parity" };
+  return { comparisons: {}, trust };
 }
 
 /**
@@ -311,12 +217,8 @@ export async function pruneAdoptComparisons(env, { now = Date.now() } = {}) {
 }
 
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
-  // Before this sweep compares anything: restore identities revoked only by input-bar differences
-  // under the old rule, so this same sweep places their records into the trusted lane again.
-  // The approved_at repair runs first, so the reclassification (if its marker is ever removed)
-  // reads real approval times.
-  await repairApprovedAtOnce(env, now);
-  await reclassifyOnce(env, now);
+  // Parity removal S2: no comparison, no registry write; the sweep only refreshes the trusted lane of the
+  // recently closed candles from the frozen table (and prunes the adoption rows, B11 Q5, until S6).
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a
   // reconcile task, so the sweep is what pairs them with the local 5m records
@@ -336,10 +238,8 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  // The intrabars of recent GMI mismatches, read again once (diagnostics only; never changes a result).
-  const intrabarRecheck = await recheckMismatchIntrabars(env, { now });
   const adoptPruned = await pruneAdoptComparisons(env, { now });
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, intrabar_recheck: intrabarRecheck, adopt_pruned: adoptPruned };
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, adopt_pruned: adoptPruned };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */

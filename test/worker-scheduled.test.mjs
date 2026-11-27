@@ -176,7 +176,7 @@ async function sweepLastClosedCandle(env) {
   return { candleKey, output };
 }
 
-test("parity sweep cron: approves the candle's local records and the backfill runs its analysis", async () => {
+test("parity sweep cron (S2): compares nothing, writes no registry row, and the backfill runs the candle's analysis", async () => {
   const { env } = await workerEnv();
   const { candleKey, output } = await sweepLastClosedCandle(env);
   assert.deepEqual(output.lines.error.filter(l => /Scheduled parity sweep failed|backfill_failed|backfill_candle_failed|ReferenceError|TypeError/.test(l)), [], "the cron must not fail");
@@ -186,9 +186,12 @@ test("parity sweep cron: approves the candle's local records and the backfill ru
   // Call for Councils P1: the hourly suggestion flags ran (CFC_MODE defaults to "suggest") and did not fail.
   assert.ok(!output.lines.error.some(l => l.startsWith("cfc_triggers_failed")) && !output.lines.log.some(l => l.startsWith("cfc_triggers {\"status\":\"failed\"")), output.lines.log.filter(l => l.startsWith("cfc")).join("\n"));
   assert.ok(env.DB.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cfc_suggestions'").get(), "the hourly sweep ran the suggestion flags");
-  const registry = Object.fromEntries(env.DB.db.prepare("SELECT engine, status FROM engine_parity_registry").all().map(r => [r.engine, r.status]));
-  assert.equal(registry.prophet, "approved");
-  assert.equal(registry.gmi, "approved");
+  // Parity removal S2: the sweep refreshes the trusted lane from the frozen table; nothing is compared.
+  const compared = env.DB.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'engine_parity_comparisons'").get()
+    ? env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").get().n : 0;
+  assert.equal(compared, 0, "no comparison row");
+  assert.ok(!env.DB.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'engine_parity_registry'").get()
+    || env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_registry WHERE status = 'approved'").get().n === 0, "no promotion");
   const run = env.DB.db.prepare("SELECT status, error_code FROM analysis_runs WHERE candle_key = ?").get(candleKey);
   assert.ok(run, "the backfill must start the candle's analysis");
   // Quorum mode (owner decision 2026-11-09): missing news no longer degrades the bar, so its

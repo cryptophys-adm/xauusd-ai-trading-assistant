@@ -71,7 +71,7 @@ jobs:
           }
           const readyResponse = await fetch("https://ai.cryptophys.work/ready", { signal: AbortSignal.timeout(15000) });
           const ready = await readyResponse.json();
-          if (!readyResponse.ok || ready.status !== "ready" || ready.d1_analysis_runs !== true || ready.provenance_mode !== "autonomous_parity_registry") {
+          if (!readyResponse.ok || ready.status !== "ready" || ready.d1_analysis_runs !== true || ready.provenance_mode !== "frozen_identity_registry" || ready.trusted_identities !== 8) {
             throw new Error(`Readiness endpoint failed: HTTP ${readyResponse.status} ${JSON.stringify(ready)}`);
           }
           for (const [name, configured] of Object.entries(body.bindings ?? {})) {
