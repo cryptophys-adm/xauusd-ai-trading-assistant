@@ -466,7 +466,9 @@
           "server": null,
           "sealed_to_current_key": false,
           "updated_ms": 1795756015000
-        }
+        },
+        "last_bar_age_ms": null,
+        "content_stale": false
       },
       {
         "bridge_id": "oanda",
@@ -485,7 +487,9 @@
           "server": "OANDA-Demo-1",
           "sealed_to_current_key": false,
           "updated_ms": 1795755585000
-        }
+        },
+        "last_bar_age_ms": null,
+        "content_stale": false
       }
     ]
   },

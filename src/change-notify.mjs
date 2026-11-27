@@ -44,6 +44,8 @@ export const TOLD_ELSEWHERE = Object.freeze([
   "profile_downgrade_vetoed", "profile_upgrade_refused", "mode_changed", "spec_changed", "position_closed", "probation_set",
   "probation_reverted", "lens_weight_floor", "limit_placed", "limit_moved", "limit_cancelled", "limit_filled", "limit_fail_closed", "limit_fault_cleared",
   "pm_stop_loosened", "pm_tp_moved", "autonomous_recovery",
+  // Feed content staleness (src/feed-stale.mjs): told once per episode by the relay.
+  "feed_stale",
   // MS2: the mode probation passed (src/mode-selector.mjs tells it in one line; its failure is a mode_changed).
   "mode_probation_passed",
   // FS1: an owner feature-switch change (src/feature-switch-store.mjs tells it in one line next to its audit row).

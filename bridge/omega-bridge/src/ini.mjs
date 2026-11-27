@@ -295,3 +295,16 @@ export function ensureFeedSettings(iniText) {
   mutateSection(blocks, "Experts", [["AllowLiveTrading", "0"], ["AllowDllImport", "0"]]);
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
 }
+
+/**
+ * 1.8.2 (feed incident 2026-11-27): the feed terminal's credential-free start file. No [Common] section (no login, no
+ * password): the terminal's saved account logs in by itself, and the chart opens with the feed's EA on its gold symbol,
+ * algo trading off. run.sh passes it with /config whenever the login ini holds no password, so a restart (a reboot, a
+ * unit restart, a crash) never drops the feed EA.
+ */
+export function feedStartupIni({ symbol = "XAUUSD", expert = "OmegaFeed" } = {}) {
+  assertNoNewlines(symbol, "symbol");
+  assertNoNewlines(expert, "expert");
+  return ["[Experts]", "Enable=1", "Enabled=1", "AllowLiveTrading=0", "AllowDllImport=0", "Account=0", "Profile=0",
+    "[StartUp]", `Expert=${expert}`, `Symbol=${symbol}`, "Period=M1", ""].join("\n");
+}

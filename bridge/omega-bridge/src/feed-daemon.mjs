@@ -10,12 +10,16 @@
 // is sent until it does), and only when the file changed since the last send that reached the server (its mtime):
 // the file is rewritten once a minute, the sync runs every 15 s, so three of four syncs skip the read. The gold bars
 // keep priority in the 64 KB body: the macro bars are halved first, and a cut body sends the rest on the next syncs.
+// 1.8.2 (feed incident 2026-11-27: after its password was emptied, a restart started the terminal without /config, so
+// without its EA): the daemon keeps a credential-free start file (feedStartupIni: no login, no password; the EA on the
+// feed's symbol, algo trading off) beside the login ini, which run.sh (bridge/omega-bridge/feed-run.sh) passes with
+// /config whenever the login ini holds no password.
 import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
 import { readState, readCorpus, readCorpusMacro, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
-import { applyFeedCredentials, clearCredentials, ensureFeedSettings } from "./ini.mjs";
+import { applyFeedCredentials, clearCredentials, ensureFeedSettings, feedStartupIni } from "./ini.mjs";
 import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
 import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE, writeTerminalIniPreservingOwner } from "./daemon.mjs";
 
@@ -39,6 +43,8 @@ export function resolveFeedConfig(options = {}) {
     stateDir: String(options.stateDir ?? env.OMEGA_STATE_DIR ?? ""),
     omegaFilesDir: mt5FilesDir ? resolveOmegaDir(mt5FilesDir) : "",
     terminalIni: String(options.terminalIni ?? env.TERMINAL_INI ?? ""),
+    // 1.8.2: the credential-free start file; beside the login ini unless FEED_STARTUP_INI names one.
+    startupIni: String(options.startupIni ?? env.FEED_STARTUP_INI ?? ((options.terminalIni ?? env.TERMINAL_INI) ? path.join(path.dirname(String(options.terminalIni ?? env.TERMINAL_INI)), "startup.ini") : "")),
     terminalService: String(options.terminalService ?? env.TERMINAL_SERVICE ?? ""),
     // The gold symbol's name on the feed's server (OANDA: "XAUUSD.sml"); the EA's chart symbol.
     symbol: String(options.symbol ?? env.OMEGA_SYMBOL ?? "XAUUSD"),
@@ -63,6 +69,7 @@ export function feedConfigProblem(c) {
   // Never the executor's terminal, unit, ini, state or files (orchestrator review of #631).
   if (EXECUTOR_UNITS.has(String(c.terminalService).trim().toLowerCase()) || /^omega-bridge(\.service)?$/i.test(String(c.terminalService).trim())) return "TERMINAL_SERVICE is the executor's unit: a feed restarts only its own terminal";
   if (norm(c.terminalIni) === norm(DEFAULT_TERMINAL_INI) || inside(c.terminalIni, EXECUTOR_PREFIX)) return "TERMINAL_INI is the executor's terminal ini: a feed writes only its own";
+  if (!c.startupIni || norm(c.startupIni) === norm(c.terminalIni) || norm(c.startupIni) === norm(DEFAULT_TERMINAL_INI) || inside(c.startupIni, EXECUTOR_PREFIX)) return "FEED_STARTUP_INI must be the feed's own file, not its login ini nor the executor's";
   if (norm(c.stateDir) === norm(DEFAULT_STATE_DIR) || inside(c.stateDir, DEFAULT_STATE_DIR)) return "OMEGA_STATE_DIR is the executor's state dir: a feed keeps its own key and state";
   if (inside(c.omegaFilesDir, EXECUTOR_PREFIX) || inside(c.omegaFilesDir, DEFAULT_MT5_FILES_DIR)) return "MT5_FILES_DIR is inside the executor's terminal: a feed reads only its own terminal's files";
   if (!/^[A-Za-z0-9._#+-]{1,32}$/.test(c.symbol)) return "OMEGA_SYMBOL is invalid";
@@ -139,6 +146,21 @@ export function createFeedDaemon(options = {}) {
 
   async function restartTerminal() { await execFn("systemctl", ["restart", config.terminalService]); }
 
+  /**
+   * 1.8.2: keep the credential-free start file current (written only when it differs), owned like the login ini so the
+   * terminal's user can read it. Returns whether it was written.
+   */
+  function ensureStartupIni() {
+    const want = feedStartupIni({ symbol: config.symbol, expert: config.expert });
+    const cur = fs.existsSync(config.startupIni) ? fs.readFileSync(config.startupIni, "utf8") : null;
+    if (cur === want) return false;
+    writeIni(config.startupIni, want, fs);
+    if (cur === null && fs.existsSync(config.terminalIni) && typeof fs.chownSync === "function") {
+      try { const st = fs.statSync(config.terminalIni); fs.chownSync(config.startupIni, st.uid, st.gid); } catch { /* not root (tests) */ }
+    }
+    return true;
+  }
+
   /** Keep algo trading off in the feed terminal's ini (whatever wrote it). Returns whether it changed. */
   function enforceFeedSettings() {
     if (!fs.existsSync(config.terminalIni)) return false;
@@ -207,6 +229,8 @@ export function createFeedDaemon(options = {}) {
       }
     }
     if (enforceFeedSettings()) log({ level: "warn", event: "feed_algo_trading_forced_off" });
+    try { if (ensureStartupIni()) log({ level: "info", event: "feed_startup_ini_written", path: config.startupIni }); }
+    catch (err) { log({ level: "warn", event: "feed_startup_ini_failed", error: err instanceof Error ? err.message.slice(0, 120) : "write_failed" }); }
     return { ok: true };
   }
 

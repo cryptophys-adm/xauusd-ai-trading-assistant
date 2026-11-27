@@ -39,6 +39,10 @@ export function recoveryLine(row) {
   const d = (typeof row.detail === "string" ? parse(row.detail) : row.detail) || {};
   const directive = String(d.directive || "unknown");
   const reason = String(d.reason || "unknown");
+  // Feed content staleness (src/feed-stale.mjs): said once per episode (the bridge id and the bar age only).
+  if (row.action === "feed_stale") {
+    return [`⚠️ Omega data feed · ${hhmm(Number(row.ms))}`, String(d.message || "A feed is syncing but its bars stopped.").slice(0, 300)].join("\n");
+  }
   // Recovery backoff (src/recovery-hold.mjs): the watchdog stopped restarting; said once, with what to check.
   if (d.status === "held") {
     return [
@@ -66,10 +70,11 @@ export function relayReport(rows) {
   text = text.slice(0, RELAY_TEXT_MAX);
   const n = rows.length;
   const held = rows.some((r) => ((typeof r.detail === "string" ? parse(r.detail) : r.detail) || {}).status === "held");
+  const feedStale = rows.some((r) => r.action === "feed_stale");
   return {
     kind: "xauusd_digest",
     severity: "warning",
-    subject: held ? "EA self-healing held: terminal restarts stopped" : `EA self-healing: ${n} recovery action${n === 1 ? "" : "s"} dispatched`,
+    subject: held ? "EA self-healing held: terminal restarts stopped" : feedStale ? "Omega data feed: syncing but its bars stopped" : `EA self-healing: ${n} recovery action${n === 1 ? "" : "s"} dispatched`,
     ai_status: "deterministic",
     body: {
       telegram_topic: EA_HEARTBEAT_TOPIC,
@@ -102,7 +107,7 @@ export async function relayEaHeartbeat(env, { now = Date.now(), publish = publis
     if (now - (Number(cursor.sent_ms) || 0) < RELAY_MIN_GAP_MS) return { status: "waiting" };
     if (now - (Number(cursor.refused_ms) || 0) < RELAY_RETRY_MS) return { status: "waiting" };
     const rows = (await db.prepare(
-      "SELECT id, ms, detail FROM omega_events WHERE action = 'autonomous_recovery' AND actor = 'agent:cerebrum' AND id > ? ORDER BY id DESC LIMIT ?"
+      "SELECT id, ms, action, detail FROM omega_events WHERE action IN ('autonomous_recovery', 'feed_stale') AND actor = 'agent:cerebrum' AND id > ? ORDER BY id DESC LIMIT ?"
     ).bind(lastId, RELAY_MAX_ITEMS + 1).all()).results || [];
     const maxId = rows.reduce((m, r) => Math.max(m, Number(r.id) || 0), lastId);
     const fresh = rows.filter((r) => now - Number(r.ms) <= RELAY_MAX_AGE_MS).slice(0, RELAY_MAX_ITEMS).reverse();

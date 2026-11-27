@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFeedDaemon, feedConfigProblem, resolveFeedConfig, buildFeedBody } from "../src/feed-daemon.mjs";
-import { applyFeedCredentials, ensureFeedSettings, clearCredentials } from "../src/ini.mjs";
+import { applyFeedCredentials, ensureFeedSettings, clearCredentials, feedStartupIni } from "../src/ini.mjs";
 import { loadOrCreateKeyPair } from "../src/keys.mjs";
 import { buildEnvelope } from "../../../workers/xauusd-omega/public/omega-crypto.js";
 
@@ -60,7 +60,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.equal(calls[0].url, "https://feed.example.invalid/omega/api/bridge/feed-sync");
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.bridge_id, "oanda");
-  assert.equal(body.bridge_version, "1.8.1");
+  assert.equal(body.bridge_version, "1.8.2");
   assert.match(body.kid, /^[0-9a-f]{16}$/);
   assert.deepEqual(Object.keys(body.state).sort(), ["connected", "server", "symbol", "terminal_error"]);
   assert.equal(JSON.stringify(body).includes("balance"), false, "no account amounts leave the VPS");
@@ -224,4 +224,33 @@ test("FD-9. a failed sync leaves the macro file unsent; the 64 KB body keeps the
   const tight = buildFeedBody({ bridgeId: "oanda", kid: "k", publicKeyBase64: "p".repeat(65_000), state: null, corpus: null, corpusMacro: huge });
   assert.ok(Buffer.byteLength(tight, "utf8") <= 65_536);
   assert.equal("corpus_macro" in JSON.parse(tight), false);
+});
+
+test("FD-10 (1.8.2): a credential-free startup.ini beside the login ini, kept current, owned like it; run.sh always passes a /config", async () => {
+  const s = setup();
+  const d = createFeedDaemon({ env: s.env, fetch: async () => okJson({ ok: true, connection: null }), execFile: async () => "", log: () => {} });
+  assert.equal(d.config.startupIni, path.join(path.dirname(s.terminalIni), "startup.ini"));
+  await d.syncOnce();
+  const text = fs.readFileSync(d.config.startupIni, "utf8");
+  assert.equal(text, feedStartupIni({ symbol: "XAUUSD.sml", expert: "OmegaFeed" }));
+  assert.doesNotMatch(text, /\[Common\]|Login=|Password=|Server=/, "no login, no password, no server");
+  assert.match(text, /\[StartUp\]\nExpert=OmegaFeed\nSymbol=XAUUSD\.sml\nPeriod=M1/);
+  assert.match(text, /AllowLiveTrading=0/);
+  assert.equal(fs.statSync(d.config.startupIni).mode & 0o777, 0o600);
+  // Unchanged: not written again.
+  const logs = [];
+  const d2 = createFeedDaemon({ env: s.env, fetch: async () => okJson({ ok: true, connection: null }), execFile: async () => "", log: (o) => logs.push(o) });
+  await d2.syncOnce();
+  assert.equal(logs.some((l) => l.event === "feed_startup_ini_written"), false);
+  // Its own file only: never the login ini, never the executor's.
+  const problem = (over) => feedConfigProblem(resolveFeedConfig({ env: { ...s.env, ...over } }));
+  assert.match(problem({ FEED_STARTUP_INI: s.terminalIni }), /FEED_STARTUP_INI/);
+  assert.match(problem({ FEED_STARTUP_INI: "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini" }), /FEED_STARTUP_INI/);
+  assert.throws(() => feedStartupIni({ symbol: "X\nY" }));
+  // run.sh: always a /config; the login file only while it holds a password.
+  const sh = fs.readFileSync(new URL("../feed-run.sh", import.meta.url), "utf8");
+  assert.match(sh, /grep -Eq '\^Password=\.\+' "\$LOGIN_INI"/);
+  assert.match(sh, /CONFIG="\$STARTUP_INI"/);
+  assert.match(sh, /\/config:\$\(winpath "\$CONFIG"\)/);
+  assert.doesNotMatch(sh, /cat |echo "\$\(/, "never prints a file");
 });

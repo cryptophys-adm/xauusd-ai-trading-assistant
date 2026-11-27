@@ -7,6 +7,7 @@
 // broker than the executor's. Inert without a feed bridge: nothing here runs until one syncs.
 import { envelopeError, SERVER_RE, KID_RE, B64_RE, ENVELOPE_MAX_BYTES } from "./omega-broker.mjs";
 import { ingestFeedCorpus } from "./corpus-oracle.mjs";
+import { feedContentStale, newStaleEpisode, staleDetail } from "./feed-stale.mjs";
 
 /** A feed's id: lower-case letters, digits and dashes, 1-24 (the bridge unit's instance name, e.g. "oanda"). */
 export const FEED_ID_RE = /^[a-z0-9-]{1,24}$/;
@@ -81,8 +82,32 @@ export async function feedSync(env, { bridgeId, state, publicKey, kid, bridgeVer
   if (corpus) {
     try { const r = await ingestFeedCorpus(env, corpus, { bridgeId: id, connection: conn, state: st, now }); corpusCursor = r.cursor_ms ?? null; corpusError = r.error ?? null; } catch { corpusCursor = null; }
   }
+  await checkFeedStale(db, { bridgeId: id, now });
   return { ok: true, role: "feed", bridge_id: id, connection, connection_version: conn.version, corpus_cursor_ms: corpusCursor, ...(corpusError ? { corpus_error: corpusError } : {}) };
 }
+
+// Feed content staleness (src/feed-stale.mjs): checked at most once a minute per bridge and isolate. Never throws.
+const STALE_CHECKED = new Map();
+const STALE_CHECK_MS = 60_000;
+async function lastFeedBarMs(db, bridgeId) {
+  try {
+    const r = await db.prepare("SELECT MAX(s.last_minute_ms) AS ms FROM corpus_sources s JOIN corpus_feeds f ON f.source = s.source WHERE f.bridge_id = ?").bind(bridgeId).first();
+    return Number.isFinite(Number(r?.ms)) && Number(r?.ms) > 0 ? Number(r.ms) : null;
+  } catch { return null; }
+}
+async function checkFeedStale(db, { bridgeId, now }) {
+  const at = STALE_CHECKED.get(bridgeId);
+  if (Number.isFinite(at) && now >= at && now - at < STALE_CHECK_MS) return;
+  STALE_CHECKED.set(bridgeId, now);
+  try {
+    const lastBarMs = await lastFeedBarMs(db, bridgeId);
+    if (!feedContentStale({ syncedMs: now, lastBarMs, now })) return;
+    const ev = await db.prepare("SELECT ms FROM omega_events WHERE action = 'feed_stale' AND json_extract(detail, '$.bridge_id') = ? ORDER BY id DESC LIMIT 1").bind(bridgeId).first();
+    if (!newStaleEpisode({ lastEventMs: Number(ev?.ms || 0), lastBarMs })) return;
+    await audit(db, now, "agent:cerebrum", "feed_stale", staleDetail({ bridgeId, lastBarMs, now }));
+  } catch { /* the next check tries again */ }
+}
+export function resetFeedStaleForTests() { STALE_CHECKED.clear(); }
 
 /** Store a feed's login (sealed in the browser to the feed bridge's key). A person only (the Omega Worker checks). */
 export async function setFeedConnection(env, { bridgeId, envelope, server, actor }, { now = Date.now() } = {}) {
@@ -132,15 +157,21 @@ export async function feedOverview(env, { now = Date.now() } = {}) {
   try {
     await ensureFeedSchema(db);
     const rows = (await db.prepare("SELECT b.bridge_id, b.kid, b.public_key, b.bridge_version, b.state, b.synced_ms, c.version, c.status, c.server, c.kid AS conn_kid, c.updated_ms FROM omega_feed_bridges b LEFT JOIN omega_feed_connections c ON c.bridge_id = b.bridge_id ORDER BY b.bridge_id").all()).results ?? [];
-    return rows.map((r) => {
+    const out = [];
+    for (const r of rows) {
       const st = parse(r.state);
       const age = finite(Number(r.synced_ms)) ? now - Number(r.synced_ms) : null;
-      return {
+      // Feed content staleness (src/feed-stale.mjs): syncing, but its bars stopped (the feed EA not attached).
+      const lastBarMs = await lastFeedBarMs(db, r.bridge_id);
+      out.push({
         bridge_id: r.bridge_id, role: "feed", kid: r.kid, public_key: r.public_key, bridge_version: r.bridge_version ?? null,
         synced_age_ms: age, fresh: age != null && age <= FEED_SEEN_MS,
         terminal_connected: st?.connected === true, server: st?.server ?? null, symbol: st?.symbol?.name ?? null,
-        connection: { version: Number(r.version) || 0, status: r.status ?? "none", server: r.server ?? null, sealed_to_current_key: r.status === "stored" && r.conn_kid === r.kid, updated_ms: r.updated_ms ?? null }
-      };
-    });
+        connection: { version: Number(r.version) || 0, status: r.status ?? "none", server: r.server ?? null, sealed_to_current_key: r.status === "stored" && r.conn_kid === r.kid, updated_ms: r.updated_ms ?? null },
+        last_bar_age_ms: lastBarMs != null ? now - lastBarMs : null,
+        content_stale: feedContentStale({ syncedMs: Number(r.synced_ms), lastBarMs, now })
+      });
+    }
+    return out;
   } catch { return []; }
 }
