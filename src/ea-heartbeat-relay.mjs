@@ -39,6 +39,15 @@ export function recoveryLine(row) {
   const d = (typeof row.detail === "string" ? parse(row.detail) : row.detail) || {};
   const directive = String(d.directive || "unknown");
   const reason = String(d.reason || "unknown");
+  // Recovery backoff (src/recovery-hold.mjs): the watchdog stopped restarting; said once, with what to check.
+  if (d.status === "held") {
+    return [
+      `🛑 Cerebrum self-healing held · ${hhmm(Number(row.ms))}`,
+      `Action: no more terminal restarts (${Number(d.dispatches) || 0} restarts did not reconnect)`,
+      `Reason: ${REASON[reason] || reason}`,
+      "Next: check the server name exactly (spaces, hyphens, case) and enter the connection again on the Omega page; restarts resume on a new connection or once the terminal is healthy again"
+    ].join("\n");
+  }
   return [
     `🤖 Cerebrum self-healing · ${hhmm(Number(row.ms))}`,
     `Action: ${DIRECTIVE[directive] || directive} (${directive})`,
@@ -56,16 +65,17 @@ export function relayReport(rows) {
   if (kept.length < blocks.length) text = `(${blocks.length - kept.length} earlier action${blocks.length - kept.length === 1 ? "" : "s"} not shown)\n\n` + text;
   text = text.slice(0, RELAY_TEXT_MAX);
   const n = rows.length;
+  const held = rows.some((r) => ((typeof r.detail === "string" ? parse(r.detail) : r.detail) || {}).status === "held");
   return {
     kind: "xauusd_digest",
     severity: "warning",
-    subject: `EA self-healing: ${n} recovery action${n === 1 ? "" : "s"} dispatched`,
+    subject: held ? "EA self-healing held: terminal restarts stopped" : `EA self-healing: ${n} recovery action${n === 1 ? "" : "s"} dispatched`,
     ai_status: "deterministic",
     body: {
       telegram_topic: EA_HEARTBEAT_TOPIC,
       text,
       observation: "Omega EA terminal health: recovery actions dispatched by the self-healing step (no trading action)",
-      actions: rows.map((r) => { const d = (typeof r.detail === "string" ? parse(r.detail) : r.detail) || {}; return { id: Number(r.id), at: new Date(Number(r.ms)).toISOString(), directive: d.directive ?? null, reason: d.reason ?? null }; }),
+      actions: rows.map((r) => { const d = (typeof r.detail === "string" ? parse(r.detail) : r.detail) || {}; return { id: Number(r.id), at: new Date(Number(r.ms)).toISOString(), directive: d.directive ?? null, reason: d.reason ?? null, status: d.status ?? null }; }),
       source: "xauusd-ai-trading-assistant"
     }
   };

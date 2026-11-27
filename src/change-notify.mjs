@@ -54,7 +54,9 @@ export const NOT_A_CHANGE = Object.freeze([
   "plan", "intent_reconciled", "symbol_refused", "terminal_error", "account_seen", "spec_validated", "account_ref_upgraded",
   "owner_sub_seen", "profile_control_refused", "profile_review_pending", "mode_unchanged", "liquidity_backfill_failed",
   // MS1: the mode selector's daily outcome (src/mode-selector.mjs), a reading; a change is its own mode_changed.
-  "mode_selector_run"
+  "mode_selector_run",
+  // Recovery backoff (src/recovery-hold.mjs): a healthy state after a recovery, which re-arms the watchdog.
+  "recovery_rearmed"
 ]);
 
 /** The settings keys in words (anything else is shown by its own name). */
