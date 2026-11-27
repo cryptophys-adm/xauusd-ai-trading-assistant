@@ -7,7 +7,7 @@ It is built from these pieces:
 | Piece | What it is |
 |---|---|
 | F1 | The server routes |
-| F2 | Bridge 1.8.0 with `OMEGA_ROLE=feed` |
+| F2 | Bridge 1.8.0 with `OMEGA_ROLE=feed` (1.8.1 also sends the macro corpus) |
 | F3 | `ea/mt5/OmegaFeed.mq5`, which contains no trade code |
 | F5 | `OMEGA_FEED_CLIENT_ID` |
 
@@ -70,6 +70,28 @@ Phases 0–1 are already done: `/opt/mt5-oanda`, Xvfb `:2`, and the units `xvfb-
    - `OMEGA_URL`: `https://nexus.cryptophys.work/omega`, the same as the executor.
 5. Leave **`CF_ACCESS_CLIENT_SECRET=__OWNER_FILLS__`** as the placeholder.
 
+**Bridge 1.8.1 (macro export step 2, 2026-11-27).** The feed bridge also sends its terminal's `omega/corpus_macro.json` (OmegaFeed 1.01) with its sync: per base only the bars after the server's cursor, only once the server answers `corpus_macro_cursors`, and only when the file changed. Before the server ingests the feed's macro bars (macro export step 3) it sends nothing more than 1.8.0. The executor is not changed: `/opt/omega-bridge` and `omega-bridge` stay as they are. One VPS change at a time, with the owner's go, after OmegaFeed 1.01 is installed and checked (section 3).
+
+1. Copy the repo's `bridge/omega-bridge` over `/opt/omega-bridge-oanda`, as root, at the merged commit. Only the feed's copy.
+2. Check the version and the syntax:
+
+   ```bash
+   grep -E '^export const BRIDGE_VERSION' /opt/omega-bridge-oanda/src/daemon.mjs && for f in /opt/omega-bridge-oanda/src/*.mjs; do node --check "$f" || echo "SYNTAX FAIL $f"; done
+   ```
+
+   Expect `export const BRIDGE_VERSION = "1.8.1";` and no `SYNTAX FAIL`.
+3. Restart only the feed's bridge, then check its start line:
+
+   ```bash
+   systemctl restart omega-bridge@oanda
+   ```
+
+   ```bash
+   journalctl -u omega-bridge@oanda -n 20 -o cat | grep -E 'feed_started|feed_sync_http|feed_loop_error'
+   ```
+
+   Expect `feed_started` with `"version":"1.8.1"` and no `feed_sync_http` or `feed_loop_error`. The executor's `omega-bridge` keeps its PID and `NRestarts`.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:
@@ -126,8 +148,10 @@ The bridge refuses to start while the placeholder is still in the file.
    **OmegaFeed 1.01 (macro export, 2026-11-27).** The same three steps (copy, compile, check) install 1.01 over 1.00. Then restart only the feed's own terminal unit, never the executor's:
 
    ```bash
-   systemctl restart "$(grep -E '^TERMINAL_SERVICE=' /etc/omega-bridge/oanda.env | cut -d= -f2)"
+   U="$(grep -E '^TERMINAL_SERVICE=' /etc/omega-bridge/oanda.env | cut -d= -f2 | tr -d '"')"; case "$U" in mt5-oanda|mt5-oanda.service) systemctl restart "$U" && echo "restarted $U" ;; *) echo "STOP: TERMINAL_SERVICE is '$U', not mt5-oanda; nothing restarted" ;; esac
    ```
+
+   The line restarts only `mt5-oanda`. Any other value, an empty one included, prints `STOP` and restarts nothing: never fall back to a default unit. Report it instead.
 
    1.01 also writes `omega/corpus_macro.json` once per closed gold M1 bar. It holds the closed M1 bars of the symbols in the input `MacroSymbols` (`XAGUSD=XAGUSD,USOIL=USOIL.sml,EURUSD=EURUSD.sml,GBPUSD=GBPUSD.sml,USDJPY=USDJPY.sml,USDCAD=USDCAD,USDCHF=USDCHF`; explicit names, nothing guessed; `MacroEnabled=false` turns it off). After two minutes, check that the file names all seven bases. The command prints bases, symbols and bar counts only, no prices:
 
@@ -135,7 +159,7 @@ The bridge refuses to start while the placeholder is still in the file.
    T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print([(s["base"], s["symbol"], len(s["bars"])) for s in d["series"]])' "$T/MQL5/Files/omega/corpus_macro.json"
    ```
 
-   A base missing from the list means that symbol has no name or no bars on this server: report which one. Until the bridge step of the macro export ships, the file is written but not sent.
+   A base missing from the list means that symbol has no name or no bars on this server: report which one. The file is sent by the feed bridge from 1.8.1 (section 1, "Bridge 1.8.1"), and only once the server ingests the feed's macro bars (macro export step 3); until then it is written but not sent.
 2. The login ini starts the chart with `Expert=OmegaFeed` and `Symbol=XAUUSD.sml`. The bridge writes these when it applies the login.
 3. Algo trading stays **off** in that terminal (`AllowLiveTrading=0`):
    - the bridge forces it on every sync;

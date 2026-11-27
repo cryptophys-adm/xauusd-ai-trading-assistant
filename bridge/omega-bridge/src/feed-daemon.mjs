@@ -4,11 +4,17 @@
 // syncs them to POST {OMEGA_URL}/api/bridge/feed-sync with its bridge id, applies its own sealed login to its own
 // terminal ini and service, and clears the password from the ini once the terminal reports it logged in. It never
 // writes intents.txt, never a reference file, never the executor's terminal; algo trading stays off in its ini.
+// 1.8.1 (macro export step 2, owner 08:15 "yang bisa ambil data raw dari mt5 ambil saja"): the feed also sends its
+// terminal's corpus_macro.json (OmegaFeed 1.01), per base only the bars after the server's cursor, and only once the
+// server answers `corpus_macro_cursors` (a server that does not ingest the feed's macro bars never does, so nothing
+// is sent until it does), and only when the file changed since the last send that reached the server (its mtime):
+// the file is rewritten once a minute, the sync runs every 15 s, so three of four syncs skip the read. The gold bars
+// keep priority in the 64 KB body: the macro bars are halved first, and a cut body sends the rest on the next syncs.
 import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
-import { readState, readCorpus, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
+import { readState, readCorpus, readCorpusMacro, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
 import { applyFeedCredentials, clearCredentials, ensureFeedSettings } from "./ini.mjs";
 import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
 import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE, writeTerminalIniPreservingOwner } from "./daemon.mjs";
@@ -64,8 +70,12 @@ export function feedConfigProblem(c) {
   return null;
 }
 
-/** Pure: the feed-sync body (bridge id, key, a state without any account data, the gold bars), bounded in size. */
-export function buildFeedBody({ bridgeId, kid, publicKeyBase64, state, corpus }) {
+/**
+ * Pure: the feed-sync body (bridge id, key, a state without any account data, the gold bars, the macro bars), bounded
+ * in size: the macro bars are halved first (each series keeps its oldest bars, so the server's cursors move forward and
+ * the rest follows), then dropped, and only then the gold bars halved.
+ */
+export function buildFeedBody({ bridgeId, kid, publicKeyBase64, state, corpus, corpusMacro = null }) {
   const s = state && typeof state === "object" ? state : null;
   const sym = s?.symbol && typeof s.symbol === "object" ? s.symbol : {};
   const lean = s ? {
@@ -73,12 +83,34 @@ export function buildFeedBody({ bridgeId, kid, publicKeyBase64, state, corpus })
     symbol: { name: sym.name ?? null, bid: sym.bid ?? null, ask: sym.ask ?? null, digits: sym.digits ?? null, contract_size: sym.contract_size ?? null, currency_profit: sym.currency_profit ?? null }
   } : null;
   let bars = corpus?.bars ?? null;
-  const make = () => JSON.stringify({ bridge_id: bridgeId, bridge_version: BRIDGE_VERSION, kid, public_key: publicKeyBase64, state: lean, ...(bars && bars.length ? { corpus: { ...corpus, bars } } : {}) });
+  let series = Array.isArray(corpusMacro?.series) && corpusMacro.series.length ? corpusMacro.series : null;
+  const make = () => JSON.stringify({ bridge_id: bridgeId, bridge_version: BRIDGE_VERSION, kid, public_key: publicKeyBase64, state: lean,
+    ...(bars && bars.length ? { corpus: { ...corpus, bars } } : {}),
+    ...(series ? { corpus_macro: { server: corpusMacro.server ?? null, series } } : {}) });
+  const fits = (b) => Buffer.byteLength(b, "utf8") <= MAX_BODY_BYTES;
   let body = make();
-  while (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES && bars && bars.length) { bars = bars.length > 1 ? bars.slice(0, Math.floor(bars.length / 2)) : null; body = make(); }
+  while (!fits(body) && series) {
+    series = series.some((x) => x.bars.length > 1) ? series.map((x) => ({ ...x, bars: x.bars.slice(0, Math.max(1, Math.floor(x.bars.length / 2))) })) : null;
+    body = make();
+  }
+  while (!fits(body) && bars && bars.length) { bars = bars.length > 1 ? bars.slice(0, Math.floor(bars.length / 2)) : null; body = make(); }
   return body;
 }
 
+/**
+ * Pure: whether a built body carries every macro bar it was given (the daemon marks the file sent only then; a cut
+ * body leaves it unsent, so the next sync sends the rest after the server's new cursors).
+ */
+export function feedBodyHasAllMacro(body, corpusMacro) {
+  try {
+    const got = JSON.parse(body)?.corpus_macro?.series;
+    if (!Array.isArray(got) || !Array.isArray(corpusMacro?.series)) return false;
+    const count = (list) => list.reduce((n, x) => n + (Array.isArray(x?.bars) ? x.bars.length : 0), 0);
+    return got.length === corpusMacro.series.length && count(got) === count(corpusMacro.series);
+  } catch { return false; }
+}
+
+function mtimeMs(p, fs) { try { return fs.statSync(p).mtimeMs; } catch { return null; } }
 function readJson(p, fs) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
 function writeJson(p, v, fs) { const tmp = `${p}.tmp.${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 }); fs.renameSync(tmp, p); }
 // The feed terminal's ini is owned by its unit's user (mt5): this root daemon keeps its owner and mode 600, as the
@@ -98,6 +130,9 @@ export function createFeedDaemon(options = {}) {
   const config = resolveFeedConfig(options);
   const secrets = [config.cfAccessClientSecret];
   let corpusCursorMs = null;
+  // Macro export step 2: null until the server answers its per-base cursors (then {} means "send every base").
+  let macroCursors = null;
+  let macroSentMtime = null;
   let stopped = false;
   let keys = null;
   const appliedPath = () => path.join(config.stateDir, "feed-applied.json");
@@ -117,7 +152,10 @@ export function createFeedDaemon(options = {}) {
     if (!keys) keys = loadOrCreateKeyPair(config.stateDir, { fs });
     const state = readState(config.omegaFilesDir, { fs });
     const corpus = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
-    const body = buildFeedBody({ bridgeId: config.bridgeId, kid: keys.kid, publicKeyBase64: keys.publicKeyBase64, state, corpus });
+    const macroMtime = macroCursors ? mtimeMs(path.join(config.omegaFilesDir, "corpus_macro.json"), fs) : null;
+    const corpusMacro = macroMtime != null && macroMtime !== macroSentMtime ? readCorpusMacro(config.omegaFilesDir, { fs, afterMsByBase: macroCursors }) : null;
+    const body = buildFeedBody({ bridgeId: config.bridgeId, kid: keys.kid, publicKeyBase64: keys.publicKeyBase64, state, corpus, corpusMacro });
+    const macroSent = corpusMacro ? feedBodyHasAllMacro(body, corpusMacro) : false;
     let res;
     try {
       res = await fetchImpl(`${config.omegaUrl}/api/bridge/feed-sync`, {
@@ -133,6 +171,15 @@ export function createFeedDaemon(options = {}) {
     try { payload = await res.json(); } catch { log({ level: "warn", event: "feed_sync_invalid_json" }); return { ok: false }; }
     if (Number.isFinite(payload?.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
     if (payload?.corpus_error) log({ level: "info", event: "feed_corpus_refused", reason: String(payload.corpus_error).slice(0, 60) });
+    // The server's macro cursors: absent means it does not take the feed's macro bars (nothing is sent).
+    const mc = payload?.corpus_macro_cursors;
+    if (mc && typeof mc === "object" && !Array.isArray(mc)) {
+      const next = { ...(macroCursors || {}) };
+      for (const [base, ms] of Object.entries(mc)) if (Number.isFinite(ms)) next[base] = ms;
+      macroCursors = next;
+    } else macroCursors = null;
+    if (macroSent) macroSentMtime = macroMtime;
+    if (payload?.corpus_macro_error) log({ level: "info", event: "feed_corpus_macro_refused", reason: String(payload.corpus_macro_error).slice(0, 60) });
 
     const applied = readJson(appliedPath(), fs) || { version: 0, server: null, cleared_ms: null };
     const conn = payload?.connection;
