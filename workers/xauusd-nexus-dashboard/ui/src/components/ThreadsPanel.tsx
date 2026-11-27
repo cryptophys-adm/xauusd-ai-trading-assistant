@@ -176,7 +176,7 @@ function NewsTab({ d }: { d: any }) {
       <ConclusionHero c={d.tldr} title="News" waiting="No TLDR yet."
         badges={<><Badge tone="slate">updated {ago(d.run_at)}</Badge><Badge tone="ok">{d.items?.length ?? 0} headlines</Badge></>}
         constraint={<><span className="eyebrow">Bias</span><Stance value="BULLISH" />{c.bullish ?? 0}<Stance value="BEARISH" />{c.bearish ?? 0}<Stance value="NEUTRAL" />{c.neutral ?? 0}</>}
-        confirmation={<div className="flex flex-wrap items-center gap-2"><span className="eyebrow">24h</span><Move x={ctx.gold} name="Gold" /><Move x={ctx.dollar} name="DXY" /><Move x={ctx.oil} name="Oil" /><Move x={ctx.usdt} name="USDT.D" /></div>} />
+        confirmation={<div className="flex flex-wrap items-center gap-2"><span className="eyebrow">24h</span><Move x={ctx.gold} name="Gold" /><Move x={ctx.dollar} name="DXY" /><Move x={ctx.oil} name="Oil" /><Move x={ctx.usdt} name="USDT mcap" /></div>} />
       <div className="eyebrow pt-1">Headlines</div>
       <div className="space-y-1.5">
         {(d.items ?? []).map((i: any, k: number) => (

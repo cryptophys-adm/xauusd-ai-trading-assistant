@@ -151,7 +151,7 @@ function MacroDrivers() {
     { key: "gold", name: "Gold", polarity: 1, v: ctx.gold?.change_24h_percent as number | undefined },
     { key: "dollar", name: "DXY", polarity: -1, v: ctx.dollar?.change_24h_percent as number | undefined },
     { key: "oil", name: "WTI oil", polarity: 1, v: ctx.oil?.change_24h_percent as number | undefined },
-    { key: "usdt", name: "USDT.D", polarity: -1, v: ctx.usdt?.change_24h_percent as number | undefined },
+    { key: "usdt", name: "USDT mcap", polarity: -1, v: ctx.usdt?.change_24h_percent as number | undefined },
   ];
   const max = Math.max(1, ...rows.map((r) => Math.abs(r.v ?? 0)));
   const g = ctx.gold?.change_24h_percent, d = ctx.dollar?.change_24h_percent;
