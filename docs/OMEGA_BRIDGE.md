@@ -45,7 +45,10 @@ is dropped when it fails; it keeps its place only while there is none. The price
 close of its 5-minute bar), so a stopped feed ages out after 20 minutes. The server sends no reference at all while
 its feed runs on the broker's own bars (the MT5 fallback), and leaves out the 4h bars inside the last recorded fallback
 (D1 `health_alerts` market_data_fallback, until they are healed from TradingView): a broker is never checked against
-itself; then the EA
+itself. MX1 (2026-11-27): a fallback on another broker's bars (its corpus source `mt5:<server>:<symbol>` against the
+account's server, `sameBroker` in `src/gold-symbol.mjs`, platform/account-type/number words ignored, unsure counts as the
+same) is still sent, with its 4h closes; the same broker, an unknown source or an unknown account server sends none.
+Without a reference the EA
 keeps a chosen symbol and chooses none. Update bridge 1.6.0 and EA 1.20 together (an EA 1.19 reads the first line only
 and keeps working with bridge 1.6.0).
 

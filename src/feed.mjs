@@ -20,6 +20,14 @@ export async function fallbackSinceMs(env) {
   } catch { return null; }
 }
 
+/** The running fallback's corpus source ("mt5:<server>:<symbol>", MX1) while the 1m series holds broker bars, else null. */
+export async function fallbackSourceOf(env) {
+  try {
+    const r = JSON.parse((await env?.SIGNAL_CACHE?.get?.(M1_KEY)) || "null");
+    return Number.isFinite(Number(r?.fallback?.since_sec)) && typeof r?.fallback?.source === "string" && r.fallback.source ? r.fallback.source : null;
+  } catch { return null; }
+}
+
 /** "mt5_fallback" when a candle closing at `closeMs` was built on the broker's bars, else "tradingview". */
 export async function feedAt(env, closeMs) {
   const since = await fallbackSinceMs(env);

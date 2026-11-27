@@ -24,8 +24,8 @@ import { pendingPositionActions, markPositionActions, positionActionRows, expire
 import { announceExits } from "./position-exit.mjs";
 import { reconcileLostCloses } from "./close-reconcile.mjs";
 import { strategyArmMode, readArmState, disarmAll, dailyLossHit } from "./strategy-arm.mjs";
-import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom } from "./gold-symbol.mjs";
-import { fallbackSinceMs } from "./feed.mjs";
+import { goldCheckOf, goldSymbolText, accountMoney, moneyText, ownerTradeSymbol, TRADE_SYMBOL_RE, DEAL_MONEY_COLUMNS_SQL, DEAL_NET_SQL, positionExposure, exposureText, referenceFrom, referenceOrigin, referenceOriginText } from "./gold-symbol.mjs";
+import { fallbackSinceMs, fallbackSourceOf } from "./feed.mjs";
 import { PROBATION, PROBATION_KEY, probationFrom, probationVerdict } from "./htf-cells.mjs";
 import { vetoSoftenedTag } from "./agent-veto.mjs";
 import { roomWaivedTag } from "./room-waive.mjs";
@@ -946,7 +946,9 @@ async function referenceSources(env, now) {
     // The alert opens on a health check after the fallback starts: 15 minutes of margin before it.
     if (Number.isFinite(a)) excluded = [[a - 900_000, Number.isFinite(b) ? b : null]];
   } catch { excluded = []; }
-  REFERENCE_SOURCES = { at: now, env, h4, fallbackSince: await fallbackSinceMs(env), excluded };
+  // MX1: the fallback's broker (its corpus source), so another broker's bars may still serve as the reference.
+  const [fallbackSince, fallbackSource] = await Promise.all([fallbackSinceMs(env), fallbackSourceOf(env)]);
+  REFERENCE_SOURCES = { at: now, env, h4, fallbackSince, fallbackSource, excluded };
   return REFERENCE_SOURCES;
 }
 
@@ -1487,7 +1489,8 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
   let reference = null;
   try {
     const src = await referenceSources(env, now);
-    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded, now });
+    reference = referenceFrom({ price: signal?.market_price, marketMs: signal?.market_ms, h4: src.h4, fallbackSince: src.fallbackSince, excluded: src.excluded,
+      fallbackSource: src.fallbackSource, accountServer: executor?.server ?? null, now });
   } catch { reference = null; }
   const referencePrice = reference?.price ?? null;
   const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, stream_mode: bridgeStreamMode(env, { executor, intents, recovery, reviewStarted }), ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
@@ -1722,6 +1725,12 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
   const b = await db.prepare("SELECT kid, bridge_version, state, synced_ms FROM omega_bridge WHERE id = 1").first();
   const st = parse(b?.state);
   const syncedAge = b?.synced_ms ? now - Number(b.synced_ms) : null;
+  let referenceView = null;
+  try {
+    const src = await referenceSources(env, now);
+    const origin = referenceOrigin({ fallbackSince: src.fallbackSince, fallbackSource: src.fallbackSource, accountServer: st?.server ?? null });
+    referenceView = { ...origin, text: referenceOriginText(origin) };
+  } catch { referenceView = null; }
   const intents = (await db.prepare("SELECT payload, status, result, created_ms, updated_ms FROM omega_intents ORDER BY created_ms DESC, id DESC LIMIT 50").all()).results ?? [];
   const events = (await db.prepare("SELECT ms, actor, action, detail FROM omega_events ORDER BY id DESC LIMIT 20").all()).results ?? [];
   const lastRec = await db.prepare("SELECT ms, detail FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
@@ -1885,7 +1894,9 @@ export async function brokerOverview(env, { now = Date.now() } = {}) {
           ok: check.ok, problem: check.problem, text: goldSymbolText(check, st.symbol),
           chart_symbol: st.symbol?.chart ?? st.bridge_symbol?.chart_symbol ?? null,
           currency_profit: st.symbol?.currency_profit ?? null, contract_size: st.symbol?.contract_size ?? null,
-          symbol_error: st.symbol_error ?? null, resolution: st.bridge_symbol ?? null
+          symbol_error: st.symbol_error ?? null, resolution: st.bridge_symbol ?? null,
+          // MX1: where the EA's reference gold price comes from (the feed, or a fallback on another broker), or why none.
+          reference: referenceView
         };
       })() : null,
       // Each position's exposure in USD (owner 2026-11-18, "baris eksposur"): per $1 move, and the risk at its stop.
