@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, Layers, LineChart, Menu, Puzzle, Shapes, Sunrise, Swords, ToggleRight, Trophy, Users, X, Zap, Cpu } from "lucide-react";
+import { Activity, BellRing, BookOpenCheck, Brain, CalendarDays, Droplets, ExternalLink, FlaskConical, GitCompareArrows, GraduationCap, Home, Layers, LineChart, Menu, Puzzle, RadioTower, Shapes, Sunrise, Swords, ToggleRight, Trophy, Users, X, Zap, Cpu } from "lucide-react";
 import { StatusRow, StatusStrip } from "./HeaderStatus";
 import { omegaCell, roomCell } from "../lib/headerStatus";
 import { useWarRoom } from "../lib/warroom";
@@ -13,7 +13,12 @@ import { marketClosed } from "../lib/health";
 // built are listed as "soon" and are not links.
 type NavItem = { label: string; href: string; key: string; icon: typeof Swords; soon?: boolean };
 export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
-  { title: "Live", items: [{ label: "War Room", href: "/#/", key: "", icon: Swords }, { label: "System status", href: "/#/status", key: "status", icon: Activity }] },
+  { title: "Live", items: [
+    { label: "War Room", href: "/#/", key: "", icon: Swords },
+    { label: "System status", href: "/#/status", key: "status", icon: Activity },
+    // F4 (owner 2026-11-27: "tempatkan di nexus > live"): the data-only feed bridges and their logins.
+    { label: "Data feeds", href: "/#/feeds", key: "feeds", icon: RadioTower }
+  ] },
   // Omega (owner decisions 2026-11-09): rendered in the main pane beside the left sidebar (#/omega and /omega/) behind the same Cloudflare Access sign-in; /omega/api/* forwards to xauusd-omega.
   { title: "Execution", items: [{ label: "Omega", href: "/#/omega", key: "omega", icon: Zap }] },
   // Call for Councils (owner 2026-11-16: "jangan ditampilkan di omega, buat menu navigator sendiri Call for Councils"):
