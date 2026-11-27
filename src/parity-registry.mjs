@@ -13,6 +13,8 @@
 // trusted only while approved Prophet AND GMI implementations declare it as
 // their Mizan dependency.
 
+import { TRUSTED_IDENTITIES, frozenTrusted } from "./trusted-identities.mjs";
+
 export const PARITY_REGISTRY_VERSION = "cryptophys.engine-parity-registry.v1";
 
 /** Webhook fields each local engine must reproduce (source -> fields). */
@@ -598,8 +600,20 @@ export async function repairApprovedAt(db, policy = DEFAULT_POLICY) {
   return { repaired, skipped, revoked_cleared: revokedCleared };
 }
 
-/** True when the identity is currently trusted for the local_computation lane. */
-export async function isTrusted(db, id) {
+/**
+ * True when the identity is trusted for the local_computation lane. Since parity removal S1 (owner
+ * 2026-11-26) trust comes from the frozen table in src/trusted-identities.mjs, never from the
+ * registry's approvals; `db` is kept for the callers' signature and unused.
+ */
+export async function isTrusted(db, id, table = TRUSTED_IDENTITIES) {
+  return frozenTrusted(id, table);
+}
+
+/**
+ * The registry's own approval of an identity (bookkeeping only since S1; nothing reads it for trust).
+ * Mizan: approved Prophet AND GMI rows of its chart that declare it.
+ */
+export async function registryApproved(db, id) {
   if (id.engine === "mizan" || id.engine.startsWith("mizan_")) {
     // Mizan is trusted per timeframe: only approved Prophet AND GMI identities on
     // the same timeframe scope (for example prophet_m5 and gmi_m5) vouch for it.

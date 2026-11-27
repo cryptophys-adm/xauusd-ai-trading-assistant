@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
-  ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry, reclassifyInputOnlyMismatches,
+  ensureSchema, registerIdentity, recordComparison, registryApproved, listRegistry, reclassifyInputOnlyMismatches,
   repairApprovedAt, isIsoTimestamp, resetSchemaCacheForTests, DEFAULT_POLICY, INPUT_MISMATCH_REVOKE_AFTER
 } from "../src/parity-registry.mjs";
 import {
@@ -87,7 +87,7 @@ test("PF-1 the 24th consecutive match approves with approved_at = now and clears
   assert.equal(r.status, "approved");
   assert.equal(r.approved_at, at(49), "the re-approval time");
   assert.equal(r.revoked_at, null);
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
 });
 
 test("PF-2 mismatch, incomplete and input_mismatch behave as before the bind fix", async () => {
@@ -210,7 +210,7 @@ test("PF-4 the approved_at repair: the streak-completing match, revoked_at on ap
   const { ids, expected } = await buildWorld(db);
   const before = Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, row(db, id)]));
   const trustedBefore = {};
-  for (const [k, id] of Object.entries(ids)) trustedBefore[k] = await isTrusted(db, id);
+  for (const [k, id] of Object.entries(ids)) trustedBefore[k] = await registryApproved(db, id);
   const viewBefore = await readParityView(db, { now: Date.parse(at(600)) });
   const listedBefore = await listRegistry(db, 200);
   const comparisonsBefore = db.db.prepare("SELECT * FROM engine_parity_comparisons ORDER BY engine, candle_key").all();
@@ -230,7 +230,7 @@ test("PF-4 the approved_at repair: the streak-completing match, revoked_at on ap
     const { approved_at: _a, revoked_at: _r, ...rest } = row(db, id);
     const { approved_at: _b, revoked_at: _s, ...restBefore } = before[k];
     assert.deepEqual(rest, restBefore, k);
-    assert.equal(await isTrusted(db, id), trustedBefore[k], k + ": isTrusted unchanged");
+    assert.equal(await registryApproved(db, id), trustedBefore[k], k + ": registryApproved unchanged");
   }
   assert.equal(trustedBefore.mizan, true, "the scenario covers a trusted Mizan");
   assert.deepEqual(db.db.prepare("SELECT * FROM engine_parity_comparisons ORDER BY engine, candle_key").all(), comparisonsBefore);

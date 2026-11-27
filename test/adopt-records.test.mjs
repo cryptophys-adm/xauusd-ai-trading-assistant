@@ -250,7 +250,7 @@ test("AD-12 the memo changes nothing the publishers post: each chart's attached 
 });
 
 test("AD-9 no reader: no AI Worker module, Omega or Nexus reads an adoption record (only ingest, parity, the HUD store's exclusion and the names)", () => {
-  const allowed = new Set(["evidence-fusion.mjs", "evidence-fusion.d.mts", "parity-registry.mjs", "parity-sweep.mjs", "hud-store.mjs", "engine-names.mjs", "index.ts", "knowledge-base.generated.mjs", "feature-switches.mjs"]);
+  const allowed = new Set(["evidence-fusion.mjs", "evidence-fusion.d.mts", "parity-registry.mjs", "parity-sweep.mjs", "hud-store.mjs", "engine-names.mjs", "index.ts", "knowledge-base.generated.mjs", "feature-switches.mjs", "trusted-identities.mjs"]);
   for (const f of readdirSync(new URL("src/", ROOT))) {
     if (!/\.(mjs|ts|mts)$/.test(f) || allowed.has(f)) continue;
     const text = readFileSync(new URL("src/" + f, ROOT), "utf8");

@@ -311,28 +311,33 @@ test("a correction that still reads like code stays invalid_output; schema error
   assert.deepEqual(e2.AI.calls.map(c => c.model), [MODERATOR_DEFAULT_MODEL, MODERATOR_DEFAULT_FALLBACK_MODEL], "a schema error gets no correction, only the moderator's fallback model once");
 });
 
-// C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are parity-approved.
-async function seedVerifiedM5(e, { approve = true } = {}) {
+// C0 step 4: the 5m read is VERIFIED only while prophet_m5 and gmi_m5 are trusted. Since parity removal S1
+// (owner 2026-11-26) trust is the frozen table (src/trusted-identities.mjs): a record carrying a frozen
+// 5m identity is trusted, one with any other hashes is not, whatever the registry holds.
+async function seedVerifiedM5(e, { approve = true, prophet = approve, gmi = approve, registry = null } = {}) {
   const { ensureSchema, registerIdentity, identityOf, resetSchemaCacheForTests } = await import("../src/parity-registry.mjs");
+  const { TRUSTED_IDENTITIES } = await import("../src/trusted-identities.mjs");
   resetSchemaCacheForTests();
   const H = (c) => c.repeat(64);
+  const frozen = (engine) => TRUSTED_IDENTITIES.find((t) => t.engine === engine);
+  const hashes = (engine, trusted, fallback) => (trusted ? { source_hash: frozen(engine).source_hash, implementation_hash: frozen(engine).implementation_hash } : fallback);
   const key = `OANDA:XAUUSD:5:${Date.parse(BAR) - 300_000}`;
   const base = { schema_version: "cryptophys.local-calculation.v1", symbol: "OANDA:XAUUSD", timeframe: "5", candle_key: key };
   const records = {
-    prophet: { ...base, engine: "prophet", provenance: { source_hash: H("a"), implementation_hash: H("5") }, values: { comparable: {
+    prophet: { ...base, engine: "prophet", provenance: hashes("prophet_m5", prophet, { source_hash: H("a"), implementation_hash: H("5") }), values: { comparable: {
       prophet_r38: { direction: -1, buy_confirmed: false, sell_confirmed: true, buy_high_quality: false, sell_high_quality: false, t_enc: 0, d_enc: -1, structure_subtype: 1 },
       prophet_r37_ssot: { direction: -1, d_enc: -1, b_enc: 0, structure_subtype: 1, bull_event: false, bear_event: true } } } },
-    gmi: { ...base, engine: "gmi", provenance: { source_hash: H("b"), implementation_hash: H("6") }, values: { comparable: {
+    gmi: { ...base, engine: "gmi", provenance: hashes("gmi_m5", gmi, { source_hash: H("b"), implementation_hash: H("6") }), values: { comparable: {
       gmi_v12_70: { verdict: -3, gate: 2, gmi_dir: -1, prophet_dir: -1, conflict: false } } } }
   };
   e.WEBHOOK_BUFFER = fakeKV(Object.fromEntries(Object.entries(records).map(([engine, r]) => [`localcalc-observed:${key}:${engine}`, JSON.stringify(r)])));
   await ensureSchema(e.DB);
   for (const r of Object.values(records)) await registerIdentity(e.DB, identityOf(r));
-  if (approve) e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
+  if (registry) e.DB.raw.prepare(`UPDATE engine_parity_registry SET status = '${registry}' WHERE engine IN ('prophet_m5', 'gmi_m5')`).run();
   return key;
 }
 
-test("liveEvidence labels the 5m read VERIFIED 5m only while the 5m implementations are parity-approved", async () => {
+test("liveEvidence labels the 5m read VERIFIED 5m only while the 5m implementations are trusted (the frozen table)", async () => {
   const e = env();
   await seedVerifiedM5(e);
   await ensureThreadSchema(e.DB);
@@ -345,36 +350,44 @@ test("liveEvidence labels the 5m read VERIFIED 5m only while the 5m implementati
   assert.equal(evidence.m5.recent_bars.length, 12);
 });
 
-test("liveEvidence keeps UNVERIFIED 5m while the 5m identities are only candidates", async () => {
+test("liveEvidence keeps UNVERIFIED 5m for identities outside the frozen table, even when the registry approves them", async () => {
   const e = env();
-  await seedVerifiedM5(e, { approve: false });
+  await seedVerifiedM5(e, { approve: false, registry: "approved" });
   await ensureThreadSchema(e.DB);
   const { evidence } = await liveEvidence(e, { bar_time: BAR }, BAR);
   assert.equal(evidence.m5.label, "UNVERIFIED 5m");
   assert.equal(evidence.m5.bias, "BULLISH");
 });
 
-test("an approved H1 identity never verifies a 5m record", async () => {
+test("a frozen 5m identity stays trusted whatever the registry says; an H1 identity never verifies a 5m record", async () => {
   const { verifiedM5Reading, m5ParityApproved } = await import("../src/m5-verification.mjs");
+  const { TRUSTED_IDENTITIES } = await import("../src/trusted-identities.mjs");
   const e = env();
-  await seedVerifiedM5(e, { approve: false });
-  // Same hashes approved under the bare H1 ids must not count for 5m.
-  e.DB.raw.prepare("INSERT INTO engine_parity_registry (engine, source_hash, implementation_hash, status, first_seen_at, updated_at) SELECT REPLACE(engine, '_m5', ''), source_hash, implementation_hash, 'approved', first_seen_at, updated_at FROM engine_parity_registry WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
-  assert.equal((await verifiedM5Reading(e, BAR)).reason, "m5_parity_not_approved");
-  assert.equal(await m5ParityApproved(e.DB), false);
-  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine IN ('prophet_m5', 'gmi_m5')").run();
-  assert.equal((await verifiedM5Reading(e, BAR)).verified, true);
+  await seedVerifiedM5(e, { registry: "revoked" });
+  assert.equal((await verifiedM5Reading(e, BAR)).verified, true, "the registry's revocation no longer reads as trust");
   assert.equal(await m5ParityApproved(e.DB), true);
+  assert.equal(await m5ParityApproved(e.DB, TRUSTED_IDENTITIES.filter((t) => !t.engine.endsWith("_m5"))), false, "only H1 and other charts in the table: not approved on 5m");
+  const h1 = env();
+  await seedVerifiedM5(h1, { approve: false });
+  // The H1 identities' hashes on a 5m record are not the 5m identities.
+  const key = `OANDA:XAUUSD:5:${Date.parse(BAR) - 300_000}`;
+  for (const engine of ["prophet", "gmi"]) {
+    const r = JSON.parse(await h1.WEBHOOK_BUFFER.get(`localcalc-observed:${key}:${engine}`));
+    const t = TRUSTED_IDENTITIES.find((x) => x.engine === engine);
+    r.provenance = { source_hash: t.source_hash, implementation_hash: t.implementation_hash };
+    await h1.WEBHOOK_BUFFER.put(`localcalc-observed:${key}:${engine}`, JSON.stringify(r));
+  }
+  assert.equal((await verifiedM5Reading(h1, BAR)).reason, "m5_parity_not_approved");
   assert.equal((await verifiedM5Reading(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");
 });
 
-test("the 5m trigger needs the Prophet 5m parity only: a revoked GMI 5m leaves the reading unverified, not the confirmation", async () => {
+test("the 5m trigger needs the Prophet 5m trust only: an untrusted GMI 5m leaves the reading unverified, not the confirmation", async () => {
   const { verifiedM5Reading, verifiedM5Confirmation } = await import("../src/m5-verification.mjs");
+  const none = env();
+  await seedVerifiedM5(none, { approve: false });
+  assert.equal((await verifiedM5Confirmation(none, BAR)).reason, "prophet_m5_parity_not_approved");
   const e = env();
-  await seedVerifiedM5(e, { approve: false });
-  assert.equal((await verifiedM5Confirmation(e, BAR)).reason, "prophet_m5_parity_not_approved");
-  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'approved' WHERE engine = 'prophet_m5'").run();
-  e.DB.raw.prepare("UPDATE engine_parity_registry SET status = 'revoked' WHERE engine = 'gmi_m5'").run();
+  await seedVerifiedM5(e, { prophet: true, gmi: false });
   assert.equal((await verifiedM5Confirmation(e, BAR)).verified, true, "production 2026-11-09: gmi_m5 revoked, prophet_m5 approved");
   assert.equal((await verifiedM5Reading(e, BAR)).verified, false, "the combined reading still needs both");
   assert.equal((await verifiedM5Confirmation(e, "2026-11-04T15:10:00.000Z")).reason, "no_local_5m_record");

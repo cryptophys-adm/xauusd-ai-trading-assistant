@@ -43,13 +43,21 @@ function kv() {
 
 test.beforeEach(() => resetSchemaCacheForTests());
 
-test("B7-1 parity is byte-identical to main for today's identities: sweep output, stored trust and the parity view", async () => {
+test("B7-1 parity bookkeeping is byte-identical to main for today's identities: sweep output, registry, comparisons and the parity view; only trust moved to the frozen table", async () => {
   const now = await runParityScenario();
   const main = fixture("parity-b7-main.json");
   // B11a adds the adoption rows' prune count to the sweep result (0 here); everything else is main's byte for byte.
   assert.equal(now.sweep?.adopt_pruned, 0);
   delete now.sweep.adopt_pruned;
-  assert.equal(JSON.stringify(now), JSON.stringify(main));
+  // Parity removal S1 (owner 2026-11-26): trust is the frozen table, so the scenario's synthetic identities
+  // are never trusted however the registry approves them. Only the trust flags and the trusted lane differ.
+  const trusts = [];
+  const stripTrust = (o) => JSON.parse(JSON.stringify(o, (k, v) => (k === "trust" ? (trusts.push(v), undefined) : v)));
+  const bookkeeping = (o) => { const c = stripTrust(o); delete c.lane; return JSON.stringify(c); };
+  assert.equal(bookkeeping(now), bookkeeping(main));
+  assert.ok(trusts.length > 0 && trusts.slice(0, trusts.length / 2).every((t) => Object.values(t).every((x) => x === false)), "every trust flag of the scenario is false now");
+  assert.deepEqual(now.lane, [], "nothing enters the trusted lane for a synthetic identity");
+  assert.ok(main.lane.length > 0, "on main the registry's approval put them in it");
   assert.ok(now.registry.length >= 8 && now.view.registry.length === now.registry.length, "the scenario covers prophet, gmi, gmi_hud and Mizan on 1H and 15m");
   assert.ok(now.reconciles.every(([, r]) => !("groups" in r)), "no group path ran");
 });
@@ -174,7 +182,7 @@ async function seed(env, key, hook, local = {}) {
 }
 const row = async (env, engine) => env.DB.prepare("SELECT status, consecutive_matches, total_matches, total_mismatches, total_incomplete FROM engine_parity_registry WHERE engine = ?").bind(engine).first();
 
-test("B7-8 each group earns its own 24-candle trust; one bad field in one group revokes only that group", async () => {
+test("B7-8 each group earns its own 24-candle approval in the registry, and one bad field revokes only that group; no group is trusted (S1: the frozen table)", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const base = 1793750400000;
   const at = (i) => `OANDA:XAUUSD:60:${base + i * 3600000}`;
@@ -182,7 +190,8 @@ test("B7-8 each group earns its own 24-candle trust; one bad field in one group 
     await seed(env, at(i), {});
     const r = await reconcileLocalComputation(env, at(i), { groups: TEST_GROUPS });
     assert.equal(r.groups.comparisons.grid_core.result, "match");
-    assert.equal(r.groups.trust.grid_core, i === 23, "approved at the 24th match, not before");
+    assert.equal(r.groups.trust.grid_core, false, "a group identity is never in the frozen table");
+    assert.equal((await row(env, "grid_core")).status, i === 23 ? "approved" : "candidate", "approved in the registry at the 24th match, not before");
   }
   for (const g of ["grid_core", "grid_flags", "grid_witness"]) assert.equal((await row(env, g)).status, "approved", g);
   assert.equal((await row(env, "gmi_hud")).status, "approved");
@@ -193,22 +202,14 @@ test("B7-8 each group earns its own 24-candle trust; one bad field in one group 
   assert.equal(out.comparisons.gmi_hud.result, "mismatch");
   assert.equal(out.trust.gmi_hud, false);
   assert.deepEqual([out.groups.comparisons.grid_core.result, out.groups.comparisons.grid_flags.result, out.groups.comparisons.grid_witness.result], ["match", "mismatch", "match"]);
-  assert.deepEqual(out.groups.trust, { grid_core: true, grid_flags: false, grid_witness: true });
+  assert.deepEqual(out.groups.trust, { grid_core: false, grid_flags: false, grid_witness: false });
   assert.equal((await row(env, "grid_flags")).status, "revoked");
   assert.equal((await row(env, "grid_core")).status, "approved");
   assert.equal((await row(env, "grid_core")).consecutive_matches, 25);
 
-  // The trusted lane: grid_core's copy holds only its own fields; grid_flags' and gmi_hud's are gone.
-  const core = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + at(24) + ":grid_core"));
-  assert.deepEqual(core.values.comparable, { gmi_v12_70_hud: { cshi_viability: 64, deploy_status: 3 } });
-  assert.equal(core.trust_status, "approved_by_parity");
-  assert.equal(core.group, "grid_core");
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + at(24) + ":grid_flags"), null);
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + at(24) + ":gmi_hud"), null);
-
-  // approvedComparable merges per source and per group: grid_core's fields stay comparable.
-  const approved = await approvedComparable(env, at(24), { groups: TEST_GROUPS });
-  assert.deepEqual(approved, { gmi_v12_70_hud: { cshi_viability: 64, deploy_status: 3, score: 0.5 } });
+  // Nothing enters the trusted lane for a group, and approvedComparable reads none.
+  for (const g of ["grid_core", "grid_flags", "gmi_hud"]) assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + at(24) + ":" + g), null, g);
+  assert.equal(await approvedComparable(env, at(24), { groups: TEST_GROUPS }), null);
   assert.equal(await approvedComparable(env, at(24)), null, "the live registry reads no group key");
 });
 

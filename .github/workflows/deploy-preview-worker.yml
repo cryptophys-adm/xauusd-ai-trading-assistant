@@ -141,6 +141,12 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
+          import { pathToFileURL } from "node:url";
+          // Parity removal S1 (owner 2026-11-26): trust is the frozen identity table, so the local records
+          // below carry the frozen identities' hashes; the registry still records and promotes them.
+          const { TRUSTED_IDENTITIES } = await import(pathToFileURL(process.cwd() + "/src/trusted-identities.mjs").href);
+          const frozenH1 = (engine) => TRUSTED_IDENTITIES.find((t) => t.engine === engine);
+          const frozenFor = (engine, tf) => frozenH1(engine + ({ M5: "_m5", "5": "_m5", "15": "_m15", "60": "" })[tf]);
 
           const base = process.env.PREVIEW_BASE_URL;
           const secret = process.env.PREVIEW_WEBHOOK_SECRET;
@@ -353,15 +359,17 @@ jobs:
           assert.equal(hudResult.analysis_status, "stored_only", "a *_hud webhook must not start the AI chain");
 
           // local_computation lane: outputs that reproduce the webhook values on the same raw bar.
-          // With PARITY_PROMOTE_AFTER=1 a single matching candle promotes Prophet and GMI autonomously;
+          // With PARITY_PROMOTE_AFTER=1 a single matching candle still promotes Prophet and GMI in the registry
+          // (bookkeeping since S1); trust comes from the frozen table, whose identities (per chart) these records carry.
           // Mizan is trusted because both declare the same Mizan dependency.
-          const mizanDependency = { mizan: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
+          const frozenMizan = frozenH1("prophet").mizan;
+          const mizanDependency = { mizan: { source_hash: frozenMizan.source_hash, implementation_hash: frozenMizan.implementation_hash } };
           const comparableFor = {
             mizan: {},
             prophet: { prophet_r38: webhookValues.prophet_r38, prophet_r37_ssot: webhookValues.prophet_r37_ssot },
             gmi: { gmi_v12_70: webhookValues.gmi_v12_70 }
           };
-          const localPayload = (engine) => ({
+          const localPayload = (engine, tf = timeframe) => ({
             schema_version: "cryptophys.local-calculation.v1",
             engine, symbol, timeframe, candle_time: candleTime, candle_key: candleKey,
             computed_at: new Date().toISOString(),
@@ -369,8 +377,8 @@ jobs:
             values: { bias: "NEUTRAL", fixture_only: true, candle: bar, comparable: comparableFor[engine] },
             provenance: {
               source: "isolated-preview-fixture",
-              source_hash: ({mizan:"a",prophet:"c",gmi:"e"})[engine].repeat(64),
-              implementation_hash: ({mizan:"b",prophet:"d",gmi:"f"})[engine].repeat(64),
+              source_hash: engine === "mizan" ? frozenMizan.source_hash : frozenFor(engine, tf).source_hash,
+              implementation_hash: engine === "mizan" ? frozenMizan.implementation_hash : frozenFor(engine, tf).implementation_hash,
               ...(engine === "mizan" ? {} : { dependencies: mizanDependency })
             }
           });
@@ -641,9 +649,9 @@ jobs:
 
           // H1 HUD snapshot verification on a real H1 candle (local-primary chain). A HUD
           // snapshot (the preview twin of the RPC submitHud) is stored first, then the
-          // calibration webhooks and the local records of the previous closed hour; parity
-          // approves the fixture identities (PARITY_PROMOTE_AFTER=1), and the H1 HUD readings
-          // are then verified against the approved local record. The per-H1 HUD agents are
+          // calibration webhooks and the local records of the previous closed hour; they carry the
+          // frozen H1 identities (trusted since S1; the registry still promotes them with
+          // PARITY_PROMOTE_AFTER=1), and the H1 HUD readings are then verified against the trusted local record. The per-H1 HUD agents are
           // retired while the War Room runs (owner decision 2026-11-05).
           const hourOpen = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000;
           const key60 = symbol + ":60:" + hourOpen;
@@ -661,7 +669,7 @@ jobs:
             assert.equal(r.status, 202, "H1 calibration webhook " + source);
           }
           for (const engine of ["mizan", "prophet", "gmi"]) {
-            const record = { ...localPayload(engine), timeframe: "60", candle_time: new Date(hourOpen).toISOString(), candle_key: key60, computed_at: new Date().toISOString(), values: { bias: "NEUTRAL", fixture_only: true, candle: h1Bar, comparable: comparableFor[engine] } };
+            const record = { ...localPayload(engine, "60"), timeframe: "60", candle_time: new Date(hourOpen).toISOString(), candle_key: key60, computed_at: new Date().toISOString(), values: { bias: "NEUTRAL", fixture_only: true, candle: h1Bar, comparable: comparableFor[engine] } };
             const r = await fetch(base + "/evidence/local-calculation", { method: "POST", headers, body: JSON.stringify(record) });
             assert.equal(r.status, 202, "H1 local calculation " + engine + ": " + JSON.stringify(await r.clone().json()));
           }

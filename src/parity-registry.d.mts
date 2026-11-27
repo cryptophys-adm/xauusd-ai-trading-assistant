@@ -1,3 +1,4 @@
+import type { TrustedIdentity } from "./trusted-identities.mjs";
 export interface EngineIdentity {
   engine: string;
   sourceHash: string;
@@ -50,5 +51,6 @@ export function ensureSchema(db: D1Database): Promise<void>;
 export function resetSchemaCacheForTests(): void;
 export function registerIdentity(db: D1Database, id: EngineIdentity, now?: string): Promise<void>;
 export function recordComparison(db: D1Database, id: EngineIdentity, candleKey: string, comparison: ParityComparison, policy?: ParityPolicy, now?: string): Promise<{ counted: boolean; result?: string; reason?: string }>;
-export function isTrusted(db: D1Database, id: EngineIdentity): Promise<boolean>;
+export function isTrusted(db: D1Database, id: EngineIdentity, table?: readonly TrustedIdentity[]): Promise<boolean>;
+export function registryApproved(db: D1Database, id: EngineIdentity): Promise<boolean>;
 export function listRegistry(db: D1Database, limit?: number): Promise<Array<Record<string, unknown>>>;

@@ -208,12 +208,17 @@ test("news cron: a missing news ingestion fails into a logged error, never an ex
   assert.ok(!output.lines.error.some(l => /ReferenceError|is not a function|is not defined/.test(l)), output.lines.error.join("\n"));
 });
 
-test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m identities are approved", async () => {
+test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m identities are trusted (the frozen table, not the registry)", async () => {
+  const { TRUSTED_IDENTITIES } = await import("../src/trusted-identities.mjs");
   const closeMs = Math.floor(Date.now() / 300_000) * 300_000;
   const key5 = SYMBOL + ":5:" + (closeMs - 300_000);
+  const frozen = (engine) => TRUSTED_IDENTITIES.find((t) => t.engine === engine + "_m5");
+  let approvedNow = true;
   const m5Record = (engine) => ({
     engine, timeframe: "5", candle_key: key5,
-    provenance: { source_hash: (engine === "prophet" ? "1" : "2").repeat(64), implementation_hash: (engine === "prophet" ? "3" : "4").repeat(64) },
+    provenance: approvedNow
+      ? { source_hash: frozen(engine).source_hash, implementation_hash: frozen(engine).implementation_hash }
+      : { source_hash: (engine === "prophet" ? "1" : "2").repeat(64), implementation_hash: (engine === "prophet" ? "3" : "4").repeat(64) },
     values: { comparable: engine === "prophet" ? { prophet_r38: values.prophet_r38, prophet_r37_ssot: values.prophet_r37_ssot } : { gmi_v12_70: values.gmi_v12_70 } }
   });
   const context = { schema_version: "cryptophys.local-context.v1", engine: "prophet_r38_5m", trust_status: "informational_unverified", source: "m5_parity_record", symbol: SYMBOL, timeframe: "5", candle_key: key5, candle_time: new Date(closeMs).toISOString(), bias: "BULLISH", buy_confirmed: true, sell_confirmed: false, d_enc: -1, t_enc: 2, received_at: new Date().toISOString() };
@@ -225,6 +230,7 @@ test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m ident
   };
 
   for (const approved of [true, false]) {
+    approvedNow = approved;
     const { env } = await workerEnv();
     await env.SIGNAL_CACHE.put("context:m5:latest", JSON.stringify(context));
     for (const engine of ["prophet", "gmi"]) {
@@ -232,7 +238,7 @@ test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m ident
       await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key5 + ":" + engine, JSON.stringify(record));
       const now = new Date().toISOString();
       env.DB.db.prepare("INSERT INTO engine_parity_registry (engine, source_hash, implementation_hash, status, consecutive_matches, first_seen_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(engine + "_m5", record.provenance.source_hash, record.provenance.implementation_hash, approved ? "approved" : "candidate", approved ? 24 : 19, now, now);
+        .run(engine + "_m5", record.provenance.source_hash, record.provenance.implementation_hash, approved ? "candidate" : "approved", approved ? 19 : 24, now, now); // the registry's status no longer counts
     }
     const { candleKey } = await sweepLastClosedCandle(env);
     const m5 = (await fusionOf(env, candleKey)).informational_5m_context;

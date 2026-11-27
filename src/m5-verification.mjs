@@ -6,6 +6,7 @@
 // lane. Otherwise the 5m data stays UNVERIFIED. The label switches by itself.
 import { identityOf, isTrusted, ensureSchema } from "./parity-registry.mjs";
 import { interpretWebhooks } from "./webhook-interpretation.mjs";
+import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
 
 export const M5_VERIFIED_LABEL = "VERIFIED 5m";
 export const M5_UNVERIFIED_LABEL = "UNVERIFIED 5m";
@@ -72,15 +73,11 @@ export async function verifiedM5Confirmation(env, closeIso) {
   return { verified: true, candle_key: candleKey };
 }
 
-/** Whether both 5m implementations currently hold an approved registry row. */
-export async function m5ParityApproved(db) {
+/**
+ * Whether both 5m implementations are trusted. Since parity removal S1 (owner 2026-11-26) this reads the
+ * frozen table (src/trusted-identities.mjs), not the registry's approvals; `db` is kept for the callers.
+ */
+export async function m5ParityApproved(db, table = TRUSTED_IDENTITIES) {
   if (!db) return false;
-  try {
-    const row = await db.prepare(
-      "SELECT SUM(CASE WHEN engine = 'prophet_m5' THEN 1 ELSE 0 END) AS prophet, SUM(CASE WHEN engine = 'gmi_m5' THEN 1 ELSE 0 END) AS gmi FROM engine_parity_registry WHERE status = 'approved'"
-    ).first();
-    return Number(row?.prophet) > 0 && Number(row?.gmi) > 0;
-  } catch {
-    return false;
-  }
+  return table.some((t) => t.engine === "prophet_m5") && table.some((t) => t.engine === "gmi_m5");
 }

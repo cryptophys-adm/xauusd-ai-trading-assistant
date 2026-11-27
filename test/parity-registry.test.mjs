@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
-  compareWithWebhooks, identityOf, ensureSchema, registerIdentity, recordComparison, isTrusted, listRegistry,
+  compareWithWebhooks, identityOf, ensureSchema, registerIdentity, recordComparison, registryApproved, listRegistry,
   resetSchemaCacheForTests, policyFromEnv, DEFAULT_POLICY, scopedEngine, INPUT_MISMATCH_REVOKE_AFTER
 } from "../src/parity-registry.mjs";
 
@@ -101,15 +101,15 @@ test("N consecutive matches promote; a mismatch revokes; revoked must re-earn N;
   await recordComparison(db, id, "k1", match, policy);
   assert.equal((await recordComparison(db, id, "k1", match, policy)).counted, false); // duplicate candle
   await recordComparison(db, id, "k2", match, policy);
-  assert.equal(await isTrusted(db, id), false);
+  assert.equal(await registryApproved(db, id), false);
   await recordComparison(db, id, "k3", match, policy);
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
 
   await recordComparison(db, id, "k4", { status: "incomplete", compared: 0, mismatches: [], missing: ["x"] }, policy);
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
 
   await recordComparison(db, id, "k5", mismatch, policy);
-  assert.equal(await isTrusted(db, id), false);
+  assert.equal(await registryApproved(db, id), false);
   const [row] = await listRegistry(db);
   assert.equal(row.status, "revoked");
   assert.equal(row.consecutive_matches, 0);
@@ -118,9 +118,9 @@ test("N consecutive matches promote; a mismatch revokes; revoked must re-earn N;
   assert.deepEqual(row.last_detail.mismatches, [{ field: "d_enc" }]);
 
   for (const k of ["k6", "k7"]) await recordComparison(db, id, k, match, policy);
-  assert.equal(await isTrusted(db, id), false);
+  assert.equal(await registryApproved(db, id), false);
   await recordComparison(db, id, "k8", match, policy);
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
 });
 
 test("Mizan is trusted only while approved Prophet AND GMI both declare the same Mizan dependency", async () => {
@@ -135,11 +135,11 @@ test("Mizan is trusted only while approved Prophet AND GMI both declare the same
   const match = { status: "match", compared: 1, mismatches: [], missing: [] };
 
   await recordComparison(db, prophet, "k1", match, policy);
-  assert.equal(await isTrusted(db, mizan), false);
+  assert.equal(await registryApproved(db, mizan), false);
   await recordComparison(db, gmi, "k1", match, policy);
-  assert.equal(await isTrusted(db, mizan), true);
+  assert.equal(await registryApproved(db, mizan), true);
   await recordComparison(db, gmi, "k2", { status: "mismatch", compared: 1, mismatches: [{}], missing: [] }, policy);
-  assert.equal(await isTrusted(db, mizan), false);
+  assert.equal(await registryApproved(db, mizan), false);
 });
 
 test("registry ids are timeframe-scoped: H1 keeps the bare id, 5m, 15m, H4 and D1 earn their own", () => {
@@ -181,20 +181,20 @@ test("an approved H1 identity does not make the same hashes trusted on 5m, and 5
 
   await recordComparison(db, prophetH1, "OANDA:XAUUSD:60:1", match, policy);
   await recordComparison(db, gmiH1, "OANDA:XAUUSD:60:1", match, policy);
-  assert.equal(await isTrusted(db, prophetH1), true);
-  assert.equal(await isTrusted(db, mizanH1), true);
-  assert.equal(await isTrusted(db, prophetM5), false);
-  assert.equal(await isTrusted(db, mizanM5), false);
+  assert.equal(await registryApproved(db, prophetH1), true);
+  assert.equal(await registryApproved(db, mizanH1), true);
+  assert.equal(await registryApproved(db, prophetM5), false);
+  assert.equal(await registryApproved(db, mizanM5), false);
 
   // A 5m mismatch resets only the 5m streak; the approved H1 identity stays approved.
   await recordComparison(db, prophetM5, "OANDA:XAUUSD:5:1", mismatch, policy);
-  assert.equal(await isTrusted(db, prophetH1), true);
+  assert.equal(await registryApproved(db, prophetH1), true);
 
   await recordComparison(db, prophetM5, "OANDA:XAUUSD:5:2", match, policy);
-  assert.equal(await isTrusted(db, mizanM5), false);
+  assert.equal(await registryApproved(db, mizanM5), false);
   await recordComparison(db, gmiM5, "OANDA:XAUUSD:5:2", match, policy);
-  assert.equal(await isTrusted(db, prophetM5), true);
-  assert.equal(await isTrusted(db, mizanM5), true);
+  assert.equal(await registryApproved(db, prophetM5), true);
+  assert.equal(await registryApproved(db, mizanM5), true);
 });
 
 test("policy is configurable from env with safe fallbacks", () => {
@@ -222,11 +222,11 @@ test("an input mismatch neither counts nor revokes; the republished candle repla
   const input = { status: "input_mismatch", compared: 24, mismatches: [{ field: "input:c" }], missing: [] };
   await recordComparison(db, id, "k1", match, policy, "2026-11-06T01:00:00Z");
   await recordComparison(db, id, "k2", match, policy, "2026-11-06T02:00:00Z");
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
 
   const r = await recordComparison(db, id, "k3", input, policy, "2026-11-06T03:00:00Z");
   assert.deepEqual(r, { counted: false, result: "input_mismatch" });
-  assert.equal(await isTrusted(db, id), true, "the approved identity stays approved");
+  assert.equal(await registryApproved(db, id), true, "the approved identity stays approved");
   let [row] = await listRegistry(db);
   assert.equal(row.consecutive_matches, 2);
   assert.equal(row.last_result, "input_mismatch");
@@ -248,11 +248,11 @@ test(`${INPUT_MISMATCH_REVOKE_AFTER} input mismatches in a row mean the data pip
   const input = { status: "input_mismatch", compared: 10, mismatches: [{ field: "input:volume" }], missing: [] };
   await recordComparison(db, id, "k1", input, policy, "2026-11-06T01:00:00Z");
   await recordComparison(db, id, "k2", input, policy, "2026-11-06T02:00:00Z");
-  assert.equal(await isTrusted(db, id), true);
+  assert.equal(await registryApproved(db, id), true);
   const third = await recordComparison(db, id, "k3", input, policy, "2026-11-06T03:00:00Z");
   assert.equal(third.result, "mismatch");
   assert.equal(third.escalated, "repeated_input_mismatch");
-  assert.equal(await isTrusted(db, id), false);
+  assert.equal(await registryApproved(db, id), false);
   const [row] = await listRegistry(db);
   assert.equal(row.status, "revoked");
   assert.equal(row.last_detail.reason, "repeated_input_mismatch");
@@ -276,13 +276,13 @@ test("one-time reconciliation: input-only revocations are restored; indicator an
   await recordComparison(db, ids.indicator, "k1", old(["input:c", "d_enc"]), policy, "2026-11-06T03:00:00Z");
   await recordComparison(db, ids.m5, "k1", { ...old(["input:volume"]), status: "mismatch" }, policy, "2026-11-06T03:00:00Z");
   await db.prepare("UPDATE engine_parity_comparisons SET detail = json_set(detail, '$.reason', 'repeated_input_mismatch') WHERE engine = 'prophet_m5'").run();
-  for (const id of Object.values(ids)) assert.equal(await isTrusted(db, id), false);
+  for (const id of Object.values(ids)) assert.equal(await registryApproved(db, id), false);
 
   const r = await reclassifyInputOnlyMismatches(db, "2026-11-06T09:00:00Z");
   assert.deepEqual(r, { reclassified: 1, restored: ["prophet"] });
-  assert.equal(await isTrusted(db, ids.inputOnly), true);
-  assert.equal(await isTrusted(db, ids.indicator), false, "an indicator mismatch stays revoked");
-  assert.equal(await isTrusted(db, ids.m5), false, "an escalated repeated-input revocation stays revoked");
+  assert.equal(await registryApproved(db, ids.inputOnly), true);
+  assert.equal(await registryApproved(db, ids.indicator), false, "an indicator mismatch stays revoked");
+  assert.equal(await registryApproved(db, ids.m5), false, "an escalated repeated-input revocation stays revoked");
   const row = (await listRegistry(db)).find((x) => x.engine === "prophet");
   assert.equal(row.total_mismatches, 0);
   assert.deepEqual(await reclassifyInputOnlyMismatches(db), { reclassified: 0, restored: [] }, "idempotent");
