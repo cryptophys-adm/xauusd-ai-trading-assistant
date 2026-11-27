@@ -6,6 +6,7 @@
 // (submitBrokerTrigger). Below 400 broker M5 bars only the structure is sent (ready: false) and the
 // TradingView 5m confirmation stays the trigger. Switch: BROKER_TRIGGER_MODE = "on" (default) | "off".
 import { buildM5LocalCalculations } from "../../local-engines/producer/src/m5-local-producer.mjs";
+import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
 import { brokerSeries } from "./broker-shadow.mjs";
 
 export const BROKER_M5_KEY = "market-data:v2:broker-trigger:m5";
@@ -16,6 +17,65 @@ const finite = (x) => typeof x === "number" && Number.isFinite(x);
 
 export function brokerTriggerMode(env) {
   return String(env?.BROKER_TRIGGER_MODE ?? "on").trim().toLowerCase() === "off" ? "off" : "on";
+}
+
+// C1 (cost brief 2026-11-27, orchestrator OK): the trigger reads only Prophet R38's buy/sell confirmation of the last
+// broker 5m bar, yet built every 5m engine (R38, R37, GMI, Mizan) with the full HTF series; R38's HTF alignment
+// (buildHtfAlignment in the protected prophet-r38/src/core.mjs, not edited) scans every HTF bar for every chart bar,
+// about 2.5-3 s per run. BROKER_TRIGGER_R38_ONLY "on" (default) calls calculateProphetR38Core directly with exactly the
+// producer's arguments (m5-local-producer.mjs: the last 1000 bars, confirmed, 5 minutes, closed-only HTF, the
+// mintick), each HTF series trimmed to start HTF_KEEP_BEFORE bars before the HTF bar the first chart bar reads. The
+// HTF z-score at bar j reads only bars j-49..j (kwwAt, length 50) and the bar a chart bar reads only moves forward in
+// time, so every selected z, and so every output, is unchanged (trimHigherTimeframes; tests BT-C1). "shadow" also runs
+// the full producer and logs a mismatch; "off" runs the full producer as before.
+export const M5_WINDOW = 1000;
+export const HTF_KEEP_BEFORE = 60;
+const HTF_MINUTES = Object.freeze({ M15: 15, H1: 60, H4: 240, D1: 1440, W1: 10080 });
+const frameBars = (frame) => (Array.isArray(frame?.candles) ? frame.candles : []);
+
+export function brokerTriggerR38Mode(env) {
+  const v = String(env?.BROKER_TRIGGER_R38_ONLY ?? "on").trim().toLowerCase();
+  return v === "off" || v === "shadow" ? v : "on";
+}
+
+const htfCloseMs = (bar, tf) => (bar?.close_time && finite(Date.parse(bar.close_time)) ? Date.parse(bar.close_time) : Date.parse(bar?.open_time) + HTF_MINUTES[tf] * 60_000);
+
+/**
+ * Pure: each HTF series from HTF_KEEP_BEFORE bars before the bar the first chart bar reads (the core's own rule: the
+ * bar containing it, else the last closed before it). A series whose bars are not in order without overlap (each opens
+ * after the previous one and no earlier than its close) is kept whole.
+ */
+export function trimHigherTimeframes(chartBars, higher, keepBefore = HTF_KEEP_BEFORE) {
+  const first = Date.parse(chartBars?.[0]?.open_time);
+  const out = {};
+  for (const [tf, list] of Object.entries(higher || {})) {
+    const arr = Array.isArray(list) ? list : [];
+    let rising = finite(first);
+    for (let j = 1; rising && j < arr.length; j++) if (!(Date.parse(arr[j].open_time) > Date.parse(arr[j - 1].open_time)) || !(htfCloseMs(arr[j - 1], tf) <= Date.parse(arr[j].open_time))) rising = false;
+    if (!rising || !(tf in HTF_MINUTES)) { out[tf] = arr; continue; }
+    let sel = arr.findIndex((b) => { const s = Date.parse(b.open_time), e = htfCloseMs(b, tf); return finite(s) && finite(e) && s <= first && first < e; });
+    if (sel >= 0) sel -= 1;
+    else for (let j = 0; j < arr.length; j++) if (htfCloseMs(arr[j], tf) <= first) sel = j;
+    out[tf] = sel - keepBefore > 0 ? arr.slice(sel - keepBefore) : arr;
+  }
+  return out;
+}
+
+/** The last broker 5m bar's R38 confirmation, as buildM5LocalCalculations computes it, with the HTF trimmed. Throws like it. */
+export function brokerR38(bundle, candles, { now = Date.now(), mintick = 0.001, trim = true } = {}) {
+  const m5 = (Array.isArray(candles) ? candles : []).slice(-M5_WINDOW);
+  if (m5.length < MIN_BARS) throw Object.assign(new Error(`insufficient 5m history: ${m5.length} < ${MIN_BARS}`), { code: "insufficient_m5_history" });
+  const last = m5.at(-1);
+  const openMs = Date.parse(last.open_time);
+  if (!finite(openMs) || Date.parse(last.close_time) > now) throw Object.assign(new Error("latest 5m bar is not closed"), { code: "m5_bar_not_closed" });
+  if (Date.parse(last.close_time) - openMs !== M5_S * 1000) throw Object.assign(new Error("latest bar is not a 5m bar"), { code: "m5_bar_invalid" });
+  const tf = bundle?.timeframes || {};
+  const higher = { M15: frameBars(tf.M15), H1: frameBars(tf.H1), H4: frameBars(tf.H4), D1: frameBars(tf.D1), W1: frameBars(tf.W1) };
+  const r38 = calculateProphetR38Core(m5.map((b) => ({ ...b, confirmed: true })), {
+    timeframe_minutes: 5, gmi_closed_only: true, mintick, higher_timeframes: trim ? trimHigherTimeframes(m5, higher) : higher
+  });
+  const o = r38.outputs.at(-1);
+  return { buy: o.confirmation?.buy_confirmed === true, sell: o.confirmation?.sell_confirmed === true };
 }
 
 /** Pure: the swing high and low of the last `n` bars and the ATR(14), or null. */
@@ -48,10 +108,20 @@ export async function runBrokerTrigger(env, { bundle, now = Date.now() } = {}) {
     if (!structure) return { status: "insufficient_history", broker_bars: broker.candles.length };
     let ready = false, buy = false, sell = false, error = null;
     if (broker.candles.length >= MIN_BARS && bundle?.timeframes) {
-      try {
-        const built = buildM5LocalCalculations({ ...bundle, timeframes: { ...bundle.timeframes, M5: { ...(bundle.timeframes.M5 || {}), candles: broker.candles } } }, { now, mintick: Number(env.CHART_MINTICK) || 0.001 });
+      const mintick = Number(env.CHART_MINTICK) || 0.001;
+      const full = () => {
+        const built = buildM5LocalCalculations({ ...bundle, timeframes: { ...bundle.timeframes, M5: { ...(bundle.timeframes.M5 || {}), candles: broker.candles } } }, { now, mintick });
         const r38 = built.records.find((r) => r.engine === "prophet")?.values?.comparable?.prophet_r38;
-        if (r38) { ready = true; buy = r38.buy_confirmed === true; sell = r38.sell_confirmed === true; }
+        return r38 ? { buy: r38.buy_confirmed === true, sell: r38.sell_confirmed === true } : null;
+      };
+      const mode = brokerTriggerR38Mode(env);
+      try {
+        const got = mode === "off" ? full() : brokerR38(bundle, broker.candles, { now, mintick });
+        if (got) { ready = true; buy = got.buy; sell = got.sell; }
+        if (mode === "shadow" && got) {
+          try { const ref = full(); if (!ref || ref.buy !== got.buy || ref.sell !== got.sell) console.log("broker_trigger_r38_mismatch", JSON.stringify({ close: new Date(closeMs).toISOString(), r38_only: got, full: ref })); }
+          catch (e) { console.log("broker_trigger_r38_shadow_failed", String(e?.code || e?.message || e).slice(0, 80)); }
+        }
       } catch (e) { error = String(e?.code || e?.message || e).slice(0, 80); }
     }
     const result = await env.AI_WORKER.submitBrokerTrigger({ close_ms: closeMs, ready, buy_confirmed: buy, sell_confirmed: sell, ...structure, bars: broker.candles.length, source: broker.source });
