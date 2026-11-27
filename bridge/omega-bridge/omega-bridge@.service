@@ -1,0 +1,25 @@
+# F2: a data-only FEED bridge instance (OMEGA_ROLE=feed), e.g. omega-bridge@oanda. One env file per instance:
+# /etc/omega-bridge/%i.env (mode 0600). The executor's omega-bridge.service is separate and unchanged.
+[Unit]
+Description=Cryptophys Omega Feed Bridge (%i)
+After=network-online.target mt5-%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/omega-bridge-%i
+EnvironmentFile=/etc/omega-bridge/%i.env
+Environment=OMEGA_ROLE=feed
+ExecStart=/usr/bin/node /opt/omega-bridge-%i/bin/omega-bridge.mjs
+Restart=always
+RestartSec=10
+MemoryMax=128M
+CPUWeight=50
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omega-bridge-%i
+
+[Install]
+WantedBy=multi-user.target

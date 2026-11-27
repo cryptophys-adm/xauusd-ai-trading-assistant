@@ -109,6 +109,9 @@ test("FB-3. the feed's bars: its own source, marked a feed; refused without its 
   e.DB.raw.exec("CREATE TABLE IF NOT EXISTS omega_connection (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, status TEXT NOT NULL, server TEXT, kid TEXT, envelope TEXT, updated_by TEXT, updated_ms INTEGER)");
   e.DB.raw.exec("INSERT OR REPLACE INTO omega_connection (id, version, status, server) VALUES (1, 3, 'stored', 'FeedBroker-Demo')");
   assert.equal((await feedSync(e, { bridgeId: "oanda", state: FEED_STATE, publicKey: SPKI, kid: KID, corpus: corpusOf("FeedBroker-Demo", "XAUUSD", from, 6) }, { now: NOW })).corpus_error, "feed_on_executor_server");
+  // The same broker on another server name ("FeedBroker-Live" beside the executor's "FeedBroker-Demo") is refused too.
+  e.DB.raw.exec("UPDATE omega_connection SET server = 'FeedBroker-Live' WHERE id = 1");
+  assert.equal((await feedSync(e, { bridgeId: "oanda", state: FEED_STATE, publicKey: SPKI, kid: KID, corpus: corpusOf("FeedBroker-Demo", "XAUUSD", from, 6) }, { now: NOW })).corpus_error, "feed_on_executor_server");
 });
 
 test("FB-4. the MT5 fallback prefers a fresh feed; every other reader, and a stale feed, gets the executor's own bars", async () => {
