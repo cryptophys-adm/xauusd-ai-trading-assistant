@@ -109,6 +109,8 @@
     // Local-primary (owner decision 2026-11-05): approved local records drive the chain;
     // TradingView webhooks only calibrate the local engines, for example monthly.
     "INDICATOR_SOURCE": "local",
+    // S3 (2026-11-27): the TradingView alert webhooks are retired: POST /webhook answers 410 and stores nothing; "on" restores them.
+    "WEBHOOK_INGEST": "off",
     // B11 (RFC_INDICATOR_ADOPTION): accept the adoption records for group parity only; "off" refuses them at ingest.
     "ADOPT_INGEST": "on",
     "CALIBRATION_INTERVAL_DAYS": "30",

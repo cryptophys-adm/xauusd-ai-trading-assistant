@@ -237,8 +237,9 @@ test("a TradingView alert that went silent while the others on its chart arrive 
   db.raw.exec("CREATE TABLE webhook_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, candle_key TEXT, source TEXT, payload TEXT, received_at TEXT)");
   const raw = db.raw;
   for (const r of [["OANDA:XAUUSD:60:1794556800000", "gmi_v12_70", "2026-11-13 09:00:15"], ["OANDA:XAUUSD:60:1794276000000", "prophet_r38", "2026-11-10 07:00:01"]]) raw.prepare("INSERT INTO webhook_sources (candle_key, source, payload, received_at) VALUES (?, ?, '{}', ?)").run(...r);
-  const issues = await detectHealthIssues({ DB: db }, now);
+  const issues = await detectHealthIssues({ DB: db, WEBHOOK_INGEST: "on" }, now);
   const w = issues.find((i) => i.kind === "webhook_silent");
+  assert.equal((await detectHealthIssues({ DB: db }, now)).some((i) => i.kind === "webhook_silent"), false, "S3: retired webhooks are never reported silent");
   assert.equal(w?.key, "webhook_silent:prophet_r38:60");
   assert.match(w.subject, /Prophet R38 1H has sent nothing since 2026-11-10 07:00 UTC/);
 });

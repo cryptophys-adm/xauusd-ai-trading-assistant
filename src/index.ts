@@ -41,6 +41,8 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
   WEBHOOK_SECRET?: string;
+  /** S3 (2026-11-27): "on" restores the TradingView webhook handler; default "off" answers POST /webhook with 410. */
+  WEBHOOK_INGEST?: string;
   CONFLUENCE_HANDOFF_SECRET?: string;
   // SB1 model router (src/model-router.mjs): the Worker secret the owner sets through the platform; MODEL_BASE_URL and
   // MODEL_ID default to Reflection's endpoint and Beam. SHADOW_MODEL_ROUTER is the FS1 switch (off by default).
@@ -266,6 +268,7 @@ import { publishSnapshot, hubSubscribers } from "./push-hub.mjs";
 import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
+import { webhookIngestMode, retiredWebhookResponse } from "./webhook-retirement.mjs";
 import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, m15KeyForClose } from "./agent-threads.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
@@ -3275,6 +3278,8 @@ export default {
       }
     }
     if (request.method === "POST" && url.pathname === "/webhook") {
+      // S3: retired (410 before the body or the secret is read; nothing written). WEBHOOK_INGEST "on" restores it.
+      if (webhookIngestMode(env) !== "on") return retiredWebhookResponse();
       return handleWebhook(request, env);
     }
     if (request.method === "POST" && url.pathname === "/evidence/local-calculation") {
