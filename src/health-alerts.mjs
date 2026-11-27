@@ -151,7 +151,7 @@ export async function marketDataFallbackIssue(env, now = Date.now()) {
   const back = cause.back_at ? `; TradingView expected back at ${hhmm(Date.parse(cause.back_at))}` : "";
   return {
     key: "market_data_fallback", kind: "market_data_fallback",
-    subject: `Market data from the broker's MT5 bars${label ? ` (${label})` : ""} since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC: ${cause.text}${back}. Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and USDT dominance wait.`,
+    subject: `Market data from the broker's MT5 bars${label ? ` (${label})` : ""} since ${iso(since * 1000).slice(0, 16).replace("T", " ")} UTC: ${cause.text}${back}. Rooms and decisions run on the broker's price (silver, oil and the dollar index too when the broker sends them); news, the 10-year yield and the USDT market cap wait.`,
     detail: { since: iso(since * 1000), source, cause: cause.code, back_at: cause.back_at }
   };
 }
