@@ -17,10 +17,9 @@ async function readJson(kv, key) {
 export async function readDiagnostics(env, { now = Date.now() } = {}) {
   const kv = env.MARKET_DATA_CACHE;
   if (!kv) return { status: 503, body: { error: "cache_not_configured" } };
-  const [lastRefresh, lastPublish, derivedCheck, records] = await Promise.all([
+  const [lastRefresh, lastPublish, records] = await Promise.all([
     readJson(kv, LAST_REFRESH_KEY),
     readJson(kv, LAST_PUBLISH_KEY),
-    readJson(kv, SERIES_INTERNALS.DERIVED_CHECK_KEY),
     Promise.all(SERIES.map((spec) => readSeries(kv, spec)))
   ]);
   const today = new Date(now).toISOString().slice(0, 10);
@@ -36,7 +35,6 @@ export async function readDiagnostics(env, { now = Date.now() } = {}) {
       budget: { date: today, used: budgetUsed, daily: budgetDaily },
       last_refresh: lastRefresh,
       last_publish: lastPublish,
-      derived_check: derivedCheck,
       series: SERIES.map((spec, index) => {
         const record = records[index];
         const last = Array.isArray(record?.candles) ? record.candles.at(-1) : null;

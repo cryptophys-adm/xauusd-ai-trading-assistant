@@ -16,8 +16,8 @@
 //   - History comes from the native series already cached. A derived series is pulled
 //     natively only to bootstrap an empty cache or to fill a gap the source no longer
 //     covers.
-//   - Once a day the derived bars are compared with a small native pull
-//     (verifyDerivedSeries), so a divergence from TradingView is visible.
+//   - compareWithNative compares derived bars with native bars of the same open times (tests). The
+//     daily live comparison (verifyDerivedSeries) was retired on 2026-11-27 (TradingView cleanup, step 1).
 
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
 

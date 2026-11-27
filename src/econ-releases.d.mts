@@ -15,3 +15,4 @@ export function upsertReleases(db: unknown, events: Record<string, any>[], optio
 export function refreshEconReleases(env: any, options?: { now?: number; gatedEvents?: any[]; readMt5?: ((env: any, o: { fromMs: number; toMs: number }) => Promise<any[]>) | null }): Promise<Record<string, any>>;
 export function calendarIntel(env: any, options?: { now?: number }): Promise<Record<string, any>>;
 export function applyMt5Actuals(db: any, events: any[], options?: { now?: number }): Promise<number>;
+export function goldHistoryForTests(env: any): Promise<{ t: number[]; o: number[]; h: number[]; l: number[]; c: number[] } | null>;
