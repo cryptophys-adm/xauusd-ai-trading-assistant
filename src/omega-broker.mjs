@@ -41,7 +41,10 @@ import { runFastProtect, pmFastOn, spikeHolds } from "./pm-fast.mjs";
 import { runReentry, recordReentry, reentryOn, isReentryId, isEntryIntentId, reentryMessage } from "./reentry-1m.mjs";
 import { limitSupersedeOn, supersedeDeletes, SUPERSEDE_REASON, SUPERSEDE_READ_MS } from "./limit-supersede.mjs";
 import { cdGateOn, readCdGateLive, recordCdEvents } from "./cd-gate.mjs";
-import { recoveryHold, heldDetail, holdRecovery, RECOVERY_RESTART_CAP } from "./recovery-hold.mjs";
+import { recoveryHold, heldDetail, holdRecovery, shouldRearm, RECOVERY_RESTART_CAP, REARM_FRESH_MS } from "./recovery-hold.mjs";
+// Recovery backoff: per database binding, when this isolate last checked for a re-arm (src/recovery-hold.mjs).
+const REARM_CHECKED = new WeakMap();
+const REARM_CHECK_MS = 5 * 60_000;
 import { brokerLabelFor, dailyLossExecutor, onboardingDayRef, accountRef, accountIdentity } from "./account-spec.mjs";
 import { syncAccount, readAccounts, resetAccountSpecSchemaForTests, specStatusText, eaVersionGateOn, versionAtLeast as specVersionAtLeast, EXECUTOR_ENTRY_MIN_VERSION, PROFILES, effectiveLimits } from "./account-spec.mjs";
 
@@ -1020,10 +1023,23 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       .bind(kid, publicKey, version, stateText, now).run();
   }
   if (prev?.kid && prev.kid !== kid) await event(db, now, "bridge", "bridge_key_changed", { from: prev.kid, to: kid });
-  // Recovery backoff: the terminal reporting connected again (a change of the stored state, so once per reconnect)
-  // re-arms Cerebrum's restarts (src/recovery-hold.mjs).
-  if (executor?.connected === true && prev?.state && parse(prev.state)?.connected === false && conn?.status === "stored") {
-    await event(db, now, "bridge", "terminal_connected", { conn_version: Number(conn.version) });
+  // Recovery backoff (src/recovery-hold.mjs): a healthy state (connected, a fresh quote) after a recovery re-arms
+  // Cerebrum's restarts, once per recovery episode (event recovery_rearmed). Checked before the light path, at most
+  // once per REARM_CHECK_MS per isolate while healthy (two small reads), at once after this isolate wrote a recovery.
+  if (conn?.status === "stored" && executor?.connected === true && Number.isFinite(executor?.received_ms) && now - Number(executor.received_ms) <= REARM_FRESH_MS) {
+    const checked = REARM_CHECKED.get(db);
+    if (!(Number.isFinite(checked) && now >= checked && now - checked < REARM_CHECK_MS)) {
+      try {
+        const lastRec = await db.prepare("SELECT ms FROM omega_events WHERE actor = 'agent:cerebrum' AND action = 'autonomous_recovery' ORDER BY id DESC LIMIT 1").first();
+        if (lastRec) {
+          const lastRearm = await db.prepare("SELECT ms FROM omega_events WHERE action = 'recovery_rearmed' ORDER BY id DESC LIMIT 1").first();
+          if (shouldRearm({ executor, now, lastRecoveryMs: Number(lastRec.ms), lastRearmMs: Number(lastRearm?.ms || 0) })) {
+            await event(db, now, "bridge", "recovery_rearmed", { conn_version: Number(conn.version) });
+          }
+        }
+        REARM_CHECKED.set(db, now);
+      } catch { /* the next sync checks again */ }
+    }
   }
   // The light path (owner 2026-11-19: "Keduanya, bertahap", step 1): a sync with nothing to manage and nothing new
   // reuses the last full plan of this isolate, at most LIGHT_SYNC_MAX_AGE_MS old, and only delivers the open intents.
@@ -1458,13 +1474,14 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       // no connected terminal since, no more restarts: one "held" event, then "hold" on every sync until it re-arms.
       let hold = { hold: false, recorded: false, streak: 0 };
       if (candidateDirective === "restart_terminal") {
-        const lastConnected = await db.prepare("SELECT ms FROM omega_events WHERE action = 'terminal_connected' ORDER BY id DESC LIMIT 1").first();
-        hold = recoveryHold({ recent, connVersion: conn.version, connectedMs: Number(lastConnected?.ms || 0) });
+        const lastRearm = await db.prepare("SELECT ms FROM omega_events WHERE action = 'recovery_rearmed' ORDER BY id DESC LIMIT 1").first();
+        hold = recoveryHold({ recent, connVersion: conn.version, connectedMs: Number(lastRearm?.ms || 0), now });
       }
       if (hold.hold) {
         recovery = holdRecovery(conn.version);
-        if (!hold.recorded) await event(db, now, "agent:cerebrum", "autonomous_recovery", heldDetail({ connVersion: conn.version, streak: hold.streak, reason: candidateReason }));
+        if (!hold.recorded) { await event(db, now, "agent:cerebrum", "autonomous_recovery", heldDetail({ connVersion: conn.version, streak: hold.streak, reason: candidateReason })); REARM_CHECKED.delete(db); }
       } else if (now - lastMs >= 180_000) {
+        REARM_CHECKED.delete(db);
         const actionId = `rec:${now}`;
         recovery = {
           directive: candidateDirective,

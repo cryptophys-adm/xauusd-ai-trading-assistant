@@ -45,7 +45,7 @@ export function recoveryLine(row) {
       `🛑 Cerebrum self-healing held · ${hhmm(Number(row.ms))}`,
       `Action: no more terminal restarts (${Number(d.dispatches) || 0} restarts did not reconnect)`,
       `Reason: ${REASON[reason] || reason}`,
-      "Next: check the server name exactly (spaces, hyphens, case) and enter the connection again on the Omega page; restarts resume on a new connection or once the terminal connects"
+      "Next: check the server name exactly (spaces, hyphens, case) and enter the connection again on the Omega page; restarts resume on a new connection or once the terminal is healthy again"
     ].join("\n");
   }
   return [
