@@ -97,7 +97,7 @@ async function workerEnv() {
     env: {
       DB: await d1(), WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv(), AI: fakeAI(),
       XAUUSD_EVENTS: { async send(body) { sent.push(body); }, async sendBatch(list) { sent.push(...list.map(m => m.body)); } },
-      WEBHOOK_SECRET: SECRET, INDICATOR_SOURCE: "local", PARITY_PROMOTE_AFTER: "1", ANALYSIS_TIMEFRAMES: "60"
+      WEBHOOK_SECRET: SECRET, INDICATOR_SOURCE: "local", PARITY_PROMOTE_AFTER: "1", ANALYSIS_TIMEFRAMES: "60", WEBHOOK_INGEST: "on"
     }
   };
 }

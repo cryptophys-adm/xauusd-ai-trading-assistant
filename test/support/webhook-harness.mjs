@@ -48,14 +48,16 @@ export function kv() {
   };
 }
 
-export async function webhookEnv(secret) {
+// S3 (2026-11-27): the harness exercises the old handler behind WEBHOOK_INGEST "on" (the rollback path); pass
+// { ingest: "off" } for the production default (410, nothing written).
+export async function webhookEnv(secret, { ingest = "on" } = {}) {
   const sent = [];
   return {
     sent,
     env: {
       DB: await d1(), WEBHOOK_BUFFER: kv(), SIGNAL_CACHE: kv(),
       XAUUSD_EVENTS: { async send(body) { sent.push(body); }, async sendBatch(list) { sent.push(...list.map((m) => m.body)); } },
-      WEBHOOK_SECRET: secret, INDICATOR_SOURCE: "local", ANALYSIS_TIMEFRAMES: "60"
+      WEBHOOK_SECRET: secret, INDICATOR_SOURCE: "local", ANALYSIS_TIMEFRAMES: "60", WEBHOOK_INGEST: ingest
     }
   };
 }
@@ -70,8 +72,8 @@ export async function postRaw(worker, env, path, text, headers = {}) {
 }
 
 /** Everything one webhook leaves behind: the answer, its D1 rows, its KV entries and its queue sends. */
-export async function webhookOutcome(worker, secret, text) {
-  const { env, sent } = await webhookEnv(secret);
+export async function webhookOutcome(worker, secret, text, opts = {}) {
+  const { env, sent } = await webhookEnv(secret, opts);
   const response = await postRaw(worker, env, "/webhook", text);
   return {
     response,
