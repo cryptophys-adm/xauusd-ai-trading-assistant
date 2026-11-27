@@ -260,3 +260,38 @@ export function setStartupSymbol(iniText, symbol) {
   mutateSection(blocks, "StartUp", [["Symbol", symbol]]);
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
 }
+
+/**
+ * F2: a FEED terminal's login (bridge OMEGA_ROLE=feed). Like applyCredentials, but algo trading stays OFF
+ * (`AllowLiveTrading=0`): the feed's EA (OmegaFeed, no trade code) only exports bars. The chart opens on the feed's gold
+ * symbol with that expert attached.
+ */
+export function applyFeedCredentials(iniText, { server, login, password, symbol = "XAUUSD", expert = "OmegaFeed" }) {
+  if (typeof iniText !== "string") throw new Error("iniText must be a string");
+  const loginStr = typeof login === "number" ? String(login) : login;
+  assertNoNewlines(server, "server");
+  assertNoNewlines(loginStr, "login");
+  assertNoNewlines(password, "password");
+  assertNoNewlines(symbol, "symbol");
+  assertNoNewlines(expert, "expert");
+  const eol = iniText.includes("\r\n") ? "\r\n" : "\n";
+  const hasTrailingNewline = iniText.endsWith("\r\n") || iniText.endsWith("\n");
+  const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
+  if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
+  const blocks = parseIniBlocks(rawLines);
+  mutateSection(blocks, "Common", [["Login", loginStr], ["Server", server], ["Password", password]]);
+  mutateSection(blocks, "Experts", [["Enable", "1"], ["Enabled", "1"], ["AllowLiveTrading", "0"], ["AllowDllImport", "0"], ["Account", "0"], ["Profile", "0"]]);
+  mutateSection(blocks, "StartUp", [["Expert", expert], ["Symbol", symbol], ["Period", "M1"]], ["ExpertParameters"]);
+  return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}
+
+/** F2: a FEED terminal's trading switch, forced off (`AllowLiveTrading=0`), whatever wrote the ini. */
+export function ensureFeedSettings(iniText) {
+  const eol = iniText.includes("\r\n") ? "\r\n" : "\n";
+  const hasTrailingNewline = iniText.endsWith("\r\n") || iniText.endsWith("\n");
+  const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
+  if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
+  const blocks = parseIniBlocks(rawLines);
+  mutateSection(blocks, "Experts", [["AllowLiveTrading", "0"], ["AllowDllImport", "0"]]);
+  return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}

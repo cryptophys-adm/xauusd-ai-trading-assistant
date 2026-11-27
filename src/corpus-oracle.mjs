@@ -20,6 +20,7 @@
 // Switch: CORPUS_ORACLE_MODE = "off" (default; the bars are ignored) | "shadow" (collect and measure).
 
 import { archiveBrokerBars } from "./liquidity-lens.mjs";
+import { sameBroker } from "./gold-symbol.mjs";
 
 export const CORPUS_TIMEFRAME = "M1";
 export const CORPUS_MAX_BARS_PER_SYNC = 240;
@@ -214,9 +215,10 @@ export async function ingestFeedCorpus(env, corpus, { bridgeId, connection = nul
   await ensureSchema(db);
   const v = validateFeedCorpus(corpus, { connection, state, now });
   if (!v.ok) return { mode: "shadow", error: v.error, cursor_ms: null };
-  // A feed on the executor's own server is no independent source (and would hide the executor's bars): refused.
+  // A feed on the executor's own broker is no independent source (and would hide the executor's bars): refused. The
+  // broker, not the server string ("FxPro-MT5" and "FxPro-MT5 Demo" are one broker; sameBroker, as MX1 compares them).
   const exec = await db.prepare("SELECT server FROM omega_connection WHERE id = 1").first().catch(() => null);
-  if (exec?.server && clean(exec.server) === v.server) return { mode: "shadow", error: "feed_on_executor_server", cursor_ms: null };
+  if (exec?.server && (clean(exec.server) === v.server || sameBroker(exec.server, v.server))) return { mode: "shadow", error: "feed_on_executor_server", cursor_ms: null };
   const mark = await db.prepare("SELECT bridge_id FROM corpus_feeds WHERE source = ?").bind(v.source).first();
   if (!mark) {
     const owned = await db.prepare("SELECT 1 AS x FROM corpus_sources WHERE source = ?").bind(v.source).first();
