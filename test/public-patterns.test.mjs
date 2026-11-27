@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { publicAnalysis, publicPatterns, analysisLeaks, ANALYSIS_CHARTS, KEY_MAP_CHARTS, PROJECTION_MAX_HEIGHTS, PUBLIC_PATTERN_STATUSES } from "../src/public-analysis.mjs";
 import { buildStrategy, keyLevelChartsOf } from "../src/strategy-engine.mjs";
 import { PRICE_LIKE } from "../src/public-projection.mjs";
-import { PATTERNS_KEY, PATTERNS_VERSION, PATTERN_BARS, PATTERN_SERIES, seriesKey, barCloseMs, patternsOf, readPatterns, runPatternsStep } from "../src/public-patterns.mjs";
+import { PATTERNS_KEY, PATTERNS_VERSION, PATTERN_BARS, PATTERN_SERIES, seriesKey, barCloseMs, barClosePrice, patternsOf, readPatterns, runPatternsStep } from "../src/public-patterns.mjs";
 import { zoneInputs, NOW } from "./support/zone-types-fixture.mjs";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -98,7 +98,7 @@ test("PT1-4 the writer: five KV reads per 5m run; a chart is detected only on it
   assert.deepEqual(kv.puts.map((p) => [p.k, p.o.expirationTtl > 0]), [[PATTERNS_KEY, true]]);
   assert.deepEqual([...kv.gets].sort(), [...Object.values(PATTERN_SERIES).map(seriesKey), PATTERNS_KEY].sort(), "the four series and the stored value, nothing else (no DB: no released figures read)");
   const stored = JSON.parse(kv.map.get(PATTERNS_KEY));
-  assert.deepEqual(Object.keys(stored), ["version", "at_close_ms", "closed", "mode", "patterns"]);
+  assert.deepEqual(Object.keys(stored), ["version", "at_close_ms", "closed", "mode", "price", "price_at", "patterns"]);
   assert.equal(JSON.stringify(stored.patterns), JSON.stringify(patternsOf(barsOf(inputs)).patterns));
   for (let i = 0; i < 3; i++) assert.equal((await runPatternsStep(env, { now: NOW })).status, "same_close");
   assert.equal(kv.puts.length, 1);
@@ -133,12 +133,13 @@ test("PT1-5 the reader: its one KV key and nothing else; sinceCloseMs equal to t
   const kv = fakeKv({ [PATTERNS_KEY]: value });
   const env = { SIGNAL_CACHE: kv, DB: { prepare() { throw new Error("no D1 read"); } } };
   const full = await readPatterns(env);
-  assert.deepEqual(full, { version: PATTERNS_VERSION, at_close_ms: value.at_close_ms, closed: value.closed, patterns: value.patterns });
-  assert.deepEqual(await readPatterns(env, { sinceCloseMs: value.at_close_ms }), { version: PATTERNS_VERSION, at_close_ms: value.at_close_ms, unchanged: true });
+  assert.deepEqual(full, { version: PATTERNS_VERSION, at_close_ms: value.at_close_ms, closed: value.closed, price: value.price, price_at: value.price_at, patterns: value.patterns });
+  assert.deepEqual(await readPatterns(env, { sinceCloseMs: value.at_close_ms }), { version: PATTERNS_VERSION, at_close_ms: value.at_close_ms, price: value.price, price_at: value.price_at, unchanged: true });
   assert.deepEqual((await readPatterns(env, { sinceCloseMs: value.at_close_ms - 900_000 })).patterns, value.patterns);
   assert.deepEqual(kv.gets, [PATTERNS_KEY, PATTERNS_KEY, PATTERNS_KEY], "one read per call, of that key only");
-  assert.deepEqual(await readPatterns({ SIGNAL_CACHE: fakeKv() }), { version: PATTERNS_VERSION, at_close_ms: null, closed: null, patterns: [] });
-  assert.deepEqual(await readPatterns({ SIGNAL_CACHE: fakeKv({ [PATTERNS_KEY]: "{not json" }) }), { version: PATTERNS_VERSION, at_close_ms: null, closed: null, patterns: [] });
+  const none = { version: PATTERNS_VERSION, at_close_ms: null, closed: null, price: null, price_at: null, patterns: [] };
+  assert.deepEqual(await readPatterns({ SIGNAL_CACHE: fakeKv() }), none);
+  assert.deepEqual(await readPatterns({ SIGNAL_CACHE: fakeKv({ [PATTERNS_KEY]: "{not json" }) }), none);
   assert.deepEqual(analysisLeaks(full), []);
 });
 
@@ -161,4 +162,38 @@ test("PT1-6 wiring: patterns() reads only through readPatterns (no fs(), strateg
   assert.match(read("src/strategy-engine.mjs"), /h1Bars: h1Bars\.slice\(-60\), m15Bars: m15Bars\.slice\(-60\), h4Bars: h4Bars\.slice\(-60\), d1Bars: d1Bars\.slice\(-60\)/);
   assert.match(read("src/strategy-engine.mjs"), /seriesCandles\(env, "1h"\), seriesCandles\(env, "15m"\), seriesCandles\(env, "4h"\), seriesCandles\(env, "1D"\)/);
   assert.match(read("src/strategy-engine.mjs"), /market-data:v2:series:OANDA:XAUUSD\|\$\{interval\}/);
+});
+
+test("PT1b price and price_at: the latest 15m bar's close and its close time, from the series already read; returned with or without unchanged; a value from before PT1b reads as null", async () => {
+  const inputs = zoneInputs();
+  const last = inputs.m15Bars.at(-1);
+  const value = patternsOf(barsOf(inputs));
+  assert.equal(value.price, Math.round(Number(last.close ?? last.c) * 100) / 100);
+  assert.equal(value.price_at, barCloseMs(last));
+  assert.equal(value.price_at, value.closed.M15, "the same bar as M15's close");
+  assert.equal(value.version, PATTERNS_VERSION, "the version is unchanged: the fields are optional");
+  // The writer: no read beyond the five, and the price comes with the 15m close.
+  const kv = seriesKv(inputs);
+  await runPatternsStep({ SIGNAL_CACHE: kv }, { now: NOW });
+  assert.equal(kv.gets.length, 5, "no new KV read");
+  const stored = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.deepEqual([stored.price, stored.price_at], [value.price, value.price_at]);
+  const next = { ...last, close: Number(last.close ?? last.c) + 1.234, close_time: new Date(barCloseMs(last) + 900_000).toISOString() };
+  kv.map.set(seriesKey("15m"), JSON.stringify({ candles: [...inputs.m15Bars, next] }));
+  assert.equal((await runPatternsStep({ SIGNAL_CACHE: kv }, { now: NOW })).status, "written");
+  const after = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.deepEqual([after.price, after.price_at], [Math.round((Number(last.close ?? last.c) + 1.234) * 100) / 100, barCloseMs(next)]);
+  // The reader returns both, also with unchanged, from the same one read.
+  const env = { SIGNAL_CACHE: kv };
+  const u = await readPatterns(env, { sinceCloseMs: after.at_close_ms });
+  assert.deepEqual([u.unchanged, u.price, u.price_at], [true, after.price, after.price_at]);
+  // A value from before PT1b (no price fields): null, not missing.
+  const { price: _p, price_at: _a, ...old } = after;
+  const r = await readPatterns({ SIGNAL_CACHE: fakeKv({ [PATTERNS_KEY]: old }) });
+  assert.deepEqual([r.price, r.price_at, r.patterns.length], [null, null, old.patterns.length]);
+  // No price without a usable close: none, not 0.
+  for (const bad of [{}, { close: 0 }, { close: -1 }, { close: "x" }, { close: null }, { c: true }]) assert.equal(barClosePrice(bad), null, JSON.stringify(bad));
+  assert.equal(barClosePrice({ c: 4012.345 }), 4012.35);
+  const empty = patternsOf({});
+  assert.deepEqual([empty.price, empty.price_at], [null, null]);
 });

@@ -9,7 +9,11 @@
 //     value; a chart's patterns are detected only on a new close of that chart (M15 every 15 minutes, H1 hourly, H4 every
 //     4 hours, D1 daily; detectPatterns with the released figures, as buildKeyLevels' chartPatterns does) and projected
 //     (publicPatterns, BP1's guards included); the other charts keep their stored patterns. It writes
-//     { version, at_close_ms, closed, mode, patterns } to one KV key only when that value changed.
+//     { version, at_close_ms, closed, mode, price, price_at, patterns } to one KV key only when that value changed.
+//     PT1b (2026-11-27, for CTA's "Price when read" and its projection checks): `price` is the close of the latest
+//     15m bar of the series it already reads (two decimals, as the analysis's price) and `price_at` that bar's close
+//     time (ms); no new read. The version is unchanged: both fields are optional, a value written before PT1b has
+//     neither until the next 15m close rewrites it.
 //   - Reader (readPatterns, PublicProjection.patterns()): that one KV key and nothing else. With `sinceCloseMs` equal to
 //     the stored at_close_ms it answers { unchanged: true } without the patterns.
 // The patterns are publicAnalysis().patterns' shape: no decision, plan, entry, stop, trade target, account or price
@@ -38,6 +42,12 @@ export function barCloseMs(bar) {
   return bar?.t !== null && bar?.t !== "" && Number.isFinite(Number(bar?.t)) ? Number(bar.t) : null;
 }
 const lastClose = (bars) => (Array.isArray(bars) && bars.length ? barCloseMs(bars.at(-1)) : null);
+/** The close price of a bar (close, else c), to two decimals, or null; a non-positive or non-finite one is no price. */
+export function barClosePrice(bar) {
+  const raw = bar?.close ?? bar?.c;
+  const n = raw === null || raw === undefined || raw === "" || typeof raw === "boolean" ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
 
 /** Pure: one chart's public patterns from its bars (the strategy's last PATTERN_BARS), as the analysis shows them. */
 export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
@@ -50,10 +60,13 @@ export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
  * the patterns in the Projection Agent's chart order (M15, H1, H4, D1, as publicAnalysis lists them), `closed` each
  * chart's latest close (ms) and `at_close_ms` the latest of them.
  */
-function valueOf(byChart, closed, mode) {
+function valueOf(byChart, closed, mode, m15Bars = []) {
   const known = Object.values(closed).filter((t) => t !== null);
+  const last = Array.isArray(m15Bars) && m15Bars.length ? m15Bars.at(-1) : null;
+  const price = barClosePrice(last);
   return {
     version: PATTERNS_VERSION, at_close_ms: known.length ? Math.max(...known) : null, closed, mode,
+    price, price_at: price === null ? null : barCloseMs(last),
     patterns: mode === "off" ? [] : Object.keys(PATTERN_SERIES).flatMap((c) => byChart[c] ?? []),
   };
 }
@@ -66,7 +79,7 @@ export function patternsOf(bars = {}, { events = [], mode = "on" } = {}) {
   const m = mode === "off" ? "off" : "on";
   const closed = Object.fromEntries(Object.keys(PATTERN_SERIES).map((c) => [c, lastClose(Array.isArray(bars?.[c]) ? bars[c].slice(-PATTERN_BARS) : [])]));
   const byChart = m === "off" ? {} : Object.fromEntries(Object.keys(PATTERN_SERIES).map((c) => [c, chartPublicPatterns(c, bars?.[c], { events })]));
-  return valueOf(byChart, closed, m);
+  return valueOf(byChart, closed, m, Array.isArray(bars?.M15) ? bars.M15.slice(-PATTERN_BARS) : []);
 }
 
 const readJson = async (kv, key) => { try { return JSON.parse((await kv?.get?.(key)) || "null"); } catch { return null; } };
@@ -95,7 +108,7 @@ export async function runPatternsStep(env, { now = Date.now() } = {}) {
     const events = detect.length ? ((await recentReleases(env, { now }).catch(() => [])) ?? []) : [];
     const byChart = {};
     for (const c of charts) byChart[c] = detect.includes(c) ? chartPublicPatterns(c, bars[c], { events }) : (reuse ? stored.patterns.filter((p) => p?.chart === c) : []);
-    const value = valueOf(byChart, closed, mode);
+    const value = valueOf(byChart, closed, mode, bars.M15);
     if (stored && JSON.stringify(stored) === JSON.stringify(value)) return { status: "unchanged", at_close_ms: value.at_close_ms, detected: detect };
     await kv.put(PATTERNS_KEY, JSON.stringify(value), { expirationTtl: PATTERNS_TTL_S });
     return { status: "written", at_close_ms: value.at_close_ms, detected: detect, patterns: value.patterns.length };
@@ -106,14 +119,17 @@ export async function runPatternsStep(env, { now = Date.now() } = {}) {
 
 /**
  * The reader (PublicProjection.patterns): the one KV key, nothing else. `sinceCloseMs` equal to the stored at_close_ms
- * answers { version, at_close_ms, unchanged: true }. Without a stored value: no patterns and a null close.
+ * answers { version, at_close_ms, price, price_at, unchanged: true }. Without a stored value: no patterns, a null
+ * close and no price. `price` and `price_at` are null for a value written before PT1b.
  */
 export async function readPatterns(env, { sinceCloseMs = null } = {}) {
   const v = await readJson(env?.SIGNAL_CACHE, PATTERNS_KEY);
-  if (!v || v.version !== PATTERNS_VERSION || !Array.isArray(v.patterns)) return { version: PATTERNS_VERSION, at_close_ms: null, closed: null, patterns: [] };
+  if (!v || v.version !== PATTERNS_VERSION || !Array.isArray(v.patterns)) return { version: PATTERNS_VERSION, at_close_ms: null, closed: null, price: null, price_at: null, patterns: [] };
+  const price = typeof v.price === "number" && Number.isFinite(v.price) && v.price > 0 ? v.price : null;
+  const price_at = price !== null && Number.isFinite(v.price_at) ? v.price_at : null;
   const since = Number(sinceCloseMs);
   if (sinceCloseMs !== null && sinceCloseMs !== undefined && Number.isFinite(since) && since === v.at_close_ms) {
-    return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, unchanged: true };
+    return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, price, price_at, unchanged: true };
   }
-  return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, closed: v.closed ?? null, patterns: v.patterns };
+  return { version: PATTERNS_VERSION, at_close_ms: v.at_close_ms, closed: v.closed ?? null, price, price_at, patterns: v.patterns };
 }
