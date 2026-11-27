@@ -17,11 +17,17 @@
 //     no chart closed, so the value is rewritten about every 5 minutes while the market trades. The patterns and
 //     `closed` are untouched by it. The version is unchanged: the price fields are optional, a value written before
 //     PT1b has none until the next run rewrites it.
+//     PT1c (2026-11-27; the owner approved CTA's "post only if the breakout is within the last 2 bars of its chart"):
+//     each pattern carries `confirmed_at_ms`, the close time of the bar where its current breakout (or bust) was
+//     confirmed: the first bar of the run of closes beyond the broken line (beyond it by the detector's own margin,
+//     0.1 x the chart's mean range) that ends at the chart's latest bar, never before the pattern's last turn; null
+//     for a forming pattern. The detector does not carry it, so it is derived here from the bars the step already
+//     passes; analysis() does not carry it (its patterns are otherwise the same).
 //   - Reader (readPatterns, PublicProjection.patterns()): that one KV key and nothing else. With `sinceCloseMs` equal to
 //     the stored at_close_ms it answers { unchanged: true } without the patterns.
 // The patterns are publicAnalysis().patterns' shape: no decision, plan, entry, stop, trade target, account or price
 // beyond each pattern's own lines and projection.
-import { detectPatterns } from "./chart-patterns.mjs";
+import { detectPatterns, normBars, meanRange } from "./chart-patterns.mjs";
 import { publicPatterns } from "./public-analysis.mjs";
 import { chartPatternsMode } from "./projection-agent.mjs";
 import { recentReleases } from "./econ-releases.mjs";
@@ -72,10 +78,33 @@ export function barClosePrice(bar) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
 }
 
+/**
+ * Pure (PT1c): the close time (ms) of the bar where a broken-out pattern's current breakout was confirmed, from the bars
+ * it was detected on: the first bar of the run of closes beyond its broken line (the upper line going up, the lower one
+ * going down; beyond by the detector's margin, 0.1 x the mean range) that ends at the latest bar, after the pattern's
+ * last turn (end_bar). The latest bar always counts, as the detector found the breakout there. Null for a forming
+ * pattern or bars without close times.
+ */
+export function breakoutCloseMs(series, p) {
+  const dir = Number(p?.direction);
+  if (!(dir > 0 || dir < 0)) return null;
+  const b = normBars(series), n = b.length;
+  const A = meanRange(b);
+  if (!n || !(A > 0)) return null;
+  const line = dir > 0 ? Number(p.upper) : Number(p.lower);
+  if (!Number.isFinite(line)) return null;
+  const eps = 0.1 * A;
+  const beyond = (x) => (dir > 0 ? x.c > line + eps : x.c < line - eps);
+  const from = Number.isInteger(p.end_bar) && p.end_bar >= 0 ? p.end_bar + 1 : 0;
+  let k = n - 1;
+  while (k - 1 >= from && beyond(b[k - 1])) k--;
+  return Number.isFinite(b[k]?.t) ? b[k].t : null;
+}
+
 /** Pure: one chart's public patterns from its bars (the strategy's last PATTERN_BARS), as the analysis shows them. */
 export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
   const series = Array.isArray(bars) ? bars.slice(-PATTERN_BARS) : [];
-  return publicPatterns(detectPatterns(series, { events }).map((p) => ({ tf: CHART_TF[chart], ...p })));
+  return publicPatterns(detectPatterns(series, { events }).map((p) => ({ tf: CHART_TF[chart], ...p, confirmed_at_ms: p.status === "forming" ? null : breakoutCloseMs(series, p) })));
 }
 
 /**

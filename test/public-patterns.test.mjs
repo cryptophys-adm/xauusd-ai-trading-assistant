@@ -7,7 +7,8 @@ import { readFileSync } from "node:fs";
 import { publicAnalysis, publicPatterns, analysisLeaks, ANALYSIS_CHARTS, KEY_MAP_CHARTS, PROJECTION_MAX_HEIGHTS, PUBLIC_PATTERN_STATUSES } from "../src/public-analysis.mjs";
 import { buildStrategy, keyLevelChartsOf } from "../src/strategy-engine.mjs";
 import { PRICE_LIKE } from "../src/public-projection.mjs";
-import { PATTERNS_KEY, PATTERNS_VERSION, PATTERN_BARS, PATTERN_SERIES, seriesKey, barCloseMs, barClosePrice, freshPrice, patternsOf, readPatterns, runPatternsStep } from "../src/public-patterns.mjs";
+import { PATTERNS_KEY, PATTERNS_VERSION, PATTERN_BARS, PATTERN_SERIES, seriesKey, barCloseMs, barClosePrice, breakoutCloseMs, freshPrice, patternsOf, readPatterns, runPatternsStep } from "../src/public-patterns.mjs";
+import { detectPatterns, normBars, meanRange } from "../src/chart-patterns.mjs";
 import { zoneInputs, NOW } from "./support/zone-types-fixture.mjs";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -76,7 +77,9 @@ test("PT1-3 the cheap path gives the patterns the strategy gives, on every chart
     const inputs = zoneInputs(undefined, { prophet });
     const fromStrategy = publicAnalysis(buildStrategy(inputs).key_levels, { now: NOW }).patterns;
     const cheap = patternsOf(barsOf(inputs), { events: inputs.releases ?? [] });
-    assert.equal(JSON.stringify(cheap.patterns), JSON.stringify(fromStrategy), `prophet ${prophet}`);
+    // PT1c: the cheap path adds confirmed_at_ms (null while forming); every other field is the strategy's, byte for byte.
+    assert.ok(cheap.patterns.every((p) => Object.hasOwn(p, "confirmed_at_ms") && (p.status === "forming" ? p.confirmed_at_ms === null : true)));
+    assert.equal(JSON.stringify(cheap.patterns.map(({ confirmed_at_ms: _c, ...p }) => p)), JSON.stringify(fromStrategy), `prophet ${prophet}`);
     assert.deepEqual(new Set(cheap.patterns.map((p) => p.chart)), new Set(["M15", "H1", "H4", "D1"]), "every chart");
     assert.deepEqual(cheap.closed, { M15: barCloseMs(inputs.m15Bars.at(-1)), H1: barCloseMs(inputs.h1Bars.at(-1)), H4: barCloseMs(inputs.h4Bars.at(-1)), D1: barCloseMs(inputs.d1Bars.at(-1)) });
     assert.equal(cheap.at_close_ms, Math.max(...Object.values(cheap.closed)));
@@ -211,4 +214,48 @@ test("PT1b the fresh price: the 1m series' latest bar (else the 15m close), refr
   await runPatternsStep({ SIGNAL_CACHE: kv15 }, { now });
   const s15 = JSON.parse(kv15.map.get(PATTERNS_KEY));
   assert.deepEqual([s15.price, s15.price_tf, s15.price_at], [barClosePrice(m15last), "15m", barCloseMs(m15last)]);
+});
+
+test("PT1c confirmed_at_ms: the close time of the first bar of the breakout's run beyond its line, on every confirmed or busted pattern; null while forming; analysis() parity holds for every other field", () => {
+  const inputs = zoneInputs();
+  const step = 3_600_000;
+  for (const up of [1, -1]) {
+    // Three H1 bars closing two mean ranges beyond the first pattern's line: a breakout up (or down) at the first of them.
+    const base = inputs.h1Bars.slice(-60);
+    const p0 = detectPatterns(base)[0];
+    const A = meanRange(normBars(base));
+    const lvl = up > 0 ? p0.upper + 2 * A : p0.lower - 2 * A;
+    const last = base.at(-1);
+    const ext = [1, 2, 3].map((k) => ({ ...last, open: lvl, high: lvl + A / 4, low: lvl - A / 4, close: lvl, close_time: new Date(Date.parse(last.close_time) + k * step).toISOString() }));
+    const h1Bars = [...inputs.h1Bars, ...ext];
+    const moved = { ...inputs, h1Bars };
+    const cheap = patternsOf(barsOf(moved));
+    const h1 = cheap.patterns.filter((p) => p.chart === "H1");
+    const broken = h1.filter((p) => p.status !== "forming");
+    assert.ok(broken.length >= 2, `breakouts found (${up > 0 ? "up" : "down"}): ${h1.map((p) => p.status).join(",")}`);
+    for (const p of h1) {
+      if (p.status === "forming") { assert.equal(p.confirmed_at_ms, null, p.pattern); continue; }
+      assert.ok(Number.isFinite(p.confirmed_at_ms), `${p.pattern} has its breakout time`);
+      assert.ok(p.confirmed_at_ms <= Date.parse(ext.at(-1).close_time) && p.confirmed_at_ms >= Date.parse(base[0].close_time), p.pattern);
+    }
+    // The patterns broken by the three new bars broke at the first of them (the bar before was inside the line).
+    const fresh = broken.filter((p) => p.pattern !== "gap");
+    assert.ok(fresh.some((p) => p.confirmed_at_ms === Date.parse(ext[0].close_time)), JSON.stringify(fresh.map((p) => [p.pattern, p.confirmed_at_ms])));
+    // analysis() on the same inputs: the same patterns but for the new field.
+    const fromStrategy = publicAnalysis(buildStrategy(moved).key_levels, { now: NOW }).patterns;
+    assert.equal(JSON.stringify(cheap.patterns.map(({ confirmed_at_ms: _c, ...p }) => p)), JSON.stringify(fromStrategy));
+    assert.ok(fromStrategy.every((p) => !Object.hasOwn(p, "confirmed_at_ms")), "analysis() does not carry it");
+  }
+  // Pure: the run's first bar, after the pattern's last turn; a re-break counts from where it came back beyond.
+  const bars = [4000, 4001, 4000, 4012, 4013, 4001, 4014, 4015, 4016].map((c, i) => ({ open: c, high: c + 0.5, low: c - 0.5, close: c, close_time: new Date(Date.UTC(2026, 10, 27, i)).toISOString() }));
+  const t = (i) => Date.UTC(2026, 10, 27, i);
+  const pat = { direction: 1, upper: 4005, lower: 3995, end_bar: 2 };
+  assert.equal(breakoutCloseMs(bars, pat), t(6), "the re-break at bar 6, not the first break at bar 3");
+  assert.equal(breakoutCloseMs(bars, { ...pat, end_bar: 7 }), t(8), "never before the pattern's last turn");
+  assert.equal(breakoutCloseMs(bars.slice(0, 5), pat), t(3));
+  assert.equal(breakoutCloseMs(bars, { ...pat, direction: 0 }), null, "forming");
+  assert.equal(breakoutCloseMs(bars.map(({ close_time: _x, ...b }) => b), pat), null, "no close times");
+  assert.equal(breakoutCloseMs([], pat), null);
+  const down = [4000, 3999, 4000, 3988, 3987].map((c, i) => ({ open: c, high: c + 0.5, low: c - 0.5, close: c, close_time: new Date(t(i)).toISOString() }));
+  assert.equal(breakoutCloseMs(down, { direction: -1, upper: 4005, lower: 3995, end_bar: 1 }), t(3), "a break down (or a bust) the same way");
 });
