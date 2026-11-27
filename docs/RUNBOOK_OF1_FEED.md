@@ -92,6 +92,40 @@ Phases 0–1 are already done: `/opt/mt5-oanda`, Xvfb `:2`, and the units `xvfb-
 
    Expect `feed_started` with `"version":"1.8.1"` and no `feed_sync_http` or `feed_loop_error`. The executor's `omega-bridge` keeps its PID and `NRestarts`.
 
+**Bridge 1.8.2 and `feed-run.sh` (feed incident 2026-11-27).** After the bridge empties `Password=` (once the terminal is logged in), the old `run.sh` started the terminal without `/config`, so after any restart (a reboot, a unit restart, a crash) the chart opened without OmegaFeed and the feed went stale. 1.8.2 keeps a credential-free `startup.ini` beside `login.ini` (no `[Common]` section: no login, no password; `[StartUp]` Expert=OmegaFeed on the feed's symbol, M1; algo trading off; owned like `login.ini`, mode 600), and `bridge/omega-bridge/feed-run.sh` always passes a `/config`: `login.ini` while it holds a password, else `startup.ini` (the saved account logs in by itself). Install both together, one VPS change, with the owner's go. The executor is not changed.
+
+1. Copy the repo's `bridge/omega-bridge` over `/opt/omega-bridge-oanda` at the merged commit (only the feed's copy) and check it as for 1.8.1. Expect `export const BRIDGE_VERSION = "1.8.2";` and no `SYNTAX FAIL`.
+2. Restart only the feed's bridge, then check that `startup.ini` exists and holds no login (counts only, nothing printed from the file):
+
+   ```bash
+   systemctl restart omega-bridge@oanda
+   ```
+
+   ```bash
+   f=/opt/mt5-oanda/startup.ini; ls -l "$f" && echo "login lines: $(grep -Ec '^(Login|Password|Server)=' "$f")" && echo "expert lines: $(grep -c '^Expert=OmegaFeed$' "$f")"
+   ```
+
+   Expect mode `-rw-------` with the same owner as `login.ini`, `login lines: 0` and `expert lines: 1`.
+3. Compare the current start script with the new one before replacing it. Show the diff (both files hold paths only, no secret):
+
+   ```bash
+   diff -u /opt/mt5-oanda/run.sh /opt/omega-bridge-oanda/feed-run.sh
+   ```
+
+   **Stop and report** if the current script does anything the new one does not (another environment variable, a flag, a path, a wine option). Otherwise keep a backup and install it with the old file's owner and mode:
+
+   ```bash
+   r=/opt/mt5-oanda/run.sh; cp -p "$r" "$r.bak" && install -o "$(stat -c %u "$r")" -g "$(stat -c %g "$r")" -m "$(stat -c %a "$r")" /opt/omega-bridge-oanda/feed-run.sh "$r" && sh -n "$r" && echo installed
+   ```
+
+4. Restart the feed terminal with the guarded line (section 3), then check after two minutes that the EA writes again (times only):
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; date -u; stat -c '%y %n' "$T/MQL5/Files/omega/state.json" "$T/MQL5/Files/omega/corpus.json"
+   ```
+
+   Both files must be under a minute old. Rollback: `cp -p /opt/mt5-oanda/run.sh.bak /opt/mt5-oanda/run.sh`.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:
@@ -159,6 +193,8 @@ The bridge refuses to start while the placeholder is still in the file.
    T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print([(s["base"], s["symbol"], len(s["bars"])) for s in d["series"]])' "$T/MQL5/Files/omega/corpus_macro.json"
    ```
 
+   **Before bridge 1.8.2 and `feed-run.sh` are installed** (section 1), a restart of `mt5-oanda` starts the terminal without its EA once the bridge has emptied `Password=` (2026-11-27 13:09Z): `state.json` stops. Then the owner re-enters the feed login on Nexus > Live > Data feeds; the bridge writes the login and restarts the terminal with `/config`, and the EA attaches. With 1.8.2 and `feed-run.sh` a restart keeps the EA.
+
    A base missing from the list means that symbol has no name or no bars on this server: report which one. The file is sent by the feed bridge from 1.8.1 (section 1, "Bridge 1.8.1"), and only once the server ingests the feed's macro bars (macro export step 3); until then it is written but not sent.
 2. The login ini starts the chart with `Expert=OmegaFeed` and `Symbol=XAUUSD.sml`. The bridge writes these when it applies the login.
 3. Algo trading stays **off** in that terminal (`AllowLiveTrading=0`):
@@ -182,7 +218,7 @@ The bridge refuses to start while the placeholder is still in the file.
 4. The bridge then:
    - writes the login into `TERMINAL_INI`;
    - restarts `mt5-oanda`;
-   - empties `Password=` once the terminal reports it is logged in on that server. `run.sh` passes `/config` only while `Password=` is non-empty, so the next start needs no login file.
+   - empties `Password=` once the terminal reports it is logged in on that server. From bridge 1.8.2 with `feed-run.sh`, `run.sh` then passes the credential-free `startup.ini` with `/config`, so every later start opens the chart with OmegaFeed (before 1.8.2 it passed no `/config` and the EA did not attach).
 
 ## 5. Verify (read-only)
 

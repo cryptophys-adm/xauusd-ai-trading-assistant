@@ -75,7 +75,7 @@ test("F4-1 the fixtures are the seed's answers, byte for byte; each feed row has
   assert.deepEqual(REPLIES, seed.replies);
   assert.deepEqual(EMPTY.broker.feeds, []);
   for (const d of [FRESH, VIEWER, STALE]) for (const f of d.broker.feeds) {
-    assert.deepEqual(Object.keys(f), ["bridge_id", "role", "kid", "public_key", "bridge_version", "synced_age_ms", "fresh", "terminal_connected", "server", "symbol", "connection"]);
+    assert.deepEqual(Object.keys(f), ["bridge_id", "role", "kid", "public_key", "bridge_version", "synced_age_ms", "fresh", "terminal_connected", "server", "symbol", "connection", "last_bar_age_ms", "content_stale"]);
     assert.deepEqual(Object.keys(f.connection), ["version", "status", "server", "sealed_to_current_key", "updated_ms"]);
   }
   const all = JSON.stringify([EMPTY, FRESH, VIEWER, STALE, REPLIES]);
