@@ -306,6 +306,7 @@ import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
 import { limitFirstRevert, limitFirstStatus, limitFirstRefusalDigest } from "./limit-first.mjs";
+import { runExecutorSilentCheck } from "./executor-silent.mjs";
 import { withFeatureSwitches, featureSwitchesPayload, setFeatureSwitch } from "./feature-switch-store.mjs";
 import { runZoneReadingsStep, runZoneBreaker, zonesView, zoneReadingsMode } from "./zone-readings.mjs";
 import { runStrategyCouncil, readCouncilVerdicts, readCouncilState, setCouncilAuto, pinStrategy, unpinStrategy } from "./strategy-council.mjs";
@@ -315,7 +316,7 @@ import { runKnobProposals } from "./council-knob-tuning.mjs";
 import { readKnobOverrides } from "./council-knobs.mjs";
 import { organismStatus } from "./organism-status.mjs";
 import { organismDna } from "./organism.mjs";
-import { sendOmegaTelegram, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
+import { sendOmegaTelegram, escHtml, bridgeKey, bridgeSync, brokerOverview, clearConnection, setConnection, writeSettings, applyOmegaPolicy, closePosition, liveBridgeFields, brokerStatus, readSettings, profileAgentTick, setAccountProfile, modeSelectorTick, probationTick, setProbation, rangeExitStep } from "./omega-broker.mjs";
 import { ownerModeAction, relayModeChanges, modeStatus, modeEvidenceStatus, rangeShadowStatus } from "./mode-selector.mjs";
 import { notifyOwner } from "./owner-notify.mjs";
 import { feedSync, setFeedConnection, clearFeedConnection, feedOverview } from "./feed-bridge.mjs";
@@ -3047,6 +3048,12 @@ async function armBlocked(env: Env): Promise<string | null> {
 
 async function runLedgerStep(env: Env): Promise<void> {
   await runEaHeartbeatRelay(env);
+  // ES1 (orchestrator 2026-11-27): the executor bridge that stops syncing in trading hours, once per episode on the
+  // Omega Telegram (critical with a position or pending order open); FS3 keeps a market-wide stop quiet, this does not.
+  try {
+    const es = await runExecutorSilentCheck(env, { send: (text: string) => sendOmegaTelegram(env, escHtml(text)) }) as { status?: string };
+    if (es?.status === "opened" || es?.status === "back" || es?.status === "failed") console.log("executor_silent", JSON.stringify(es));
+  } catch (e) { console.error("executor_silent_failed", e instanceof Error ? e.message : String(e)); }
   // The change audit on Telegram (owner 2026-11-20): every change that affects trading, debounced per switch per minute.
   try {
     const audit = await runAuditNotify(env) as { status?: string };
