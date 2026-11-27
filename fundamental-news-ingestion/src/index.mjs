@@ -459,11 +459,11 @@ function pushCandidateArrays(target, value) {
   }
 }
 
+// The diagnostic text stored in the last-pull summary (served on /health) and logged. Before 2026-11-27 its
+// patterns were written with doubled escapes (a backslash before s), so a Bearer token or access_token=... was never removed;
+// it now shares the O5 refusal sanitizer's rules (sanitizeText below).
 function redactDiagnosticText(value) {
-  return asString(value)
-    .slice(0, 240)
-    .replace(/Bearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, "Bearer [redacted]")
-    .replace(/(access_token|refresh_token|client_secret|authorization)\\s*[:=]\\s*["']?[^,\\s"']+/gi, "$1=[redacted]");
+  return sanitizeText(value, 240);
 }
 
 function safeUpstreamDiagnostic(error) {
@@ -723,18 +723,30 @@ export function quotaCooldown(message, { now = Date.now(), retryAfterMs = null }
 }
 
 /** Pure: a refusal's text with no secret in it: bearer tokens, long token-like runs, emails and URLs out; 300 chars. */
-export function sanitizeRefusalText(message) {
-  return asString(message)
+// Credential-like key=value pairs (OAuth and API keys); their values are removed, the key kept for reading.
+const SECRET_PAIR = /\b(access_token|refresh_token|id_token|client_secret|code_verifier|api_key|apikey|password|authorization)\s*[:=]\s*["']?[^\s,"'&;]+/gi;
+
+/**
+ * Text that may carry a secret, made safe to log or store: bearer tokens, credential key=value pairs, URLs
+ * (with their queries), emails and token-like runs of 32+ characters removed; whitespace collapsed; at most
+ * `max` characters.
+ */
+export function sanitizeText(value, max = 300) {
+  return asString(value)
     .replace(/bearer\s+\S+/gi, "Bearer <redacted>")
+    .replace(SECRET_PAIR, "$1=<redacted>")
     .replace(/https?:\/\/[^\s"')]+/gi, "<url>")
     .replace(/[^\s@"']+@[^\s@"']+\.[a-z]{2,}/gi, "<email>")
     .replace(/[A-Za-z0-9_\-.~+/=]{32,}/g, "<redacted>")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 300);
+    .slice(0, max);
 }
 
-/** The cooldown end for a quota refusal; logs the form read and the sanitized text, so an unknown form can be read. */
+export function sanitizeRefusalText(message) {
+  return sanitizeText(message, 300);
+}
+
 export function parseQuotaCooldownUntil(message, now = Date.now(), retryAfterMs = null) {
   const r = quotaCooldown(message, { now, retryAfterMs });
   console.log("tv_quota_refusal", JSON.stringify({ form: r.form, until: r.until, retry_after_ms: Number.isFinite(Number(retryAfterMs)) ? Number(retryAfterMs) : null, text: sanitizeRefusalText(message) }));
@@ -906,7 +918,7 @@ async function handleOAuthStart(request, env) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1025,7 +1037,7 @@ async function handleOAuthCallback(request, env) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1048,10 +1060,22 @@ async function handleOAuthCallback(request, env) {
       provider: PROVIDER,
       oauth_authorized: false,
       error: "OAuth token exchange failed",
-      detail: error instanceof Error ? error.message : "Unknown error",
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error",
       upstream_status: Number.isFinite(status) ? status : null
     }, safeStatus);
   }
+}
+
+/** The last-pull summary as /health serves it: the upstream diagnostic reduced to its codes. */
+export function publicLastPull(last) {
+  if (!last || typeof last !== "object") return null;
+  const { failure_diagnostic: diag, ...rest } = last;
+  const code = (v) => (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(v)) ? v : null;
+  return {
+    ...rest,
+    failure_code: diag ? code(diag.code) : null,
+    upstream_error_code: diag ? code(diag.upstream_error_code) : null
+  };
 }
 
 async function readLastScheduledPull(env) {
@@ -1166,7 +1190,9 @@ async function buildHealth(env) {
     ohlcv_gateway: "rpc:TvGateway",
     provider_cooldown_until: providerCooldown?.until || null,
     provider_cooldown_reason: providerCooldown?.reason || null,
-    last_scheduled_ingest: lastScheduledPull,
+    // Public route: status, counts, codes and timestamps only (RD, orchestrator 2026-11-27). The upstream
+    // diagnostic's free text stays in the stored summary (sanitized) and the ingest log, never here.
+    last_scheduled_ingest: publicLastPull(lastScheduledPull),
     // TradingView MCP calls this gateway made, per caller and UTC hour, today and yesterday
     // (2026-11-11: the account's quota ran out at 13:05 UTC and nothing said who had spent it).
     provider_calls: providerCalls,
@@ -1266,7 +1292,7 @@ async function handlePull(request, env, ctx, options = {}) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "TradingView MCP OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1275,7 +1301,7 @@ async function handlePull(request, env, ctx, options = {}) {
     accessToken = await getValidAccessToken(env, metadata);
   } catch (error) {
     return unavailableResponse(503, "TradingView MCP OAuth token unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1321,13 +1347,13 @@ async function handlePull(request, env, ctx, options = {}) {
     if (status === 401 || status === 403) {
       return unavailableResponse(503, "TradingView MCP OAuth authorization failed", {
         upstream_status: status,
-        detail: error instanceof Error ? error.message : "Unknown error"
+        detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
       });
     }
     const safeStatus = Number.isFinite(status) ? 502 : 502;
     return unavailableResponse(safeStatus, "TradingView MCP get_news failed", {
       upstream_status: Number.isFinite(status) ? status : null,
-      detail: error instanceof Error ? error.message : "Unknown error",
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error",
       upstream_diagnostic: safeUpstreamDiagnostic(error)
     });
   }
@@ -1517,7 +1543,7 @@ export default {
       }
       console.error("scheduled_news_ingest_failed", JSON.stringify({
         ...summary,
-        error: error instanceof Error ? error.message.slice(0, 200) : "Unknown error"
+        error: error instanceof Error ? sanitizeText(error.message, 200) : "Unknown error"
       }));
     }
   }
