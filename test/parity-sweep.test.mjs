@@ -5,7 +5,8 @@ import {
   PARITY_SWEEP_CRON, PARITY_SWEEP_LOOKBACK_CANDLES,
   closedH1CandleKeys, closedM5CandleKeys, closedM15CandleKeys, reconcileLocalComputation, reconcileRecentCandles
 } from "../src/parity-sweep.mjs";
-import { resetSchemaCacheForTests, ensureSchema, registerIdentity, identityOf } from "../src/parity-registry.mjs";
+import { resetSchemaCacheForTests, ensureSchema, registerIdentity, identityOf, scopedEngine } from "../src/parity-registry.mjs";
+import { TRUSTED_IDENTITIES } from "../src/trusted-identities.mjs";
 
 /** Minimal D1 adapter over node:sqlite so the registry SQL runs for real. */
 function d1() {
@@ -51,26 +52,34 @@ function webhookPayloads() {
   };
 }
 
-function observedRecord(engine, webhooks, timeframe = "60") {
+// Since parity removal S1 (owner 2026-11-26) trust is the frozen table (src/trusted-identities.mjs): a record
+// with the frozen identity of its chart is trusted at once, one with synthetic hashes never is, whatever
+// the registry approves.
+function frozenProvenance(engine, timeframe) {
+  const t = TRUSTED_IDENTITIES.find((x) => x.engine === scopedEngine(engine, timeframe));
+  return { source_hash: t.source_hash, implementation_hash: t.implementation_hash, dependencies: { mizan: t.mizan } };
+}
+
+function observedRecord(engine, webhooks, timeframe = "60", { trusted = false } = {}) {
   const comparable = engine === "prophet"
     ? { prophet_r38: pick(webhooks.prophet_r38, R38_FIELDS), prophet_r37_ssot: pick(webhooks.prophet_r37_ssot, R37_FIELDS) }
     : { gmi_v12_70: pick(webhooks.gmi_v12_70, GMI_FIELDS) };
   return {
     engine, timeframe,
-    provenance: { source_hash: H({ prophet: "a", gmi: "b" }[engine]), implementation_hash: H("1") },
+    provenance: trusted ? frozenProvenance(engine, timeframe) : { source_hash: H({ prophet: "a", gmi: "b" }[engine]), implementation_hash: H("1") },
     values: { candle, comparable }
   };
 }
 
 /** Seeds KV the way the webhook handler and LocalComputationIngress do. */
-async function seedCandle(env, candleKey, timeframe = "60") {
+async function seedCandle(env, candleKey, timeframe = "60", { trusted = false } = {}) {
   await ensureSchema(env.DB);
   const hooks = webhookPayloads();
   for (const [source, payload] of Object.entries(hooks)) {
     await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source, JSON.stringify(payload));
   }
   for (const engine of ["prophet", "gmi"]) {
-    const record = observedRecord(engine, hooks, timeframe);
+    const record = observedRecord(engine, hooks, timeframe, { trusted });
     // ingestLocalCalculation registers the identity before any reconcile runs.
     await registerIdentity(env.DB, identityOf(record));
     await env.WEBHOOK_BUFFER.put("localcalc-observed:" + candleKey + ":" + engine, JSON.stringify(record));
@@ -146,7 +155,7 @@ test("sweep skips candles whose evidence never arrived, without failing the othe
   assert.equal(env.DB.db.prepare("SELECT COUNT(*) AS n FROM engine_parity_comparisons").get().n, 2);
 });
 
-test("reconcileLocalComputation promotes trusted records into the trusted lane only when approved", async () => {
+test("reconcileLocalComputation puts records into the trusted lane only for a frozen identity, never through the registry's approval", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const candleKey = "OANDA:XAUUSD:60:1793750400000";
   await seedCandle(env, candleKey);
@@ -155,7 +164,7 @@ test("reconcileLocalComputation promotes trusted records into the trusted lane o
   assert.equal(first.trust.prophet, false);
   assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
 
-  // Force approval through 24 consecutive matching candles, then re-reconcile.
+  // 24 consecutive matching candles approve the synthetic identity in the registry, which no longer trusts.
   const base = 1793750400000;
   for (let i = 1; i < 24; i += 1) {
     const key = `OANDA:XAUUSD:60:${base - i * 3600000}`;
@@ -163,8 +172,16 @@ test("reconcileLocalComputation promotes trusted records into the trusted lane o
     await reconcileLocalComputation(env, key);
   }
   const after = await reconcileLocalComputation(env, candleKey);
-  assert.equal(after.trust.prophet, true);
-  const trusted = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"));
+  assert.equal(env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'prophet'").get().status, "approved", "the registry is still written");
+  assert.equal(after.trust.prophet, false);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + candleKey + ":prophet"), null);
+
+  // The frozen identity is trusted on its first candle, Mizan with it.
+  const frozenKey = `OANDA:XAUUSD:60:${base + 3600000}`;
+  await seedCandle(env, frozenKey, "60", { trusted: true });
+  const frozen = await reconcileLocalComputation(env, frozenKey);
+  assert.deepEqual([frozen.trust.prophet, frozen.trust.gmi], [true, true]);
+  const trusted = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + frozenKey + ":prophet"));
   assert.equal(trusted.trust_status, "approved_by_parity");
 });
 
@@ -250,12 +267,12 @@ test("a candle whose local input bar differs never enters the trusted lane; the 
   const env = { DB: d1(), WEBHOOK_BUFFER: kv(), PARITY_PROMOTE_AFTER: "1" };
   const base = 1793750400000;
   const approvedKey = `OANDA:XAUUSD:60:${base - 3600000}`;
-  await seedCandle(env, approvedKey);
+  await seedCandle(env, approvedKey, "60", { trusted: true });
   await reconcileLocalComputation(env, approvedKey);
 
   // The local record of the next candle was built on a provisional bar (close and volume differ).
   const key = `OANDA:XAUUSD:60:${base}`;
-  await seedCandle(env, key);
+  await seedCandle(env, key, "60", { trusted: true });
   for (const engine of ["prophet", "gmi"]) {
     const rec = JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc-observed:" + key + ":" + engine));
     rec.values.candle = { ...rec.values.candle, c: rec.values.candle.c + 0.33, volume: rec.values.candle.volume - 496 };
@@ -269,7 +286,7 @@ test("a candle whose local input bar differs never enters the trusted lane; the 
   assert.equal(status, "approved", "the identity is not revoked for a bar-only difference");
 
   // Republished on the final bar: it matches, counts, and enters the trusted lane.
-  await seedCandle(env, key);
+  await seedCandle(env, key, "60", { trusted: true });
   const second = await reconcileLocalComputation(env, key);
   assert.equal(second.comparisons.prophet.result, "match");
   assert.equal(second.comparisons.prophet.counted, true);
@@ -277,12 +294,12 @@ test("a candle whose local input bar differs never enters the trusted lane; the 
   assert.ok(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet"));
 });
 
-test("gmi_hud (Grid Bot comparator) is compared and approved apart; it never enters or blocks the decision lane", async () => {
+test("gmi_hud (Grid Bot comparator) is compared and approved apart in the registry, never trusted (not frozen); it never enters or blocks the decision lane", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const HUD = { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false, cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true };
   const hudRecord = { engine: "gmi_hud", timeframe: "60", provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: HUD } } };
   const seedHud = async (key, webhook) => {
-    await seedCandle(env, key);
+    await seedCandle(env, key, "60", { trusted: true });
     if (webhook) await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify(webhook));
     await registerIdentity(env.DB, identityOf(hudRecord));
     await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
@@ -301,14 +318,17 @@ test("gmi_hud (Grid Bot comparator) is compared and approved apart; it never ent
   }
   const key = `OANDA:XAUUSD:60:${base}`;
   const after = await reconcileLocalComputation(env, key);
-  assert.equal(after.trust.gmi_hud, true, "24 matching candles approve the HUD identity");
-  assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud")).trust_status, "approved_by_parity");
+  const hudStatus = () => env.DB.db.prepare("SELECT status FROM engine_parity_registry WHERE engine = 'gmi_hud'").get().status;
+  assert.equal(hudStatus(), "approved", "24 matching candles approve the HUD identity in the registry");
+  assert.equal(after.trust.gmi_hud, false, "gmi_hud is not in the frozen table");
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud"), null);
 
-  // A Grid Bot mismatch revokes gmi_hud only: the approved gmi identity and its trusted copy stay.
+  // A Grid Bot mismatch revokes gmi_hud only in the registry: the trusted gmi identity and its copy stay.
   const next = `OANDA:XAUUSD:60:${base + 3600000}`;
   await seedHud(next, { ...HUD, deploy_status: 2 });
   const out = await reconcileLocalComputation(env, next);
   assert.equal(out.comparisons.gmi_hud.result, "mismatch");
+  assert.equal(hudStatus(), "revoked");
   assert.equal(out.trust.gmi_hud, false);
   assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + next + ":gmi_hud"), null);
   assert.equal(out.trust.gmi, true);

@@ -15,7 +15,7 @@ These rules bind every agent on every machine: a cloud session, a local checkout
    - `xauusd-omega` (Omega Execution Engine, owner decisions 2026-11-09)
 4. **Never recreate the removed Workers:** `xauusd-mizan-engine`, `xauusd-prophet-engine`, `xauusd-gmi-engine`, `xauusd-market-data-normalizer`, `xauusd-pull-orchestrator` and `xauusd-confluence-controller`. The "8 + 1 Workers" plan in older documents is cancelled.
 5. **Start from the latest `main`.** Do not revive, merge or deploy branches cut from an old base.
-6. **Do not edit `pinescript/ssot/*`.** Local engine trust comes only from the autonomous parity registry. Never mark an engine verified or `production_ready` by hand.
+6. **Do not edit `pinescript/ssot/*`.** Local engine trust comes from the frozen identity table (`src/trusted-identities.mjs`); a change per `docs/SSOT.md` §3 (a behaviour-identical refactor by review; a behaviour change or a new engine with a shadow-agreement report and the owner's explicit OK). Owner 2026-11-26: "Kita akan remove parity karena efeknya kecil dan sudah terbukti". Never mark an engine verified or `production_ready` by hand.
 7. **Inter-Worker calls use RPC Service Bindings.** Do not add shared secrets between Workers. Nexus reaches the AI Worker's read API only through its `AI_WORKER` binding, never the public URL (docs/SSOT.md §2).
    - Two bindings reach outside this repository, both on the production AI Worker only (docs/SSOT.md §2):
      - `AGENTS` to the Cryptophys Platform `cryptophys-ai-kernel` (`AgentRpc`, `props.host_worker = "xauusd-ai-trading-assistant"`);
