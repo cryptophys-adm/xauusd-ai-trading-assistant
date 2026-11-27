@@ -40,7 +40,9 @@ export function recoveryHold({ recent = [], connVersion, connectedMs = 0, now = 
     if (!Number.isFinite(ms) || ms <= Number(connectedMs || 0) || Number(d.conn_version) !== v) break;
     // A recorded hold stays until a re-arm or a new connection version, however long ago it was written.
     if (d.status === "held" && streak === 0) return { hold: true, recorded: true, streak: Number(d.dispatches) || cap };
-    if (d.status !== "dispatched" || d.directive !== "restart_terminal") break;
+    // Another directive (remediate_algo_trading) is skipped, so it neither breaks a run nor lifts a hold (review of #647).
+    if (d.status === "dispatched" && d.directive !== "restart_terminal") continue;
+    if (d.status !== "dispatched") break;
     if (newer != null && newer - ms > gapMs) break;
     streak += 1;
     newer = ms;
@@ -60,8 +62,12 @@ export function shouldRearm({ executor, now, lastRecoveryMs, lastRearmMs }) {
   return Number.isFinite(rec) && rec > 0 && rec > Number(lastRearmMs || 0) && rcv > rec;
 }
 
-/** Pure: the "held" event's detail (no server name, no login: the connection version and the count only). */
-export function heldDetail({ connVersion, streak, reason }) {
+/**
+ * Pure: the "held" event's detail: the connection version and the count; no login. With `cause` "server_not_seen"
+ * (src/server-check.mjs) the message names that cause and the server name the owner typed (no other name).
+ */
+export function heldDetail({ connVersion, streak, reason, cause = null, server = null }) {
+  const notSeen = cause === "server_not_seen" && server;
   return {
     directive: "restart_terminal",
     reason: String(reason || "terminal_disconnected"),
@@ -69,7 +75,10 @@ export function heldDetail({ connVersion, streak, reason }) {
     conn_version: Number(connVersion),
     dispatches: Number(streak),
     action_id: `hold:${Number(connVersion)}`,
-    message: `${Number(streak)} terminal restarts did not reconnect; no more restarts until the connection is entered again or the terminal is healthy again. Check the server name exactly (spaces, hyphens, case).`
+    ...(notSeen ? { cause: "server_not_seen" } : {}),
+    message: notSeen
+      ? `${Number(streak)} terminal restarts did not reconnect: the terminal has not logged into a server named exactly '${String(server)}'. Check spaces, hyphens and case, then enter the connection again. No more restarts until then or until the terminal is healthy again.`
+      : `${Number(streak)} terminal restarts did not reconnect; no more restarts until the connection is entered again or the terminal is healthy again. Check the server name exactly (spaces, hyphens, case).`
   };
 }
 

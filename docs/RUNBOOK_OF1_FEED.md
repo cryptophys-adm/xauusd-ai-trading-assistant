@@ -124,7 +124,21 @@ Phases 0–1 are already done: `/opt/mt5-oanda`, Xvfb `:2`, and the units `xvfb-
    T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; date -u; stat -c '%y %n' "$T/MQL5/Files/omega/state.json" "$T/MQL5/Files/omega/corpus.json"
    ```
 
-   Both files must be under a minute old. Rollback: `cp -p /opt/mt5-oanda/run.sh.bak /opt/mt5-oanda/run.sh`.
+   Both files must be under a minute old. Then check that the terminal logged in by itself from its saved account (`startup.ini` holds no login, so this only works if MT5 kept the password from the earlier `/config` login). Print only these two fields:
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(d.get("connected"), d.get("server"))' "$T/MQL5/Files/omega/state.json"
+   ```
+
+   Expect `True OANDA_Global-Live-1`. **If it prints `False`, stop:** re-enter the feed login on Nexus > Live > Data feeds (the bridge restarts with the login file) and report.
+
+   If the EA did not attach at all (the files stay old), compare the two files' line endings first, by counts only (`startup.ini` uses LF):
+
+   ```bash
+   for f in /opt/mt5-oanda/login.ini /opt/mt5-oanda/startup.ini; do printf '%s CR=%s lines=%s\n' "$f" "$(tr -cd '\r' < "$f" | wc -c)" "$(wc -l < "$f")"; done
+   ```
+
+   Report the counts before trying anything else. Rollback: `cp -p /opt/mt5-oanda/run.sh.bak /opt/mt5-oanda/run.sh`.
 
 ## 2. The secret (owner only)
 
