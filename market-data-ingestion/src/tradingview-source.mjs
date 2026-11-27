@@ -255,9 +255,10 @@ export function tailOf(record, bars = TAIL_BARS) {
   };
 }
 
+// The tail is written before the series: a failed write then leaves the tail ahead of the series, never behind it.
 export async function writeSeries(kv, spec, record) {
-  await kv.put(SERIES_KEY_PREFIX + spec.key, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
   if (TAIL_SERIES.includes(spec.key)) await kv.put(TAIL_KEY_PREFIX + spec.key, JSON.stringify(tailOf(record)), { expirationTtl: 60 * 60 * 24 * 30 });
+  await kv.put(SERIES_KEY_PREFIX + spec.key, JSON.stringify(record), { expirationTtl: 60 * 60 * 24 * 30 });
 }
 
 /**

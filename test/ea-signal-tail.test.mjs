@@ -82,6 +82,25 @@ test("K1-4: a missing, empty, unparsable or stale tail falls back to the series"
   assert.deepEqual(await readFeedCandles({ SIGNAL_CACHE: kv }, { now: fresh }), [], "nothing stored: no bars, no throw");
 });
 
+test("K1-4b: the window is 7 minutes: a tail 6 minutes old is read, one 7 minutes and a second old falls back", async () => {
+  assert.equal(EA_TAIL_MAX_AGE_MS, 7 * 60_000);
+  const rec = series(100);
+  const at = Date.parse(rec.fetched_at);
+  for (const [age, expected] of [[6 * 60_000, [EA_TAIL_KEY]], [EA_TAIL_MAX_AGE_MS, [EA_TAIL_KEY]], [EA_TAIL_MAX_AGE_MS + 1000, [EA_TAIL_KEY, EA_SERIES_KEY]], [15 * 60_000, [EA_TAIL_KEY, EA_SERIES_KEY]]]) {
+    const kv = countingKv({ [EA_SERIES_KEY]: JSON.stringify(rec), [EA_TAIL_KEY]: JSON.stringify(tailOf(rec)) });
+    await readFeedCandles({ SIGNAL_CACHE: kv }, { now: at + age });
+    assert.deepEqual(kv.gets, expected, `age ${age / 1000}s`);
+  }
+});
+
+test("K1-2b: the tail is written before the series, so a failed series write leaves the tail ahead, never behind", async () => {
+  const order = [];
+  const kv = { async put(k) { order.push(k); if (k.startsWith("market-data:v2:series:")) throw new Error("kv down"); } };
+  const m5 = SERIES.find((s) => s.key === "OANDA:XAUUSD|5m");
+  await assert.rejects(() => writeSeries(kv, m5, series(60)), /kv down/);
+  assert.deepEqual(order, [EA_TAIL_KEY, EA_SERIES_KEY]);
+});
+
 test("K1-5: 'off' reads the series as before; 'shadow' reads both, uses the series and counts a mismatch", async () => {
   const rec = series(200);
   const now = Date.parse(rec.fetched_at) + 60_000;

@@ -308,11 +308,11 @@ export function blackoutWindow(env) {
 // and the 2-hour basis, 24 bars). The pull adapter writes a tail of the series' last 48 bars in the same write
 // (market-data-ingestion/src/tradingview-source.mjs `writeSeries`, `tailOf`), so a sync no longer parses the ~880 KB
 // series. EA_SIGNAL_TAIL: "on" (default) reads the tail, and the full series when the tail is missing, empty or older
-// than EA_TAIL_MAX_AGE_MS (a closed market, a failed write); "shadow" reads both, uses the series and logs a mismatch;
-// "off" reads the series as before.
+// than EA_TAIL_MAX_AGE_MS (7 minutes: one 5m bar plus margin; a closed market, a failed or late write); "shadow" reads
+// both, uses the series and logs a mismatch; "off" reads the series as before.
 export const EA_TAIL_KEY = `market-data:v2:tail:${SYMBOL}|5m`;
 export const EA_SERIES_KEY = `market-data:v2:series:${SYMBOL}|5m`;
-export const EA_TAIL_MAX_AGE_MS = 15 * 60_000;
+export const EA_TAIL_MAX_AGE_MS = 7 * 60_000;
 export const EA_TAIL_COMPARE_BARS = 24;
 export function eaSignalTailMode(env) {
   const v = String(env?.EA_SIGNAL_TAIL ?? "on").trim().toLowerCase();
