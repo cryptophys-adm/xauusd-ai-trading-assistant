@@ -259,3 +259,21 @@ test("PT1c confirmed_at_ms: the close time of the first bar of the breakout's ru
   const down = [4000, 3999, 4000, 3988, 3987].map((c, i) => ({ open: c, high: c + 0.5, low: c - 0.5, close: c, close_time: new Date(t(i)).toISOString() }));
   assert.equal(breakoutCloseMs(down, { direction: -1, upper: 4005, lower: 3995, end_bar: 1 }), t(3), "a break down (or a bust) the same way");
 });
+
+test("PT1d a value written before PT1c (patterns without confirmed_at_ms) is detected again on the next run, every chart, though no chart closed", async () => {
+  const inputs = zoneInputs();
+  const kv = seriesKv(inputs);
+  const env = { SIGNAL_CACHE: kv };
+  await runPatternsStep(env, { now: NOW });
+  const now = JSON.parse(kv.map.get(PATTERNS_KEY));
+  // As #654 stored it: no price fields, no confirmed_at_ms.
+  const { price: _p, price_tf: _t, price_at: _a, ...rest } = now;
+  const old = { ...rest, patterns: now.patterns.map(({ confirmed_at_ms: _c, ...p }) => p) };
+  kv.map.set(PATTERNS_KEY, JSON.stringify(old));
+  const r = await runPatternsStep(env, { now: NOW });
+  assert.deepEqual([r.status, r.detected], ["written", ["M15", "H1", "H4", "D1"]], "every chart, once");
+  const after = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.ok(after.patterns.every((p) => Object.hasOwn(p, "confirmed_at_ms")));
+  assert.equal(JSON.stringify(after), JSON.stringify(now), "the same value a fresh detection gives");
+  assert.equal((await runPatternsStep(env, { now: NOW })).status, "same_close", "then the per-chart rule again");
+});
