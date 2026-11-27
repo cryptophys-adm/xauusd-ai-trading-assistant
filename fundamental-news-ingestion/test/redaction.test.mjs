@@ -47,3 +47,17 @@ test("RD-3 the public /health carries no free-text diagnostic: codes only, whate
   assert.equal(publicLastPull(null), null);
   assert.equal(publicLastPull({ status: "ok", failure_diagnostic: { code: "has a space" } }).failure_code, null, "a non-code value is dropped, not served");
 });
+
+test("RD-4 the gateway keeps its console logs but no invocation logs (they record /oauth/callback?code=...); error bodies are sanitized", async () => {
+  const fs = await import("node:fs");
+  const raw = fs.readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"));
+  assert.equal(config.observability?.enabled, true);
+  assert.equal(config.observability?.logs?.enabled, true);
+  assert.equal(config.observability?.logs?.persist, true);
+  assert.equal(config.observability?.logs?.invocation_logs, false, "invocation logs would store request URLs, OAuth codes included");
+  assert.deepEqual(config.triggers?.crons, ["4 * * * *"], "the cron is unchanged");
+  const src = fs.readFileSync(new URL("../src/index.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /detail: error instanceof Error \? error\.message/, "every error body's detail goes through sanitizeText");
+  assert.equal([...src.matchAll(/detail: error instanceof Error \? sanitizeText\(error\.message, 300\)/g)].length, 7);
+});

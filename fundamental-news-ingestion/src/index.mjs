@@ -918,7 +918,7 @@ async function handleOAuthStart(request, env) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1037,7 +1037,7 @@ async function handleOAuthCallback(request, env) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1060,7 +1060,7 @@ async function handleOAuthCallback(request, env) {
       provider: PROVIDER,
       oauth_authorized: false,
       error: "OAuth token exchange failed",
-      detail: error instanceof Error ? error.message : "Unknown error",
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error",
       upstream_status: Number.isFinite(status) ? status : null
     }, safeStatus);
   }
@@ -1292,7 +1292,7 @@ async function handlePull(request, env, ctx, options = {}) {
     metadata = await fetchOAuthMetadata(env);
   } catch (error) {
     return unavailableResponse(503, "TradingView MCP OAuth metadata unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1301,7 +1301,7 @@ async function handlePull(request, env, ctx, options = {}) {
     accessToken = await getValidAccessToken(env, metadata);
   } catch (error) {
     return unavailableResponse(503, "TradingView MCP OAuth token unavailable", {
-      detail: error instanceof Error ? error.message : "Unknown error"
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
     });
   }
 
@@ -1347,13 +1347,13 @@ async function handlePull(request, env, ctx, options = {}) {
     if (status === 401 || status === 403) {
       return unavailableResponse(503, "TradingView MCP OAuth authorization failed", {
         upstream_status: status,
-        detail: error instanceof Error ? error.message : "Unknown error"
+        detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error"
       });
     }
     const safeStatus = Number.isFinite(status) ? 502 : 502;
     return unavailableResponse(safeStatus, "TradingView MCP get_news failed", {
       upstream_status: Number.isFinite(status) ? status : null,
-      detail: error instanceof Error ? error.message : "Unknown error",
+      detail: error instanceof Error ? sanitizeText(error.message, 300) : "Unknown error",
       upstream_diagnostic: safeUpstreamDiagnostic(error)
     });
   }

@@ -50,13 +50,14 @@
   },
   // Workers Logs (2026-11-27, orchestrator): the O5 refusal log (`tv_quota_refusal`) and the ingest summaries are
   // kept. Every console line of this Worker is sanitized or carries counts and codes only (sanitizeText).
+  // Invocation logs stay off: they record each request's URL, and /oauth/callback?code=... carries the OAuth code.
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "invocation_logs": true,
+      "invocation_logs": false,
       "persist": true
     }
   }
