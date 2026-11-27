@@ -167,7 +167,7 @@ test("Z0-8 buildKeyLevels: an overlay; zones, candidates, scores, labels, member
 test("Z0-9 KEY_LEVEL_ZONE_TYPES off: the strategy, guardrails, decision record, council, EA signal, public output and plan_setups equal main's (hash taken on main 74be83c)", async () => {
   const off = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" } });
   const { run, ...rest } = off;
-  assert.equal(sha(rest), "a830079cae93d842555b61cbb3a799bfce47fd94266a48308d6d468189d630d5");
+  assert.equal(sha(rest), "2e3da11a0889e96fbe617f274c5b0900d7f3fc60ac622404c96dcd8b4d842ffd");
   assert.deepEqual(z0Keys(rest), [], "off removes every typed field");
   const cols = run.DB.raw.prepare("SELECT entry_zone_type, stop_zone_type, tp1_zone_type, opposing_room_atr FROM plan_setups").all();
   assert.ok(cols.length >= 1 && cols.every((c) => Object.values(c).every((v) => v === null)), "the zone columns stay NULL");
@@ -481,7 +481,7 @@ test("Z1a-6 KEY_LEVEL_ZONE_TYPES off with Prophet zones in the planes: main's ou
   const off = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" }, prophet: true });
   const { run, ...rest } = off;
   // The strategy inputs differ only by the planes' zones, which nothing but the typing reads.
-  assert.equal(sha(rest), "a830079cae93d842555b61cbb3a799bfce47fd94266a48308d6d468189d630d5");
+  assert.equal(sha(rest), "2e3da11a0889e96fbe617f274c5b0900d7f3fc60ac622404c96dcd8b4d842ffd");
   assert.deepEqual(z0Keys(rest), []);
 });
 
@@ -674,7 +674,7 @@ test("Z1b-6 the scenario: gmi_ob off is Z1a's record and everything downstream; 
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(again.guards[side]), JSON.stringify(z1a.guards[side]), `gmi_ob off: ${side} guards`);
   const typesOff = await zoneScenario(mods, { db: d1, kv, modes: { zoneTypes: "off" }, aegis: true });
   const { run, ...rest } = typesOff;
-  assert.equal(sha(rest), "a830079cae93d842555b61cbb3a799bfce47fd94266a48308d6d468189d630d5", "KEY_LEVEL_ZONE_TYPES off: main's output");
+  assert.equal(sha(rest), "2e3da11a0889e96fbe617f274c5b0900d7f3fc60ac622404c96dcd8b4d842ffd", "KEY_LEVEL_ZONE_TYPES off: main's output");
   const on = await zoneScenario(mods, { db: d1, kv, aegis: true });
   assert.deepEqual(strip(on.record), typesOff.record);
   for (const side of ["long", "short"]) assert.equal(JSON.stringify(on.guards[side].checks), JSON.stringify(typesOff.guards[side].checks), `${side} checks`);

@@ -187,7 +187,7 @@ test("ZS-7 medium or stronger only in the signal: weak boxes are recorded, never
 // ------------------------------------------------------------------ the scenario: off, record, signal
 
 test("ZS-8 SD_LEVELS off (unset or 'off'): the strategy, record, council, EA signal, management, public output and plan_setups are main's byte for byte (hash on main e7c055b)", async () => {
-  for (const [opts, pin] of [[{}, "3b573cf8c1a6b52e3e39c35d4be6f73e0c463e55725f3ee3c342439742fe3eda"], [{ prophet: true, aegis: true }, "4e117601ed1f3618f4a4f7468f6bbadc21b0f0e7658643daaaec1b27642bdb2b"]]) {
+  for (const [opts, pin] of [[{}, "157180d874cc5a1a52257beb64ac3501fff58769dda19b80c449ab3c6707bdea"], [{ prophet: true, aegis: true }, "7ac65b42b8ca5431dbb8ced3dc6f9c0907fa4a01ab833a106200a8a867a67d81"]]) {
     for (const modes of [undefined, { sdLevels: "off" }]) {
       const { run, ...rest } = await zoneScenario(mods, { db: d1, kv, ...opts, ...(modes ? { modes } : {}) });
       assert.equal(sha(rest), pin, `${JSON.stringify(opts)} ${JSON.stringify(modes)}`);

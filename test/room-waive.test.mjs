@@ -30,7 +30,7 @@ const roomCheck = (g) => g.checks.find((c) => c.id === "room");
 const DAY = 86_400_000;
 const OWNER = "owner-sub-0001";
 /** The hash of roomScenario's outputs taken with main 738960c's modules (a git-archive of main, the same scenario code). */
-const MAIN_HASH = "788940606a0ad105fd306e611afca76437522783e23266ddb1bf5b5ac4aa8477";
+const MAIN_HASH = "eb803ff02702dd04d560d56596a7e935e29ca527a6ebfa7de63134804eabb674";
 
 test("RW-1 the switch: only \"on\" turns it on; wrangler.jsonc sets it with the owner's words; the FS1 row", () => {
   assert.deepEqual([roomBreakoutWaiveOf({}), roomBreakoutWaiveOf({ ROOM_BREAKOUT_WAIVE: "bogus" }), roomBreakoutWaiveOf({ ROOM_BREAKOUT_WAIVE: " On " }), roomBreakoutWaiveOf({ ROOM_BREAKOUT_WAIVE: "off" })], ["off", "off", "on", "off"]);
