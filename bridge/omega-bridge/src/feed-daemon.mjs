@@ -8,10 +8,10 @@ import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
-import { readState, readCorpus, resolveOmegaDir } from "./files.mjs";
+import { readState, readCorpus, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
 import { applyFeedCredentials, clearCredentials, ensureFeedSettings } from "./ini.mjs";
-import { loadOrCreateKeyPair } from "./keys.mjs";
-import { BRIDGE_VERSION, DEFAULT_OMEGA_URL } from "./daemon.mjs";
+import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
+import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE } from "./daemon.mjs";
 
 export const FEED_ID_RE = /^[a-z0-9-]{1,24}$/;
 export const DEFAULT_FEED_SYNC_MS = 15_000;
@@ -41,12 +41,24 @@ export function resolveFeedConfig(options = {}) {
   };
 }
 
+// The executor's own terminal, unit and dirs (the defaults of src/daemon.mjs, keys.mjs and files.mjs): a feed runs as root
+// and restarts and rewrites what its env names, so a wrong env file must never reach the executor's MT5.
+const EXECUTOR_PREFIX = "/opt/mt5-ingestion-gateway";
+const EXECUTOR_UNITS = new Set([DEFAULT_TERMINAL_SERVICE, "mt5-terminal", "mt5-xvfb.service", "mt5-xvfb", "omega-bridge.service", "omega-bridge"]);
+const norm = (p) => path.posix.normalize(String(p || "").replace(/\\/g, "/")).replace(/\/+$/, "").toLowerCase();
+const inside = (p, dir) => { const a = norm(p), d = norm(dir); return a === d || a.startsWith(`${d}/`); };
+
 /** Pure: why a feed configuration cannot run, or null. Every path is the feed's own: none may be left to a default. */
 export function feedConfigProblem(c) {
   if (!FEED_ID_RE.test(c.bridgeId)) return "OMEGA_FEED_ID must be 1-24 lower-case letters, digits or dashes";
   if (!c.cfAccessClientId || !c.cfAccessClientSecret) return "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required";
   if (!c.cfAccessClientSecret || /__OWNER_FILLS__/.test(c.cfAccessClientSecret)) return "CF_ACCESS_CLIENT_SECRET is still the placeholder";
   for (const k of ["stateDir", "omegaFilesDir", "terminalIni", "terminalService"]) if (!c[k]) return `${k} is required for a feed (its own terminal)`;
+  // Never the executor's terminal, unit, ini, state or files (orchestrator review of #631).
+  if (EXECUTOR_UNITS.has(String(c.terminalService).trim().toLowerCase()) || /^omega-bridge(\.service)?$/i.test(String(c.terminalService).trim())) return "TERMINAL_SERVICE is the executor's unit: a feed restarts only its own terminal";
+  if (norm(c.terminalIni) === norm(DEFAULT_TERMINAL_INI) || inside(c.terminalIni, EXECUTOR_PREFIX)) return "TERMINAL_INI is the executor's terminal ini: a feed writes only its own";
+  if (norm(c.stateDir) === norm(DEFAULT_STATE_DIR) || inside(c.stateDir, DEFAULT_STATE_DIR)) return "OMEGA_STATE_DIR is the executor's state dir: a feed keeps its own key and state";
+  if (inside(c.omegaFilesDir, EXECUTOR_PREFIX) || inside(c.omegaFilesDir, DEFAULT_MT5_FILES_DIR)) return "MT5_FILES_DIR is inside the executor's terminal: a feed reads only its own terminal's files";
   if (!/^[A-Za-z0-9._#+-]{1,32}$/.test(c.symbol)) return "OMEGA_SYMBOL is invalid";
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(c.expert)) return "OMEGA_FEED_EXPERT is invalid";
   return null;
@@ -139,7 +151,7 @@ export function createFeedDaemon(options = {}) {
       } catch (err) {
         log({ level: "error", event: "feed_connection_apply_failed", version: Number(conn.version), error: err instanceof Error ? err.message.slice(0, 120) : "apply_failed" });
       }
-    } else if (applied.server && !applied.cleared_ms && state?.connected === true && String(state.server ?? "") === String(applied.server)) {
+    } else if (applied.server && !applied.cleared_ms && state?.connected === true && String(state.server ?? "").trim().toLowerCase() === String(applied.server).trim().toLowerCase()) {
       // Logged in on the stored server: the password leaves the ini (MT5 keeps the session; run.sh passes /config only
       // while Password= is non-empty, so the next start needs no login file).
       try {

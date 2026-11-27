@@ -61,9 +61,9 @@ Phases 0–1 are already done: `/opt/mt5-oanda`, Xvfb `:2`, and the units `xvfb-
    install -d -m 700 /var/lib/omega-bridge-oanda
    ```
 
-4. Create `/etc/omega-bridge/oanda.env` with mode 600, owned by root, from `feed.env.example`. Fill in the paths of the feed terminal:
-   - `MT5_FILES_DIR`: its `MQL5/Files` directory;
-   - `TERMINAL_INI`: the `login.ini` that `run.sh` reads;
+4. Create `/etc/omega-bridge/oanda.env` with mode 600, owned by root, from `feed.env.example`. Fill in the paths of the feed terminal. The terminal is the portable OANDA install in the second prefix, with the terminal directory `T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"`:
+   - `MT5_FILES_DIR="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5/MQL5/Files"` (quoted: the path has spaces; portable, so `MQL5` sits in the terminal directory);
+   - `TERMINAL_INI=/opt/mt5-oanda/login.ini` (the file `run.sh` passes as `/config:Z:\opt\mt5-oanda\login.ini`);
    - `TERMINAL_SERVICE`: `mt5-oanda.service`;
    - `OMEGA_SYMBOL`: `XAUUSD.sml`;
    - `CF_ACCESS_CLIENT_ID`: the feed token's client id;
@@ -97,7 +97,31 @@ The bridge refuses to start while the placeholder is still in the file.
 
 ## 3. The EA
 
-1. Compile `ea/mt5/OmegaFeed.mq5` in the feed terminal, under `/opt/mt5-oanda`'s `MQL5/Experts`.
+1. Before step 4, confirm the terminal directory and the MetaEditor binary. If the `ls` fails, the install path differs: report it and stop.
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; ls -d "$T/MQL5/Experts" "$T/MQL5/Files" "$T/metaeditor64.exe"
+   ```
+
+2. Copy the EA from the merged repo checkout into that Experts directory, owned by `mt5`:
+
+   ```bash
+   install -o mt5 -g mt5 -m 644 ea/mt5/OmegaFeed.mq5 "/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5/MQL5/Experts/OmegaFeed.mq5"
+   ```
+
+3. Compile it under Wine as user `mt5`, on the feed's display `:2` and in the feed's own prefix. Never use the executor's prefix or `:99`.
+
+   ```bash
+   cd "/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5" && sudo -u mt5 env HOME=/opt/mt5-oanda WINEPREFIX=/opt/mt5-oanda/prefix DISPLAY=:2 wine metaeditor64.exe /portable /compile:"MQL5\Experts\OmegaFeed.mq5" /log:"MQL5\Experts\OmegaFeed.log"
+   ```
+
+4. Check that the `.ex5` exists and the log reports 0 errors. The log is UTF-16, hence `iconv`.
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; ls -l "$T/MQL5/Experts/OmegaFeed.ex5" && iconv -f UTF-16LE -t UTF-8 "$T/MQL5/Experts/OmegaFeed.log" | grep -Ei "result|error"
+   ```
+
+   The expected output is a line like `Result: 0 errors, 0 warnings`. Any error: stop and report the log lines, which hold no secrets.
 2. The login ini starts the chart with `Expert=OmegaFeed` and `Symbol=XAUUSD.sml`. The bridge writes these when it applies the login.
 3. Algo trading stays **off** in that terminal (`AllowLiveTrading=0`):
    - the bridge forces it on every sync;
@@ -116,7 +140,7 @@ The bridge refuses to start while the placeholder is still in the file.
    ```
 
 2. The bridge makes its own RSA-3072 key in `/var/lib/omega-bridge-oanda` and registers it with its first feed-sync.
-3. **Login through Nexus.** The owner opens the Omega Setup feed Connection card for bridge `oanda`. It needs the frontend card (F4) and the server route `POST /api/feed-connection`. The owner enters the OANDA login and server there; it is sealed in the browser to the feed's key.
+3. **Login through Nexus. Prerequisite: F4, the Nexus feed-connection card (frontend session), must be live; without it there is no login path.** The owner opens the Omega Setup feed Connection card for bridge `oanda`. The card posts to the server route `POST /api/feed-connection`, and the server refuses it with `feed_bridge_not_seen` until the bridge's first sync in step 2. The owner enters the OANDA login and server there; it is sealed in the browser to the feed's key.
 4. The bridge then:
    - writes the login into `TERMINAL_INI`;
    - restarts `mt5-oanda`;

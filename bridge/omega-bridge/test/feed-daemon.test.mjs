@@ -34,6 +34,21 @@ test("FD-1. the feed configuration: its own id, paths and service; a placeholder
   assert.match(feedConfigProblem(resolveFeedConfig({ env: { ...env, OMEGA_FEED_ID: "Bad Id" } })), /OMEGA_FEED_ID/);
 });
 
+test("FD-6. a wrong env file never reaches the executor's terminal, unit, ini, state or files", () => {
+  const { env } = setup();
+  const problem = (over) => feedConfigProblem(resolveFeedConfig({ env: { ...env, ...over } }));
+  for (const unit of ["mt5-terminal.service", "mt5-terminal", "omega-bridge.service", "omega-bridge", "mt5-xvfb.service", "MT5-Terminal.service"]) {
+    assert.match(problem({ TERMINAL_SERVICE: unit }), /executor's unit/, unit);
+  }
+  assert.match(problem({ TERMINAL_INI: "/opt/mt5-ingestion-gateway/config/terminal_gateway.ini" }), /executor's terminal ini/);
+  assert.match(problem({ TERMINAL_INI: "/opt/mt5-ingestion-gateway/prefix/drive_c/x/login.ini" }), /executor's terminal ini/, "anything under the executor's prefix");
+  assert.match(problem({ OMEGA_STATE_DIR: "/var/lib/omega-bridge" }), /executor's state dir/);
+  assert.match(problem({ OMEGA_STATE_DIR: "/var/lib/omega-bridge/" }), /executor's state dir/);
+  assert.match(problem({ MT5_FILES_DIR: "/opt/mt5-ingestion-gateway/prefix/drive_c/Program Files/MetaTrader 5/MQL5/Files" }), /inside the executor's terminal/);
+  // The feed's own (distinct) paths pass.
+  assert.equal(problem({ OMEGA_STATE_DIR: "/var/lib/omega-bridge-oanda", TERMINAL_SERVICE: "mt5-oanda.service", TERMINAL_INI: "/opt/mt5-oanda/login.ini" }), null);
+});
+
 test("FD-2. the sync body: bridge id, key, a state without any account data, the gold bars; posted to feed-sync only", async () => {
   const { env, omega } = setup();
   fs.writeFileSync(path.join(omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", account: { balance: 1000, login: 1234 }, positions: [{ ticket: 1 }], symbol: { name: "XAUUSD.sml", bid: 3600.1, ask: 3600.4, digits: 2, contract_size: 10, currency_profit: "USD" } }));
@@ -75,7 +90,8 @@ test("FD-3. the feed's login: applied to its own ini with algo trading OFF, its 
   assert.deepEqual(execs, [["systemctl", "restart", "mt5-oanda.service"]], "only the feed's own terminal is restarted");
   // The same version again is not re-applied; once the terminal reports it is logged in, the password leaves the ini.
   payload = { ok: true, connection: { version: 1, server: "OANDA-Demo-1", envelope } };
-  fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", symbol: { name: "XAUUSD.sml" } }));
+  // The terminal reports the server with another case and spaces: still the stored one.
+  fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: " oanda-demo-1 ", symbol: { name: "XAUUSD.sml" } }));
   await d.syncOnce();
   assert.equal(execs.length, 1, "no second restart");
   const cleared = fs.readFileSync(s.terminalIni, "utf8");
