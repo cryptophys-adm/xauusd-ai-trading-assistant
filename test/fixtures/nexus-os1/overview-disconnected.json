@@ -1,0 +1,42 @@
+{
+  "broker": {
+    "connection": {
+      "version": 1,
+      "status": "stored",
+      "server": "Placeholder-Live 2",
+      "trade_symbol": null,
+      "units_per_usd": null,
+      "updated_by": "owner@example.com",
+      "updated_ms": 1795754400000
+    },
+    "bridge": {
+      "terminal_connected": false,
+      "server": "Placeholder-Live 2"
+    },
+    "autonomous_watchdog": {
+      "active": true,
+      "agent": "agent:cerebrum",
+      "policy": "self_healing_v1",
+      "anti_flapping_cooldown_sec": 180,
+      "last_recovery": {
+        "ms": 1795755060000,
+        "directive": "restart_terminal",
+        "reason": "terminal_disconnected",
+        "status": "held",
+        "conn_version": 1,
+        "dispatches": 3,
+        "action_id": "hold:1",
+        "message": "3 terminal restarts did not reconnect; no more restarts until the connection is entered again or the terminal is healthy again. Check the server name exactly (spaces, hyphens, case)."
+      }
+    },
+    "server_check": {
+      "status": "disconnected"
+    },
+    "feeds": []
+  },
+  "viewer": {
+    "subject": "owner@example.com",
+    "type": "user",
+    "can_control": true
+  }
+}
