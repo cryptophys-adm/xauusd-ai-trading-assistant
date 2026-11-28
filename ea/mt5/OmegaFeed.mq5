@@ -18,11 +18,16 @@
 //|     closed M1 bars from there to the last closed bar (at most    |
 //|     600, the server's 10-hour window) and echoes backfill_from_ms;|
 //|     without the file it is 1.01's last CorpusBars bars.          |
+//|   - 1.03 (feed incident 2026-11-28 10:25:58Z): corpus.json and   |
+//|     corpus_macro.json are written only while the terminal is     |
+//|     connected and its server offset read the same on two timer   |
+//|     ticks in a row (a logged-out terminal takes its own clock    |
+//|     for the server's: bars two hours off). state.json as before. |
 //| The gold symbol is the input FeedSymbol, else the chart's symbol |
 //| (OANDA: "XAUUSD.sml"). Its contract is recorded, never checked.  |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.02"
+#property version   "1.03"
 #property strict
 
 input string FeedSymbol   = "";   // the gold symbol on this server (empty: the chart's symbol)
@@ -35,7 +40,7 @@ input bool   MacroEnabled = true;
 input string MacroSymbols = "XAGUSD=XAGUSD,USOIL=USOIL.sml,EURUSD=EURUSD.sml,GBPUSD=GBPUSD.sml,USDJPY=USDJPY.sml,USDCAD=USDCAD,USDCHF=USDCHF";
 input int    MacroBars    = 240;  // closed M1 bars per macro symbol (10 to 240)
 
-const string OMEGA_FEED_VERSION = "1.02"; // keep equal to #property version
+const string OMEGA_FEED_VERSION = "1.03"; // keep equal to #property version
 const string STATE_JSON_PATH  = "omega/state.json";
 const string STATE_TMP_PATH   = "omega/state.tmp";
 const string CORPUS_JSON_PATH = "omega/corpus.json";
@@ -49,6 +54,11 @@ datetime g_lastCorpusBar = 0;
 datetime g_lastMacroBar  = 0;
 long     g_lastFromMs    = -1;   // 1.02: the backfill start the last corpus.json answered (0: none)
 long     g_lastStateMs   = 0;
+// 1.03: the time base. Ready only while connected and after the same offset on two ticks in a row.
+bool     g_timeBaseReady  = false;
+bool     g_offsetSeen     = false;
+int      g_offsetLast     = 0;
+int      g_timeBaseOffset = 0;
 
 string EscapeJson(const string s)
   {
@@ -77,6 +87,17 @@ int ServerUtcOffsetSeconds()
    // Broker bar times are server time; brokers sit on whole quarter hours from UTC.
    long diff = (long)(TimeTradeServer() - TimeGMT());
    return (int)(MathRound(diff / 900.0) * 900);
+  }
+
+// 1.03: once per timer tick. A disconnect clears the time base; the corpus files wait until it is ready again.
+void UpdateTimeBase()
+  {
+   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)) { g_offsetSeen = false; g_timeBaseReady = false; return; }
+   int offset = ServerUtcOffsetSeconds();
+   g_timeBaseReady = g_offsetSeen && offset == g_offsetLast;
+   g_offsetLast = offset;
+   g_offsetSeen = true;
+   if(g_timeBaseReady) g_timeBaseOffset = offset;
   }
 
 void WriteStateJson()
@@ -129,12 +150,13 @@ long BackfillFromMs()
 
 void WriteCorpusJson()
   {
+   if(!g_timeBaseReady) return; // 1.03: never a bar on an unconfirmed clock
    string sym = FeedGoldSymbol();
    datetime lastClosed = iTime(sym, PERIOD_M1, 1);
    long fromMs = BackfillFromMs();
    if(lastClosed == 0 || (lastClosed == g_lastCorpusBar && fromMs == g_lastFromMs)) return;
    int n = (int)MathMax(10, MathMin(240, CorpusBars));
-   int offset = ServerUtcOffsetSeconds();
+   int offset = g_timeBaseOffset;
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
    int got = 0;
@@ -174,12 +196,12 @@ void WriteCorpusJson()
 // have, or with no bars yet, is left out; nothing else is tried in its place.
 void WriteCorpusMacroJson()
   {
-   if(!MacroEnabled) return;
+   if(!MacroEnabled || !g_timeBaseReady) return; // 1.03: as the gold corpus
    string gold = FeedGoldSymbol();
    datetime lastClosed = iTime(gold, PERIOD_M1, 1);
    if(lastClosed == 0 || lastClosed == g_lastMacroBar) return;
    int n = (int)MathMax(10, MathMin(240, MacroBars));
-   int offset = ServerUtcOffsetSeconds();
+   int offset = g_timeBaseOffset;
    string entries[];
    int count = StringSplit(MacroSymbols, ',', entries);
    string series = "";
@@ -238,6 +260,7 @@ void OnDeinit(const int reason) { EventKillTimer(); }
 
 void OnTimer()
   {
+   UpdateTimeBase();
    long nowMs = NowUtcMs();
    if(nowMs - g_lastStateMs >= (long)MathMax(1, StateSeconds) * 1000)
      {

@@ -229,6 +229,22 @@ rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.3 /opt/o
 
 A `KeepPrivate=1` left in the login file is harmless to 1.8.3.
 
+## 1d. OmegaFeed 1.03: no corpus on an unconfirmed clock (one VPS change with the owner's go)
+
+**Why.** At 10:25:58Z on 28 Nov the feed terminal was logged out after a restart. A logged-out terminal takes its own clock for the server's, so OmegaFeed's offset (`TimeTradeServer() - TimeGMT()`) read 0 and it wrote 120 M1 bars two hours off. The server now refuses such a batch (CG2) and has repaired that one. 1.03 stops it at the source:
+- `corpus.json` and `corpus_macro.json` are written only while `TERMINAL_CONNECTED` is true and the offset read the same on two timer ticks in a row (one second apart);
+- a disconnect clears that, and the bars wait until it holds again;
+- `state.json` is written as before; it carries `connected`.
+
+There is no change to the bridge, the executor or its EA. Install it with or after bridge 1.8.4 (section 1c).
+
+1. Install OmegaFeed 1.03 with section 3's steps 1 to 4 (copy, compile, check `Result: 0 errors`). Keep the 1.02 `.ex5` as a backup first, as section 3 does.
+2. Restart only the feed's terminal with the guarded line (section 3).
+3. Check with 1.8.2's step 4 (the two-field print): once `connected` is `True`, `corpus.json` is under two minutes old. While `connected` is `False`, `state.json` stays fresh and `corpus.json` stops getting newer. That is 1.03 holding the bars back, not a fault.
+4. The agent then checks read-only that the feed source's `corpus_sources.last_error` is not `shifted_copy` after the next reconnect.
+
+**Rollback.** Put the 1.02 file back with section 3's steps (or the backup `.ex5`) and restart only the feed's terminal.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:

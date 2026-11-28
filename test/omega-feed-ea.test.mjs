@@ -34,7 +34,7 @@ test("OF-3. it writes the state and the gold M1 corpus in the executor's formats
 
 test("OF-4. 1.01 macro export: an explicit BASE=SYMBOL map, the executor's corpus_macro format, data only", async () => {
   const { CORPUS_MACRO_BASES, readCorpusMacro } = await import("../bridge/omega-bridge/src/files.mjs");
-  assert.ok(["1.01", "1.02"].includes(src.match(/#property version\s+"([\d.]+)"/)?.[1]), "1.01 or later");
+  assert.ok(["1.01", "1.02", "1.03"].includes(src.match(/#property version\s+"([\d.]+)"/)?.[1]), "1.01 or later");
   assert.match(code, /"omega\/corpus_macro\.json"/);
   assert.match(code, /input bool\s+MacroEnabled = true;/);
   const map = code.match(/input string MacroSymbols = "([^"]+)";/)?.[1];
@@ -58,7 +58,7 @@ test("OF-4. 1.01 macro export: an explicit BASE=SYMBOL map, the executor's corpu
 
 test("OF-5. 1.02 backfill (BF1 c): reads the bridge's corpus_from.json, writes at most 600 closed bars from there and echoes the start; still data only", async () => {
   const { readCorpus, writeBackfillRequest, BACKFILL_MAX_BARS } = await import("../bridge/omega-bridge/src/files.mjs");
-  assert.equal(src.match(/#property version\s+"([\d.]+)"/)?.[1], "1.02");
+  assert.ok(["1.02", "1.03"].includes(src.match(/#property version\s+"([\d.]+)"/)?.[1]), "1.02 or later");
   assert.match(code, /CORPUS_FROM_JSON_PATH\s*= "omega\/corpus_from\.json"/);
   assert.match(code, /FileOpen\(CORPUS_FROM_JSON_PATH, FILE_READ \| FILE_TXT \| FILE_ANSI\)/, "read only");
   assert.doesNotMatch(code, /FileOpen\(CORPUS_FROM_JSON_PATH, FILE_WRITE/, "the EA never writes the request");
@@ -79,4 +79,21 @@ test("OF-5. 1.02 backfill (BF1 c): reads the bridge's corpus_from.json, writes a
   assert.equal(all.bars.length, 600);
   assert.equal(all.backfill_from_ms, 1795800000000);
   assert.equal(readCorpus("/omega", { fs }).bars.length, 240, "the default read is unchanged");
+});
+
+test("OF-6. 1.03 time base (feed incident 2026-11-28 10:25:58Z): the corpus files only while connected, on an offset read the same on two ticks", () => {
+  assert.equal(src.match(/#property version\s+"([\d.]+)"/)?.[1], "1.03");
+  const fn = (name) => code.slice(code.indexOf(`void ${name}()`), code.indexOf("\n  }\n", code.indexOf(`void ${name}()`)));
+  const base = fn("UpdateTimeBase");
+  assert.match(base, /if\(!\(bool\)TerminalInfoInteger\(TERMINAL_CONNECTED\)\) \{ g_offsetSeen = false; g_timeBaseReady = false; return; \}/, "a disconnect clears it");
+  assert.match(base, /g_timeBaseReady = g_offsetSeen && offset == g_offsetLast;/, "the same offset on two reads in a row");
+  assert.match(code, /void OnTimer\(\)\n  \{\n   UpdateTimeBase\(\);/, "read once per tick, before any write");
+  const corpus = fn("WriteCorpusJson"), macro = fn("WriteCorpusMacroJson"), state = fn("WriteStateJson");
+  assert.match(corpus, /^void WriteCorpusJson\(\)\n  \{\n   if\(!g_timeBaseReady\) return;/, "the gold corpus waits for the time base");
+  assert.match(macro, /if\(!MacroEnabled \|\| !g_timeBaseReady\) return;/, "so does the macro corpus");
+  for (const f of [corpus, macro]) {
+    assert.match(f, /int offset = g_timeBaseOffset;/, "the confirmed offset, not a fresh read");
+    assert.doesNotMatch(f, /ServerUtcOffsetSeconds\(\)/);
+  }
+  assert.doesNotMatch(state, /g_timeBaseReady/, "state.json is written as before (it carries connected)");
 });
