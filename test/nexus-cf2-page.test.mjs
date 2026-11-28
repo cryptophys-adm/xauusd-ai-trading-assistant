@@ -375,5 +375,9 @@ test("CF2-15 the deploy smoke step: the Councils archive in both scopes, no emai
   assert.match(step, /const EMAIL = /, "no email address");
   assert.doesNotMatch(step, /text\.includes\("@"\)/, "a bare @ is not an email: topic keys carry it");
   assert.match(step, /const PRICE = /, "no price-like number");
+  // CF2a (#682): the CI service token is a viewer, never the owner.
+  assert.match(step, /https:\/\/nexus\.cryptophys\.work\/omega\/api\/whoami/);
+  assert.match(step, /who\?\.can_control !== false \|\| who\?\.is_owner !== false/, "can_control and is_owner both false");
+  assert.doesNotMatch(step, /who\.subject|who\?\.subject/, "the token's subject is never printed");
 });
 

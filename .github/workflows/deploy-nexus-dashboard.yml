@@ -322,7 +322,8 @@ jobs:
         # token: items an array and counts.by_status (#680), and no email address and no price-like number in the body ("@" alone
           # is not one: topic keys carry it, e.g. strategy:zone_pullback@intraday, seat:risk@15). The
         # route answers 200 whatever CFC_MODE is (off is an empty or frozen archive, not an error). Without the token:
-        # the Access login redirect.
+        # the Access login redirect. And (CF2a, #682) Omega's whoami under the same token answers can_control false and
+        # is_owner false: the CI token is never the owner.
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -368,4 +369,20 @@ jobs:
             out[scope] = { items: body.items.length, total: body.counts.total ?? null, active: body.counts.active ?? null, archive: body.counts.archive ?? null, by_status: byStatus };
           }
           console.log(JSON.stringify({ council_archive: out }));
+          // CF2a (#682): the Councils page shows owner controls only to the owner. The CI service token is never the
+          // owner: Omega's whoami answers can_control false and is_owner false for it (its subject is not printed).
+          const WHOAMI = "https://nexus.cryptophys.work/omega/api/whoami";
+          let w = null, who = null;
+          for (let i = 0; i < 30; i++) {
+            try {
+              w = await fetch(WHOAMI, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+              who = await w.json().catch(() => null);
+              if (w.status === 200 && who && typeof who.can_control === "boolean") break;
+              console.log("whoami not ready:", w.status, typeof who?.can_control);
+            } catch (e) { console.log("whoami error:", e?.name); }
+            await new Promise((res) => setTimeout(res, 10000));
+          }
+          if (!w || w.status !== 200) { console.error(`/omega/api/whoami: HTTP ${w?.status ?? "no answer"}`); process.exit(1); }
+          if (who?.can_control !== false || who?.is_owner !== false) { console.error(`/omega/api/whoami: the CI service token is not a viewer (can_control ${who?.can_control}, is_owner ${who?.is_owner})`); process.exit(1); }
+          console.log(JSON.stringify({ whoami_ci: { type: who.type ?? null, can_control: who.can_control, is_owner: who.is_owner } }));
           NODE
