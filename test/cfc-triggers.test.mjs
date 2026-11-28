@@ -98,7 +98,7 @@ test("risk, engine, model, seat, knowledge, news, execution, data and cost flags
   assert.deepEqual(newsFlags(losing.slice(0, 2), near, { now: NOW }), [], "two losing trades are not enough");
   assert.deepEqual(keys(executionFlags({ recoveries: 3, failedIntents: 2 })), ["execution:recoveries"]);
   assert.deepEqual(keys(executionFlags({ recoveries: 0, failedIntents: 3 })), ["execution:rejected_intents"]);
-  assert.deepEqual(keys(dataFlags({ stuck: [{ field: "gmi_v12_70.verdict", status: "open", candles: 24 }, { field: "prophet_r38.d_enc", status: "open", candles: 23 }], alerts: [{ kind: "parity_revoked", status: "open" }, { kind: "market_data_stale", status: "resolved" }] })), ["data:gmi_v12_70", "data:parity"]);
+  assert.deepEqual(keys(dataFlags({ stuck: [{ field: "gmi_v12_70.verdict", status: "open", candles: 24 }, { field: "prophet_r38.d_enc", status: "open", candles: 23 }], alerts: [{ kind: "parity_revoked", status: "open" }, { kind: "market_data_stale", status: "resolved" }] })), ["data:gmi_v12_70"], "S5: an open parity_revoked alert no longer flags a topic");
   const day = (d) => new Date(NOW - d * 86_400_000).toISOString().slice(0, 10);
   const usage = [
     ...[1, 2, 3].map((d) => ({ day: day(d), source: "warroom_agent", model: MODEL, calls: 100, prompt_tokens: 600_000, completion_tokens: 60_000 })),
@@ -112,18 +112,18 @@ test("risk, engine, model, seat, knowledge, news, execution, data and cost flags
 
 test("the flags come in a fixed order and every key is valid", () => {
   const statuses = agentStatuses(ALL_LIVE);
-  const flags = computeFlags({ strategy: { trades: run("zone_pullback", 20, 20), statuses, wanted: statuses }, trades: run("zone_pullback", 20, 20), execution: { recoveries: 5 }, data: { alerts: [{ kind: "parity_revoked", status: "open" }] } }, { now: NOW });
-  assert.deepEqual(keys(flags), ["strategy:zone_pullback:exits", "risk:intraday", "risk:london", "risk:normal-trending", "execution:recoveries", "data:parity"]);
+  const flags = computeFlags({ strategy: { trades: run("zone_pullback", 20, 20), statuses, wanted: statuses }, trades: run("zone_pullback", 20, 20), execution: { recoveries: 5 }, data: { alerts: [{ kind: "market_data_stale", status: "open" }] } }, { now: NOW });
+  assert.deepEqual(keys(flags), ["strategy:zone_pullback:exits", "risk:intraday", "risk:london", "risk:normal-trending", "execution:recoveries", "data:market_feed"]);
   for (const c of flags) { assert.equal(parseTopicKey(c.topic_key).ok, true); assert.deepEqual(priceKeysIn(c.signal), []); assert.equal(typeof c.signal.summary, "string"); }
 });
 
 test("dedup: one open per topic key, a 7-day fingerprint cooldown, at most 3 new a day", async () => {
   const c = (topic_key, rule = "stop_share") => ({ topic_key, rule, fingerprint: `${topic_key}|${rule}` });
-  const list = [c("strategy:a:exits"), c("strategy:a:exits", "agent_suspended"), c("risk:london"), c("risk:asia"), c("engine:15"), c("data:parity"), c("cost:shadow")];
+  const list = [c("strategy:a:exits"), c("strategy:a:exits", "agent_suspended"), c("risk:london"), c("risk:asia"), c("engine:15"), c("data:market_feed"), c("cost:shadow")];
   const sel = selectNew(list, { open: new Set(["risk:london"]), recent: new Set(["risk:asia|stop_share"]), createdToday: 1 });
   assert.deepEqual(keys(sel.insert), ["strategy:a:exits", "engine:15"], "3 a day, one already made today");
   assert.deepEqual(keys(sel.touch), ["risk:london"]);
-  assert.deepEqual(sel.skipped.map((x) => [x.topic_key, x.why]), [["strategy:a:exits", "same_topic_this_run"], ["risk:asia", "cooldown"], ["data:parity", "daily_cap"], ["cost:shadow", "daily_cap"]]);
+  assert.deepEqual(sel.skipped.map((x) => [x.topic_key, x.why]), [["strategy:a:exits", "same_topic_this_run"], ["risk:asia", "cooldown"], ["data:market_feed", "daily_cap"], ["cost:shadow", "daily_cap"]]);
   assert.deepEqual(selectNew(list, { createdToday: 3 }).insert, []);
   assert.match(await fingerprintOf({ topic_key: "risk:asia", rule: "stop_share" }), /^[0-9a-f]{64}$/);
   assert.equal(await fingerprintOf({ topic_key: "risk:asia", rule: "stop_share" }), await fingerprintOf({ topic_key: "risk:asia", rule: "stop_share" }));

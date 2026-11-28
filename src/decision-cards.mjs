@@ -31,9 +31,9 @@ export function sessionOf(iso) {
 /**
  * Pure: the card of one room. `thread` is readTimeframeThread or readWarRoom output; `outcomes`
  * rows { subject, result, direction }; `stuck` open stuck states; `compliance` rows { agent,
- * check_id, detail }; `parity` { engine: status }.
+ * check_id, detail }. Parity removal S5: the card no longer carries `provenance.parity`.
  */
-export function buildDecisionCard({ chart, thread, outcomes = [], stuck = [], compliance = [], parity = {}, run = 0 }) {
+export function buildDecisionCard({ chart, thread, outcomes = [], stuck = [], compliance = [], run = 0 }) {
   const barOpen = chart === "15" ? new Date(Date.parse(thread.bar_time) - 15 * 60_000).toISOString() : thread.bar_open ?? null;
   const barClose = chart === "15" ? thread.bar_time : thread.bar_close ?? null;
   const final = finalEntries(thread.openings || [], thread.debate || []);
@@ -58,7 +58,7 @@ export function buildDecisionCard({ chart, thread, outcomes = [], stuck = [], co
     stuck_open: stuck.map((s) => ({ field: s.field, candles: s.candles })),
     compliance: compliance.map((x) => ({ agent: x.agent, check: x.check_id, detail: sanitizeText(x.detail, 200) })),
     outcomes: Object.fromEntries(outcomes.map((o) => [o.subject, { result: o.result, direction: o.direction ?? null }])),
-    provenance: { scoring_version: SCORING_VERSION, kb_sha: KNOWLEDGE_BASE_V4.provenance.content_sha256, learned_pack_sha: null, parity }
+    provenance: { scoring_version: SCORING_VERSION, kb_sha: KNOWLEDGE_BASE_V4.provenance.content_sha256, learned_pack_sha: null }
   };
 }
 
@@ -97,8 +97,6 @@ export async function loadDecisionCards(env, { chart = "60", limit = 6 } = {}) {
     const keys = (await db.prepare("SELECT DISTINCT json_extract(body_json, '$.candle_key') AS k FROM agent_thread_messages WHERE thread_id = ? AND step = 'brief' ORDER BY run_id DESC LIMIT ?").bind(`tf:${tf}`, n).all()).results || [];
     for (const r of keys) { if (!r.k) continue; const t = await readTimeframeThread(db, tf, { candleKey: r.k }); if (t) threads.push({ t, key: t.candle_key, threadId: `tf:${tf}`, barTime: t.bar_close }); }
   }
-  let parity = {};
-  try { for (const row of (await db.prepare("SELECT engine, status FROM engine_parity_registry").all()).results || []) if (row.status === "approved" || !(row.engine in parity)) parity[row.engine] = row.status; } catch { parity = {}; }
   let stuck = [];
   try { stuck = (await db.prepare("SELECT field, candles FROM stuck_states WHERE status = 'open'").all()).results || []; } catch { stuck = []; }
   const cards = [];
@@ -106,7 +104,7 @@ export async function loadDecisionCards(env, { chart = "60", limit = 6 } = {}) {
     let outcomes = [], compliance = [];
     try { outcomes = (await db.prepare("SELECT subject, result, direction FROM outcome_scores WHERE timeframe = ? AND candle_key = ? AND (subject LIKE 'agent:%' OR subject = 'chain:h1')").bind(chart, key).all()).results || []; } catch { outcomes = []; }
     try { compliance = (await db.prepare("SELECT agent, check_id, detail FROM compliance_checks WHERE thread_id = ? AND bar_time = ?").bind(threadId, barTime).all()).results || []; } catch { compliance = []; }
-    cards.push(buildDecisionCard({ chart, thread: t, outcomes, stuck: chart === "60" ? stuck : [], compliance, parity, run: t.reconvened ? 1 : 0 }));
+    cards.push(buildDecisionCard({ chart, thread: t, outcomes, stuck: chart === "60" ? stuck : [], compliance, run: t.reconvened ? 1 : 0 }));
   }
   return cards;
 }

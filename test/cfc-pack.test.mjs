@@ -21,12 +21,12 @@ test("the topic grammar accepts every agent, every pattern it trades, every type
   assert.deepEqual(patternsOf("zone_pullback"), []);
   const t = parseTopicKey("strategy:zone_pullback:exits");
   assert.deepEqual([t.type, t.agent, t.focus, t.pattern], ["strategy", "zone_pullback", "exits", null]);
-  for (const key of ["seat:risk", "seat:risk@15", "seat:moderator@1D", "engine:15", "engine:model", "risk:london", "risk:scalp", "risk:high-ranging", "news:release_horizon", "news:drift", "execution:rejected_intents", "data:parity", "data:prophet_r38", "cost:shadow", "cost:shadow:metric_opening", "knowledge:note-1.v2", "free:sl-plus-review"]) assert.equal(parseTopicKey(key).ok, true, key);
+  for (const key of ["seat:risk", "seat:risk@15", "seat:moderator@1D", "engine:15", "engine:model", "risk:london", "risk:scalp", "risk:high-ranging", "news:release_horizon", "news:drift", "execution:rejected_intents", "data:prophet_r38", "cost:shadow", "cost:shadow:metric_opening", "knowledge:note-1.v2", "free:sl-plus-review"]) assert.equal(parseTopicKey(key).ok, true, key);
   assert.equal(parseTopicKey("risk:london").dimension, "session");
   assert.equal(parseTopicKey("risk:normal-trending").dimension, "regime");
   for (const bad of [undefined, null, 42, "", "strategy", "strategy:", "nope:x", "strategy:unknown_agent", "strategy:zone_pullback:double_top", "strategy:pattern_peaks:not_a_pattern",
     "strategy:zone_pullback@intraday", "strategy:zone_pullback@intraday|sideways", "strategy:zone_pullback:exits:more", "strategy:a@b@c", "seat:system", "seat:nobody", "seat:risk@5",
-    "engine:60", "risk:weekend", "news:other", "execution:orders", "data:anything", "cost:UPPER", "cost:has space", "knowledge:", "free:Has_Caps", "free:x y",
+    "engine:60", "risk:weekend", "news:other", "execution:orders", "data:anything", "data:parity", "cost:UPPER", "cost:has space", "knowledge:", "free:Has_Caps", "free:x y",
     "strategy:zone_pullback\n", "x".repeat(121), "seat:risk@15'; DROP TABLE x"]) assert.equal(parseTopicKey(bad).ok, false, String(bad));
   assert.ok(!SEAT_IDS.includes("system") && SEAT_IDS.includes("risk") && SEAT_IDS.includes("moderator"));
 });
@@ -150,7 +150,7 @@ test("every other type builds a pack from the tables that exist, says unavailabl
   db.prepare("INSERT INTO omega_intents (id, kind, payload, status, result, created_ms, updated_ms) VALUES ('i1', 'open', ?, 'failed', ?, ?, ?)").run(JSON.stringify({ entry: 4001.25 }), JSON.stringify({ ok: false, error: "invalid stops at 3995.5" }), NOW - 3600_000, NOW);
   db.prepare("INSERT INTO stuck_states (field, value, first_candle_key, last_candle_key, candles, price_range, atr, status, detected_at, updated_at) VALUES ('prophet_r38.d_enc', '-1', 'a', 'b', 30, 13, 6.5, 'open', ?, ?)").run(new Date(NOW).toISOString(), new Date(NOW).toISOString());
   db.prepare("INSERT INTO ai_usage_daily (day, source, model, calls, prompt_tokens, completion_tokens) VALUES ('2026-11-15', 'warroom_agent', ?, 10, 60000, 6000)").run(MODEL);
-  const keys = ["seat:risk@15", "seat:moderator", "engine:15", "engine:model", "risk:london", "risk:intraday", "news:release_horizon", "news:drift", "execution:recoveries", "execution:rejected_intents", "data:prophet_r38", "data:parity", "cost:warroom_agent", "cost:shadow", "knowledge:note-1", "free:sl-plus-review"];
+  const keys = ["seat:risk@15", "seat:moderator", "engine:15", "engine:model", "risk:london", "risk:intraday", "news:release_horizon", "news:drift", "execution:recoveries", "execution:rejected_intents", "data:prophet_r38", "cost:warroom_agent", "cost:shadow", "knowledge:note-1", "free:sl-plus-review"];
   const packs = {};
   for (const key of keys) {
     const pack = await buildEvidencePack(env, key, { now: NOW });

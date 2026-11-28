@@ -19,7 +19,7 @@
 //   knowledge a live learned note retired as worse than its control in the last 7 days
 //   news      three or more losing trades within a release's gate window in 7 days
 //   execution three or more self-healing recoveries, or three or more failed Omega intents, in 24 hours
-//   data      a stuck state open over 24 candles; a revoked parity; a market-data-stale alert open
+//   data      a stuck state open over 24 candles; a market-data-stale alert open
 //   cost      a meter source's neurons up 50 % week on week (at least 1,000 a week); a shadow breaker trip in 7 days
 //
 // Rate limits (RFC §1.2): one open suggestion per topic key; a fingerprint (topic key and rule) is not suggested
@@ -193,7 +193,7 @@ export function executionFlags({ recoveries = 0, failedIntents = 0 } = {}, rules
   return out;
 }
 
-/** Pure: stuck states open over 24 candles, a revoked parity, stale market data. */
+/** Pure: stuck states open over 24 candles, stale market data (S5: the revoked-parity trigger is retired). */
 export function dataFlags({ stuck = [], alerts = [] } = {}, rules = CFC_RULES.data) {
   const out = [];
   const feeds = new Map();
@@ -204,7 +204,6 @@ export function dataFlags({ stuck = [], alerts = [] } = {}, rules = CFC_RULES.da
   }
   for (const [feed, candles] of [...feeds].sort()) out.push(candidate(`data:${feed}`, "stuck_state", { candles, at_least: rules.stuck_candles, summary: `A field of ${feed} has not changed for ${candles} closed 1H candles.` }));
   const open = (kind) => (alerts || []).some((a) => a.kind === kind && a.status === "open");
-  if (open("parity_revoked")) out.push(candidate("data:parity", "parity_revoked", { summary: "A local engine's parity identity is revoked." }));
   if (open("market_data_stale")) out.push(candidate("data:market_feed", "market_data_stale", { summary: "Market data stopped while the market trades." }));
   return out;
 }

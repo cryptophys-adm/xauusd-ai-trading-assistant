@@ -74,8 +74,9 @@ test("decision cards carry no level, price, plan or size; agent text keeps no pr
     debate: [{ id: "prophet", status: "ok", stance: "SELL", bias: "BEARISH", confidence: 0.75 }],
     strategy: { plan: { entry: 4051, stop: 4060, tp1: 4030 } }, key_levels: [{ price: 4030 }]
   };
-  const card = buildDecisionCard({ chart: "60", thread, outcomes: [{ subject: "agent:prophet", result: "hit", direction: -1 }], compliance: [{ agent: "risk", check_id: "calibration_talk", detail: "verified" }], parity: { prophet: "approved" } });
+  const card = buildDecisionCard({ chart: "60", thread, outcomes: [{ subject: "agent:prophet", result: "hit", direction: -1 }], compliance: [{ agent: "risk", check_id: "calibration_talk", detail: "verified" }] });
   assert.deepEqual(cardLeaks(card), []);
+  assert.ok(!("parity" in card.provenance), "parity removal S5: no provenance.parity");
   assert.equal(card.h1.decision, "SELL");
   assert.equal(card.agents[0].confidence, 0.75, "the final stance after the Consensus Discussion");
   assert.match(card.agents[0].claim, /below \[level\] with the stop above \[level\]/);

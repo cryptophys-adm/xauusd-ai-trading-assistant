@@ -1,7 +1,7 @@
 // Health alerts (gap 2, owner decision 2026-11-06): the system watches itself.
 //
 // Every parity sweep (15 minutes) the detectors below look for operational problems that so far
-// were found only by a manual check: a revoked parity identity, a local input bar that differs
+// were found only by a manual check (the revoked-parity alert is retired since S5): a local input bar that differs
 // from TradingView's final bar, a missing local H1 record, a timeframe room that did not
 // conclude, model calls lost to the Workers AI rate limit, a stale News Daily or a stale War
 // Room. Each problem is an alert row (D1 `health_alerts`): it opens once, stays open while the
@@ -200,14 +200,8 @@ export async function detectHealthIssues(env, now = Date.now()) {
   const db = env.DB;
   const out = [];
 
-  // 1. Parity identities revoked (latest identity per engine, changed in the last 7 days).
-  const registry = await rows(db, "SELECT engine, status, consecutive_matches, revoked_at, updated_at FROM engine_parity_registry WHERE updated_at >= ? ORDER BY updated_at DESC", iso(now - 7 * 24 * HOUR));
-  const latest = new Map();
-  for (const r of registry) if (!latest.has(r.engine)) latest.set(r.engine, r);
-  for (const r of latest.values()) {
-    if (r.status !== "revoked") continue;
-    out.push({ key: `parity_revoked:${r.engine}`, kind: "parity_revoked", subject: `Parity revoked: ${engineLabel(r.engine)}, ${r.consecutive_matches} of 24 matches toward re-approval`, detail: { engine: r.engine, revoked_at: r.revoked_at, consecutive_matches: r.consecutive_matches } });
-  }
+  // 1. Retired in parity removal S5: the parity_revoked alert (trust is the frozen identity table since S2). An alert
+  // still open resolves at the next pass.
 
   // 2. Local input bars that differ from TradingView's final bar (one alert per candle).
   for (const r of await rows(db, "SELECT engine, candle_key, detail, compared_at FROM engine_parity_comparisons WHERE result = 'input_mismatch' AND compared_at >= ?", iso(now - 3 * HOUR))) {

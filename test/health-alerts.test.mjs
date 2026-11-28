@@ -40,15 +40,15 @@ function env(overrides = {}) {
 
 test.beforeEach(() => resetHealthSchemaCacheForTests());
 
-test("detectors: a revoked identity, an input mismatch and a missing local H1 record are reported; healthy state is quiet", async () => {
+test("detectors: an input mismatch and a missing local H1 record are reported, a revoked identity no longer (S5); healthy state is quiet", async () => {
   const e = env();
   e.DB.raw.prepare("INSERT INTO engine_parity_registry VALUES ('prophet','a','b','revoked',4,?,?)").run(iso(NOW - 5 * H), iso(NOW - H));
   e.DB.raw.prepare("INSERT INTO engine_parity_registry VALUES ('prophet_m15','a','b','approved',34,NULL,?)").run(iso(NOW - H));
   e.DB.raw.prepare("INSERT INTO engine_parity_comparisons VALUES ('gmi','a','b','OANDA:XAUUSD:60:1','input_mismatch',?,?)").run(JSON.stringify({ mismatches: [{ field: "input:c" }, { field: "input:volume" }] }), iso(NOW - H));
   const issues = await detectHealthIssues(e, NOW);
-  assert.deepEqual(issues.map((i) => i.kind).sort(), ["h1_local_missing", "input_mismatch", "parity_revoked"]);
+  // Parity removal S5: the revoked 'prophet' row raises no parity_revoked alert.
+  assert.deepEqual(issues.map((i) => i.kind).sort(), ["h1_local_missing", "input_mismatch"]);
   // Canonical names (owner request 2026-11-08): the indicator name, its timeframe and the registry id.
-  assert.match(issues.find((i) => i.kind === "parity_revoked").subject, /^Parity revoked: Prophet R38 \+ R37 1H \(prophet\), 4 of 24/);
   assert.match(issues.find((i) => i.kind === "input_mismatch").subject, /GMI v12\.70 1H \(gmi\), bar opened 1970-01-01 00:00 UTC \(input:c, input:volume\)/);
 
   const healthy = env();
