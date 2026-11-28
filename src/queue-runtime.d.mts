@@ -29,6 +29,7 @@ export type QueueTask =
       bundle: EvidenceBundle;
     }
   | {
+      // Kept so a leftover queued task still parses: the news thread is removed (AU1 item 8) and index.ts acknowledges it.
       kind: "news_thread";
       event_id: string;
       analysis_key: string;
