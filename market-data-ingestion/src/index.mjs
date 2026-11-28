@@ -1,5 +1,5 @@
 import { buildLocalEngineInput } from "./engine-inputs.mjs";
-import { applyMt5Fallback, applyBrokerSeries } from "./mt5-fallback.mjs";
+import { applyMt5Fallback, applyBrokerSeries, fillHoles } from "./mt5-fallback.mjs";
 import { runBrokerShadow } from "./broker-shadow.mjs";
 import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
@@ -315,6 +315,14 @@ const worker = {
       } catch (error) {
         records.length = 0;
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "mt5_fallback_failed", code: asString(error?.code) || "fallback_failed" }));
+      }
+      // BF1 (d): the holes inside the 1m series' last 10 hours, filled from the corpus (feed first) every 5 minutes.
+      try {
+        const fill = await fillHoles(env);
+        if (fill.status === "filled") records.length = 0;
+        if (["filled", "nothing_in_corpus", "failed"].includes(fill.status)) console.log(JSON.stringify({ worker: WORKER_NAME, event: "fill_holes", ...fill }));
+      } catch (error) {
+        console.error(JSON.stringify({ worker: WORKER_NAME, event: "fill_holes_failed", code: asString(error?.code) || "fill_holes_failed" }));
       }
       // QB1 O3: the broker-built series (silver 4H, context only) from the broker's bars, whatever TradingView's state;
       // the broker is asked only once a new bucket can have closed. Never in the engines' bundle (role "context").

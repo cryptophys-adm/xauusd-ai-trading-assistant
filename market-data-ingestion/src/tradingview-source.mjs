@@ -179,13 +179,36 @@ export function gapBackoffSeconds(spec) {
  * since `fallback.since_sec` is pulled back over that range, so TradingView's bars overwrite them.
  * Null when the series holds no fallback bars.
  */
-export function healPlan(spec, cached, nowSec) {
+export function healPlan(spec, cached, nowSec, { budget = null } = {}) {
   const since = Number(cached?.fallback?.since_sec);
-  if (spec.derived_from || spec.broker || !Number.isFinite(since)) return null;
+  if (spec.derived_from || spec.broker) return null;
+  // BF1 (d): the corpus-filled ranges are healed too, but only while the day's calls are at most FILL_HEAL_BUDGET_SHARE
+  // of the budget (`budget`: { used, daily }) and the market trades, so a heal never brings on the next quota stop.
+  const fill = fillsFrom(cached);
+  const fillOk = Number.isFinite(fill) && Number.isFinite(Number(budget?.used)) && Number(budget?.daily) > 0
+    && Number(budget.used) <= FILL_HEAL_BUDGET_SHARE * Number(budget.daily) && !marketClosed(spec.symbol, nowSec);
+  if (!Number.isFinite(since) && !fillOk) return null;
   // Once per 5 minutes: while the gateway is still in cooldown every attempt reserves the daily budget.
   if (Math.floor(nowSec / 60) % HEAL_EVERY_MIN !== 0) return null;
-  const count = Math.min(spec.retain, MAX_GATEWAY_COUNT, Math.ceil((nowSec - since) / spec.seconds) + 3);
-  return { symbol: spec.symbol, interval: spec.interval, count, bootstrap: false, heal: true };
+  const from = Math.min(Number.isFinite(since) ? since : Infinity, fillOk ? fill : Infinity);
+  const count = Math.min(spec.retain, MAX_GATEWAY_COUNT, Math.ceil((nowSec - from) / spec.seconds) + 3);
+  return { symbol: spec.symbol, interval: spec.interval, count, bootstrap: false, heal: true, ...(fillOk ? { fills: true } : {}) };
+}
+
+/** BF1 (d): TradingView re-pulls a corpus-filled range only while the day's calls are at most this share of the budget. */
+export const FILL_HEAL_BUDGET_SHARE = 0.8;
+/** Pure: the earliest minute (seconds) of a record's corpus-filled ranges (`fills`, src/mt5-fallback.mjs fillHoles), or NaN. */
+export function fillsFrom(record) {
+  const f = (Array.isArray(record?.fills) ? record.fills : []).map((x) => Number(x?.from)).filter(Number.isFinite);
+  return f.length ? Math.min(...f) : NaN;
+}
+/** Pure: the filled ranges a pull leaves: a heal pull clears the ranges it reached back over (TradingView's bars replace them); any other pull keeps them. */
+export function fillsAfterPull(previous, plan, spec, nowSec) {
+  const fills = Array.isArray(previous?.fills) ? previous.fills : [];
+  if (!fills.length) return null;
+  const reach = nowSec - (Number(plan?.count) || 0) * spec.seconds;
+  const kept = plan?.heal ? fills.filter((f) => Number(f.from) < reach) : fills;
+  return kept.length ? kept : null;
 }
 
 /**
@@ -365,6 +388,12 @@ async function refreshCycle(env, { now, force }) {
   const perRun = Math.min(12, Number.parseInt(asString(env.TV_MAX_CALLS_PER_RUN) || "8", 10) || 8);
 
   const cached = await Promise.all(SERIES.map((spec) => readSeries(kv, spec)));
+  // BF1 (d): the day's calls so far, read only when a native series holds corpus-filled ranges (healPlan's budget margin).
+  let budgetPeek = null;
+  if (SERIES.some((spec, i) => !spec.derived_from && !spec.broker && Number.isFinite(fillsFrom(cached[i])))) {
+    const used = Number.parseInt((await kv.get(BUDGET_KEY_PREFIX + new Date(now).toISOString().slice(0, 10))) || "0", 10) || 0;
+    budgetPeek = { used, daily: dailyBudget(env, now) };
+  }
   const sourceIndex = (spec) => SERIES.findIndex((s) => s.key === spec.derived_from);
   const planned = [];
   SERIES.forEach((spec, index) => {
@@ -379,7 +408,7 @@ async function refreshCycle(env, { now, force }) {
       if (own.length && sourceCovers(own.at(-1), source, spec.seconds)) plan = null;
       else plan = planRequest(spec, cached[index], nowSec);
     } else {
-      plan = healPlan(spec, cached[index], nowSec) ?? (force && cached[index]?.candles?.length
+      plan = healPlan(spec, cached[index], nowSec, { budget: budgetPeek }) ?? (force && cached[index]?.candles?.length
         ? { symbol: spec.symbol, interval: spec.interval, count: 5, bootstrap: false }
         : planRequest(spec, cached[index], nowSec));
     }
@@ -433,10 +462,12 @@ async function refreshCycle(env, { now, force }) {
     try {
       const incoming = closedCandlesFromColumns(result.bars, item.spec, nowSec);
       const candles = item.plan.bootstrap ? mergeCandles([], incoming, item.spec.retain) : mergeCandles(previous?.candles, incoming, item.spec.retain);
+      const fills = item.plan.bootstrap ? null : fillsAfterPull(previous, item.plan, item.spec, nowSec);
       await writeSeries(kv, item.spec, {
         series: item.spec.key, symbol: item.spec.symbol, interval: item.spec.interval, timeframe: item.spec.timeframe,
         fetched_at: new Date(now).toISOString(), candle_count: candles.length,
         volume_available: candles.length > 0 && candles.every((c) => c.volume !== null),
+        ...(fills ? { fills } : {}),
         candles
       });
       updated.push({ series: item.spec.key, received: incoming.length, stored: candles.length, bootstrap: item.plan.bootstrap });
@@ -471,7 +502,11 @@ async function deriveSeries(kv, records, now, skip) {
     // from broker minutes are aggregated again from the fallback's start.
     const ownSince = Number(records[index]?.fallback?.since_sec);
     const healing = Number.isFinite(ownSince) && !sourceRecord?.fallback;
-    const after = healing ? Math.floor(ownSince / spec.seconds) * spec.seconds - 1 : own.at(-1).time;
+    // BF1 (d): the buckets built from corpus-filled minutes are aggregated again once the source's fills are healed.
+    const ownFill = fillsFrom(records[index]);
+    const fillHealing = Number.isFinite(ownFill) && !Number.isFinite(fillsFrom(sourceRecord));
+    const fromSec = Math.min(healing ? ownSince : Infinity, fillHealing ? ownFill : Infinity);
+    const after = Number.isFinite(fromSec) ? Math.floor(fromSec / spec.seconds) * spec.seconds - 1 : own.at(-1).time;
     const incoming = aggregateCandles(source, { seconds: spec.seconds, sourceSeconds: sourceSpec.seconds, nowSec, fetchedAtSec, after });
     if (!incoming.length) continue;
     const candles = mergeCandles(own, incoming, spec.retain);
@@ -481,11 +516,12 @@ async function deriveSeries(kv, records, now, skip) {
       volume_available: candles.length > 0 && candles.every((c) => c.volume !== null),
       // A series still fed by broker minutes keeps its fallback mark until the source heals.
       ...(records[index]?.fallback && !healing ? { fallback: records[index].fallback } : {}),
+      ...(records[index]?.fills && !fillHealing ? { fills: records[index].fills } : {}),
       candles
     };
     await writeSeries(kv, spec, record);
     records[index] = record;
-    out.push({ series: spec.key, derived: incoming.length, stored: candles.length, ...(healing ? { healed: true } : {}) });
+    out.push({ series: spec.key, derived: incoming.length, stored: candles.length, ...(healing ? { healed: true } : {}), ...(fillHealing ? { fills_healed: true } : {}) });
   }
   return out;
 }

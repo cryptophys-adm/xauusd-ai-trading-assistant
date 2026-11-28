@@ -21,6 +21,7 @@
 
 import { archiveBrokerBars } from "./liquidity-lens.mjs";
 import { sameBroker } from "./gold-symbol.mjs";
+import { goldPausedAt } from "./market-hours.mjs";
 
 export const CORPUS_TIMEFRAME = "M1";
 export const CORPUS_MAX_BARS_PER_SYNC = 240;
@@ -145,7 +146,70 @@ export function resetCorpusSchemaCacheForTests() { ready = false; }
 async function ensureSchema(db) {
   if (ready) return;
   for (const sql of CORPUS_SCHEMA_SQL) await db.prepare(sql).run();
+  // BF1 (a): the earliest open hole of the source, cached so a sync without a hole reads nothing more.
+  try { await db.prepare("ALTER TABLE corpus_sources ADD COLUMN backfill_from_ms INTEGER").run(); } catch { /* already there */ }
   ready = true;
+}
+
+// ---------------------------------------------------------------- BF1 (a): the backfill cursor
+// After a reconnect or a broker switch the terminal's corpus file holds only its last N bars, so the minutes in between
+// were never sent (27 Nov 02:13-04:55Z). Each sync answers `corpus_backfill_from_ms`: the source's first missing trading
+// minute inside the last BACKFILL_WINDOW_MS (gold's weekends and daily breaks are not holes), or null. The bridge
+// (1.8.3, with the owner's go) asks its terminal for the bars from there; until then the field is read by nothing.
+// For a source with no bar yet (a new feed or broker), the floor is the newest minute any other gold source stored, so
+// the minutes since the series last had data are asked for. The value is cached on the source's row
+// (backfill_from_ms): a sync that opens no hole while none is open reads nothing more.
+export const BACKFILL_WINDOW_MS = 10 * 3_600_000;
+
+/** Pure: the first minute in [fromMs, toMs) at which gold trades, or null (BACKFILL_WINDOW_MS bounds the walk). */
+export function firstTradingMinute(fromMs, toMs) {
+  if (![fromMs, toMs].every(finite) || !(toMs > fromMs)) return null;
+  const stop = Math.min(toMs, fromMs + BACKFILL_WINDOW_MS + MINUTE);
+  for (let t = Math.ceil(fromMs / MINUTE) * MINUTE; t < stop; t += MINUTE) if (!goldPausedAt(t)) return t;
+  return null;
+}
+
+/** The first missing trading minute of `source` inside the window ending at `now` (`floorMs`: the stored minute before its first bar), or null. */
+export async function earliestHole(db, source, { floorMs = null, now = Date.now() } = {}) {
+  const from = Math.floor((now - BACKFILL_WINDOW_MS) / MINUTE) * MINUTE;
+  let before = finite(floorMs) ? floorMs : null;
+  if (before == null) {
+    const t = (await db.prepare("SELECT MAX(minute_ms) AS t FROM corpus_bars WHERE source = ? AND minute_ms < ?").bind(source, from).first())?.t;
+    before = t == null ? null : Number(t);
+  }
+  const rows = ((await db.prepare(`SELECT t, prev FROM (SELECT minute_ms AS t, LAG(minute_ms) OVER (ORDER BY minute_ms) AS prev FROM corpus_bars WHERE source = ? AND minute_ms >= ?)
+    WHERE prev IS NULL OR t - prev > ? ORDER BY t`).bind(source, from, MINUTE).all()).results) || [];
+  for (const r of rows) {
+    const prev = r.prev == null ? (finite(before) ? before : null) : Number(r.prev);
+    if (prev == null) continue;
+    const hole = firstTradingMinute(Math.max(prev + MINUTE, from), Number(r.t));
+    if (hole != null) return hole;
+  }
+  return null;
+}
+
+/**
+ * The backfill cursor after a sync stored `batch` (its validated bars) into `source`, `prev` its row before the sync
+ * ({ last_minute_ms, backfill_from_ms } or null). Cached on the row. Never throws (null).
+ */
+async function backfillCursor(db, source, { prev, batch, now }) {
+  try {
+    const prevLast = finite(Number(prev?.last_minute_ms)) && prev?.last_minute_ms != null ? Number(prev.last_minute_ms) : null;
+    const cached = prev?.backfill_from_ms != null && finite(Number(prev.backfill_from_ms)) ? Number(prev.backfill_from_ms) : null;
+    const first = batch.length ? Math.min(...batch.map((b) => b.t)) : null;
+    const isNew = prevLast == null;
+    const opened = prevLast != null && first != null && first - prevLast > MINUTE && firstTradingMinute(Math.max(prevLast + MINUTE, now - BACKFILL_WINDOW_MS), first) != null;
+    if (cached == null && !isNew && !opened) return null;
+    let floorMs = null;
+    if (isNew) {
+      const other = await db.prepare("SELECT MAX(last_minute_ms) AS t FROM corpus_sources WHERE source LIKE 'mt5:%' AND source <> ? AND last_minute_ms IS NOT NULL").bind(source).first();
+      floorMs = finite(Number(other?.t)) && other?.t != null ? Number(other.t) : null;
+      if (floorMs == null) return null;
+    }
+    const hole = await earliestHole(db, source, { floorMs, now });
+    if (hole !== cached) await db.prepare("UPDATE corpus_sources SET backfill_from_ms = ? WHERE source = ?").bind(hole, source).run();
+    return hole;
+  } catch { return null; }
 }
 
 /**
@@ -165,6 +229,7 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
       .bind(source, clean(corpus?.server), clean(corpus?.symbol, 32), Number(connection?.version) || 0, Array.isArray(corpus?.bars) ? corpus.bars.length : 0, v.error, now).run();
     return { mode: "shadow", error: v.error, cursor_ms: null };
   }
+  const prevRow = await db.prepare("SELECT last_minute_ms, backfill_from_ms FROM corpus_sources WHERE source = ?").bind(v.source).first().catch(() => null);
   let stored = 0;
   for (const b of v.bars) {
     const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -184,7 +249,8 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
     ON CONFLICT(source) DO UPDATE SET connection_version = excluded.connection_version, last_minute_ms = excluded.last_minute_ms, stored = stored + excluded.stored, refused = refused + excluded.refused, last_error = NULL, updated_ms = excluded.updated_ms`)
     .bind(v.source, v.server, v.symbol, v.connection_version, last?.t ?? null, stored, v.refused, now).run();
   if (stored && new Date(now).getUTCMinutes() === 0) await db.prepare("DELETE FROM corpus_bars WHERE minute_ms < ?").bind(now - CORPUS_KEEP_MS).run();
-  return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null };
+  const backfill = await backfillCursor(db, v.source, { prev: prevRow, batch: v.bars, now });
+  return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null, backfill_from_ms: backfill };
 }
 
 /**
@@ -225,6 +291,7 @@ export async function ingestFeedCorpus(env, corpus, { bridgeId, connection = nul
     if (owned) return { mode: "shadow", error: "source_is_executor", cursor_ms: null };
   } else if (mark.bridge_id !== bridgeId) return { mode: "shadow", error: "source_of_another_feed", cursor_ms: null };
   await db.prepare("INSERT INTO corpus_feeds (source, bridge_id, updated_ms) VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET updated_ms = excluded.updated_ms").bind(v.source, bridgeId, now).run();
+  const prevRow = await db.prepare("SELECT last_minute_ms, backfill_from_ms FROM corpus_sources WHERE source = ?").bind(v.source).first().catch(() => null);
   let stored = 0;
   for (const b of v.bars) {
     const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -235,7 +302,8 @@ export async function ingestFeedCorpus(env, corpus, { bridgeId, connection = nul
   await db.prepare(`INSERT INTO corpus_sources (source, server, symbol, connection_version, last_minute_ms, stored, refused, last_error, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
     ON CONFLICT(source) DO UPDATE SET connection_version = excluded.connection_version, last_minute_ms = excluded.last_minute_ms, stored = stored + excluded.stored, refused = refused + excluded.refused, last_error = NULL, updated_ms = excluded.updated_ms`)
     .bind(v.source, v.server, v.symbol, v.connection_version, last?.t ?? null, stored, v.refused, now).run();
-  return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null };
+  const backfill = await backfillCursor(db, v.source, { prev: prevRow, batch: v.bars, now });
+  return { mode: "shadow", source: v.source, stored, refused: v.refused, cursor_ms: last?.t ?? null, backfill_from_ms: backfill };
 }
 
 /** F1: a feed source is preferred by the MT5 fallback while its newest bar is at most this old. */
@@ -266,7 +334,8 @@ export async function readCorpusBars(env, { sinceMs = 0, limit = CORPUS_READ_MAX
     const n = Math.max(1, Math.min(CORPUS_READ_MAX, Number(limit) || CORPUS_READ_MAX));
     const since = finite(Number(sinceMs)) ? Number(sinceMs) : 0;
     const rows = ((await db.prepare("SELECT minute_ms AS t, o, h, l, c, tick_volume AS v FROM corpus_bars WHERE source = ? AND minute_ms > ? ORDER BY minute_ms LIMIT ?").bind(src.source, since, n).all()).results) || [];
-    return { source: src.source, server: src.server, symbol: src.symbol, bars: rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v) })) };
+    const feed = Boolean(await db.prepare("SELECT 1 AS x FROM corpus_feeds WHERE source = ?").bind(src.source).first());
+    return { source: src.source, server: src.server, symbol: src.symbol, feed, bars: rows.map((r) => ({ t: Number(r.t), o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: r.v == null ? null : Number(r.v) })) };
   } catch {
     return { source: null, bars: [] };
   }

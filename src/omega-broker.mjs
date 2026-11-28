@@ -1080,7 +1080,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
     const open = (await db.prepare("SELECT id, status, payload FROM omega_intents WHERE status IN ('pending', 'sent') ORDER BY created_ms, id").all()).results ?? [];
     if (open.some((r) => r.status === "pending")) await db.prepare("UPDATE omega_intents SET status = 'sent', updated_ms = ? WHERE status = 'pending'").bind(now).run();
     const openIntents = open.map((r) => parse(r.payload)).filter(Boolean);
-    return { ...last.response, intents: openIntents, corpus_cursor_ms: null, corpus_macro_cursors: null, calendar_seen_ms: null, stream_mode: bridgeStreamMode(env, { executor, intents: openIntents }), light: true };
+    return { ...last.response, intents: openIntents, corpus_cursor_ms: null, corpus_backfill_from_ms: null, corpus_macro_cursors: null, calendar_seen_ms: null, stream_mode: bridgeStreamMode(env, { executor, intents: openIntents }), light: true };
   }
   // The bridge found no chart symbol the server has (exhausted) or stopped on a login failure: an event once per
   // change, which the health alert reads while no fresh, verified state says otherwise.
@@ -1549,9 +1549,9 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
 
   // Corpus Oracle (owner 2026-11-11): the broker's closed M1 bars of Omega's active broker, pair and
   // user, kept for the local lane's phase 2; off unless CORPUS_ORACLE_MODE = "shadow". Never blocks a sync.
-  let corpusCursor = null;
+  let corpusCursor = null, corpusBackfill = null;
   if (corpus) {
-    try { corpusCursor = (await ingestCorpus(env, corpus, { executor, now })).cursor_ms ?? null; } catch { corpusCursor = null; }
+    try { const r = await ingestCorpus(env, corpus, { executor, now }); corpusCursor = r.cursor_ms ?? null; corpusBackfill = r.backfill_from_ms ?? null; } catch { corpusCursor = null; }
   }
   // The MT5 fallback, stage 2 (2026-11-11): the macro symbols' bars and the MQL5 calendar, same rules.
   let macroCursors = null, calendarSeen = null;
@@ -1573,7 +1573,7 @@ export async function bridgeSync(env, { state, results, publicKey, kid, bridgeVe
       fallbackSource: src.fallbackSource, accountServer: executor?.server ?? null, now });
   } catch { reference = null; }
   const referencePrice = reference?.price ?? null;
-  const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, stream_mode: bridgeStreamMode(env, { executor, intents, recovery, reviewStarted }), ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
+  const response = { ok: true, intents, connection, settings_version: settingsVersion, notes: plan.notes, corpus_cursor_ms: corpusCursor, corpus_backfill_from_ms: corpusBackfill, corpus_macro_cursors: macroCursors, calendar_seen_ms: calendarSeen, reference_price: referencePrice, reference, stream_mode: bridgeStreamMode(env, { executor, intents, recovery, reviewStarted }), ...(recovery ? { recovery } : {}), ...(reviewStarted ? { profile_review_started: true } : {}) };
   // A full plan that ended with nothing to manage is what the light path may reuse (never a recovery or a review).
   if (!recovery && !reviewStarted) LIGHT_SYNC.set(db, { at: now, lightKey, response: { ...response, intents: [] } });
   else LIGHT_SYNC.delete(db);
