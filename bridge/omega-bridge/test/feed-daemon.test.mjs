@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFeedDaemon, feedConfigProblem, resolveFeedConfig, buildFeedBody } from "../src/feed-daemon.mjs";
-import { applyFeedCredentials, ensureFeedSettings, clearCredentials, feedStartupIni } from "../src/ini.mjs";
+import { applyFeedCredentials, ensureFeedSettings, clearCredentials, clearFeedCredentials, feedStartupIni, feedIniSafeToWrite, iniValue } from "../src/ini.mjs";
 import { loadOrCreateKeyPair } from "../src/keys.mjs";
 import { buildEnvelope } from "../../../workers/xauusd-omega/public/omega-crypto.js";
 
@@ -60,7 +60,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.equal(calls[0].url, "https://feed.example.invalid/omega/api/bridge/feed-sync");
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.bridge_id, "oanda");
-  assert.equal(body.bridge_version, "1.8.3");
+  assert.equal(body.bridge_version, "1.8.4");
   assert.match(body.kid, /^[0-9a-f]{16}$/);
   assert.deepEqual(Object.keys(body.state).sort(), ["connected", "server", "symbol", "terminal_error"]);
   assert.equal(JSON.stringify(body).includes("balance"), false, "no account amounts leave the VPS");
@@ -354,4 +354,47 @@ test("FD-15. the daemon: the cursor from the server, the request file for the EA
   await d.syncOnce();
   assert.equal(fs.existsSync(req), false, "the request file is removed");
   assert.equal(fs.existsSync(path.join(omega, "intents.txt")), false, "a feed never writes intents");
+});
+
+test("FD-16 (1.8.4). the feed's login asks MT5 to save the password (KeepPrivate=1); the clear keeps it; a password without it is never written", async () => {
+  const s = setup({ ini: "[Common]\nKeepPrivate=0\nLogin=\nPassword=\n[Experts]\nAllowLiveTrading=0\n" });
+  const keys = loadOrCreateKeyPair(s.stateDir, { fs });
+  const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
+  let payload = { ok: true, connection: { version: 1, server: "OANDA-Demo-1", envelope } };
+  const logs = [];
+  const d = createFeedDaemon({ env: s.env, fetch: async () => okJson(payload), execFile: async () => "", log: (o) => logs.push(o) });
+  await d.syncOnce();
+  const ini = fs.readFileSync(s.terminalIni, "utf8");
+  assert.equal(iniValue(ini, "Common", "KeepPrivate"), "1", "the applied login saves its password; an old KeepPrivate=0 is overwritten");
+  assert.equal((ini.match(/^KeepPrivate=/gm) || []).length, 1, "one KeepPrivate line");
+  assert.ok(iniValue(ini, "Common", "Password"), "the password is in the applied file");
+  // Logged in on that server: the password leaves the file, KeepPrivate=1 stays.
+  fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", symbol: { name: "XAUUSD.sml" } }));
+  await d.syncOnce();
+  const cleared = fs.readFileSync(s.terminalIni, "utf8");
+  assert.ok(logs.some((l) => l.event === "feed_credentials_cleared"));
+  assert.deepEqual([iniValue(cleared, "Common", "Password"), iniValue(cleared, "Common", "Login"), iniValue(cleared, "Common", "KeepPrivate")], ["", "", "1"]);
+  // startup.ini has no [Common] section at all: it cannot set KeepPrivate=0 or touch the saved account.
+  const startup = feedStartupIni({ symbol: "XAUUSD.sml" });
+  assert.doesNotMatch(startup, /^\[Common\]/m);
+  assert.doesNotMatch(startup, /KeepPrivate|Password|Login/);
+  // Pure: every writer the feed uses keeps KeepPrivate=1; a password without it is refused; CRLF files too.
+  assert.equal(iniValue(applyFeedCredentials("", { server: "S", login: "1", password: "p" }), "Common", "KeepPrivate"), "1");
+  assert.equal(iniValue(applyFeedCredentials("[Common]\r\nKeepPrivate=0\r\n", { server: "S", login: "1", password: "p" }), "Common", "KeepPrivate"), "1");
+  assert.equal(iniValue(clearFeedCredentials("[Common]\nPassword=x\n"), "Common", "KeepPrivate"), "1");
+  assert.match(clearFeedCredentials("[Common]\nPassword=x\n"), /AllowLiveTrading=0/);
+  assert.equal(feedIniSafeToWrite("[Common]\nLogin=1\nPassword=x\n"), false, "a password with no KeepPrivate is never written");
+  assert.equal(feedIniSafeToWrite("[Common]\nPassword=x\nKeepPrivate=0\n"), false);
+  assert.equal(feedIniSafeToWrite("[Common]\nPassword=x\nKeepPrivate=1\n"), true);
+  assert.equal(feedIniSafeToWrite("[Common]\nPassword=\n"), true, "a password-less file is always safe");
+  assert.equal(feedIniSafeToWrite("[Experts]\nPassword=x\n"), true, "only [Common] holds the login");
+  // The executor's writers are untouched (feed first): no KeepPrivate in its apply or clear.
+  assert.equal(iniValue(clearCredentials("[Common]\nPassword=x\n"), "Common", "KeepPrivate"), null);
+});
+
+test("FD-17 (1.8.4). the feed never writes a login whose password MT5 would not save", async () => {
+  const src = fs.readFileSync(new URL("../src/feed-daemon.mjs", import.meta.url), "utf8");
+  const code = src.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  assert.match(code, /if \(!feedIniSafeToWrite\(next\)\) throw new Error\("keep_private_missing"\);\s*writeIni\(config\.terminalIni, next, fs\);/, "the guard sits right before the login write");
+  assert.doesNotMatch(code, /clearCredentials\(/, "the feed clears with clearFeedCredentials only");
 });

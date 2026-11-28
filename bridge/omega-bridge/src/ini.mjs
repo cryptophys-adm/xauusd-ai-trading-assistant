@@ -265,6 +265,10 @@ export function setStartupSymbol(iniText, symbol) {
  * F2: a FEED terminal's login (bridge OMEGA_ROLE=feed). Like applyCredentials, but algo trading stays OFF
  * (`AllowLiveTrading=0`): the feed's EA (OmegaFeed, no trade code) only exports bars. The chart opens on the feed's gold
  * symbol with that expert attached.
+ * 1.8.4 (feed incident 2026-11-28 10:16Z): `[Common] KeepPrivate=1` beside the login, so MT5 saves the password at this
+ * login (MetaQuotes "Platform Start" help, [Common]: "KeepPrivate — saving the password between connections: 1 — to
+ * save, 0 — not to save"). Without it the password the bridge later clears was never saved, and every start with the
+ * credential-free startup.ini came up logged out. A KeepPrivate=0 already in the file is overwritten.
  */
 export function applyFeedCredentials(iniText, { server, login, password, symbol = "XAUUSD", expert = "OmegaFeed" }) {
   if (typeof iniText !== "string") throw new Error("iniText must be a string");
@@ -279,10 +283,50 @@ export function applyFeedCredentials(iniText, { server, login, password, symbol 
   const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
   if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
   const blocks = parseIniBlocks(rawLines);
-  mutateSection(blocks, "Common", [["Login", loginStr], ["Server", server], ["Password", password]]);
+  mutateSection(blocks, "Common", [["Login", loginStr], ["Server", server], ["Password", password], ["KeepPrivate", "1"]]);
   mutateSection(blocks, "Experts", [["Enable", "1"], ["Enabled", "1"], ["AllowLiveTrading", "0"], ["AllowDllImport", "0"], ["Account", "0"], ["Profile", "0"]]);
   mutateSection(blocks, "StartUp", [["Expert", expert], ["Symbol", symbol], ["Period", "M1"]], ["ExpertParameters"]);
   return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}
+
+/**
+ * 1.8.4: the FEED terminal's clear once it is logged in: Login and Password emptied, algo trading off, and
+ * `[Common] KeepPrivate=1` kept, so the file can never ask MT5 to forget the saved password if it is ever passed again
+ * (feed-run.sh passes it only while it holds a password). The executor's own clear (clearCredentials) is unchanged.
+ */
+export function clearFeedCredentials(iniText) {
+  if (typeof iniText !== "string") throw new Error("iniText must be a string");
+  const eol = iniText.includes("\r\n") ? "\r\n" : "\n";
+  const hasTrailingNewline = iniText.endsWith("\r\n") || iniText.endsWith("\n");
+  const rawLines = iniText.length === 0 ? [] : iniText.split(/\r?\n/);
+  if (hasTrailingNewline && rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
+  const blocks = parseIniBlocks(rawLines);
+  mutateSection(blocks, "Common", [["Login", ""], ["Password", ""], ["KeepPrivate", "1"]]);
+  mutateSection(blocks, "Experts", [["AllowLiveTrading", "0"]]);
+  return serializeIniBlocks(blocks, eol, hasTrailingNewline);
+}
+
+/** Pure: a section's value of a key ([Section] Key=value), case-insensitive on names, or null. */
+export function iniValue(iniText, section, key) {
+  let cur = null;
+  for (const raw of String(iniText ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = /^\[([^\]]+)\]$/.exec(line);
+    if (m) { cur = m[1].trim().toLowerCase(); continue; }
+    if (cur !== String(section).toLowerCase() || line.startsWith(";")) continue;
+    const eq = line.indexOf("=");
+    if (eq > 0 && line.slice(0, eq).trim().toLowerCase() === String(key).toLowerCase()) return line.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+/**
+ * 1.8.4: a feed ini that carries a password is safe to write only if it also asks MT5 to save that password
+ * ([Common] KeepPrivate=1). A password-less file is always safe.
+ */
+export function feedIniSafeToWrite(iniText) {
+  const pw = iniValue(iniText, "Common", "Password");
+  return !pw || iniValue(iniText, "Common", "KeepPrivate") === "1";
 }
 
 /** F2: a FEED terminal's trading switch, forced off (`AllowLiveTrading=0`), whatever wrote the ini. */
@@ -300,7 +344,8 @@ export function ensureFeedSettings(iniText) {
  * 1.8.2 (feed incident 2026-11-27): the feed terminal's credential-free start file. No [Common] section (no login, no
  * password): the terminal's saved account logs in by itself, and the chart opens with the feed's EA on its gold symbol,
  * algo trading off. run.sh passes it with /config whenever the login ini holds no password, so a restart (a reboot, a
- * unit restart, a crash) never drops the feed EA.
+ * unit restart, a crash) never drops the feed EA. 1.8.4: it still has no [Common] section, so it can never set
+ * KeepPrivate=0 or touch the saved account; the password is saved at the login (applyFeedCredentials, KeepPrivate=1).
  */
 export function feedStartupIni({ symbol = "XAUUSD", expert = "OmegaFeed" } = {}) {
   assertNoNewlines(symbol, "symbol");

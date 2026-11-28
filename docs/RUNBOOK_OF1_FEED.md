@@ -184,6 +184,51 @@ rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.1 /opt/o
 
 A leftover `omega/corpus_from.json` is harmless to 1.01, which never reads it. Remove it with `rm -f "$T/MQL5/Files/omega/corpus_from.json"`.
 
+## 1c. Bridge 1.8.4: the feed keeps its login across restarts (KeepPrivate, one VPS change with the owner's go)
+
+**Why.** On 28 Nov 10:16Z (and 27 Nov 13:09) a guarded restart started the feed terminal with `startup.ini`; OmegaFeed loaded but the terminal did not log in. `startup.ini` holds no login by design: the terminal logs in with the account it saved. MT5 saves the password only when the login file asks it to: `[Common] KeepPrivate=1` (MetaQuotes "Platform Start" help: "KeepPrivate — saving the password between connections: 1 — to save, 0 — not to save"). Bridges up to 1.8.3 never wrote it, so the password the bridge clears after the login was never saved. 1.8.4 writes `KeepPrivate=1` with every feed login, keeps it in the cleared file, and refuses to write a login file without it. `startup.ini` is unchanged (no `[Common]`). The executor, its bridge and its EA are not changed.
+
+**Order matters.** The password is saved only at a login applied by 1.8.4. Re-entering the login on 1.8.3 restores the feed for now but does not survive the next restart.
+
+**Pre-check (the stick point).** If `feed_credentials_cleared` already ran under 1.8.3 (it has on this VPS: the 1.8.3 login was cleared once the terminal connected), MT5 never saved that password, and nothing 1.8.4 does to the file can bring it back. The owner's re-entry after the 1.8.4 install (step 2) is then required, not optional. Check it by event names and times only:
+
+```bash
+journalctl -u omega-bridge@oanda --since "2026-11-27" -o cat | grep -E '"event":"feed_(connection_applied|credentials_cleared)"' | tail -4
+```
+
+A `feed_credentials_cleared` line with no later 1.8.4 `feed_connection_applied` means: do step 2.
+
+1. Back up the feed's bridge, then copy the repo's `bridge/omega-bridge` over `/opt/omega-bridge-oanda` at the merged commit (only the feed's copy):
+
+   ```bash
+   cp -a /opt/omega-bridge-oanda /opt/omega-bridge-oanda.bak-1.8.3 && echo backed-up
+   ```
+
+   Check it as for 1.8.1. Expect `export const BRIDGE_VERSION = "1.8.4";` and no `SYNTAX FAIL`. Then restart only the feed's bridge:
+
+   ```bash
+   systemctl restart omega-bridge@oanda
+   ```
+
+2. The owner re-enters the feed login once on Nexus > Live > Data feeds. The bridge applies it (with `KeepPrivate=1`) and restarts the feed terminal with the login file.
+3. Check the login file asks MT5 to save the password, by counts only (nothing printed from the file):
+
+   ```bash
+   f=/opt/mt5-oanda/login.ini; echo "keep_private_1: $(grep -c '^KeepPrivate=1' "$f") keep_private_0: $(grep -c '^KeepPrivate=0' "$f")"
+   ```
+
+   Expect `keep_private_1: 1 keep_private_0: 0`. Once the terminal reports it is logged in, the bridge logs `feed_credentials_cleared` and the same check still shows `keep_private_1: 1`.
+4. The real test: one guarded restart of the feed terminal (section 3's guarded line). `run.sh` now passes `startup.ini`. After two minutes, check as in 1.8.2's step 4 that `state.json` and `corpus.json` are under a minute old and that `connected` is `True` (the two-field print there; no other field).
+5. If it prints `False`, stop and report: the saved-password path does not hold on this VPS either, and the owner re-enters the login (the feed comes back on the login file).
+
+**Rollback.** Restore the 1.8.3 backup and restart only `omega-bridge@oanda`:
+
+```bash
+rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.3 /opt/omega-bridge-oanda && echo restored
+```
+
+A `KeepPrivate=1` left in the login file is harmless to 1.8.3.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:
