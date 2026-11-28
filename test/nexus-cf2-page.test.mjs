@@ -356,3 +356,23 @@ test("CF2-14 the veto window (#680): late amber, next actor owner, a countdown t
   assert.match(JSON.stringify(ARC), /vetoed by [^"]*@/);
   assert.equal(vetoed.proposal.note, "vetoed by owner");
 });
+
+test("CF2-15 the deploy smoke step: the Councils archive in both scopes, no email, no price", () => {
+  const wf = read(".github/workflows/deploy-nexus-dashboard.yml");
+  const at = wf.indexOf("- name: Smoke test the Call for Councils archive");
+  assert.ok(at > wf.indexOf("- name: Smoke test the Position Manager lines"), "after the other smoke steps");
+  const step = wf.slice(at, wf.indexOf("NODE\n", wf.indexOf("node --input-type=module", at)) + 5);
+  assert.match(step, /https:\/\/nexus\.cryptophys\.work\/api\/council\/archive/);
+  assert.match(step, /for \(const scope of \["active", "archive"\]\)/, "both scopes");
+  assert.match(step, /isAccessLogin\(bare\)/, "the Access redirect without the token");
+  assert.match(step, /headers: token\.headers/, "under the CI token");
+  assert.match(step, /r\.status !== 200/);
+  assert.match(step, /\\bjson\\b/);
+  assert.match(step, /no-store/);
+  assert.match(step, /Array\.isArray\(body\?\.items\)/);
+  assert.match(step, /body\?\.counts\?\.by_status/);
+  assert.match(step, /const EMAIL = /, "no email address");
+  assert.doesNotMatch(step, /text\.includes\("@"\)/, "a bare @ is not an email: topic keys carry it");
+  assert.match(step, /const PRICE = /, "no price-like number");
+});
+

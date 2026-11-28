@@ -315,3 +315,57 @@ jobs:
           if (lines.length !== PM_LINES.length || bad.length) { console.error(`/api/omega/position-manager: ${lines.length} lines (want ${PM_LINES.length}), ${bad.length} not in B5's shape`); process.exit(1); }
           console.log(JSON.stringify({ pm_lines: { n: lines.length, off: lines.filter((l) => !l.enabled).map((l) => `${l.id}@${l.version}${l.off_since == null ? " (switch)" : ""}`) } }));
           NODE
+
+      - name: Smoke test the Call for Councils archive
+        # CF2 (the Councils page, #/councils, #681): GET /api/council/archive through the Nexus proxy, scope=active (the
+        # page's default view) and scope=archive (the ended chains), answers 200 JSON with no-store under the CI service
+        # token: items an array and counts.by_status (#680), and no email address and no price-like number in the body ("@" alone
+          # is not one: topic keys carry it, e.g. strategy:zone_pullback@intraday, seat:risk@15). The
+        # route answers 200 whatever CFC_MODE is (off is an empty or frozen archive, not an error). Without the token:
+        # the Access login redirect.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { accessToken, isAccessLogin } from "./scripts/access-token.mjs";
+          const BASE = "https://nexus.cryptophys.work/api/council/archive";
+          const token = accessToken();
+          if (token.problems.length || !token.headers) { console.error(`CF_ACCESS_CLIENT_ID/SECRET: ${token.problems.join("; ") || "not set"} (${token.shape})`); process.exit(1); }
+          // Without the token: Cloudflare Access answers with its login redirect, never the archive.
+          const bare = await fetch(`${BASE}?scope=active`, { redirect: "manual", signal: AbortSignal.timeout(20000) });
+          if (!isAccessLogin(bare)) { console.error(`/api/council/archive without the token: expected the Access login redirect, got ${bare.status}`); process.exit(1); }
+          console.log(`/api/council/archive without the token: Access login redirect (${bare.status})`);
+          // An email address (a local part, "@", a domain with a dot), and a price-like number (a gold price: four digits, a
+          // decimal point) anywhere in the body.
+          const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
+          const PRICE = /\b[1-9]\d{3}\.\d{1,3}\b/;
+          const out = {};
+          for (const scope of ["active", "archive"]) {
+            const url = `${BASE}?scope=${scope}&limit=50`;
+            // With the token: 200 JSON, no-store (the AI Worker may still be deploying: retry for up to 5 minutes).
+            let r = null, text = "", body = null;
+            for (let i = 0; i < 30; i++) {
+              try {
+                r = await fetch(url, { redirect: "manual", headers: token.headers, signal: AbortSignal.timeout(20000) });
+                text = await r.text();
+                try { body = JSON.parse(text); } catch { body = null; }
+                if (r.status === 200 && Array.isArray(body?.items)) break;
+                console.log(`council archive (${scope}) not ready:`, r.status, text.slice(0, 200));
+              } catch (e) { console.log(`council archive (${scope}) error:`, e?.name); }
+              await new Promise((res) => setTimeout(res, 10000));
+            }
+            if (!r || r.status !== 200) { console.error(`/api/council/archive?scope=${scope}: HTTP ${r?.status ?? "no answer"} ${text.slice(0, 200)}`); process.exit(1); }
+            if (!/\bjson\b/i.test(r.headers.get("content-type") ?? "")) { console.error(`/api/council/archive?scope=${scope}: not JSON (${r.headers.get("content-type")})`); process.exit(1); }
+            if (!/no-store/i.test(r.headers.get("cache-control") ?? "")) { console.error(`/api/council/archive?scope=${scope}: cache-control ${r.headers.get("cache-control")}, expected no-store`); process.exit(1); }
+            if (!Array.isArray(body?.items)) { console.error(`/api/council/archive?scope=${scope}: items is not an array`); process.exit(1); }
+            const byStatus = body?.counts?.by_status;
+            if (!byStatus || typeof byStatus !== "object") { console.error(`/api/council/archive?scope=${scope}: no counts.by_status`); process.exit(1); }
+            const email = text.match(EMAIL);
+            if (email) { console.error(`/api/council/archive?scope=${scope}: an email address in the body (${email[0].replace(/^[^@]*/, "…")})`); process.exit(1); }
+            const price = text.match(PRICE);
+            if (price) { console.error(`/api/council/archive?scope=${scope}: a price-like number in the body (${price[0]})`); process.exit(1); }
+            out[scope] = { items: body.items.length, total: body.counts.total ?? null, active: body.counts.active ?? null, archive: body.counts.archive ?? null, by_status: byStatus };
+          }
+          console.log(JSON.stringify({ council_archive: out }));
+          NODE
