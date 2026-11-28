@@ -3,8 +3,8 @@ import { Dot, phaseOf } from "./ui";
 import { useSystemHealth } from "../lib/health";
 
 /**
- * War Room: only what needs attention (owner request 2026-11-08). The full Worker status and parity
- * live on the System status page; this panel appears only when a lane is late (amber) or a fault (red).
+ * War Room: only what needs attention (owner request 2026-11-08). The full Worker status lives on the
+ * System status page; this panel appears only when a lane is late (amber) or a fault (red).
  */
 export default function SystemIssues() {
   const { items, poll, lanePoll } = useSystemHealth();

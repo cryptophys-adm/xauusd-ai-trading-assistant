@@ -131,7 +131,7 @@ function StatusLine({ r, s }: { r: SwitchRow; s?: RowStatus }) {
     return (
       <p className={cls} aria-live="polite">
         <span className="text-ok" title={s.changed && r.write === "feature-switch" ? PROPAGATION_NOTE : undefined}>{s.changed ? "saved" : "no change"}</span>
-        <span className="text-fg-2"> {clockText(s.at)} · owner{s.changed && s.era ? " · new parity era" : ""}</span>
+        <span className="text-fg-2"> {clockText(s.at)} · owner{s.changed && s.era ? " · new era" : ""}</span>
       </p>
     );
   }
