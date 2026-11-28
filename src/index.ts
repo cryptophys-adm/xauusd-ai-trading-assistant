@@ -304,6 +304,7 @@ import { computeRecommendations, readRecommendations } from "./strategy-recommen
 import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
+import { freshPatternRevert } from "./fresh-pattern.mjs";
 import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
 import { limitFirstRevert, limitFirstStatus, limitFirstRefusalDigest } from "./limit-first.mjs";
 import { runExecutorSilentCheck } from "./executor-silent.mjs";
@@ -3184,6 +3185,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // latest 15 closed waived trades average below 0R; once a UTC day, beside SV1b's check (the same rule, no cron of its own).
   const roomWaive = await runRoomWaiveRevert(env, { send: (text: string) => sendTelegram(env, text) });
   if (roomWaive.status === "reverted" || roomWaive.status === "failed") console.log("room_waive", JSON.stringify(roomWaive));
+  // FP1 (src/fresh-pattern.mjs): the fresh 15m pattern exception's named auto-revert (FRESH_PATTERN_MODE to "record"
+  // once, if its first 30 closed trades average below +0.10R at the broker; one Omega event, one Telegram line).
+  const freshRevert = await freshPatternRevert(env, { send: (text: string) => sendTelegram(env, text) });
+  if (freshRevert.status === "reverted" || freshRevert.status === "kept" || freshRevert.status === "failed") console.log("fresh_pattern_revert", JSON.stringify(freshRevert));
   // CDG (src/cd-gate.mjs, owner 2026-11-25: "Learned gate, hold otherwise (Recommended)"): the learned confidence-drop
   // gate once a UTC day (KV, its history, one Omega event and one Telegram line per pass/fail change), then its named
   // auto-revert (cd_gate back to "off" once, if its first 15 outcomes average worse than the earlier rule). No cron of its own.

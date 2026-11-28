@@ -20,6 +20,8 @@ export function rosterLines(before: Record<string, { status: string; version: nu
 export function syncAgentBreaker(env: unknown, records: unknown, options?: { send?: ((text: string) => Promise<unknown>) | null; now?: number }): Promise<Record<string, any>>;
 export function agentContext(input?: Record<string, any>): Record<string, any>;
 export function agentPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
+export function freshPatternPlans(dir: number, ctx: Record<string, any>, statuses?: Record<string, string>): Record<string, { status: string; plan: Record<string, any> }>;
+export function withFreshPlans(plans: Record<string, { status: string; plan: Record<string, any> | null }>, fresh: Record<string, { status: string; plan: Record<string, any> }>): Record<string, { status: string; plan: Record<string, any> | null }>;
 export function agentCatalog(statuses?: Record<string, string>, options?: { suspended?: string[] }): Array<{ id: string; label: string; version: number; status: string; suspended?: boolean; fits: string; family?: string; patterns?: Array<{ id: string; name: string }> }>;
 export function priceActionReading(patterns: unknown, calibration?: unknown): Array<Record<string, any>>;
 export function slimPlan(p: Record<string, any>): Record<string, any>;

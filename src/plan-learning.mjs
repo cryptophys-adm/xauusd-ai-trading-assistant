@@ -32,6 +32,7 @@ import { RANGE_GATED_AGENTS, CELL_GATE, cellRecords, htfAt, htfContext, loadHtfB
 import { simulateSignal, ledgerSeries, toMs, decisionCloseMs, validSignal, FILL_WINDOW_MS, TRADING_MODES } from "./signal-ledger.mjs";
 import { signTestP, SHADOW_SIGNIFICANCE } from "./shadow-versions.mjs";
 import { modeShadowEvidence, ruleVersionOf, ensureModeShadowSchema } from "./mode-shadow.mjs";
+import { FRESH_PATTERN_SOURCE, FRESH_PATTERN_PREFIX, freshPatternModeOf } from "./fresh-pattern.mjs";
 import { RANGE_BOTH_SOURCE, RANGE_BOTH_PREFIX, RANGE_BOTH_DAILY_CAP, RANGE_EPISODE_BACKFILL_DAYS, rangeShadowMode, rangeKeyOf, rangeRuleVersionOf, capRangeBoth, logRangeBothCapped, rangeEpisodesFrom, writableEpisodes, ensureRangeEpisodesSchema } from "./range-shadow.mjs";
 
 export const PLAN_LEARNING_VERSION = "cryptophys.plan-learning.v2";
@@ -382,6 +383,28 @@ export function rangeBothSetupsFrom(rows, { rangeKey }) {
     .sort((a, b) => a.opened_ms - b.opened_ms || (a.setup_key < b.setup_key ? -1 : 1));
 }
 
+/**
+ * Pure (FP1, src/fresh-pattern.mjs): the pattern_fresh setups of engine decisions of any stance (`rows`: decision_key,
+ * decided_at, atr_h1, mode, regime, plans = the decision's fresh_plans) through the live setup rules (setupsFrom). The
+ * key is "fresh:" before the live rule's key (never another source's key); source pattern_fresh. Oldest first.
+ */
+export function freshSetupsFrom(rows) {
+  const plans = [];
+  for (const r of rows || []) {
+    for (const side of ["BUY", "SELL"]) plans.push(...decisionPlans({ ...r, side }).filter((d) => typeof d.agent === "string" && d.agent.startsWith("pattern_") && finite(d.entry) && finite(d.stop) && finite(d.tp1)));
+  }
+  const list = plans.filter((d) => finite(d.close_ms)).sort((a, b) => a.close_ms - b.close_ms);
+  return setupsFrom(list).map((s) => ({ ...s, setup_key: `${FRESH_PATTERN_PREFIX}${s.setup_key}`, source: FRESH_PATTERN_SOURCE, rule_version: "fresh_pattern@1" }))
+    .sort((a, b) => a.opened_ms - b.opened_ms || (a.setup_key < b.setup_key ? -1 : 1));
+}
+
+/** FP1: the engine decisions since `sinceIso` that recorded fresh plans, any stance (oldest first). */
+async function loadFreshDecisions(db, sinceIso) {
+  return (await db.prepare(`SELECT decision_key, decided_at, json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode,
+      json_extract(decision_json, '$.context.regime_1h') AS regime, json_extract(decision_json, '$.fresh_plans') AS plans
+    FROM engine_decisions WHERE bar_close >= ? AND json_extract(decision_json, '$.fresh_plans') IS NOT NULL ORDER BY bar_close`).bind(sinceIso).all()).results || [];
+}
+
 /** Range shadow c2: the ranging engine decisions since `sinceIso`, any stance, with their plans (oldest first). */
 async function loadRangeDecisions(db, sinceIso) {
   return (await db.prepare(`SELECT decision_key, decided_at, json_extract(decision_json, '$.strategy.atr_h1') AS atr_h1, json_extract(decision_json, '$.trading_mode') AS mode,
@@ -552,6 +575,21 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
       logRangeBothCapped(capped.capped);
       await runAll(db, bothWrites);
     }
+    // FP1 (src/fresh-pattern.mjs): the fresh 15m pattern plans in their own rows (source pattern_fresh), whatever the
+    // council chose, while FRESH_PATTERN_MODE is not "off"; replayed on the control arm only, in their own queue.
+    const freshOn = freshPatternModeOf(env) !== "off";
+    const freshOut = { added: 0, extended: 0, resolved: 0, unavailable: 0 };
+    if (freshOn) {
+      const stamp = iso(now), fsince = now - PLAN_RULES.window_days * DAY;
+      const freshKnown = new Map(((await db.prepare("SELECT setup_key, last_seen_at, status FROM plan_setups WHERE source = ? AND opened_at >= ?").bind(FRESH_PATTERN_SOURCE, iso(fsince)).all()).results || []).map((r) => [r.setup_key, r]));
+      const freshWrites = [];
+      for (const s of freshSetupsFrom(await loadFreshDecisions(db, iso(fsince)))) {
+        const k = freshKnown.get(s.setup_key);
+        if (!k) { freshWrites.push(...setupInserts(db, s, { stamp, source: FRESH_PATTERN_SOURCE, ruleVersion: s.rule_version })); freshOut.added += 1; }
+        else if (k.status === "open" && toMs(k.last_seen_at) < s.last_seen_ms) { freshWrites.push(setupExtend(db, s, stamp)); freshOut.extended += 1; }
+      }
+      await runAll(db, freshWrites);
+    }
     // A setup replayed by an older version of the rules is replayed again.
     await db.prepare("UPDATE plan_setups SET status = 'open', results_json = NULL, resolved_at = NULL, version = ? WHERE version <> ? AND status IN ('resolved', 'unavailable')").bind(PLAN_LEARNING_VERSION, PLAN_LEARNING_VERSION).run();
     // The setups the engine no longer repeats are replayed until every arm is final.
@@ -561,18 +599,20 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
     // Range shadow c2: the range_both setups in a queue of their own too, on the control arm only, by the same replay
     // (a limit entry fills only when a bar trades through it within fillWindowOf; an at-level plan's market band).
     const openBoth = rangeOn ? ((await db.prepare("SELECT * FROM plan_setups WHERE status = 'open' AND source = ? AND last_seen_at <= ? ORDER BY opened_at LIMIT 200").bind(RANGE_BOTH_SOURCE, iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map((r) => ({ ...fromRow(r), source: RANGE_BOTH_SOURCE })) : [];
+    const openFresh = freshOn ? ((await db.prepare("SELECT * FROM plan_setups WHERE status = 'open' AND source = ? AND last_seen_at <= ? ORDER BY opened_at LIMIT 200").bind(FRESH_PATTERN_SOURCE, iso(now - PLAN_RULES.setup_gap_ms)).all()).results || []).map((r) => ({ ...fromRow(r), source: FRESH_PATTERN_SOURCE })) : [];
     let resolved = 0, unavailable = 0;
-    if (open.length || openShadow.length || openBoth.length) {
+    if (open.length || openShadow.length || openBoth.length || openFresh.length) {
       const series = bars ?? (await ledgerSeries(env)).bars;
       const updates = [];
       const controlOnly = PLAN_ARMS.filter((a) => a.id === CONTROL_ARM);
-      for (const s of [...open, ...openShadow, ...openBoth]) {
-        const isShadow = s.source === "shadow", isBoth = s.source === RANGE_BOTH_SOURCE;
-        const out = replaySetup(s, series, isShadow || isBoth ? { now, arms: controlOnly } : { now });
+      for (const s of [...open, ...openShadow, ...openBoth, ...openFresh]) {
+        const isShadow = s.source === "shadow", isBoth = s.source === RANGE_BOTH_SOURCE, isFresh = s.source === FRESH_PATTERN_SOURCE;
+        const out = replaySetup(s, series, isShadow || isBoth || isFresh ? { now, arms: controlOnly } : { now });
         if (out.status === "open") continue;
         updates.push(db.prepare("UPDATE plan_setups SET status = ?, resolved_at = ?, results_json = ?, updated_at = ? WHERE setup_key = ?").bind(out.status, iso(out.resolved_ms ?? now), out.status === "resolved" ? JSON.stringify(out.results) : null, iso(now), s.setup_key));
         if (isShadow) shadow[out.status === "resolved" ? "resolved" : "unavailable"] += 1;
         else if (isBoth) both[out.status === "resolved" ? "resolved" : "unavailable"] += 1;
+        else if (isFresh) freshOut[out.status === "resolved" ? "resolved" : "unavailable"] += 1;
         else if (out.status === "resolved") resolved += 1; else unavailable += 1;
       }
       await runAll(db, updates);
@@ -591,7 +631,7 @@ export async function runPlanLearning(env, { now = Date.now(), bars = null } = {
     if (rangeOn) { try { episodes = await updateRangeEpisodes(db, { now }); } catch (e) { episodes = { status: "failed", error: String(e?.message ?? e).slice(0, 200) }; } }
     const previous = await readPlanLearning(env);
     // The learned state is the live setups' only: shadow and range_both work alone leave it as it is.
-    const shadowOut = { ...(shadowOn ? { shadow } : {}), ...(rangeOn ? { range_both: both, range_episodes: episodes } : {}) };
+    const shadowOut = { ...(shadowOn ? { shadow } : {}), ...(rangeOn ? { range_both: both, range_episodes: episodes } : {}), ...(freshOn ? { pattern_fresh: freshOut } : {}) };
     if (!added && !extended && !resolved && !unavailable && !tagged && previous?.version === PLAN_LEARNING_VERSION && Array.isArray(previous?.cells)) return { status: "unchanged", setups: previous.setups?.resolved ?? 0, ...shadowOut };
     const state = await buildState(db, { now });
     await env.SIGNAL_CACHE?.put?.(PLAN_LEARNING_KEY, JSON.stringify(state));

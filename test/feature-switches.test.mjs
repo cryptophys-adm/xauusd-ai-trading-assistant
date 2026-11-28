@@ -24,6 +24,7 @@ import { zoneReadingsMode } from "../src/zone-readings.mjs";
 import { chartPatternsMode } from "../src/projection-agent.mjs";
 import { gridAdaptMode } from "../src/grid-adapt.mjs";
 import { roomBreakoutWaiveOf } from "../src/room-waive.mjs";
+import { freshPatternModeOf } from "../src/fresh-pattern.mjs";
 import { cfcMode, CFC_MODES } from "../src/cfc-triggers.mjs";
 import { modeShadowEvidence, modeProbationMode } from "../src/mode-shadow.mjs";
 import { liquidityWitnessEnabled } from "../src/decision-engine.mjs";
@@ -156,6 +157,7 @@ const ACCESSOR = {
   GRID_ADAPT_MODE: (env) => gridAdaptMode(env),
   PM_LINES_OFF: (env) => PM_LINE_IDS.filter((t) => !pmLinesOffEnv(env).includes(t)),
   ROOM_BREAKOUT_WAIVE: (env) => roomBreakoutWaiveOf(env),
+  FRESH_PATTERN_MODE: (env) => freshPatternModeOf(env),
   AGENT_VETO_RULE: (env) => agentVetoRuleOf(env),
   CFC_MODE: (env) => cfcMode(env),
   MODE_SHADOW_EVIDENCE: (env) => modeShadowEvidence(env),
@@ -316,7 +318,7 @@ test("FS-6 GET payload: the promised shape; no email, account or identity key; s
   assert.equal(p.switches.length, FEATURE_SWITCHES.length);
   for (const r of p.switches) {
     const keys = Object.keys(r);
-    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" ? ["auto_revert"] : r.key === "ZONE_AHEAD_MODE" || r.key === "ZONE_AIM_OFF" ? ["zone_hold"] : [], `${r.key}: no extra key`);
+    assert.deepEqual(keys.filter((k) => !ROW_KEYS.includes(k)), r.key === "AGENT_VETO_RULE" || r.key === "ROOM_BREAKOUT_WAIVE" || r.key === "FRESH_PATTERN_MODE" ? ["auto_revert"] : r.key === "ZONE_AHEAD_MODE" || r.key === "ZONE_AIM_OFF" ? ["zone_hold"] : [], `${r.key}: no extra key`);
     assert.deepEqual(ROW_KEYS.filter((k) => !keys.includes(k)), [], `${r.key}: every key`);
     assert.ok(["override", "config", "default"].includes(r.source));
     assert.ok(r.set_by === null || ["owner", "aether", "agent", "system"].includes(r.set_by), `${r.key}: set_by a role word`);
@@ -335,6 +337,12 @@ test("FS-6 GET payload: the promised shape; no email, account or identity key; s
   assert.deepEqual([row("reentry_1m").value, row("reentry_1m").source, row("reentry_1m").set_by], ["on", "default", null]);
   assert.deepEqual(row("AGENT_VETO_RULE").auto_revert, null);
   assert.deepEqual([row("ROOM_BREAKOUT_WAIVE").value, row("ROOM_BREAKOUT_WAIVE").source, row("ROOM_BREAKOUT_WAIVE").auto_revert], ["on", "config", null]);
+  assert.deepEqual([row("FRESH_PATTERN_MODE").value, row("FRESH_PATTERN_MODE").source, row("FRESH_PATTERN_MODE").auto_revert], ["on", "config", null]);
+  // FP1: once its automatic revert ran, the row reads "record" with the hold (no end); the owner's override wins.
+  store.m.set("fresh-pattern:revert:v1", JSON.stringify({ status: "reverted", n: 30, mean_r: 0.05, at: new Date(T0).toISOString() }));
+  const fp = (await featureSwitchesPayload(env, { now: T0 + 1000 })).switches.find((r) => r.key === "FRESH_PATTERN_MODE");
+  assert.deepEqual([fp.value, fp.source, fp.auto_revert], ["record", "config", { since: new Date(T0).toISOString(), until: null }]);
+  assert.equal((await setFeatureSwitch(env, { key: "FRESH_PATTERN_MODE", value: "on", actor_sub: OWNER, now: T0 + 2000 })).switch.auto_revert, null);
   // The KV and D1 rows carry role words, never the email.
   assert.doesNotMatch(store.m.get(FEATURE_SWITCH_OVERRIDE_KEY), EMAIL);
   assert.doesNotMatch(String(db.raw.prepare("SELECT key_meta FROM omega_settings WHERE id = 1").get().key_meta), EMAIL);
