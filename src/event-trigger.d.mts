@@ -1,0 +1,12 @@
+export const EVENT_TRIGGER_SWITCH: "EVENT_TRIGGER_MODE";
+export const EVENT_TRIGGER_MODES: readonly ("record" | "on" | "off")[];
+export const EVENT_TRIGGER_DAILY_CAP: number;
+export const EVENT_TRIGGER_KEY_PREFIX: string;
+export function eventTriggerMode(env: unknown): "record" | "on" | "off";
+export function sidePlanOf(record: unknown, side: "long" | "short"): { agent: string; entry: number; stop: number; tp1: number } | null;
+export function eventsOf(record: unknown, live: unknown, now: number): Array<{ side: "long" | "short"; event_ms: number; plan: Record<string, number | string> }>;
+export function eventSetup(row: Record<string, unknown>): Record<string, unknown>;
+export function resetEventTriggerSchemaForTests(): void;
+export function takeEventRun(env: unknown, opts?: { now?: number; cap?: number }): Promise<boolean>;
+export function runEventTrigger(env: unknown, opts?: { now?: number; live?: unknown; record?: unknown; bars?: unknown[] | null; runner?: ((e: { decision_key: string; side: string; event_ms: number }) => Promise<unknown>) | null }): Promise<{ status: string; [k: string]: unknown }>;
+export function eventTriggerReport(env: unknown, opts?: { now?: number; days?: number }): Promise<Record<string, unknown>>;

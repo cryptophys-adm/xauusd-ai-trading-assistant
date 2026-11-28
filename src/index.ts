@@ -305,6 +305,7 @@ import { runGridAdapt, readGridChoices, gridAdaptMode } from "./grid-adapt.mjs";
 import { runAgentVetoRevert, agentVetoStatus } from "./agent-veto.mjs";
 import { runRoomWaiveRevert, roomWaiveStatus } from "./room-waive.mjs";
 import { freshPatternRevert } from "./fresh-pattern.mjs";
+import { runEventTrigger } from "./event-trigger.mjs";
 import { runCdGate, cdGateStatus } from "./cd-gate.mjs";
 import { limitFirstRevert, limitFirstStatus, limitFirstRefusalDigest } from "./limit-first.mjs";
 import { runExecutorSilentCheck } from "./executor-silent.mjs";
@@ -3189,6 +3190,10 @@ async function runLedgerStep(env: Env): Promise<void> {
   // once, if its first 30 closed trades average below +0.10R at the broker; one Omega event, one Telegram line).
   const freshRevert = await freshPatternRevert(env, { send: (text: string) => sendTelegram(env, text) });
   if (freshRevert.status === "reverted" || freshRevert.status === "kept" || freshRevert.status === "failed") console.log("fresh_pattern_revert", JSON.stringify(freshRevert));
+  // ET1 (src/event-trigger.mjs, EVENT_TRIGGER_MODE "record"): a verified 5m confirmation on a side the latest 15m WAIT
+  // was waiting for, recorded once per decision and side with its counterfactual R (no model call, no order).
+  const eventTrigger = await runEventTrigger(env) as { status?: string; recorded?: number };
+  if (eventTrigger.status === "failed" || (eventTrigger.recorded ?? 0) > 0) console.log("event_trigger_step", JSON.stringify(eventTrigger));
   // CDG (src/cd-gate.mjs, owner 2026-11-25: "Learned gate, hold otherwise (Recommended)"): the learned confidence-drop
   // gate once a UTC day (KV, its history, one Omega event and one Telegram line per pass/fail change), then its named
   // auto-revert (cd_gate back to "off" once, if its first 15 outcomes average worse than the earlier rule). No cron of its own.

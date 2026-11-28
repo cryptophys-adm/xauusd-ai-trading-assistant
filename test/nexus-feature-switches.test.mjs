@@ -108,7 +108,7 @@ test("FSU4 the pure view over the fixture: groups in the payload's order, one co
   assert.deepEqual([sw.canControl, sw.overrides, sw.at], [true, 3, Date.parse("2026-11-25T03:40:00Z")]);
   const kinds = Object.fromEntries(sw.rows.map((r) => [r.key, u.controlKind(r)]));
   assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "tokens").map(([k]) => k), ["ZONE_AIM_OFF", "ZONE_SOURCES_OFF", "PM_LINES_OFF", "change_thresholds"]);
-  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "SD_LEVELS", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "FRESH_PATTERN_MODE", "AGENT_VETO_RULE", "CFC_MODE", "LENS_ROOM_LINE", "profit_lock_gate", "zone_mgmt"]);
+  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "SD_LEVELS", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "FRESH_PATTERN_MODE", "AGENT_VETO_RULE", "EVENT_TRIGGER_MODE", "CFC_MODE", "LENS_ROOM_LINE", "profit_lock_gate", "zone_mgmt"]);
   for (const r of sw.rows) if (kinds[r.key] === "toggle") assert.deepEqual([...r.values].sort(), ["off", "on"], r.key);
   assert.deepEqual(sw.rows.filter(u.wideControl).map((r) => r.key), ["ZONE_SOURCES_OFF", "PM_LINES_OFF"], "only the five sources and B5's lines take their own line");
   const cols = u.columnsOf(sw.groups);
@@ -141,7 +141,7 @@ test("FSU5 owner against read only: controls only when viewer.can_control, never
   const owner = await page(OWNER), viewer = await page(VIEWER);
   const toggles = OWNER.switches.filter((r) => Array.isArray(r.values) && [...r.values].sort().join() === "off,on" && !r.read_only).length;
   assert.equal(count(owner, /role="switch"/g), toggles);
-  assert.equal(count(owner, /role="group"/g), 15, "11 segmented (Z3a's zone_mgmt the ninth, Z6's SD_LEVELS the tenth, FP1's FRESH_PATTERN_MODE the eleventh) and 4 token lists (B5's PM_LINES_OFF the fourth)");
+  assert.equal(count(owner, /role="group"/g), 16, "12 segmented (Z3a's zone_mgmt the ninth, Z6's SD_LEVELS the tenth, FP1's FRESH_PATTERN_MODE the eleventh, ET1's EVENT_TRIGGER_MODE the twelfth) and 4 token lists (B5's PM_LINES_OFF the fourth)");
   assert.ok(!owner.includes('aria-label="Metric rebuttals (METRIC_REBUTTAL)"'), "a read-only row never shows a control, even for the owner");
   for (const t of ["role=\"switch\"", "aria-pressed", "Reset to", "role=\"group\""]) assert.ok(!viewer.includes(t), `viewer: ${t}`);
   for (const t of ["Settings · viewer", "read only", "none on", "conf,tpw,limit,skip", "two_sided", "suggest"]) assert.ok(viewer.includes(t), `viewer: ${t}`);
