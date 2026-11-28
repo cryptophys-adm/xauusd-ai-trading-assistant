@@ -47,6 +47,37 @@ export function goldPausedMsBetween(startMs, endMs) {
   return paused;
 }
 
+/**
+ * Pure: true when bar `t` (ms, a bar's time, its open or close as the series stamps them) follows a trading pause after
+ * the bar before it (`prevT`): the two are more than one bar (`barMs`) apart and gold was paused between them (the
+ * weekend or a daily break). Contiguous bars are never after a pause, so a D1 bar spanning the daily break is not, nor
+ * a data hole in trading hours.
+ */
+export function barAfterPause(prevT, t, barMs) {
+  if (![prevT, t, barMs].every(Number.isFinite) || !(barMs > 0) || !(t - prevT > barMs)) return false;
+  return goldPausedMsBetween(prevT, t) > 0;
+}
+
+/**
+ * The daily rollover quarantine (owner 2026-11-28 ~02:25Z: "Ya, perbaiki (Recommended)"): from 5 minutes before the
+ * daily break to 15 minutes after the reopen, 16:55-18:15 New York time, the same clock as goldPausedAt. That is
+ * 21:55-23:15 UTC in US standard time and 20:55-22:15 UTC in US daylight time.
+ */
+export const ROLLOVER_QUARANTINE_NY = "16:55-18:15";
+/** Pure: the quarantine in UTC for the season at `ms` ("21:55-23:15" in US standard time, "20:55-22:15" in daylight time). */
+export function rolloverQuarantineUtcAt(ms) {
+  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const offset = (((new Date(ms).getUTCHours() - Number(p.hour)) % 24) + 24) % 24;
+  const hm = (h, m) => `${String((h + offset) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  return `${hm(16, 55)}-${hm(18, 15)}`;
+}
+export function rolloverQuarantineAt(ms) {
+  if (!Number.isFinite(ms)) return false;
+  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const minutes = Number(p.hour) * 60 + Number(p.minute);
+  return minutes >= 16 * 60 + 55 && minutes < 18 * 60 + 15;
+}
+
 // ---------------------------------------------------------------- the session clock (Track A PR 2)
 // One clock for every reader of the sessions: the Decision Engine's market context (sessionAt), the opening ranges
 // and the session windows. src/liquidity-lens.mjs keeps its own New York hour-of-week clock; a test pins its

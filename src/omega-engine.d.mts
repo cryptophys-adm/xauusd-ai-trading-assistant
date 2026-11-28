@@ -51,7 +51,7 @@ export function planIntents(input?: {
   /** CDG: the learned confidence-drop gate in force (src/cd-gate.mjs), only while cd_gate is "on". */
   cdGate?: { cells: Record<string, { pass?: boolean; n?: number; lift?: number | null }> };
 }): { intents: Record<string, any>[]; notes: { code: string }[]; pm_dropped: { id: string; reason: string }[]; cd_gate?: Record<string, any>[]; entry_request?: Record<string, any> | null; limit_used?: string[]; limit_dropped?: { id: string; reason: string }[]; fill_checks?: { ticket: number; guard: string | null }[] };
-export const ROLLOVER_QUARANTINE_UTC: string;
+export function rolloverQuarantineUtc(nowMs?: number): string;
 export function manageIntents(input?: { positions?: any[]; sym?: any; settings?: any; signal?: any; side?: string | null; recentIntentIds?: string[]; skipTickets?: unknown[]; stops?: Record<string, number[]>; gates?: Record<string, Record<string, any>> }): Array<Record<string, any>>;
 export const STOP_COMMAND_MS: number;
 export function commandedStops(rows?: Array<{ payload?: unknown; status?: string; result?: unknown }>): Record<string, number[]>;

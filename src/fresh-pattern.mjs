@@ -17,6 +17,7 @@
 // as ROOM_BREAKOUT_WAIVE's (src/room-waive.mjs): the order owner override > automatic revert > env.
 import { normBars, meanRange } from "./chart-patterns.mjs";
 import { overriddenKeys } from "./feature-switches.mjs";
+import { barAfterPause } from "./market-hours.mjs";
 
 export const FRESH_PATTERN_SWITCH = "FRESH_PATTERN_MODE";
 export const FRESH_PATTERN_MODES = Object.freeze(["on", "record", "off"]);
@@ -69,9 +70,17 @@ export async function readFreshPatternHold(kv) {
  * pattern, no bars, or a latest bar that is not beyond the line.
  */
 export function breakoutAgeBars(bars, p, { window = 60 } = {}) {
+  const r = breakoutRun(bars, p, { window });
+  return r ? r.n - 1 - r.k : null;
+}
+
+/** Pure: the run breakoutAgeBars counts: { b (the normalised bars), n, k (the index of the run's first close) }, or null. */
+function breakoutRun(bars, p, { window = 60 } = {}) {
   const dir = Number(p?.direction);
   if (!(dir > 0 || dir < 0)) return null;
-  const b = normBars(Array.isArray(bars) ? bars.slice(-window) : []), n = b.length;
+  // A bar's time for barAfterPause: its close_time (normBars), else its `t`, else its open_time (the spacing is what counts).
+  const timed = (Array.isArray(bars) ? bars.slice(-window) : []).map((x) => (x && !x.close_time && !Number.isFinite(x.t) && x.open_time ? { ...x, t: Date.parse(String(x.open_time)) } : x));
+  const b = normBars(timed), n = b.length;
   const A = meanRange(b);
   if (!n || !(A > 0)) return null;
   const line = dir > 0 ? Number(p.upper) : Number(p.lower);
@@ -83,7 +92,18 @@ export function breakoutAgeBars(bars, p, { window = 60 } = {}) {
   const from = Number.isInteger(ago) && ago >= 0 ? Math.max(0, n - ago) : 0;
   let k = n - 1;
   while (k - 1 >= from && beyond(b[k - 1])) k--;
-  return n - 1 - k;
+  return { b, n, k };
+}
+
+/**
+ * Pure (orchestrator 2026-11-28: "gap ≠ breakout"): true when the run's first close beyond the line (breakoutAgeBars)
+ * is the first bar after a trading pause, the weekend or a daily break (src/market-hours.mjs barAfterPause): the move
+ * came with the gap, so the breakout is not fresh at any age. A breakout whose first close beyond is a later bar
+ * follows the normal rules.
+ */
+export function breakoutAfterPause(bars, p, { window = 60, barMs = 15 * 60_000 } = {}) {
+  const r = breakoutRun(bars, p, { window });
+  return Boolean(r && r.k > 0 && barAfterPause(r.b[r.k - 1].t, r.b[r.k].t, barMs));
 }
 
 /** Pure: the record a fresh plan carries. */

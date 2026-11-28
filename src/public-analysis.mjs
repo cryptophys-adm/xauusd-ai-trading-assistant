@@ -140,7 +140,9 @@ export function publicPatterns(list) {
         ...(typeof p.line_from === "string" && typeof p.line_to === "string" && r2(p.upper_from) != null && r2(p.lower_from) != null
           ? { lines: { from: p.line_from, to: p.line_to, upper: [r2(p.upper_from), r2(p.upper)], lower: [r2(p.lower_from), r2(p.lower)] } } : {}),
         // PT1c: the breakout's close time, only where the caller derived it (src/public-patterns.mjs); analysis() has none.
-        ...(Object.hasOwn(p, "confirmed_at_ms") ? { confirmed_at_ms: p.status !== "forming" && Number.isFinite(p.confirmed_at_ms) ? p.confirmed_at_ms : null } : {})
+        ...(Object.hasOwn(p, "confirmed_at_ms") ? { confirmed_at_ms: p.status !== "forming" && Number.isFinite(p.confirmed_at_ms) ? p.confirmed_at_ms : null } : {}),
+        // The breakout came with a weekend or daily-break gap (src/public-patterns.mjs): no confirming close, so null above.
+        ...(p.breakout_after_pause === true ? { breakout_after_pause: true } : {})
       };
     })
     .filter((p) => p.upper != null && p.lower != null && p.upper > 0 && p.lower > 0);

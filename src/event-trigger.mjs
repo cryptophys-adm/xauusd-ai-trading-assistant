@@ -44,11 +44,6 @@ export function sidePlanOf(record, side) {
 }
 
 /**
- * Pure: the events of one step: [{ side, event_ms, plan }] for each side where the latest decision WAITed, the side's
- * guardrails all passed, its entry trigger had not fired, and the verified 5m confirmation on that side (`live`, as
- * liveM5Inputs returns it) closed after the decision's bar and before the next 15m close (`now` too).
- */
-/**
  * Pure: the sides that could still have an event at `now`, from the decision alone (no 5m read): the latest decision is a
  * WAIT inside its 15m window, and the side's guardrails all passed with its entry trigger not fired. [] when none.
  */
@@ -59,6 +54,11 @@ export function candidateSidesOf(record, now) {
   return ["long", "short"].filter((side) => record.guardrails?.[side]?.allowed === true && record.guardrails?.[side]?.entry_trigger?.fired !== true);
 }
 
+/**
+ * Pure: the events of one step: [{ side, event_ms, plan }] for each side where the latest decision WAITed, the side's
+ * guardrails all passed, its entry trigger had not fired, and the verified 5m confirmation on that side (`live`, as
+ * liveM5Inputs returns it) closed after the decision's bar and before the next 15m close (`now` too).
+ */
 export function eventsOf(record, live, now) {
   const sides = candidateSidesOf(record, now);
   if (!sides.length) return [];

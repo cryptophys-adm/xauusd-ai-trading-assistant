@@ -277,3 +277,19 @@ test("PT1d a value written before PT1c (patterns without confirmed_at_ms) is det
   assert.equal(JSON.stringify(after), JSON.stringify(now), "the same value a fresh detection gives");
   assert.equal((await runPatternsStep(env, { now: NOW })).status, "same_close", "then the per-chart rule again");
 });
+
+test("PT1d a stored pattern with confirmed_at_ms null (a breakout after a trading pause) keeps the reuse check satisfied", async () => {
+  const inputs = zoneInputs();
+  const kv = seriesKv(inputs);
+  const env = { SIGNAL_CACHE: kv };
+  await runPatternsStep(env, { now: NOW });
+  const now = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.ok(now.patterns.length > 0);
+  // The first pattern as the gap rule stores it: the key kept, its value null, the flag set.
+  const gapped = { ...now, patterns: now.patterns.map((p, i) => (i === 0 ? { ...p, confirmed_at_ms: null, breakout_after_pause: true } : p)) };
+  kv.map.set(PATTERNS_KEY, JSON.stringify(gapped));
+  const r = await runPatternsStep(env, { now: NOW });
+  assert.notEqual(r.status, "written", "not detected again: the null keeps Object.hasOwn(p, \"confirmed_at_ms\")");
+  const after = JSON.parse(kv.map.get(PATTERNS_KEY));
+  assert.deepEqual([after.patterns[0].confirmed_at_ms, after.patterns[0].breakout_after_pause], [null, true]);
+});
