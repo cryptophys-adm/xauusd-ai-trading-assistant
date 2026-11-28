@@ -26,6 +26,7 @@ import { gridAdaptMode } from "../src/grid-adapt.mjs";
 import { roomBreakoutWaiveOf } from "../src/room-waive.mjs";
 import { freshPatternModeOf } from "../src/fresh-pattern.mjs";
 import { councilConfRetryMode } from "../src/council-conf-retry.mjs";
+import { eventTriggerMode } from "../src/event-trigger.mjs";
 import { cfcMode, CFC_MODES } from "../src/cfc-triggers.mjs";
 import { modeShadowEvidence, modeProbationMode } from "../src/mode-shadow.mjs";
 import { liquidityWitnessEnabled } from "../src/decision-engine.mjs";
@@ -161,6 +162,7 @@ const ACCESSOR = {
   FRESH_PATTERN_MODE: (env) => freshPatternModeOf(env),
   AGENT_VETO_RULE: (env) => agentVetoRuleOf(env),
   COUNCIL_CONF_RETRY: (env) => councilConfRetryMode(env),
+  EVENT_TRIGGER_MODE: (env) => eventTriggerMode(env),
   CFC_MODE: (env) => cfcMode(env),
   MODE_SHADOW_EVIDENCE: (env) => modeShadowEvidence(env),
   MODE_PROBATION: (env) => modeProbationMode(env),

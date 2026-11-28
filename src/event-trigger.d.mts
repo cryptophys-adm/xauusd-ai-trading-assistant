@@ -1,0 +1,10 @@
+export const EVENT_TRIGGER_SWITCH: "EVENT_TRIGGER_MODE";
+export const EVENT_TRIGGER_MODES: readonly ("record" | "off")[];
+export function eventTriggerMode(env: unknown): "record" | "off";
+export function candidateSidesOf(record: unknown, now: number): Array<"long" | "short">;
+export function sidePlanOf(record: unknown, side: "long" | "short"): { agent: string; entry: number; stop: number; tp1: number } | null;
+export function eventsOf(record: unknown, live: unknown, now: number): Array<{ side: "long" | "short"; event_ms: number; plan: Record<string, number | string> }>;
+export function eventSetup(row: Record<string, unknown>): Record<string, unknown>;
+export function resetEventTriggerSchemaForTests(): void;
+export function runEventTrigger(env: unknown, opts?: { now?: number; live?: unknown; record?: unknown; bars?: unknown[] | null}): Promise<{ status: string; [k: string]: unknown }>;
+export function eventTriggerReport(env: unknown, opts?: { now?: number; days?: number }): Promise<Record<string, unknown>>;
