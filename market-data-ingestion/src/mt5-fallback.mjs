@@ -276,6 +276,29 @@ export function seriesHoles(candles, nowSec, { windowS = FILL_WINDOW_S } = {}) {
   return out;
 }
 
+/**
+ * Pure: the filled ranges a record carries after a fill (`fills`, [{ from, to }] in seconds): the new bars' runs added to
+ * the record's own, merged, and only those ending inside the window (TradingView heals them while the day's budget allows,
+ * src/tradingview-source.mjs healPlan). Null when none is left.
+ */
+export function fillsWith(existing, times, seconds, nowSec, { windowS = FILL_WINDOW_S } = {}) {
+  const runs = [];
+  for (const t of [...times].sort((a, b) => a - b)) {
+    const last = runs.at(-1);
+    if (last && t === last.to) last.to = t + seconds;
+    else runs.push({ from: t, to: t + seconds });
+  }
+  const all = [...(Array.isArray(existing) ? existing : []), ...runs].filter((r) => finite(Number(r?.from)) && finite(Number(r?.to)) && Number(r.to) > nowSec - windowS)
+    .map((r) => ({ from: Number(r.from), to: Number(r.to) })).sort((a, b) => a.from - b.from);
+  const merged = [];
+  for (const r of all) {
+    const last = merged.at(-1);
+    if (last && r.from <= last.to) last.to = Math.max(last.to, r.to);
+    else merged.push({ ...r });
+  }
+  return merged.length ? merged.slice(-50) : null;
+}
+
 /** Pure: the complete buckets of `seconds` that the filled minutes make whole, absent from `existing`, from the 1m `candles`. */
 export function filledBuckets(candles, filledTimes, existing, { seconds, nowSec }) {
   const have = new Set((existing || []).map((x) => x.time));
@@ -334,7 +357,9 @@ export async function fillHoles(env, { now = Date.now() } = {}) {
     if (!filled.size) return { status: "nothing_in_corpus", holes: holes.length, missing: holes.reduce((a, h) => a + h.minutes, 0) };
     // Only missing minutes are written: the existing bars come last in the merge, so none is ever replaced.
     const candles = mergeCandles([...filled.values()], m1.candles, sourceSpec.retain);
-    await writeSeries(kv, sourceSpec, { ...m1, fetched_at: m1.fetched_at, candle_count: candles.length, volume_available: candles.every((c) => c.volume !== null), candles });
+    // The filled ranges are recorded, so TradingView replaces them once its budget allows (healPlan); then they clear.
+    const m1Fills = fillsWith(m1.fills, filled.keys(), 60, nowSec);
+    await writeSeries(kv, sourceSpec, { ...m1, fetched_at: m1.fetched_at, candle_count: candles.length, volume_available: candles.every((c) => c.volume !== null), ...(m1Fills ? { fills: m1Fills } : {}), candles });
     const rebuilt = [];
     for (const key of FILL_SERIES) {
       const spec = SERIES.find((s) => s.key === key);
@@ -343,7 +368,8 @@ export async function fillHoles(env, { now = Date.now() } = {}) {
       const bars = filledBuckets(candles, filled.keys(), own?.candles, { seconds: spec.seconds, nowSec });
       if (!bars.length) continue;
       const merged = mergeCandles(bars, own?.candles, spec.retain);
-      await writeSeries(kv, spec, { ...(own || {}), series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe, candle_count: merged.length, volume_available: merged.every((c) => c.volume !== null), candles: merged });
+      const ownFills = fillsWith(own?.fills, bars.map((b) => b.time), spec.seconds, nowSec);
+      await writeSeries(kv, spec, { ...(own || {}), series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe, candle_count: merged.length, volume_available: merged.every((c) => c.volume !== null), ...(ownFills ? { fills: ownFills } : {}), candles: merged });
       rebuilt.push({ series: key, bars: bars.length });
     }
     const bySrc = [...filled.values()].reduce((a, c) => ({ ...a, [c.src]: (a[c.src] ?? 0) + 1 }), {});

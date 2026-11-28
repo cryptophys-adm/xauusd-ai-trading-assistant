@@ -1,8 +1,8 @@
 // BF1 (d): filling the 1m series' holes from the corpus (src/mt5-fallback.mjs fillHoles). No network.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fillHoles, seriesHoles, filledBuckets, goldTradesAt, FILL_WINDOW_S, FILL_EVERY_MIN } from "../src/mt5-fallback.mjs";
-import { SERIES, SERIES_INTERNALS, readSeries } from "../src/tradingview-source.mjs";
+import { fillHoles, seriesHoles, filledBuckets, fillsWith, goldTradesAt, FILL_WINDOW_S, FILL_EVERY_MIN } from "../src/mt5-fallback.mjs";
+import { SERIES, SERIES_INTERNALS, readSeries, refreshSeries, healPlan, FILL_HEAL_BUDGET_SHARE } from "../src/tradingview-source.mjs";
 import { breakoutAgeBars } from "../../src/fresh-pattern.mjs";
 import { breakoutCloseMs } from "../../src/public-patterns.mjs";
 
@@ -121,3 +121,73 @@ test("FH-5 no retro-trigger: a filled 15m bar three bars back is no fresh breako
   assert.equal(breakoutAgeBars(bars, wedge), 3, "three closed bars since the filled bar broke: FP1's limit is 1");
   assert.equal(breakoutCloseMs(bars, wedge, { barMs: 900_000 }), (T0 - 3 * 900) * 1000, "confirmed at the filled bar's own close: CTA's breakoutState reads it stale");
 });
+
+/** TradingView's own market over every requested bar: 4035.5 (distinct from the corpus's 4020.5 / 4030.5). */
+function tradingView(nowSec, calls) {
+  return { async ohlcv(requests) {
+    calls.push(requests);
+    return { status: 200, body: { results: requests.map((r) => {
+      const s = SERIES.find((x) => x.symbol === r.symbol && x.interval === r.interval);
+      const t = [], o = [], h = [], l = [], c = [], v = [];
+      const end = Math.floor(nowSec / s.seconds) * s.seconds;
+      for (let i = r.count - 1; i >= 0; i--) { const at = end - i * s.seconds; t.push(at); o.push(4035); h.push(4036); l.push(4034); c.push(4035.5); v.push(9); }
+      return { ok: true, request: r, bars: { t, o, h, l, c, v } };
+    }) } };
+  } };
+}
+const budgetKey = (now) => "market-data:v2:mcp-calls:" + new Date(now).toISOString().slice(0, 10);
+
+test("FH-6 TradingView heals the filled range when the day's budget allows; the derived 15m bucket is rebuilt from it", async () => {
+  const kv = new MemoryKV();
+  await cacheWithHole(kv);
+  await fillHoles(ENV(kv, corpus()), { now: NOW });
+  const m1Filled = await readSeries(kv, spec("OANDA:XAUUSD|1m"));
+  assert.deepEqual(m1Filled.fills, [{ from: HOLE_FROM, to: HOLE_TO }], "the filled range is recorded");
+  assert.deepEqual((await readSeries(kv, spec("OANDA:XAUUSD|15m"))).fills, [{ from: T0 - 90 * 60, to: T0 - 60 * 60 }]);
+  const healAt = NOW + 5 * 60_000; // the next 5-minute mark
+  const healSec = healAt / 1000;
+  await kv.put(budgetKey(healAt), "100"); // 100 of 480: under the 80% margin
+  const calls = [];
+  const env = { ...ENV(kv, corpus()), TV_GATEWAY: tradingView(healSec, calls), TV_DAILY_CALL_BUDGET: "480" };
+  await refreshSeries(env, { now: healAt });
+  const pulled1m = calls.flat().find((x) => x.interval === "1m");
+  assert.ok(pulled1m && pulled1m.count >= Math.ceil((healSec - HOLE_FROM) / 60), "the 1m pull reaches back over the filled range: " + JSON.stringify(pulled1m));
+  const m1 = await readSeries(kv, spec("OANDA:XAUUSD|1m"));
+  assert.equal(m1.fills, undefined, "the range is cleared");
+  const inHole = m1.candles.filter((c) => c.time >= HOLE_FROM && c.time < HOLE_TO);
+  assert.equal(inHole.length, 30);
+  assert.ok(inHole.every((c) => !c.fill && !c.src && c.close === 4035.5), "TradingView's own bars replaced every filled minute");
+  const m15 = await readSeries(kv, spec("OANDA:XAUUSD|15m"));
+  const bucket = m15.candles.find((c) => c.time === T0 - 75 * 60);
+  assert.deepEqual([bucket.close, bucket.fill, bucket.src, m15.fills], [4035.5, undefined, undefined, undefined], "the 15m bucket aggregated again from the healed minutes");
+  const h1 = await readSeries(kv, spec("OANDA:XAUUSD|1h"));
+  assert.equal(h1.fills, undefined, "the native 1H series healed by its own pull");
+});
+
+test("FH-7 a tight budget keeps the filled range: no heal pull, and a normal pull keeps the marks", async () => {
+  const kv = new MemoryKV();
+  await cacheWithHole(kv);
+  await fillHoles(ENV(kv, corpus()), { now: NOW });
+  const healAt = NOW + 5 * 60_000, healSec = healAt / 1000;
+  const m1 = await readSeries(kv, spec("OANDA:XAUUSD|1m"));
+  const tight = { used: Math.floor(FILL_HEAL_BUDGET_SHARE * 480) + 1, daily: 480 };
+  assert.equal(healPlan(spec("OANDA:XAUUSD|1m"), m1, healSec, { budget: tight }), null, "over 80% of the day's budget: no heal");
+  assert.equal(healPlan(spec("OANDA:XAUUSD|1m"), m1, healSec, {}), null, "no budget read: no heal");
+  assert.equal(healPlan(spec("OANDA:XAUUSD|1m"), m1, healSec, { budget: { used: 100, daily: 480 } }).fills, true);
+  assert.equal(FILL_HEAL_BUDGET_SHARE, 0.8);
+  await kv.put(budgetKey(healAt), String(tight.used));
+  const calls = [];
+  await refreshSeries({ ...ENV(kv, corpus()), TV_GATEWAY: tradingView(healSec, calls), TV_DAILY_CALL_BUDGET: "480" }, { now: healAt });
+  const after = await readSeries(kv, spec("OANDA:XAUUSD|1m"));
+  const pulled1m = calls.flat().find((x) => x.interval === "1m");
+  assert.ok(!pulled1m || pulled1m.count < Math.ceil((healSec - HOLE_FROM) / 60), "no pull back over the range");
+  assert.deepEqual(after.fills, [{ from: HOLE_FROM, to: HOLE_TO }], "the marks stay until a heal pull reaches them");
+  assert.equal(after.candles.filter((c) => c.fill).length, 30, "the filled minutes stay until then");
+});
+
+test("FH-8 fillsWith: runs merged, bounded to the window", () => {
+  assert.deepEqual(fillsWith(null, [T0, T0 + 60, T0 + 180], 60, T0 + 600), [{ from: T0, to: T0 + 120 }, { from: T0 + 180, to: T0 + 240 }]);
+  assert.deepEqual(fillsWith([{ from: T0 - 60, to: T0 }], [T0], 60, T0 + 600), [{ from: T0 - 60, to: T0 + 60 }], "an adjacent range joins");
+  assert.equal(fillsWith([{ from: T0, to: T0 + 60 }], [], 60, T0 + FILL_WINDOW_S + 120), null, "a range out of the window is dropped");
+});
+
