@@ -49,11 +49,11 @@ test("B7-1 S2: the parity scenario runs through the sweep and compares nothing: 
   assert.ok(main.comparisons.length > 0 && main.lane.length > 0, "before parity removal the scenario compared, promoted and filled the lane");
   assert.deepEqual(now.comparisons, []);
   assert.deepEqual(now.lane, []);
-  assert.ok(now.registry.length >= 8 && now.registry.every((r) => r.status === "candidate" && r.consecutive_matches === 0), "only the ingest's identity rows, never promoted");
+  assert.ok(now.registry.length >= 6 && now.registry.every((r) => r.status === "candidate" && r.consecutive_matches === 0), "only the ingest's identity rows, never promoted");
   assert.ok(now.reconciles.every(([, r]) => Object.keys(r.comparisons).length === 0 && !("groups" in r)), "no engine or group comparison");
   assert.ok(now.reconciles.every(([, r]) => Object.values(r.trust).every((t) => t === false)), "synthetic identities are never trusted");
   assert.deepEqual(now.signal_cache, [], "the reclassification and approved_at repair no longer run");
-  assert.equal(now.sweep?.adopt_pruned, 0);
+  assert.equal("adopt_pruned" in now.sweep, false, "S4: the adoption rows' prune is gone");
 });
 
 test("B7-2 compareWithWebhooks without the new options deep-equals main's", () => {
@@ -70,19 +70,18 @@ test("B7-3 no group id starts with mizan; the registry declares the witness grou
   assert.deepEqual(Object.keys(PARITY_GROUPS), [
     "probe_mizan_witness",
     "gmi_adopt_hud", "gmi_adopt_flow", "gmi_adopt_kin", "gmi_adopt_zone", "gmi_adopt_zone_levels", "gmi_adopt_burst", "gmi_adopt_order", "gmi_adopt_levels", "gmi_adopt_plan",
-    "prophet_adopt_hud", "prophet_adopt_core", "prophet_adopt_ob", "prophet_adopt_scalp", "prophet_adopt_plan",
     "probe_mizan_core", "probe_mizan_mtf", "probe_mizan_decision", "probe_mizan_state"
   ]);
   assert.ok(Object.keys(PARITY_GROUPS).every((id) => !id.startsWith("mizan")));
   assert.deepEqual(parityGroupProblems(PARITY_GROUPS), []);
   const bad = { engine: "gmi", source: "gmi_v12_70", kind: "witness", fields: { verdict: "verdict" } };
   assert.ok(parityGroupProblems({ mizan_core: bad }).includes("mizan_core:id_starts_with_mizan"));
-  assert.ok(parityGroupProblems({ gmi_hud: bad }).includes("gmi_hud:id_is_an_engine"));
+  assert.ok(parityGroupProblems({ prophet_hud: bad }).includes("prophet_hud:id_is_an_engine"));
   assert.ok(parityGroupProblems({ core_m15: bad }).includes("core_m15:id_has_timeframe_suffix"));
   assert.ok(parityGroupProblems({ w: { ...bad, nullEqual: true } }).includes("w:null_equal_outside_hud"));
   assert.ok(parityGroupProblems({ w: { ...bad, fields: {} } }).includes("w:fields_invalid"));
   // A group identity never reads as the Mizan library in isTrusted (an engine id starting "mizan").
-  const id = groupIdentityOf(gmiHudRecord(), "grid_core", TEST_GROUPS);
+  const id = groupIdentityOf(testRecord(), "grid_core", TEST_GROUPS);
   assert.equal(id.engine.startsWith("mizan"), false);
 });
 
@@ -121,8 +120,8 @@ test("B7-4 the witness group: fields { net_witness, prior_edge }, nullEqual off,
 
 test("B7-5 nullEqual counts null === null as equal for a HUD group only; a fieldMap maps local to webhook names", () => {
   const candle = { o: 1, h: 2, l: 0.5, c: 1.5, volume: 10 };
-  const groups = { hud_a: { engine: "gmi_hud", source: "s", kind: "hud", fields: { x: "x_hook" }, nullEqual: true }, wit_a: { engine: "gmi_hud", source: "s", kind: "witness", fields: { x: "x_hook" }, nullEqual: true } };
-  const record = { engine: "gmi_hud", values: { candle, comparable: { s: { x: null } } } };
+  const groups = { hud_a: { engine: "gmi", source: "s", kind: "hud", fields: { x: "x_hook" }, nullEqual: true }, wit_a: { engine: "gmi", source: "s", kind: "witness", fields: { x: "x_hook" }, nullEqual: true } };
+  const record = { engine: "gmi", values: { candle, comparable: { s: { x: null } } } };
   const hooks = { s: { ...candle, x_hook: null } };
   assert.equal(compareWithWebhooks(record, hooks, DEFAULT_POLICY, groupCompareOptions("hud_a", groups)).status, "match");
   assert.equal(groupCompareOptions("wit_a", groups).nullEqual, false, "nullEqual is ignored outside a HUD group");
@@ -133,45 +132,48 @@ test("B7-5 nullEqual counts null === null as equal for a HUD group only; a field
   assert.deepEqual(diff.values, { s: { local: { x: 2 }, webhook: { x_hook: 3 } } });
 });
 
-test("B7-6 only the adoption engines (B11) declare groups; the HUD store never reads their groups, so its KV reads are main's", async () => {
-  for (const engine of INGEST_ENGINES.filter((e) => !["gmi_adopt", "prophet_adopt"].includes(e))) assert.deepEqual(groupsFor(engine), [], engine);
+test("B7-6 no ingested engine declares groups (S4: the adoption records are retired); the HUD store reads prophet and gmi only", async () => {
+  for (const engine of INGEST_ENGINES) assert.deepEqual(groupsFor(engine), [], engine);
+  assert.deepEqual([...INGEST_ENGINES], ["mizan", "prophet", "gmi"]);
+  assert.deepEqual(groupsFor("prophet_adopt"), [], "S4 retired the prophet_adopt groups");
   assert.equal(INGEST_ENGINES.includes(PARITY_GROUPS.probe_mizan_witness.engine), false);
   assert.equal(BASE_ENGINES.includes("probe_mizan"), false);
   const probeRecord = { engine: "probe_mizan", timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
   assert.equal(groupIdentityOf(probeRecord, "probe_mizan_witness"), null, "no probe_mizan identity until B26 registers the engine");
   const env = { WEBHOOK_BUFFER: kv() };
   assert.equal(await approvedComparable(env, "OANDA:XAUUSD:60:1"), null);
-  assert.equal(env.WEBHOOK_BUFFER.gets(), 3, "prophet, gmi and gmi_hud only, as on main");
+  assert.equal(env.WEBHOOK_BUFFER.gets(), 2, "prophet and gmi only (gmi_hud's copy is no longer read since S4)");
 });
 
-// A test registry: two groups on the gmi_hud records (the Grid Bot comparator).
+// A test registry: groups on synthetic gmi records (the decision engine; before S4 these were the gmi_hud records).
 const TEST_GROUPS = Object.freeze({
-  grid_core: { engine: "gmi_hud", source: "gmi_v12_70_hud", kind: "hud", fields: { cshi_viability: "cshi_viability", deploy_status: "deploy_status" } },
-  grid_flags: { engine: "gmi_hud", source: "gmi_v12_70_hud", kind: "hud", fields: { muddy_waters: "muddy_waters", grid_viable: "grid_viable" } },
-  grid_witness: { engine: "gmi_hud", source: "gmi_v12_70_hud", kind: "witness", fields: { score: "score" }, requireFinite: true }
+  grid_core: { engine: "gmi", source: "gmi_v12_70_hud", kind: "hud", fields: { cshi_viability: "cshi_viability", deploy_status: "deploy_status" } },
+  grid_flags: { engine: "gmi", source: "gmi_v12_70_hud", kind: "hud", fields: { muddy_waters: "muddy_waters", grid_viable: "grid_viable" } },
+  grid_witness: { engine: "gmi", source: "gmi_v12_70_hud", kind: "witness", fields: { score: "score" }, requireFinite: true }
 });
 const H = (c) => c.repeat(64);
 const candle = { o: 3950.1, h: 3955.2, l: 3948.0, c: 3953.4, volume: 2103 };
 const HUD = { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false, cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true };
-function gmiHudRecord(timeframe = "60", extra = {}) {
-  return { engine: "gmi_hud", timeframe, provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: { ...HUD, score: 0.5, ...extra } } } };
+function testRecord(timeframe = "60", extra = {}) {
+  return { engine: "gmi", timeframe, provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: { ...HUD, score: 0.5, ...extra } } } };
 }
 
 test("B7-7 groupIdentityOf: the engine identity's hashes under <group id><timeframe suffix>", () => {
-  const h1 = groupIdentityOf(gmiHudRecord(), "grid_core", TEST_GROUPS);
-  const base = identityOf(gmiHudRecord());
-  assert.deepEqual(h1, { engine: "grid_core", sourceHash: base.sourceHash, implementationHash: base.implementationHash, mizanSourceHash: null, mizanImplementationHash: null, group: "grid_core", parentEngine: "gmi_hud" });
-  assert.equal(groupIdentityOf(gmiHudRecord("15"), "grid_core", TEST_GROUPS).engine, "grid_core_m15");
-  assert.equal(groupIdentityOf({ ...gmiHudRecord(), engine: "gmi" }, "grid_core", TEST_GROUPS), null, "another engine's record does not carry the group");
-  assert.equal(groupIdentityOf(gmiHudRecord(), "nope", TEST_GROUPS), null);
-  assert.deepEqual(groupsFor("gmi_hud", TEST_GROUPS), ["grid_core", "grid_flags", "grid_witness"]);
+  const h1 = groupIdentityOf(testRecord(), "grid_core", TEST_GROUPS);
+  const base = identityOf(testRecord());
+  assert.deepEqual(h1, { engine: "grid_core", sourceHash: base.sourceHash, implementationHash: base.implementationHash, mizanSourceHash: null, mizanImplementationHash: null, group: "grid_core", parentEngine: "gmi" });
+  assert.equal(groupIdentityOf(testRecord("15"), "grid_core", TEST_GROUPS).engine, "grid_core_m15");
+  assert.equal(groupIdentityOf({ ...testRecord(), engine: "prophet" }, "grid_core", TEST_GROUPS), null, "another engine's record does not carry the group");
+  assert.equal(groupIdentityOf(testRecord(), "nope", TEST_GROUPS), null);
+  assert.deepEqual(groupsFor("gmi", TEST_GROUPS), ["grid_core", "grid_flags", "grid_witness"]);
+  assert.equal(identityOf({ ...testRecord(), engine: "gmi_hud" }), null, "S4: gmi_hud is no longer a base engine");
 });
 
 async function seed(env, key, hook, local = {}) {
   await ensureSchema(env.DB);
-  const record = gmiHudRecord("60", local);
+  const record = testRecord("60", local);
   await registerIdentity(env.DB, identityOf(record));
-  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(record));
+  await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi", JSON.stringify(record));
   await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify({ ...candle, ...HUD, score: 0.5, ...hook }));
 }
 const row = async (env, engine) => env.DB.prepare("SELECT status, consecutive_matches, total_matches, total_mismatches, total_incomplete FROM engine_parity_registry WHERE engine = ?").bind(engine).first();
@@ -183,18 +185,19 @@ test("B7-8 S2: a declared group is compared with nothing, gets no registry row a
     const key = `OANDA:XAUUSD:60:1793750400000`;
     await seed(env, key, {});
     if (feed) {
-      const k = "localcalc-observed:" + key + ":gmi_hud";
+      const k = "localcalc-observed:" + key + ":gmi";
       await env.WEBHOOK_BUFFER.put(k, JSON.stringify({ ...JSON.parse(await env.WEBHOOK_BUFFER.get(k)), feed }));
     }
     const r = await reconcileLocalComputation(env, key, { groups: TEST_GROUPS });
     assert.deepEqual(r.comparisons, {}, String(feed));
-    assert.equal(r.trust.gmi_hud, false);
+    assert.equal(r.trust.gmi, false, "a synthetic identity is not in the frozen table");
+    assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi"), null);
     assert.equal(r.groups, undefined);
     for (const g of ["grid_core", "grid_flags", "grid_witness"]) {
       assert.equal(await row(env, g), null, g);
       assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":" + g), null, g);
     }
-    assert.equal(await isTrusted(env.DB, groupIdentityOf(gmiHudRecord(), "grid_witness", TEST_GROUPS)), false);
+    assert.equal(await isTrusted(env.DB, groupIdentityOf(testRecord(), "grid_witness", TEST_GROUPS)), false);
   }
 });
 

@@ -1,5 +1,6 @@
-// B7: a fixed parity scenario for today's identities (prophet, gmi, gmi_hud and the Mizan they vouch
-// for, on H1 and 15m), run through the real sweep on an in-memory D1 and a Map KV, with a fixed clock.
+// B7: a fixed parity scenario for today's identities (prophet, gmi and the Mizan they vouch for, on H1
+// and 15m; gmi_hud's record left the scenario with its identity in S4, 2026-11-28), run through the real
+// sweep on an in-memory D1 and a Map KV, with a fixed clock.
 // test/parity-groups.test.mjs compares its output with test/fixtures/parity-b7-main.json, which was
 // generated with this module on main before the field groups existed: the sweep output, the stored
 // trust (registry rows, comparisons, the trusted KV lane) and the parity view must stay byte-identical.
@@ -76,8 +77,7 @@ async function seed(env, key, timeframe, i) {
   const records = {
     mizan: record("mizan", timeframe, {}, MIZAN, feed),
     prophet: record("prophet", timeframe, { prophet_r38: JSON.parse(JSON.stringify(r38)), prophet_r37_ssot: R37 }, { source_hash: H("a"), implementation_hash: H("1") }, feed),
-    gmi: record("gmi", timeframe, { gmi_v12_70: GMI }, { source_hash: H("b"), implementation_hash: H("1") }, feed),
-    gmi_hud: record("gmi_hud", timeframe, { gmi_v12_70_hud: HUD }, { source_hash: H("c"), implementation_hash: H("2") }, feed)
+    gmi: record("gmi", timeframe, { gmi_v12_70: GMI }, { source_hash: H("b"), implementation_hash: H("1") }, feed)
   };
   for (const [engine, rec] of Object.entries(records)) {
     await registerIdentity(env.DB, identityOf(rec));

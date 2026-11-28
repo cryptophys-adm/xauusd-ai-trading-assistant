@@ -9,10 +9,9 @@ export const ENGINE_NAMES = Object.freeze({
   prophet: "Prophet R38 + R37",
   gmi: "GMI v12.70",
   prophet_hud: "Prophet HUD",
-  gmi_hud: "GMI HUD",
-  // B11 adoption records (the v2 alerts "· R12 ADOPTION HUD" / "· R38 ADOPTION HUD").
-  gmi_adopt: "GMI Adoption",
-  prophet_adopt: "Prophet Adoption"
+  // B11b/c's planned GMI adoption record (the v2 alert "· R12 ADOPTION HUD"); not ingested. S4 (2026-11-28) retired
+  // gmi_hud and prophet_adopt: their old registry ids now show by the bare id.
+  gmi_adopt: "GMI Adoption"
 });
 
 const SUFFIX = /_(m5|m15|h4|d1)$/;

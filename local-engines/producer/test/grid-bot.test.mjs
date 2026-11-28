@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cshiSeries, gridBotFields, DEPLOY_STATUS } from "../src/grid-bot.mjs";
+import { cshiSeries, gridBotFields, DEPLOY_STATUS, DEPLOY_STATUS_CODE } from "../src/grid-bot.mjs";
 
 const bars = (n, f) => Array.from({ length: n }, (_, i) => f(i));
 
@@ -23,4 +23,18 @@ test("deploy status follows GMI: muddy waters with high entropy, toxic above 85,
   assert.ok(DEPLOY_STATUS.includes(quiet.deploy_status));
   if (quiet.cshi_viability >= 45 && quiet.cshi_viability <= 85) assert.equal(quiet.deploy_status, "muddy_waters_on");
   assert.equal(gridBotFields(base, {}), null, "no GMI entropy: no reading");
+});
+
+// Moved from gmi-hud-producer.test.mjs when S4 (2026-11-28) retired the gmi_hud producer; grid-bot.mjs stays (hud-snapshot.mjs).
+test("cshi_viability is a whole percent without float noise; the deploy status codes follow GMI's chain", () => {
+  const start = Date.parse("2026-10-20T00:00:00Z");
+  let p = 4000;
+  const h1 = bars(300, (i) => {
+    const o = p, c = p + Math.sin(i / 5) * 3 + (i % 7 === 0 ? -4 : 1.2);
+    p = c;
+    return { open_time: new Date(start + i * 3600000).toISOString(), close_time: new Date(start + (i + 1) * 3600000).toISOString(), open: o, high: Math.max(o, c) + 1.5, low: Math.min(o, c) - 1.1, close: c, volume: 1000 + i };
+  });
+  const g = gridBotFields(h1, { entropy: 0.5 });
+  assert.equal(g.cshi_viability, Math.round(g.cshi_viability));
+  assert.deepEqual(DEPLOY_STATUS_CODE, { muddy_waters_on: 1, toxic_chop_off: 2, optimal_on: 3, trending_off: 4 });
 });

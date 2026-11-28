@@ -3,7 +3,7 @@ import { applyMt5Fallback, applyBrokerSeries, fillHoles } from "./mt5-fallback.m
 import { runBrokerShadow } from "./broker-shadow.mjs";
 import { runBrokerTrigger } from "./broker-trigger.mjs";
 import { calculateProphetR38Core } from "../../local-engines/prophet-r38/src/core.mjs";
-import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, publishAdoptRecords, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
+import { publishLocalComputation, publishM5LocalComputation, publishM15LocalComputation, publishHtfLocalComputation, publishHudSnapshots, republishRevisedH1, LAST_PUBLISH_KEY, LAST_HUD_PUBLISH_KEY } from "./local-publisher.mjs";
 import { SERIES, PROVIDER, LAST_REFRESH_KEY, refreshSeries, buildBundle, closedCandlesFromColumns, mergeCandles, planRequest, marketClosed, closureId, settleSeconds, SETTLE_SECONDS } from "./tradingview-source.mjs";
 
 const JSON_HEADERS = {
@@ -418,16 +418,6 @@ const worker = {
         }
       } catch (error) {
         console.error(JSON.stringify({ worker: WORKER_NAME, event: "m5_context_submit_failed", code: asString(error?.code) || "submit_failed" }));
-      }
-      // B11: the adoption records, last, after every engine record (parity only; at most one build a tick).
-      try {
-        const adopt = await publishAdoptRecords(env, { bundle: latestBundle });
-        const notable = Object.entries(adopt.charts || {}).filter(([, r]) => !["no_fresh_close", "already_published", "deferred", "waiting_for_core"].includes(r.status));
-        if (adopt.status !== "adopt_publish_disabled" && notable.length) {
-          console.log(JSON.stringify({ worker: WORKER_NAME, event: "adopt_publish", builds: adopt.builds ?? 0, charts: Object.fromEntries(notable.map(([c, r]) => [c, { status: r.status, candle_key: r.candle_key || null, error: r.error || null }])) }));
-        }
-      } catch (error) {
-        console.error(JSON.stringify({ worker: WORKER_NAME, event: "adopt_publish_failed", code: asString(error?.code) || "publish_failed" }));
       }
     })());
   }

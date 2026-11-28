@@ -30,12 +30,8 @@ export const PARITY_FIELDS = Object.freeze({
   // Separate HUD identities (RFC §3). Approved prophet/gmi identities above are untouched.
   prophet_hud: Object.freeze({
     prophet_r38_hud: Object.freeze(["cshi_score", "cycle_intensity", "d_enc", "structure_subtype", "t_enc"])
-  }),
-  gmi_hud: Object.freeze({
-    // The Grid Bot Protocol fields (2026-11-07): CSHI viability, deploy status code (1 muddy waters,
-    // 2 toxic chop, 3 optimal, 4 trending or dead), muddy waters and grid viable.
-    gmi_v12_70_hud: Object.freeze(["verdict", "gate", "gmi_dir", "prophet_dir", "conflict", "cshi_viability", "deploy_status", "muddy_waters", "grid_viable"])
   })
+  // S4 (2026-11-28): the gmi_hud comparator (Grid Bot Protocol fields, source gmi_v12_70_hud) is retired.
 });
 
 /** Raw candle inputs carried by every webhook payload; the local engine must have used the same bar. */
@@ -62,7 +58,7 @@ export function normalizeHash(value) {
   return HASH.test(hash) ? hash : null;
 }
 
-export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_hud", "gmi_adopt", "prophet_adopt"]);
+export const BASE_ENGINES = Object.freeze(["mizan", "prophet", "gmi", "prophet_hud", "gmi_adopt"]);
 
 /** A HUD field group whose local and webhook fields share their names (null === null is equal). */
 function hudGroup(engine, source, fields) {
@@ -81,9 +77,9 @@ function hudGroup(engine, source, fields) {
  *   - kind "witness": requireFinite, a candle matches only when every field is a finite number on
  *     both sides; null (or any non-finite value) on both sides is incomplete, never a match.
  * A group is compared only for an engine whose records are ingested and observed (evidence-fusion
- * INGEST_ENGINES). B11a ingests prophet_adopt (gmi_adopt follows in B11b/c): its groups have an
- * identity, the engine itself never does (ingest registers group identities only). probe_mizan is
- * neither ingested nor a base engine yet (B26), so its group has no identity (groupIdentityOf null).
+ * INGEST_ENGINES). None is today: S4 (2026-11-28) retired B11a's prophet_adopt records and their groups,
+ * and gmi_adopt (B11b/c) is a base engine that is not ingested. probe_mizan is neither ingested nor a
+ * base engine yet (B26), so its group has no identity (groupIdentityOf null).
  */
 export const PARITY_GROUPS = Object.freeze({
   // MZ1, the Mizan witness (owner 2026-11-23). Carried by the Mizan Probe's records (engine
@@ -98,7 +94,7 @@ export const PARITY_GROUPS = Object.freeze({
   }),
   // B10: the GMI R12 adoption alert (source gmi_v12_70_adopt_hud, pinescript/candidates
   // Global-Multiverse-Interceptor-v12.70.hud.v2.txt; RFC_INDICATOR_ADOPTION stages 1, 2, 4 and 6).
-  // Engine gmi_adopt: B11's adopt records. cvd_life_pct is sent but never compared (it accumulates
+  // Engine gmi_adopt: B11b/c's adopt records (not built). cvd_life_pct is sent but never compared (it accumulates
   // from the chart's first bar, like structure_state).
   gmi_adopt_hud: hudGroup("gmi_adopt", "gmi_v12_70_adopt_hud", "swc tva_period smr_bull_pct smr_bear_pct mml"),
   gmi_adopt_flow: hudGroup("gmi_adopt", "gmi_v12_70_adopt_hud", "buy_vol sell_vol bar_delta delta_pct cvd14 cvd14_pct vol_surge wai wai_ok wai_acc wai_dist vpt_flow vpt_gap"),
@@ -109,13 +105,8 @@ export const PARITY_GROUPS = Object.freeze({
   gmi_adopt_order: hudGroup("gmi_adopt", "gmi_v12_70_adopt_hud", "ob_in_bull ob_in_bear ob_bull_n ob_bear_n ob_bull_hv ob_bear_hv"),
   gmi_adopt_levels: hudGroup("gmi_adopt", "gmi_v12_70_adopt_hud", "ob_bull_top ob_bull_bot ob_bear_top ob_bear_bot ob_bull_sl ob_bear_sl"),
   gmi_adopt_plan: hudGroup("gmi_adopt", "gmi_v12_70_adopt_hud", "plan_dir sl_state box_top box_bot box_tp box_rr cap_pct"),
-  // B10: the Prophet R38 adoption alert (source prophet_r38_adopt_hud, The-Prophet-v7.02-R38.hud.v2.txt;
-  // stages 1, 2 and 6). Engine prophet_adopt: B11's adopt records.
-  prophet_adopt_hud: hudGroup("prophet_adopt", "prophet_r38_adopt_hud", "cshi cshi_tier er vol_anom"),
-  prophet_adopt_core: hudGroup("prophet_adopt", "prophet_r38_adopt_hud", "early_buy early_sell bull_div bear_div bull_div_age bull_div_osc bear_div_age bear_div_osc pro_fast pro_slow pro_core"),
-  prophet_adopt_ob: hudGroup("prophet_adopt", "prophet_r38_adopt_hud", "buy_ob_score sell_ob_score buy_ob_hv sell_ob_hv bull_tp_score bear_tp_score ob_bull_n ob_bear_n ob_filter buy_stop sell_stop buy_risk sell_risk buy_reward sell_reward buy_rr sell_rr buy_ready sell_ready"),
-  prophet_adopt_scalp: hudGroup("prophet_adopt", "prophet_r38_adopt_hud", "mom mom_delta mom_ctx cross_up cross_dn ct_bull ct_bear proj_main proj_alt proj_slope"),
-  prophet_adopt_plan: hudGroup("prophet_adopt", "prophet_r38_adopt_hud", "buy_entry_ref sell_entry_ref buy_entry sell_entry pos entry_ok tp_struct tp_reached reversal mom_weak exit_code exit_key tk_latched tk_dir tk_reached tk_just_hit tk_last_hit tk_hit"),
+  // B10/B11a's Prophet R38 adoption groups (prophet_adopt_*, source prophet_r38_adopt_hud) were retired in S4
+  // (2026-11-28) with the prophet_adopt records; the v2 alert stays in pinescript/candidates.
   // B10: the Cryptophys Mizan Probe's alert (source probe_mizan_hud, Cryptophys-Mizan-Probe.v1.txt, 15m;
   // stage 5). Engine probe_mizan: the Probe's local port (B26). probe_mizan_core is the Mizan
   // Oracle's HUD identity.

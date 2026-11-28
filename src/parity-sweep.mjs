@@ -8,7 +8,7 @@
 // writes nothing to the parity registry. Trust is the frozen table (src/trusted-identities.mjs, S1).
 // The module keeps its name, the decision records' reader and the backfill until S6.
 
-import { LOCAL_ENGINES, HUD_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
+import { LOCAL_ENGINES } from "./evidence-fusion.mjs";
 import {
   identityOf, ensureSchema, isTrusted, policyFromEnv, reclassifyInputOnlyMismatches, repairApprovedAt
 } from "./parity-registry.mjs";
@@ -63,15 +63,16 @@ export async function decisionLocalRecords(env, candleKey) {
  * and nothing is written to the parity registry any more: each observed record of a decision engine whose
  * identity is in the frozen table (src/trusted-identities.mjs) gets its trusted copy
  * (localcalc:<candle>:<engine>, trust_status approved_by_parity); a visible record of an identity outside it
- * loses its copy. HUD and group identities (gmi_hud, B7) are never trusted, so they never get one. The return
- * keeps its shape ({ comparisons, trust }) for the callers; `comparisons` is always empty.
+ * loses its copy. Group identities (B7) are never trusted, so they never get one; S4 (2026-11-28) retired the
+ * gmi_hud records, so only the decision engines are read. The return keeps its shape ({ comparisons, trust })
+ * for the callers; `comparisons` is always empty.
  */
 export async function reconcileLocalComputation(env, candleKey) {
   const observed = {};
-  await Promise.all([...LOCAL_ENGINES, ...HUD_ENGINES].map(async engine => {
+  await Promise.all(LOCAL_ENGINES.map(async engine => {
     observed[engine] = await readJsonKV(env.WEBHOOK_BUFFER, OBSERVED_PREFIX + candleKey + ":" + engine);
   }));
-  if (![...LOCAL_ENGINES, ...HUD_ENGINES].some(engine => observed[engine])) return { comparisons: {}, trust: {} };
+  if (!LOCAL_ENGINES.some(engine => observed[engine])) return { comparisons: {}, trust: {} };
   const trust = {};
   for (const engine of LOCAL_ENGINES) {
     const record = observed[engine];
@@ -82,11 +83,6 @@ export async function reconcileLocalComputation(env, candleKey) {
     // deleting its trusted copy here would undo a reconcile that saw it.
     if (record && trust[engine]) await env.WEBHOOK_BUFFER.put(trustedKey, JSON.stringify({ ...record, trust_status: "approved_by_parity" }), LOCAL_TTL);
     else if (record) await env.WEBHOOK_BUFFER.delete(trustedKey);
-  }
-  for (const engine of HUD_ENGINES) {
-    if (!observed[engine]) continue;
-    trust[engine] = false;
-    await env.WEBHOOK_BUFFER.delete(TRUSTED_PREFIX + candleKey + ":" + engine);
   }
   return { comparisons: {}, trust };
 }
@@ -193,32 +189,10 @@ export async function repairApprovedAtOnce(env, now = Date.now()) {
   }
 }
 
-/** B11 (orchestrator 2026-11-26, Q5): retention of the adoption groups' comparison rows. */
-export const ADOPT_COMPARISON_RETENTION_DAYS = 30;
-export const ADOPT_PRUNE_MAX_ROWS = 2000;
-
-/**
- * B11: deletes the adoption groups' comparison rows (engine ids gmi_adopt_* / prophet_adopt_*) older than 30 days,
- * at most 2,000 a sweep. No other engine's rows are touched (their retention is a separate decision). Returns the
- * number deleted (0 without the table or on an error; the sweep never fails on it).
- */
-export async function pruneAdoptComparisons(env, { now = Date.now() } = {}) {
-  if (!env?.DB?.prepare) return 0;
-  const cutoff = new Date(now - ADOPT_COMPARISON_RETENTION_DAYS * 86_400_000).toISOString();
-  const like = ADOPT_ENGINES.map(() => "engine LIKE ? ESCAPE '\\'").join(" OR ");
-  const patterns = ADOPT_ENGINES.map((e) => e.replace(/_/g, "\\_") + "\\_%");
-  try {
-    const r = await env.DB.prepare(`DELETE FROM engine_parity_comparisons WHERE rowid IN (SELECT rowid FROM engine_parity_comparisons WHERE (${like}) AND compared_at < ? LIMIT ${ADOPT_PRUNE_MAX_ROWS})`)
-      .bind(...patterns, cutoff).run();
-    return Number(r?.meta?.changes) || 0;
-  } catch {
-    return 0;
-  }
-}
-
 export async function reconcileRecentCandles(env, { now = Date.now(), lookback = PARITY_SWEEP_LOOKBACK_CANDLES, m5Lookback = PARITY_SWEEP_LOOKBACK_M5_CANDLES, m15Lookback = PARITY_SWEEP_LOOKBACK_M15_CANDLES } = {}) {
   // Parity removal S2: no comparison, no registry write; the sweep only refreshes the trusted lane of the
-  // recently closed candles from the frozen table (and prunes the adoption rows, B11 Q5, until S6).
+  // recently closed candles from the frozen table. (S4, 2026-11-28: the B11 adoption rows' prune is gone with the
+  // adoption records; their D1 rows stay until S6.)
   const candleKeys = closedH1CandleKeys(now, { lookback });
   // 5m parity (C0): 5m comparator webhooks are stored only and never queue a
   // reconcile task, so the sweep is what pairs them with the local 5m records
@@ -238,8 +212,7 @@ export async function reconcileRecentCandles(env, { now = Date.now(), lookback =
       results[candleKey] = { error: error instanceof Error ? error.name : "UnknownError" };
     }
   }
-  const adoptPruned = await pruneAdoptComparisons(env, { now });
-  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results, adopt_pruned: adoptPruned };
+  return { swept_at: new Date(now).toISOString(), candle_keys: candleKeys, m5_candle_keys: m5CandleKeys, m15_candle_keys: m15CandleKeys, htf_candle_keys: htfCandleKeys, results };
 }
 
 /** Minutes after an H1 close after which a candle without approved local records is recorded as a fail-closed WAIT. */

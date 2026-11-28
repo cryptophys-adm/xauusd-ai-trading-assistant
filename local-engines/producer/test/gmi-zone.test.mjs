@@ -267,7 +267,7 @@ test("Z1b-G7 a chart where GMI did not run has no aegis, and prophet is as it wa
 
 test("Z1b-G8 provenance: gmi-core*.mjs, mizan.mjs and pine.mjs hash to their records; hud-snapshot.mjs is in none, adopt/ only in the adopt identities (B11)", () => {
   const records = new Map();
-  const adoptIdentities = new Set(["gmi_adopt", "prophet_adopt"]);
+  const adoptIdentities = new Set(["gmi_adopt"]); // prophet_adopt retired in S4 (2026-11-28)
   for (const [id, engine] of Object.entries(ENGINE_PROVENANCE)) {
     for (const f of [...(engine.files?.sources || []), ...(engine.files?.implementation || [])]) {
       assert.equal(sha(readFileSync(new URL(`../../../${f.path}`, import.meta.url))), f.sha256, f.path);

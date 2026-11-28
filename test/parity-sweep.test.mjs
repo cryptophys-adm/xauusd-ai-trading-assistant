@@ -266,20 +266,23 @@ test("S2: with no comparison, a record built on a provisional bar enters the tru
   assert.equal(JSON.parse(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":prophet")).values.candle.volume, 2103);
 });
 
-test("gmi_hud (Grid Bot comparator) is never trusted and never compared; it never enters or blocks the decision lane", async () => {
+test("S4: a leftover gmi_hud record (the retired Grid Bot comparator) is not read; the decision lane is untouched and its keys expire by TTL", async () => {
   const env = { DB: d1(), WEBHOOK_BUFFER: kv() };
   const HUD = { verdict: 3, gate: 2, gmi_dir: 1, prophet_dir: 1, conflict: false, cshi_viability: 64, deploy_status: 3, muddy_waters: false, grid_viable: true };
   const hudRecord = { engine: "gmi_hud", timeframe: "60", provenance: { source_hash: H("c"), implementation_hash: H("2") }, values: { candle, comparable: { gmi_v12_70_hud: HUD } } };
   const key = `OANDA:XAUUSD:60:1793750400000`;
   await seedCandle(env, key, "60", { trusted: true });
-  await env.WEBHOOK_BUFFER.put("candle:" + key + ":gmi_v12_70_hud", JSON.stringify(HUD));
   await env.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
-  await env.WEBHOOK_BUFFER.put("localcalc:" + key + ":gmi_hud", JSON.stringify({ ...hudRecord, trust_status: "approved_by_parity" }));
   const out = await reconcileLocalComputation(env, key);
-  assert.equal(out.trust.gmi_hud, false);
-  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud"), null, "a stale HUD copy is removed");
+  assert.equal("gmi_hud" in out.trust, false, "only the decision engines are read");
   assert.deepEqual([out.trust.prophet, out.trust.gmi], [true, true]);
+  assert.equal(await env.WEBHOOK_BUFFER.get("localcalc:" + key + ":gmi_hud"), null, "no copy is ever written for it");
+  assert.ok(await env.WEBHOOK_BUFFER.get("localcalc-observed:" + key + ":gmi_hud"), "the leftover observed key is left to its 14-day TTL, not deleted");
   assert.equal(counts(env).comparisons, 0);
+  // Alone, a leftover record is not a candle the reconcile acts on.
+  const lone = { DB: d1(), WEBHOOK_BUFFER: kv() };
+  await lone.WEBHOOK_BUFFER.put("localcalc-observed:" + key + ":gmi_hud", JSON.stringify(hudRecord));
+  assert.deepEqual(await reconcileLocalComputation(lone, key), { comparisons: {}, trust: {} });
 });
 
 test("decisionLocalRecords: the approved copy where it exists, else the observed record labelled not_parity_approved", async () => {
