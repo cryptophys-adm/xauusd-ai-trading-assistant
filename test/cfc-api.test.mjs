@@ -87,7 +87,9 @@ test("Nexus proxies the council routes to the AI Worker over its binding, GET on
   const path = "/api/council/evidence?topic=" + encodeURIComponent("strategy:zone_pullback:exits");
   assert.equal((await nexus.fetch(new Request("https://nexus.test" + path), { AI_WORKER })).status, 200);
   assert.equal((await nexus.fetch(new Request("https://nexus.test/api/council/suggestions"), { AI_WORKER })).status, 200);
-  assert.deepEqual(seen, [["GET", path], ["GET", "/api/council/suggestions"]]);
+  // CF2: the archive's Load more pages through the same generic /api/* proxy, its query kept.
+  assert.equal((await nexus.fetch(new Request("https://nexus.test/api/council/archive?limit=50&cursor=50"), { AI_WORKER })).status, 200);
+  assert.deepEqual(seen, [["GET", path], ["GET", "/api/council/suggestions"], ["GET", "/api/council/archive?limit=50&cursor=50"]]);
   assert.equal((await nexus.fetch(new Request("https://nexus.test/api/council/suggestions", { method: "POST", body: "{}" }), { AI_WORKER })).status, 405);
 });
 
@@ -96,8 +98,10 @@ test("the Call for Councils page has its own navigator item and nothing of it is
   const shell = ui("components/AppShell.tsx");
   assert.match(shell, /title: "Councils", items: \[\{ label: "Call for Councils", href: "\/#\/councils", key: "councils"/);
   assert.match(ui("App.tsx"), /councils: Councils/);
-  const page = ui("pages/Councils.tsx");
-  for (const route of ["/api/council/suggestions", "/api/council/evidence?topic=", "/api/strategy-agents"]) assert.ok(page.includes(route), route);
+  // CF2 (owner-approved mockup 2026-11-28): the page and its one adapter (lib/councilArchive.ts); the topic picker and its
+  // strategy-agent read are gone (the owner approves suggested topics).
+  const page = ui("pages/Councils.tsx") + ui("lib/councilArchive.ts");
+  for (const route of ["/api/council/suggestions", "/api/council/evidence?topic=", "/api/council/archive"]) assert.ok(page.includes(route), route);
   // P2 (owner 2026-11-17, "Setuju + topik bebas"): the page opens sessions; its only write is the owner-only council route.
   assert.ok(page.includes("/api/council/sessions") && page.includes("/api/council/session?id="), "the sessions are read from the AI Worker");
   assert.deepEqual([...new Set([...page.matchAll(/\/omega\/api\/[a-z/-]+/g)].map((m) => m[0]))], ["/omega/api/council"], "the one write: the owner's council route");

@@ -71,7 +71,10 @@ test("NF6 dialogs in the tokens: confirm or approve ok cyan, a step to think twi
   assert.match(cd, /const t = TONES\[options\.tone \?\? "ok"\];/);
   assert.doesNotMatch(cd, /emerald|rose|from-\[#/);
   const councils = src("pages/Councils.tsx");
-  assert.match(councils, /confirmLabel: "Accept", tone: "ok" \}/, "accepting an option is an approve: cyan, not green");
+  // CF2: the option pick is read-only (no Accept); approving a topic is the approve, cyan; rejecting it a step to think twice.
+  assert.match(councils, /\{ confirmLabel: "Approve", tone: "ok" \} : \{ confirmLabel: "Reject", tone: "late" \}/, "approving a topic is an approve: cyan, not green");
+  assert.match(councils, /confirmLabel: "Accept", tone: "ok" \}/, "accepting an option (CFC_MODE on) is an approve: cyan, not green");
+  assert.match(councils, /confirmLabel: "Veto", tone: "fault" \}/, "vetoing the council's task stops it: destructive");
   assert.match(councils, /confirmLabel: "Close session", tone: "late" \}/);
   assert.match(councils, /confirmLabel: "Turn off", tone: "fault" \}/, "turning sessions off stops running ones: destructive");
   const ex = src("components/ExitConfirmModal.tsx");
@@ -141,7 +144,7 @@ test("NF8 green is bullish only: no \"green\" or emerald as a state tone anywher
   assert.match(src("pages/Neurons.tsx"), /<Badge tone=\{a\.status === "live" \? "ok" : "shadow"\}>\{a\.status\}<\/Badge>/);
   assert.match(src("pages/Shadow.tsx"), /<Badge tone="ok">BETTER<\/Badge>/);
   assert.match(src("pages/Scorecards.tsx"), /const accuracyFill = \(v: number\) => \(v >= 0\.55 \? "bg-ok-fill" : v < 0\.45 \? "bg-fault-fill" : "bg-off-fill"\);/);
-  assert.match(src("pages/Councils.tsx"), /support: \{ text: "agree", tone: "ok" \}, oppose: \{ text: "disagree", tone: "fault" \}/, "a vote is not a direction");
+  assert.match(src("lib/councilArchive.ts"), /support: \{ text: "agree", tone: "ok" \}, oppose: \{ text: "disagree", tone: "fault" \}/, "a vote is not a direction");
   // Where the value is a direction, it stays bull / bear with its glyph or word.
   const cal = src("pages/Calendar.tsx");
   assert.match(cal, /<span className="text-bull">gold ▲<\/span> : x < 0 \? <span className="text-bear">gold ▼<\/span>/);

@@ -1,0 +1,131 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mx08ocg0_aclji2",
+    "topic_key": "risk:intraday",
+    "topic_text": null,
+    "type": "risk",
+    "question": "What should change about risk:intraday, if anything?",
+    "state": "awaiting_owner",
+    "participants": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "chronos_matrix",
+        "name": "Chronos Matrix",
+        "role": "the Chronos Matrix HUD reading of the room's chart"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      },
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "projection",
+        "name": "Projection Agent",
+        "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+      }
+    ],
+    "calls": 11,
+    "options": {
+      "summary": "Three seats spoke; the rest did not answer.",
+      "options": [
+        {
+          "option_id": "wider_stop",
+          "rank": 1,
+          "title": "Widen the intraday stop after a range night",
+          "hypothesis": "Fewer stops inside the noise.",
+          "change": "small",
+          "risk": "medium",
+          "dissent": null,
+          "kind": "repository_task",
+          "spec": "Widen the intraday stop by 0.2 ATR after a range night; measure R per trade.",
+          "ev_ref": null
+        },
+        {
+          "option_id": "no_change",
+          "rank": 2,
+          "title": "No change",
+          "hypothesis": "What runs today stays.",
+          "change": "none",
+          "risk": "none",
+          "dissent": null,
+          "kind": "no_change",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mx08ocg0_aclji2#options.no_change"
+        }
+      ]
+    },
+    "reason": "no quorum (3 of 6 spoke)",
+    "pack_hash": "996d631209ed32102d8a4c98e76b3799feafcb49df1cc5de7b3f1db49a382724",
+    "created_by": "owner",
+    "created_ms": 1795860000000,
+    "updated_ms": 1795862400000,
+    "pack_refs": 72,
+    "pack_stale": false,
+    "terminal": false,
+    "messages": [
+      {
+        "id": 32,
+        "round": "position",
+        "seat": "risk",
+        "stance": "support",
+        "opinion": "The intraday stops sit too close for this volatility.",
+        "proposal": "Widen the intraday stop.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T10:00:00.000Z"
+        ],
+        "ms": 1795860120000,
+        "name": "Risk Manager",
+        "at": "2026-11-28T10:02:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/32"
+      },
+      {
+        "id": 33,
+        "round": "position",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "The 15m swings are wider this week.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T10:00:00.000Z#r_omega"
+        ],
+        "ms": 1795860180000,
+        "name": "15m Desk",
+        "at": "2026-11-28T10:03:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/33"
+      },
+      {
+        "id": 34,
+        "round": "position",
+        "seat": "technical",
+        "stance": "amend",
+        "opinion": "Only after a range night.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T10:00:00.000Z#r_tp1"
+        ],
+        "ms": 1795860240000,
+        "name": "Technical Analyst",
+        "at": "2026-11-28T10:04:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/34"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mx08ocg0_aclji2"
+  }
+}

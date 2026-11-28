@@ -271,8 +271,9 @@ test("PS18 item 4: a failed read never reads as \"nothing yet\"", () => {
   assert.match(ro, /readError \? <ErrorLine error=\{readError\} \/> : <p className="text-\[12px\] text-slate-500">No conclusion yet\.<\/p>/);
   assert.match(ro, /readError \? <ErrorLine error=\{readError\} \/> : <p className="text-\[12px\] text-slate-500">No session yet\.<\/p>/);
   const co = src("pages/Councils.tsx");
-  assert.match(co, /if \(!s\) return poll\.error != null \? <PollError poll=\{poll\} \/> : <Empty>Session not found\.<\/Empty>;/);
-  assert.match(co, /phase === "error" \|\| \(!d && poll\.error != null\) \? <PollError poll=\{poll\} \/> : phase === "loading" \? <Skeleton rows=\{2\} \/> : <Empty>No session yet\.<\/Empty>/);
+  // CF2: a session's failed read is the error box, never "not found"; a tab's failed read is the error box, never its empty state.
+  assert.match(co, /if \(!d\) return poll\.error != null \? <PollError poll=\{poll\} \/> : poll\.loading \? <Skeleton rows=\{4\} \/> : <Empty>Session not found\.<\/Empty>;/);
+  assert.match(co, /const body = \(poll: Poll, view: \(\) => ReactNode\) => \(phaseOf\(poll\) === "error" \? <PollError poll=\{poll\} \/> : poll\.data == null \? <Skeleton rows=\{3\} \/> : view\(\)\);/);
   const sh = src("pages/Shadow.tsx");
   assert.match(sh, /const kpi = \(n: number\) => \(known \? n : "—"\);/);
   for (const k of ["totalCandidates", "promotionReadyCount", "collectingCount", "totalBarsEvaluated"]) assert.match(sh, new RegExp(`\\{kpi\\(${k}\\)\\}`), k);
@@ -289,7 +290,8 @@ test("PS19 item 5: the stale/live tag on Status, Shadow, Councils, Calendar and 
   for (const p of ["poll={poll} live right=", "poll={lanePoll} right="]) assert.ok(st.includes(p), p);
   assert.ok(src("pages/Shadow.tsx").includes("poll={poll} live"), "Shadow");
   const co = src("pages/Councils.tsx");
-  for (const p of ["poll={poll} live", "poll={sugPoll}", "poll={topic ? packPoll : undefined}", "<PollStrip poll={poll}"]) assert.ok(co.includes(p), p);
+  // CF2: each tab's view carries its read's stale tag (PollStrip), the Archive's 404 and 5xx their own boxes.
+  for (const p of ["poll={sugPoll}", "poll={sesPoll}", "poll={arcPoll}", "<PollStrip poll={poll}", "<ArchiveUnread poll={arcPoll} />"]) assert.ok(co.includes(p), p);
   assert.ok(src("pages/Calendar.tsx").includes("hint={hint} poll={poll} live"), "Calendar");
   const tp = src("components/ThreadsPanel.tsx");
   for (const p of ["<PollStrip poll={roomPoll} />", "<PollStrip poll={pollOf(NEWS_PATH)} />", "<PollStrip poll={pollOf(threadPath(tab))} />"]) assert.ok(tp.includes(p), p);
