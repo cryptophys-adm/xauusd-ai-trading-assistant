@@ -561,13 +561,14 @@
     {
       "key": "CFC_MODE",
       "label": "Call for Councils",
-      "description": "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page); off runs nothing.",
+      "description": "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page) and approve or reject a suggestion; auto is on plus the council-led steps of CFC-A (a decided proposal with no follow-up in 7 days expires; the council's own pick comes later); off runs nothing.",
       "group": "agents",
       "worker": "ai",
       "values": [
         "off",
         "suggest",
-        "on"
+        "on",
+        "auto"
       ],
       "value": "suggest",
       "source": "default",

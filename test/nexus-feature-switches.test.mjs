@@ -157,7 +157,7 @@ test("FSU6 each control type: toggle, segmented, token toggles; the POST body of
   assert.equal(u.flipped(r("ZONE_PRIORITY")), "off");
   assert.deepEqual(u.postBody(r("ZONE_PRIORITY"), { value: "off" }), { key: "ZONE_PRIORITY", value: "off" });
   // Segmented: the value pressed.
-  assert.deepEqual(u.optionsOf(r("CFC_MODE")), ["off", "suggest", "on"]);
+  assert.deepEqual(u.optionsOf(r("CFC_MODE")), ["off", "suggest", "on", "auto"]);
   assert.deepEqual(u.postBody(r("CFC_MODE"), { value: "on" }), { key: "CFC_MODE", value: "on" });
   // Token toggles: the on-list, in the registry's order.
   assert.deepEqual(u.toggledTokens(r("ZONE_AIM_OFF"), "factor"), ["factor"]);

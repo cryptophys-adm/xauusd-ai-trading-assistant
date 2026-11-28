@@ -8,14 +8,14 @@
 //
 // Runs as queue steps (kind "council_step", one step per message: positions, rebuttals, synthesis, answer), so a step
 // may take the model's minutes. Limits (RFC §8): at most 16 model calls per session (6 positions, 4 rebuttals,
-// 4 answers, 1 synthesis, 1 retry), 20 owner messages, 2 sessions open and 4 started per UTC day; CFC_MODE "on" runs
-// sessions ("suggest" shows suggestions only; "off" nothing); a daily neuron cap CFC_NEURONS_PER_DAY_MAX (8,000)
+// 4 answers, 1 synthesis, 1 retry), 20 owner messages, 2 sessions open and 4 started per UTC day; CFC_MODE "on" or "auto"
+// runs sessions ("suggest" shows suggestions only; "off" nothing); a daily neuron cap CFC_NEURONS_PER_DAY_MAX (8,000)
 // over every "cfc:*" meter. Never throws from a step; a failed step aborts the session with its reason.
 import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf } from "./ai-usage.mjs";
 import { buildEvidencePack, parseTopicKey, evRef } from "./cfc-pack.mjs";
 import { parseRef, refCarriesPrice } from "./owner-corrections.mjs";
-import { cfcMode } from "./cfc-triggers.mjs";
+import { cfcMode, cfcSessionsMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
 import { knobMenu, checkKnobValue, readKnobOverrides } from "./council-knobs.mjs";
@@ -80,7 +80,7 @@ export function resetSessionSchemaForTests() { schemaReady = null; }
 
 /** Sessions run only with CFC_MODE "on" and the owner's switch on (the latest switch event; off by default). */
 export async function sessionsEnabled(env) {
-  if (cfcMode(env) !== "on") return false;
+  if (!cfcSessionsMode(env)) return false;
   try {
     await ensureSessionSchema(env.DB);
     const row = await env.DB.prepare("SELECT on_value FROM council_switch_events ORDER BY id DESC LIMIT 1").first();

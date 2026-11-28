@@ -149,8 +149,8 @@ test("the hourly run stores at most 3 a day, refreshes the open ones, waits out 
   assert.equal(new Set(rows.map((r) => r.topic_key)).size, rows.length, "one row per topic key");
   assert.ok(rows.every((r) => r.status === "open"));
   assert.throws(() => env.DB.db.prepare("INSERT INTO cfc_suggestions (topic_key, type, rule, fingerprint, signal_json, created_at, last_seen_at) VALUES (?, 'risk', 'r', 'f', '{}', 'x', 'x')").run(rows[0].topic_key), /UNIQUE/, "the database itself keeps one open suggestion per topic");
-  // A dismissed suggestion (phase P2) is not suggested again within 7 days.
-  env.DB.db.prepare("UPDATE cfc_suggestions SET status = 'dismissed' WHERE topic_key = ?").run(rows[0].topic_key);
+  // A rejected suggestion (CFC-A1) is not suggested again within 7 days.
+  env.DB.db.prepare("UPDATE cfc_suggestions SET status = 'rejected' WHERE topic_key = ?").run(rows[0].topic_key);
   const cooled = await runCfcTriggers(env, { now: NOW + 2 * 86_400_000 });
   assert.ok(!cooled.created.includes(rows[0].topic_key), "the fingerprint's cooldown");
   const view = await readSuggestions(env, { now: NOW + 2 * 86_400_000 });

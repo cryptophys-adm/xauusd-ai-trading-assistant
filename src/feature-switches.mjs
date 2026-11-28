@@ -190,9 +190,9 @@ export const FEATURE_SWITCHES = Object.freeze([
   }),
   entry({
     key: "CFC_MODE", label: "Call for Councils", group: "agents",
-    description: "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page); off runs nothing.",
-    values: ["off", "suggest", "on"], default_value: "suggest", config_value: "on",
-    read: (raw) => { if (!isSet(raw) || String(raw).trim() === "") return "suggest"; const v = s(raw); return ["off", "suggest", "on"].includes(v) ? v : "off"; }
+    description: "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page) and approve or reject a suggestion; auto is on plus the council-led steps of CFC-A (a decided proposal with no follow-up in 7 days expires; the council's own pick comes later); off runs nothing.",
+    values: ["off", "suggest", "on", "auto"], default_value: "suggest", config_value: "on",
+    read: (raw) => { if (!isSet(raw) || String(raw).trim() === "") return "suggest"; const v = s(raw); return ["off", "suggest", "on", "auto"].includes(v) ? v : "off"; }
   }),
   // ---- Trading-mode evidence (MS2, src/mode-shadow.mjs)
   entry({
