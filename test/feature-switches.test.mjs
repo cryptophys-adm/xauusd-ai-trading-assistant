@@ -610,6 +610,18 @@ async function migratedD1() {
   return { raw: db, prepare: (sql) => st(sql), batch: async (l) => Promise.all(l.map((s) => s.run())), exec: async (sql) => { db.exec(sql); return { count: 1 }; } };
 }
 
+test("FS-11b (CF2a) whoami: can_control for any signed-in person, is_owner only for OWNER_ACCESS_SUB", async () => {
+  resetKeyCacheForTests();
+  const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OMEGA: { overview: async () => ({}) }, OWNER_ACCESS_SUB: OWNER };
+  const opts = { fetchImpl: certsFetch, now: NOW_S };
+  const who = async (token, e = env) => { const r = await omegaHandle(req("/api/whoami", { token }), e, opts); return (({ can_control, is_owner, type }) => ({ can_control, is_owner, type }))(await r.json()); };
+  const owner = await jwt({ email: "owner@example.com", sub: OWNER }), guest = await jwt({ email: "guest@example.com", sub: "guest-sub-0002" }), svc = await jwt({ common_name: "ci.access" });
+  assert.deepEqual(await who(owner), { can_control: true, is_owner: true, type: "user" });
+  assert.deepEqual(await who(guest), { can_control: true, is_owner: false, type: "user" }, "a viewer: can_control as before, never the owner");
+  assert.deepEqual((await who(svc)).is_owner, false);
+  assert.deepEqual((await who(owner, { ...env, OWNER_ACCESS_SUB: "" })).is_owner, false, "no owner configured: nobody is the owner");
+});
+
 test("FS-12 the bundled Worker: an override reaches a fetch route's reader; the GET route; OmegaGateway's GET, POST and the strategy-council veto_rule write through FS1", async () => {
   const mod = await loadWorkerModule();
   const store = kv(), db = await migratedD1();

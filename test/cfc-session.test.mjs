@@ -214,11 +214,18 @@ test("CS10. typed options: a knob change only within the registry's bounds, anyt
   assert.deepEqual([r.pending, r.sent], [1, 1]);
   const body = sent[0].report.body;
   assert.equal(sent[0].agent, "xauusd-moderator");
-  assert.deepEqual([body.schema, body.kind, body.executor, body.spec, body.origin.council, body.chosen_by], ["typed_proposal.v1", "repository_task", "cryptophys", "build a momentum agent", session_id, "owner:owner@example.com"]);
+  assert.deepEqual([body.schema, body.kind, body.executor, body.spec, body.origin.council, body.chosen_by], ["typed_proposal.v1", "repository_task", "cryptophys", "build a momentum agent", session_id, "owner:owner"]);
+  assert.ok(!JSON.stringify(body).includes("@"), "CF2a: no email in the hand-off (the shape owner:<actor> stays)");
   assert.equal(body.state, "handed_off", "the report carries the state the platform holds it in");
   assert.ok(!/\d{4}\.\d/.test(JSON.stringify(body)), "no price in the hand-off");
   const list = (await listProposals(env)).proposals;
   assert.deepEqual([list[0].state, list[0].report_id], ["handed_off", "rpt_1"]);
+  // CF2a: the owner's Access email is stored as sent but never read out: proposals, the session and the list.
+  assert.equal(list[0].accepted_by, "owner");
+  const read = await readSession(env, session_id);
+  assert.match(read.reason, /^accepted code by owner$/);
+  assert.ok(!JSON.stringify(read).includes("@") && !JSON.stringify(list).includes("@"), "no email in the session or the proposals");
+  assert.ok(!JSON.stringify(await listSessions(env)).includes("@"), "nor in the session list");
   // A knob option on another session: queued for its shadow test, and the platform is told.
   const b = await startSession(env, { topic_key: "strategy:zone_pullback", enqueue });
   await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ? WHERE id = ?").bind(JSON.stringify({ summary: "s", options: opts }), b.session_id).run();

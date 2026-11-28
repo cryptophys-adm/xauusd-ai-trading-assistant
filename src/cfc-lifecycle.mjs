@@ -13,7 +13,7 @@
 // repository task never delivered to the platform (still handoff_pending). A knob change in its shadow test has
 // started (queued_shadow counts as started). GET /api/council/archive reads the chains; nothing here changes trading.
 import { ensureCfcSchema, effectiveStatus, suggestionExpiry, cfcAutoMode, SUGGESTION_STATUSES } from "./cfc-triggers.mjs";
-import { ensureSessionSchema, startSession, TERMINAL_STATES } from "./cfc-session.mjs";
+import { ensureSessionSchema, startSession, maskActor, TERMINAL_STATES } from "./cfc-session.mjs";
 import { platformStates } from "./council-decisions.mjs";
 
 export const DECISIONS = Object.freeze(["approve", "reject"]);
@@ -172,13 +172,13 @@ export function sessionProgress(session, counts = []) {
 const sessionView = (s, counts) => s && ({
   id: s.id, topic_key: s.topic_key, topic_text: s.topic_text ?? null, type: s.type, state: s.state, terminal: TERMINAL_STATES.includes(s.state),
   created_at: msIso(s.created_ms), updated_at: msIso(s.updated_ms), started_by: String(s.created_by ?? "").startsWith("council") ? "council" : "owner",
-  reason: s.reason ? clip(s.reason.replace(/\S+@\S+/g, "owner"), 200) : null,
+  reason: s.reason ? clip(maskActor(s.reason), 200) : null,
   reopened_as: /^reopened as (\S+)/.exec(String(s.reason ?? ""))?.[1] ?? null,
   progress: sessionProgress(s, counts)
 });
 const proposalView = (p, ps) => p && ({
   id: p.id, kind: p.kind, title: p.title ?? null, state: p.state, knob: p.knob ?? null, from: p.from_value ?? null, value: p.value ?? null,
-  decided_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : "owner", decided_at: msIso(p.accepted_ms), updated_at: msIso(p.updated_ms), note: p.note ?? null,
+  decided_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : "owner", decided_at: msIso(p.accepted_ms), updated_at: msIso(p.updated_ms), note: maskActor(p.note ?? null),
   // CFC-A2: the council's own pick, its rationale and the seat tally (null for the owner's pick).
   council_decision: parse(p.decision_json, null),
   platform: ps ? { state: ps.state, at: ps.at ?? null, reason: ps.reason ?? null, close_code: ps.refs?.close_code ?? null, history: ps.history ?? [] } : null

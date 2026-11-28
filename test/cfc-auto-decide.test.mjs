@@ -96,9 +96,14 @@ test("AD-3 the owner's veto: Close inside the window stops the task; it is never
   const env = await setup();
   const t0 = Date.now();
   const { session_id, published, publish } = await runToSynthesis(env, { options: TASK, now: t0 });
-  const v = await closeSession(env, { session_id, actor: "owner", now: t0 + 60_000 });
+  // The actor is the Access email Omega passes; it is stored as sent, and every read shows "owner" (CF2a).
+  const v = await closeSession(env, { session_id, actor: "owner@example.com", now: t0 + 60_000 });
   assert.deepEqual([v.ok, v.state, v.proposal_state], [true, "decided", "vetoed"]);
   assert.equal((await proposalOf(env, session_id)).state, "vetoed");
+  assert.equal((await proposalOf(env, session_id)).note, "vetoed by owner@example.com", "the stored row is not rewritten");
+  const chain = (await readCouncilArchive(env)).items.find((c) => c.session?.id === session_id);
+  assert.equal(chain.proposal.note, "vetoed by owner", "CF2a: the archive masks the actor in the note");
+  assert.ok(!JSON.stringify(chain).includes("@"), "no email anywhere in the chain");
   assert.equal((await retryProposalHandoffs(env, { publish, now: t0 + VETO_WINDOW_MS + 1 })).pending, 0);
   assert.equal(published.length, 1, "nothing handed off");
   assert.match((await closeSession(env, { session_id, actor: "owner" })).error, /already decided/);

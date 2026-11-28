@@ -247,7 +247,12 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.feedSync({ bridgeId: body.bridge_id, state: body.state ?? null, publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null }), "feed_sync_failed");
     }
 
-    if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
+    // CF2a (2026-11-28): can_control is any signed-in person (the trading controls); is_owner is the owner check
+    // (OWNER_ACCESS_SUB) that the owner-only routes use, so a page gates owner actions such as Decide on it.
+    if (route === "GET /api/whoami") {
+      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
+      return json({ subject: identity.subject, type: identity.type, can_control: canControl, is_owner: identity.type === "user" && Boolean(ownerSub) && identity.sub === ownerSub });
+    }
     // The Nexus badge (UI audit DEF-10): connected, armed, server and open positions, from one bridge row.
     if (route === "GET /api/status") {
       if (typeof env.OMEGA.status !== "function") return json({ error: "status_unavailable" }, 503);

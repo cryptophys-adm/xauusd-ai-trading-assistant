@@ -5,6 +5,10 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-28
+- fix(council, omega): CF2a, two of frontend's CF2 findings and one PR2 leak.
+  - No owner email on a council read. `maskActor` shows an Access-email actor as `owner` in the session `reason` and `created_by`, the session list, the proposals' `accepted_by` and `note`, and the archive's proposal `note` (PR2's `vetoed by <actor>` was unmasked there). The hand-off's `chosen_by` keeps its `owner:<actor>` shape as `owner:owner`. The stored rows are not changed.
+  - Omega `GET /api/whoami` gains `is_owner` (the Access user equals `OWNER_ACCESS_SUB`). `can_control` is unchanged: any signed-in person.
+  - Tests: FS-11b, CS (masked accept, list and hand-off), AD-3 (masked veto note). SSOT updated.
 - feat(council): CFC-A PR2, the council decides by itself in CFC_MODE "auto" (A2 + A3). Production stays "on", so nothing changes until the owner switches it.
   - `councilPick` needs a quorum of 4 seats that spoke (`COUNCIL_QUORUM`, the orchestrator's review); without it the session stays `awaiting_owner` with the reason `no quorum (n of m spoke)` and the owner picks. With a quorum it picks the moderator's top option other than `no_change` when support reaches max(4, ⌈2/3 of the seats that spoke⌉) and the option is valid, else `no_change`. The stance tally is the position round's, so `support` means support for acting on the topic; a per-option tally is a later item. It runs `acceptOption` as `council` and stores the rationale and tally in `council_proposals.decision_json`.
   - A council-picked `repository_task` waits a 2 h veto window (`veto_window`). The owner's Close inside it vetoes the task (`vetoed`); otherwise the hourly hand-off sends it after the window. A knob goes to its shadow test at once.

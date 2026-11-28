@@ -34,6 +34,9 @@ export const STANCES = Object.freeze(["support", "oppose", "amend", "abstain"]);
 const DAY = 86_400_000;
 const parse = (s, fb = null) => { try { return s == null ? fb : JSON.parse(s); } catch { return fb; } };
 const clip = (s, n) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+/** CF2a (2026-11-28): an actor stored as an Access email reads as "owner" on every council read and in the hand-off (no email
+ * in Nexus or on the platform). The stored rows are not changed; null stays null. */
+export const maskActor = (s) => (s == null ? s : String(s).replace(/\S+@\S+/g, "owner"));
 
 /** Seats per topic type (RFC §2), the first six that exist in the roster. */
 export const SEATS_BY_TYPE = Object.freeze({
@@ -335,7 +338,7 @@ export function proposalReport(p, { session, refs = [] } = {}) {
       origin: { council: p.session_id, option_id: p.option_id, side: "nexus", repo: PROPOSAL_REPO, topic: session?.topic_key ?? null, question: session?.question ?? null },
       session_id: p.session_id,
       // CFC-A3: who chose the option, and that the owner approved the topic (the owner's identity is never stored).
-      chosen_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : `owner:${p.accepted_by ?? "owner"}`, chosen_at: new Date(Number(p.accepted_ms)).toISOString(),
+      chosen_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : `owner:${maskActor(p.accepted_by ?? "owner")}`, chosen_at: new Date(Number(p.accepted_ms)).toISOString(),
       topic_approved_by: "owner",
       ...(String(p.accepted_by ?? "").startsWith("council") && parse(p.decision_json, null) ? { council_decision: parse(p.decision_json, null) } : {}),
       title: o.title ?? null, hypothesis: o.hypothesis ?? null, change: o.change ?? null, risk: o.risk ?? null, dissent: o.dissent ?? null,
@@ -421,7 +424,7 @@ export async function listProposals(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT id, session_id, option_id, kind, title, knob, from_value, value, spec, state, note, report_id, accepted_by, accepted_ms, updated_ms FROM council_proposals ORDER BY accepted_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
   // H3f-refs: ev_ref is the ref the owner's correction cites (POST /omega/api/correction target.ref).
-  return { proposals: rows.map((r) => ({ ...r, accepted_at: new Date(Number(r.accepted_ms)).toISOString(), ev_ref: evRef("council_proposals", r.id) })) };
+  return { proposals: rows.map((r) => ({ ...r, accepted_by: maskActor(r.accepted_by), note: maskActor(r.note), accepted_at: new Date(Number(r.accepted_ms)).toISOString(), ev_ref: evRef("council_proposals", r.id) })) };
 }
 
 /** One step of a session (the queue consumer). */
@@ -567,7 +570,7 @@ export async function listSessions(env, { limit = 20 } = {}) {
   await ensureSessionSchema(env.DB);
   const rows = (await env.DB.prepare("SELECT id, topic_key, topic_text, type, question, state, participants, calls, reason, created_ms, updated_ms, COALESCE(json_array_length(json_extract(pack_json, '$.refs')), 0) AS pack_refs FROM council_sessions ORDER BY created_ms DESC LIMIT ?").bind(Math.min(50, Math.max(1, limit))).all()).results ?? [];
   const now = Date.now();
-  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString(), pack_stale: Number(r.pack_refs) === 0 || now - Number(r.created_ms) > PACK_STALE_MS, ev_ref: evRef("council_sessions", r.id) })) };
+  return { enabled: await sessionsEnabled(env), mode: cfcMode(env), limits: SESSION_LIMITS, sessions: rows.map((r) => ({ ...r, reason: maskActor(r.reason), participants: parse(r.participants, []), created_at: new Date(Number(r.created_ms)).toISOString(), pack_stale: Number(r.pack_refs) === 0 || now - Number(r.created_ms) > PACK_STALE_MS, ev_ref: evRef("council_sessions", r.id) })) };
 }
 export async function readSession(env, id) {
   await ensureSessionSchema(env.DB);
@@ -580,7 +583,7 @@ export async function readSession(env, id) {
   const withRefs = options && typeof options === "object" && Array.isArray(options.options)
     ? { ...options, options: options.options.map((o) => (o && typeof o === "object" ? { ...o, ev_ref: optionRef(s.id, o.option_id) } : o)) }
     : options;
-  return { ...s, pack_stale: Number(s.pack_refs) === 0 || Date.now() - Number(s.created_ms) > PACK_STALE_MS, terminal: TERMINAL_STATES.includes(s.state),
+  return { ...s, reason: maskActor(s.reason), created_by: maskActor(s.created_by), pack_stale: Number(s.pack_refs) === 0 || Date.now() - Number(s.created_ms) > PACK_STALE_MS, terminal: TERMINAL_STATES.includes(s.state),
     participants: parse(s.participants, []).map((x) => ({ id: x, ...(names[x] ?? { name: x, role: "" }) })), options: withRefs,
     messages: msgs.map((m) => ({ ...m, name: m.seat === "owner" ? "Owner" : names[m.seat]?.name ?? m.seat, reply_to: parse(m.reply_to, []), refs: parse(m.refs, []), at: new Date(Number(m.ms)).toISOString(), ev_ref: evRef("council_messages", m.id) })),
     ev_ref: evRef("council_sessions", s.id) };
