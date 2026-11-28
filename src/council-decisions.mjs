@@ -19,8 +19,10 @@ import { ensureSessionSchema } from "./cfc-session.mjs";
 
 export const DECISIONS_AGENT = "xauusd-moderator";
 export const DECISIONS_CAPABILITY = "council.decisions.read";
-export const PLATFORM_STATES = Object.freeze(["received", "queued", "waiting_external", "rejected", "in_progress", "proposed", "merged", "deployed",
-  "deployed_unmeasured", "closed", "refused", "unfit", "reverted"]);
+// queued_external and expired (platform PR-A, live 2026-11-28): a task queued for a repository the platform does not build
+// yet, and one whose wait ran out; an update carrying either was dropped as unknown before.
+export const PLATFORM_STATES = Object.freeze(["received", "queued", "waiting_external", "queued_external", "rejected", "in_progress", "proposed", "merged", "deployed",
+  "deployed_unmeasured", "closed", "refused", "unfit", "reverted", "expired"]);
 const MAX_PAGES = 5;
 const CURSOR_ID = "platform";
 const TIMEOUT_MS = 10_000;
@@ -42,7 +44,8 @@ export function resetDecisionsSchemaForTests() { schemaReady = null; }
 export const decisionsPollOn = (env) => String(env?.COUNCIL_DECISIONS_POLL ?? "off").toLowerCase() === "on";
 
 const clip = (s, n) => String(s ?? "").slice(0, n);
-const REF_KEYS = ["intent_id", "evolution_id", "cr_id", "merge_sha", "deploy_ref"];
+// close_code (platform PR-A): why a proposal reached a terminal state (closed, refused, expired, ...), a short code.
+const REF_KEYS = ["intent_id", "evolution_id", "cr_id", "merge_sha", "deploy_ref", "close_code"];
 
 /** One update as the platform sends it → a stored row, or null when it is not one of ours or not well formed. */
 export function cleanUpdate(u) {

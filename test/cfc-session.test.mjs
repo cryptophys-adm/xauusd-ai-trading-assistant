@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
-import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, proposalReport, packForPrompt, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, SESSION_LIMITS } from "../src/cfc-session.mjs";
+import { startSession, ownerMessage, closeSession, reopenSession, acceptOption, retryProposalHandoffs, listProposals, proposalReport, packForPrompt, runSessionStep, readSession, listSessions, setSessionsSwitch, sessionsEnabled, cleanSeat, cleanOptions, slugOf, resetSessionSchemaForTests, ensureSessionSchema, SESSION_LIMITS } from "../src/cfc-session.mjs";
 import { resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 
 async function setup(over = {}) {
@@ -225,4 +225,74 @@ test("CS10. typed options: a knob change only within the registry's bounds, anyt
   assert.deepEqual([k.kind, k.state], ["policy_parameter", "queued_shadow"]);
   assert.deepEqual([sent.at(-1).report.body.knob, sent.at(-1).report.body.from, sent.at(-1).report.body.value], ["decision.min_rrr.intraday", 1.5, 1.8]);
   assert.equal(proposalReport({ id: "x", session_id: "s", option_id: "no_change", kind: "no_change", option_json: "{}", accepted_ms: 0 }).body.executor, "xauusd");
+});
+
+// C1 (orchestrator 2026-11-28, the owner's "setuju semua" on platform Issue #327): the owner's Close while a step runs.
+/** A model that closes the session on its first call (the owner clicks Close while the step waits for the model). */
+function closingModel(env, session_id) {
+  const inner = model();
+  let closed = false;
+  const call = async (e, o) => {
+    if (!closed) { closed = true; await closeSession(env, { session_id, actor: "owner" }); }
+    return inner.call(e, o);
+  };
+  return { call };
+}
+
+test("CS11. C1: a Close during positions, rebuttals or the synthesis stays closed: no awaiting_owner, no next step, no council_decision.v1", async () => {
+  for (const at of ["positions", "rebuttals", "synthesis"]) {
+    const env = await setup();
+    await setSessionsSwitch(env, { on: true });
+    queue.length = 0;
+    const { session_id } = await startSession(env, { topic_key: "strategy:zone_pullback:exits", enqueue });
+    const published = [];
+    const publish = async (_e, agent, report) => { published.push(report); return { outcome: "success" }; };
+    const steps = ["positions", "rebuttals", "synthesis"];
+    for (const name of steps.slice(0, steps.indexOf(at))) await runSessionStep(env, { session_id, step: name }, { call: model().call, publish, enqueue });
+    queue.length = 0;
+    const r = await runSessionStep(env, { session_id, step: at }, { call: closingModel(env, session_id).call, publish, enqueue });
+    assert.equal(r.status, "ended", `${at}: ${JSON.stringify(r)}`);
+    const s = await readSession(env, session_id);
+    assert.equal(s.state, "closed", `${at}: the owner's Close wins`);
+    assert.match(s.reason, /^owner_closed/);
+    assert.deepEqual(queue, [], `${at}: no next step is queued`);
+    assert.equal(published.filter((p) => p.body?.schema === "council_decision.v1").length, 0, `${at}: nothing published for a closed session`);
+    // A later step on the closed session does nothing.
+    assert.equal((await runSessionStep(env, { session_id, step: "synthesis" }, { call: model().call, publish, enqueue })).status, "closed");
+  }
+});
+
+test("CS12. C1's repair: a session left awaiting_owner after the owner's Close (or Re-open) is closed once; nothing else moves", async () => {
+  const env = await setup();
+  await setSessionsSwitch(env, { on: true });
+  const a = await startSession(env, { topic_key: "strategy:zone_pullback:exits", enqueue });
+  // Two more rows like it (the open-session limit would refuse more starts).
+  const cols = ((await env.DB.prepare("PRAGMA table_info(council_sessions)").all()).results ?? []).map((c) => c.name).filter((n) => n !== "id");
+  for (const id of ["cfc_b", "cfc_c"]) await env.DB.prepare(`INSERT INTO council_sessions (id, ${cols.join(", ")}) SELECT ?, ${cols.join(", ")} FROM council_sessions WHERE id = ?`).bind(id, a.session_id).run();
+  const b = { session_id: "cfc_b" }, c = { session_id: "cfc_c" };
+  await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', reason = ? WHERE id = ?").bind("owner_closed by owner", a.session_id).run();
+  await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', reason = NULL WHERE id = ?").bind(b.session_id).run();
+  await env.DB.prepare("UPDATE council_sessions SET state = 'awaiting_owner', reason = ? WHERE id = ?").bind("reopened as cfc_x by owner", c.session_id).run();
+  resetSessionSchemaForTests();
+  await ensureSessionSchema(env.DB);
+  const state = async (id) => (await env.DB.prepare("SELECT state FROM council_sessions WHERE id = ?").bind(id).first()).state;
+  assert.deepEqual([await state(a.session_id), await state(b.session_id), await state(c.session_id)], ["closed", "awaiting_owner", "closed"]);
+  resetSessionSchemaForTests();
+  await ensureSessionSchema(env.DB);
+  assert.equal(await state(b.session_id), "awaiting_owner", "idempotent: a real pick-waiting session is never touched");
+});
+
+test("CS13. C1: Accept after a Close is refused and stores no proposal; Close on an ended session says so", async () => {
+  const env = await setup();
+  await setSessionsSwitch(env, { on: true });
+  const { session_id } = await startSession(env, { topic_key: "strategy:zone_pullback:exits", enqueue });
+  const publish = async () => ({ outcome: "success" });
+  for (const name of ["positions", "rebuttals", "synthesis"]) await runSessionStep(env, { session_id, step: name }, { call: model().call, publish, enqueue });
+  assert.equal((await readSession(env, session_id)).state, "awaiting_owner");
+  // The owner's Close lands between Accept's read and its write.
+  const racing = { ...env, DB: { prepare(sql) { if (/^UPDATE council_sessions SET state = 'decided'/.test(sql)) env.DB.prepare("UPDATE council_sessions SET state = 'closed', reason = 'owner_closed by owner' WHERE id = ?").bind(session_id).run(); return env.DB.prepare(sql); } } };
+  const r = await acceptOption(racing, { session_id, option_id: "no_change", publish });
+  assert.deepEqual([r.ok, r.error], [false, "the session is no longer waiting for your pick"]);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM council_proposals WHERE session_id = ?").bind(session_id).first()).n, 0);
+  assert.equal((await closeSession(env, { session_id })).ok, false);
 });

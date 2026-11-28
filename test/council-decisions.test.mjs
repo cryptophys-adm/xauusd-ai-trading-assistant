@@ -87,3 +87,12 @@ test("CD4 cleanUpdate keeps only a well-formed typed_proposal.v1 update", () => 
   assert.deepEqual(cleanUpdate({ proposal_id: "cp_one", state: "merged", at: "2026-11-17T18:00:00Z", refs: { merge_sha: "abc1234" } }),
     { proposal_id: "cp_one", state: "merged", reason: null, refs: { merge_sha: "abc1234" }, at: "2026-11-17T18:00:00.000Z" });
 });
+
+test("CD5 platform PR-A: queued_external and expired are states, close_code is a ref", () => {
+  for (const state of ["queued_external", "expired"]) {
+    assert.equal(cleanUpdate({ proposal_id: "cp_one", state, at: "2026-11-28T04:00:00Z" })?.state, state);
+  }
+  assert.deepEqual(cleanUpdate({ proposal_id: "cp_one", state: "expired", at: "2026-11-28T04:00:00Z", reason: "no answer in 14 days", refs: { close_code: "ttl_expired", intent_id: "int_1", other: "dropped" } }),
+    { proposal_id: "cp_one", state: "expired", reason: "no answer in 14 days", refs: { intent_id: "int_1", close_code: "ttl_expired" }, at: "2026-11-28T04:00:00.000Z" });
+  assert.equal(cleanUpdate({ proposal_id: "cp_one", state: "queued_externally", at: "2026-11-28T04:00:00Z" }), null, "an unknown state is still dropped");
+});

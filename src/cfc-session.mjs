@@ -22,6 +22,11 @@ import { knobMenu, checkKnobValue, readKnobOverrides } from "./council-knobs.mjs
 
 /** States that end a session; "closed" is the owner's Close or Re-open (owner 2026-11-17). */
 export const TERMINAL_STATES = Object.freeze(["aborted", "expired", "decided", "closed"]);
+// C1 (orchestrator 2026-11-28, the owner's "setuju semua" on platform Issue #327): every write that moves a session's state
+// carries this guard, so a step that read the session before the owner closed it cannot move it back out of a terminal
+// state (cfc_mwxpyjky_splej5: closed during its synthesis, left awaiting_owner).
+const NOT_TERMINAL = `state NOT IN (${TERMINAL_STATES.map((s) => `'${s}'`).join(", ")})`;
+const changed = (r) => Number(r?.meta?.changes) > 0;
 /** A pack older than this is stale: the page offers to re-open the topic with fresh evidence. */
 export const PACK_STALE_MS = 24 * 3_600_000;
 export const SESSION_LIMITS = Object.freeze({ calls: 16, positions: 6, rebuttals: 4, answers: 4, owner_messages: 20, open: 2, started_per_day: 4, neurons_per_day: 8000, pack_chars: 7000 });
@@ -64,6 +69,11 @@ let schemaReady = null;
 export async function ensureSessionSchema(db) {
   if (schemaReady === db) return;
   for (const q of SCHEMA_SQL) await db.prepare(q).run();
+  // C1's repair, idempotent: a session the owner closed (or re-opened) while a step ran was moved on to awaiting_owner
+  // by that step; its reason still says so. Only that state and those reasons are touched.
+  try {
+    await db.prepare("UPDATE council_sessions SET state = 'closed' WHERE state = 'awaiting_owner' AND (reason LIKE 'owner_closed%' OR reason LIKE 'reopened as %')").run();
+  } catch { /* the sessions stand */ }
   schemaReady = db;
 }
 export function resetSessionSchemaForTests() { schemaReady = null; }
@@ -249,7 +259,8 @@ export async function closeSession(env, { session_id, actor = "owner", reason = 
   const s = await db.prepare("SELECT id, state FROM council_sessions WHERE id = ?").bind(session_id).first();
   if (!s) return { ok: false, error: "unknown session" };
   if (TERMINAL_STATES.includes(s.state)) return { ok: false, error: `the session is already ${s.state}` };
-  await db.prepare("UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`${reason} by ${actor}`, 200), now, session_id).run();
+  const r = await db.prepare(`UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(clip(`${reason} by ${actor}`, 200), now, session_id).run();
+  if (!changed(r)) return { ok: false, error: "the session has just ended" };
   return { ok: true, session_id, state: "closed" };
 }
 
@@ -262,7 +273,7 @@ export async function reopenSession(env, { session_id, actor = "owner", now = Da
   const free = String(s.topic_key ?? "").startsWith("free:") && s.topic_text;
   const r = await startSession(env, { topic_key: free ? null : s.topic_key, text: free ? s.topic_text : null, seats: parse(s.participants, []), actor, now, enqueue });
   if (!r?.ok) return r;
-  if (!TERMINAL_STATES.includes(s.state)) await db.prepare("UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`reopened as ${r.session_id} by ${actor}`, 200), now, session_id).run();
+  if (!TERMINAL_STATES.includes(s.state)) await db.prepare(`UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(clip(`reopened as ${r.session_id} by ${actor}`, 200), now, session_id).run();
   return { ...r, reopened_from: session_id };
 }
 
@@ -323,9 +334,11 @@ export async function acceptOption(env, { session_id, option_id, actor = "owner"
   const state = kind === "no_change" ? "closed" : kind === "policy_parameter" ? "queued_shadow" : "handoff_pending";
   const p = { id, session_id, option_id, kind, title: clip(opt.title, 120), knob, from_value: from, value, spec: kind === "repository_task" ? clip(opt.spec ?? opt.change, 800) : null,
     option_json: JSON.stringify(opt), state, note, accepted_by: clip(actor, 120), accepted_ms: now };
+  // C1: the session is decided only while it still waits for the owner (a Close in between wins); then the proposal is stored.
+  const decided = await db.prepare("UPDATE council_sessions SET state = 'decided', reason = ?, updated_ms = ? WHERE id = ? AND state = 'awaiting_owner'").bind(clip(`accepted ${option_id} by ${actor}`, 200), now, session_id).run();
+  if (!changed(decided)) return { ok: false, error: "the session is no longer waiting for your pick" };
   await db.prepare("INSERT INTO council_proposals (id, session_id, option_id, kind, title, knob, from_value, value, spec, option_json, state, note, report_id, accepted_by, accepted_ms, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
     .bind(p.id, p.session_id, p.option_id, p.kind, p.title, p.knob, p.from_value, p.value, p.spec, p.option_json, p.state, p.note, p.accepted_by, now, now).run();
-  await db.prepare("UPDATE council_sessions SET state = 'decided', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(`accepted ${option_id} by ${actor}`, 200), now, session_id).run();
   // The report carries the state the proposal has once the platform holds it (a code task: handed_off).
   const sent = await handOff(env, { ...p, state: kind === "repository_task" ? "handed_off" : state }, publish);
   const delivered = sent?.outcome === "success";
@@ -364,7 +377,13 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
   await ensureSessionSchema(db);
   const s = await db.prepare("SELECT * FROM council_sessions WHERE id = ?").bind(session_id).first();
   if (!s) return { status: "unknown" };
-  const abort = async (reason) => { await db.prepare("UPDATE council_sessions SET state = 'aborted', reason = ?, updated_ms = ? WHERE id = ?").bind(clip(reason, 200), now, session_id).run(); return { status: "aborted", reason }; };
+  // C1: a session that went terminal while this step ran (the owner's Close) stays as it is: the step stops quietly.
+  const ended = { status: "ended" };
+  const abort = async (reason) => {
+    const r = await db.prepare(`UPDATE council_sessions SET state = 'aborted', reason = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(clip(reason, 200), now, session_id).run();
+    return changed(r) ? { status: "aborted", reason } : ended;
+  };
+  const keepCalls = async () => db.prepare(`UPDATE council_sessions SET calls = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(calls, session_id).run();
   if (TERMINAL_STATES.includes(s.state)) return { status: s.state };
   if (!(await sessionsEnabled(env))) return abort("council sessions were switched off");
   if ((await cfcNeuronsToday(db, now)) >= neuronCap(env)) return abort("the daily council budget is used up");
@@ -390,14 +409,19 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
   };
   const save = async (seat, round, m) => db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .bind(session_id, round, seat, m.stance, m.opinion, m.proposal, JSON.stringify(m.reply_to ?? []), JSON.stringify(m.refs ?? []), now).run();
-  const advance = async (state, next) => { await db.prepare("UPDATE council_sessions SET state = ?, calls = ?, updated_ms = ? WHERE id = ?").bind(state, calls, now, session_id).run(); if (next) await enqueue({ kind: "council_step", session_id, step: next }); };
+  const advance = async (state, next) => {
+    const r = await db.prepare(`UPDATE council_sessions SET state = ?, calls = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(state, calls, now, session_id).run();
+    if (!changed(r)) return false;
+    if (next) await enqueue({ kind: "council_step", session_id, step: next });
+    return true;
+  };
 
   if (step === "positions") {
     const out = await Promise.all(seats.map(async (seat) => [seat, await ask(seat, "position")]));
     const ok = out.filter(([, m]) => m);
     for (const [seat, m] of ok) await save(seat, "position", m);
-    if (ok.length < 3) { await db.prepare("UPDATE council_sessions SET calls = ? WHERE id = ?").bind(calls, session_id).run(); return abort(`only ${ok.length} seats gave a valid opinion`); }
-    await advance("rebuttals", "rebuttals");
+    if (ok.length < 3) { await keepCalls(); return abort(`only ${ok.length} seats gave a valid opinion`); }
+    if (!(await advance("rebuttals", "rebuttals"))) return ended;
     return { status: "positions", spoke: ok.length };
   }
   if (step === "rebuttals") {
@@ -408,7 +432,7 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     const speakers = [...new Set([...dissent, pos.find((p) => p.stance === majority)?.seat, seats.includes("risk") ? "risk" : null].filter(Boolean))].slice(0, SESSION_LIMITS.rebuttals);
     const out = await Promise.all(speakers.map(async (seat) => [seat, await ask(seat, "rebuttal")]));
     for (const [seat, m] of out) if (m) await save(seat, "rebuttal", m);
-    await advance("synthesis", "synthesis");
+    if (!(await advance("synthesis", "synthesis"))) return ended;
     return { status: "rebuttals", spoke: out.filter(([, m]) => m).length };
   }
   if (step === "synthesis") {
@@ -429,8 +453,10 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
       const r = await call(env, { messages: msgs, schemaName: "cfc_synthesis", schema: SYNTHESIS_SCHEMA, maxTokens: 1500, effort: "medium", deadline: Date.now() + 90_000, clock: () => Date.now(), runState: {}, role: "moderator", meterSource: "cfc:synthesis" });
       syn = r?.status === "answered" ? cleanOptions(r.obj, live) : null;
     } catch { syn = null; }
-    if (!syn) { await db.prepare("UPDATE council_sessions SET calls = ? WHERE id = ?").bind(calls, session_id).run(); return abort("the moderator gave no valid synthesis"); }
-    await db.prepare("UPDATE council_sessions SET state = 'awaiting_owner', options = ?, calls = ?, updated_ms = ? WHERE id = ?").bind(JSON.stringify(syn), calls, now, session_id).run();
+    if (!syn) { await keepCalls(); return abort("the moderator gave no valid synthesis"); }
+    const moved = await db.prepare(`UPDATE council_sessions SET state = 'awaiting_owner', options = ?, calls = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(JSON.stringify(syn), calls, now, session_id).run();
+    // C1: closed during the synthesis: no awaiting_owner, and no council_decision.v1 for a closed session.
+    if (!changed(moved)) return ended;
     // The pick is made in Cerebrum (HAIC Q6): the options go to the platform's inbox. Best effort.
     try {
       await publish(env, "xauusd-moderator", { kind: "xauusd_digest", severity: "info", subject: clip(`Council: ${s.topic_text ?? s.topic_key}`, 200), ai_status: "model",
@@ -452,7 +478,7 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     }
     if (to.length > room) await db.prepare("INSERT INTO council_messages (session_id, round, seat, stance, opinion, proposal, reply_to, refs, ms) VALUES (?, 'notice', 'system', NULL, ?, NULL, '[]', '[]', ?)")
       .bind(session_id, `The session's ${SESSION_LIMITS.answers} answers are used up; re-open the topic to ask more.`, now).run();
-    await db.prepare("UPDATE council_sessions SET calls = ?, updated_ms = ? WHERE id = ?").bind(calls, now, session_id).run();
+    await db.prepare(`UPDATE council_sessions SET calls = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(calls, now, session_id).run();
     return { status: "answered", answers: out.filter(([, m]) => m).length };
   }
   return { status: "unknown_step" };
