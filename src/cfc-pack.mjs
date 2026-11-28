@@ -8,7 +8,7 @@
 //   risk       risk:<session | mode | regime>                            the Signal Ledger grouped by session, trading mode or 1H regime
 //   news       news:release_horizon | news:drift | news:calendar
 //   execution  execution:recoveries | rejected_intents | fills | sl_plus
-//   data       data:parity | market_feed | tv_budget | <engine of a stuck state>
+//   data       data:market_feed | tv_budget | <engine of a stuck state> (S5: data:parity retired)
 //   cost       cost:<meter source> | cost:shadow
 //   knowledge  knowledge:<learned item id>
 //   free       free:<slug>                                               the owner picks the sections in a later phase
@@ -44,7 +44,7 @@ export const NEWS_KINDS = Object.freeze(["release_horizon", "drift", "calendar"]
 export const EXECUTION_KINDS = Object.freeze(["recoveries", "rejected_intents", "fills", "sl_plus"]);
 /** The engines whose fields outcome scoring watches for stuck states (src/outcome-scoring.mjs STUCK_FIELDS). */
 export const STUCK_FEEDS = Object.freeze(["prophet_r37", "prophet_r38", "gmi_v12_70"]);
-export const DATA_FEEDS = Object.freeze(["parity", "market_feed", "tv_budget", ...STUCK_FEEDS]);
+export const DATA_FEEDS = Object.freeze(["market_feed", "tv_budget", ...STUCK_FEEDS]);
 export const CONTEXT_MODES = Object.freeze([...TRADING_MODES, "none"]);
 export const CONTEXT_REGIMES = Object.freeze([...REGIMES, "unknown"]);
 export const RISK_VALUES = Object.freeze([...SESSIONS, ...TRADING_MODES, ...REGIMES]);
@@ -738,7 +738,7 @@ async function executionPack(env, t, { now, asOf, refs }) {
   };
 }
 
-const DATA_ALERT_KINDS = Object.freeze(["parity_revoked", "input_mismatch", "market_data_stale", "market_data_fallback", "webhook_rejected", "webhook_silent"]);
+const DATA_ALERT_KINDS = Object.freeze(["input_mismatch", "market_data_stale", "market_data_fallback", "webhook_rejected", "webhook_silent"]);
 
 async function dataPack(env, t, { now, refs }) {
   const db = env.DB;
@@ -753,15 +753,11 @@ async function dataPack(env, t, { now, refs }) {
     refs.push(...rows.slice(0, 10).map((r) => evRef("health_alerts", r.alert_key, { field: "status" })));
     return { n: rows.length, open: rows.filter((r) => r.status === "open").length, rows: rows.slice(0, 50).map((r) => ({ kind: r.kind, status: r.status, subject: digitsOut(r.subject), opened_at: r.opened_at, resolved_at: r.resolved_at })), note: "the data health alerts open now or opened in the last 30 days; numbers in the subject replaced by #" };
   });
-  const parity = await safe("engine_parity_registry", async () => {
-    const rows = ((await db.prepare("SELECT engine, status, consecutive_matches, updated_at FROM engine_parity_registry ORDER BY updated_at DESC LIMIT 50").all()).results) || [];
-    return { engines: rows.map((r) => ({ engine: r.engine, status: r.status, consecutive_matches: num(r.consecutive_matches), updated_at: r.updated_at })) };
-  });
   const tv = await safe("tv_call_budget", async () => {
     const rows = ((await db.prepare("SELECT day, used, daily, updated_at FROM tv_call_budget WHERE day >= ? ORDER BY day DESC LIMIT 14").bind(iso(now - PACK_LIMITS.short_days * DAY).slice(0, 10)).all()).results) || [];
     return { days: rows.map((r) => ({ day: r.day, used: num(r.used), daily: num(r.daily) })) };
   });
-  return { scope: { feed: t.feed }, stuck_states: stuck, alerts, parity, tv_budget: tv, prior: PRIOR };
+  return { scope: { feed: t.feed }, stuck_states: stuck, alerts, tv_budget: tv, prior: PRIOR };
 }
 
 /** Pure: neurons per day and source (the model is used for the rate only and never kept). */

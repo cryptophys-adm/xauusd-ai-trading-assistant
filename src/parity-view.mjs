@@ -35,7 +35,7 @@ export function shapeRegistry(rows) {
   }).sort((a, b) => Number(b.current) - Number(a.current) || a.base.localeCompare(b.base) || a.timeframe.localeCompare(b.timeframe));
 }
 
-/** GET /api/parity. */
+/** The parity view (S5: no longer served; `GET /api/parity` is gone. Kept for the parity scenario tests until S6 drops the tables). */
 export async function readParityView(db, { now = Date.now(), limit = 40 } = {}) {
   await ensureSchema(db);
   const rows = (await db.prepare("SELECT * FROM engine_parity_registry").all()).results || [];

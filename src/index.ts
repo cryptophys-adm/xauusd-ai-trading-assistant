@@ -100,7 +100,6 @@ export interface Env {
   AI_MODEL_REASONER: string;
   REQUIRED_SOURCES: string;
   INDICATOR_SOURCE?: string;
-  CALIBRATION_INTERVAL_DAYS?: string;
   ANALYSIS_TIMEFRAMES?: string;
   /** The news threads (owner 2026-11-15; MULTI_AGENT_BUS_ENABLED is read for one deploy when this is unset). */
   NEWS_THREADS_ENABLED?: string;
@@ -288,7 +287,6 @@ import { readAiUsage } from "./ai-usage.mjs";
 import { roomMemoEnabled } from "./room-memo.mjs";
 import { notifyH1Decision } from "./h1-telegram.mjs";
 import { runPendingMacroRooms, readMacroRoom } from "./macro-room.mjs";
-import { readParityView } from "./parity-view.mjs";
 import { readCrowdReplay } from "./tuning-replay.mjs";
 import { applyWeighting, weightingMessage, WEIGHTING_TIMEFRAMES } from "./weighting.mjs";
 import { eaSignal, eaStatus, storeHeartbeat, readControl } from "./ea-signal.mjs";
@@ -803,24 +801,6 @@ async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
 }
 
 
-
-/**
- * Calibration status per approved identity: when TradingView last confirmed it (a parity
- * comparison) and whether a calibration run is due (owner decision: webhooks are used for
- * periodic calibration, for example monthly, not for decisions).
- */
-function calibrationStatus(rows: JsonObject[], now: number, intervalDays: number): JsonObject {
-  const out: JsonObject = { interval_days: intervalDays, engines: {} as JsonObject, due: false };
-  for (const row of rows) {
-    const last = asText(row.last_compared_at);
-    const lastMs = Date.parse(last);
-    const days = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
-    const due = days === null || days >= intervalDays;
-    (out.engines as JsonObject)[asText(row.engine)] = { status: asText(row.status), consecutive_matches: Number(row.consecutive_matches) || 0, last_calibrated_at: last || null, days_since_calibration: days, calibration_due: due };
-    if (due) out.due = true;
-  }
-  return out;
-}
 
 /** How long a local_calculation_reconcile task retries while the other approved records become visible. */
 const LOCAL_TRIGGER_RETRY_MS = 4 * 60 * 1000;
@@ -2205,23 +2185,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       const r = await fetch(asText(env.INGEST_URL || "https://news.cryptophys.work").replace(/\/+$/, "") + "/health", { signal: AbortSignal.timeout(5000) });
       ingestion = await r.json();
     } catch { /* reported as unreachable */ }
+    // Parity removal S5: the parity registry, calibration and comparison keys are gone from local_lane. Only the
+    // legacy webhook mode still reads the last comparison, for its meaning of "fresh".
     let lastComparison: string | null = null;
-    let recentComparisons: unknown[] = [];
-    let registry: unknown[] = [];
-    let calibration: JsonObject = {};
-    try {
-      await ensureSchema(env.DB);
-      const row = await env.DB.prepare("SELECT MAX(compared_at) AS last FROM engine_parity_comparisons").first<{ last: string | null }>();
-      lastComparison = row?.last ?? null;
-      const recent = await env.DB.prepare("SELECT engine, candle_key, result, compared_at FROM engine_parity_comparisons ORDER BY compared_at DESC LIMIT 5").all<JsonObject>();
-      recentComparisons = recent.results || [];
-      const entries = await env.DB.prepare("SELECT engine, status, consecutive_matches, last_candle_key, last_result, updated_at FROM engine_parity_registry ORDER BY updated_at DESC LIMIT 10").all<JsonObject>();
-      registry = entries.results || [];
-      const perEngine = await env.DB.prepare(
-        "SELECT r.engine, r.status, r.consecutive_matches, (SELECT MAX(c.compared_at) FROM engine_parity_comparisons c WHERE c.engine = r.engine AND c.source_hash = r.source_hash AND c.implementation_hash = r.implementation_hash) AS last_compared_at FROM engine_parity_registry r WHERE r.status = 'approved' AND r.engine IN ('prophet', 'gmi', 'prophet_m5', 'gmi_m5')"
-      ).all<JsonObject>();
-      calibration = calibrationStatus(perEngine.results || [], Date.now(), Number(env.CALIBRATION_INTERVAL_DAYS) || 30);
-    } catch { /* registry unavailable */ }
+    if (indicatorSourceMode(env) === "webhook") {
+      try {
+        const row = await env.DB.prepare("SELECT MAX(compared_at) AS last FROM engine_parity_comparisons").first<{ last: string | null }>();
+        lastComparison = row?.last ?? null;
+      } catch { /* comparisons unavailable */ }
+    }
     // Local-primary: the lane is fresh while approved local records exist for a recent closed H1 candle.
     let localRecordFresh = false;
     try {
@@ -2242,21 +2214,13 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
         // after the 1H War Room's Consensus Discussion (owner decision 2026-11-07).
         models: { analyst: env.AI_MODEL_ANALYST, counselor: env.AI_MODEL_COUNSELOR, reasoner: env.AI_MODEL_REASONER },
         h1_chain: H1_CHAIN,
-        // local_computation arrives over the LocalComputationIngress RPC entrypoint;
-        // "fresh" means a local-vs-webhook parity comparison ran in the last 2 hours.
-        // A scheduled sweep (cron 10-59/15) re-reconciles the last closed H1 candles
-        // so a candle is not lost when the per-event tasks run before KV settles.
+        // local_computation arrives over the LocalComputationIngress RPC entrypoint.
         local_lane: {
           rpc_entrypoint: "LocalComputationIngress",
           indicator_source: indicatorSourceMode(env),
-          last_parity_comparison_at: lastComparison,
           // Local-primary: fresh = approved local records for a recent H1 candle. Legacy webhook
           // mode keeps the old meaning (a parity comparison in the last 2 hours).
-          fresh: indicatorSourceMode(env) === "local" ? localRecordFresh : Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS,
-          calibration,
-          parity_sweep_cron: PARITY_SWEEP_CRON,
-          recent_comparisons: recentComparisons,
-          registry
+          fresh: indicatorSourceMode(env) === "local" ? localRecordFresh : Number.isFinite(lastMs) && Date.now() - lastMs < LOCAL_LANE_FRESH_MS
         }
       },
       ingestion_worker: ingestion,
@@ -2427,15 +2391,6 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "ok", ledger, omega });
     } catch (error) {
       console.error("ledger_failed", error instanceof Error ? error.message : String(error));
-      return dashboardJson({ status: "error" }, 500);
-    }
-  }
-  if (url.pathname === "/api/parity") {
-    // Nexus System status (owner request 2026-11-08): every parity identity, the recent comparisons and the last 24 hours.
-    try {
-      return dashboardJson({ status: "ok", parity: await readParityView(env.DB) });
-    } catch (error) {
-      console.error("parity_view_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error" }, 500);
     }
   }
