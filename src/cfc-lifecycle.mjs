@@ -27,7 +27,9 @@ export const ARCHIVE_PAGE = Object.freeze({ default: 20, max: 50 });
 export const NEXT_ACTORS = Object.freeze(["owner", "council", "platform", "shadow", "none"]);
 /** The chain statuses, in the order a chain can pass them (platform states pass through as they come). */
 export const CHAIN_STATUSES = Object.freeze(["awaiting_approval", "approved", "rejected", "expired", "in_session", "awaiting_pick", "decided", "closed", "aborted",
-  "no_change", "shadow_test", "live", "rolled_back", "superseded", "handoff_pending", "handed_off"]);
+  "no_change", "shadow_test", "live", "rolled_back", "superseded", "veto_window", "vetoed", "handoff_pending", "handed_off"]);
+/** CFC-A PR2: the archive's scopes. active: a chain someone still acts on (next_actor not "none"); archive: the rest. */
+export const ARCHIVE_SCOPES = Object.freeze(["active", "archive"]);
 const PLATFORM_TERMINAL = Object.freeze(["rejected", "closed", "refused", "unfit", "reverted", "expired", "deployed", "deployed_unmeasured"]);
 const RUNNING = Object.freeze(["positions", "rebuttals", "synthesis"]);
 
@@ -130,6 +132,9 @@ export function chainState({ suggestion = null, session = null, proposal = null,
     // A live knob is still watched by its rollback check.
     if (st === "live") return { status: "live", source: "proposal", next_actor: "shadow" };
     if (st === "handoff_pending") return { status: "handoff_pending", source: "proposal", next_actor: "platform" };
+    // CFC-A2: a council-picked task waits for the owner's veto (Close) before its hand-off; a vetoed one ends there.
+    if (st === "veto_window") return { status: "veto_window", source: "proposal", next_actor: "owner" };
+    if (st === "vetoed") return { status: "vetoed", source: "proposal", next_actor: "none" };
     return { status: st, source: "proposal", next_actor: "none" };
   }
   if (session) {
@@ -174,6 +179,8 @@ const sessionView = (s, counts) => s && ({
 const proposalView = (p, ps) => p && ({
   id: p.id, kind: p.kind, title: p.title ?? null, state: p.state, knob: p.knob ?? null, from: p.from_value ?? null, value: p.value ?? null,
   decided_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : "owner", decided_at: msIso(p.accepted_ms), updated_at: msIso(p.updated_ms), note: p.note ?? null,
+  // CFC-A2: the council's own pick, its rationale and the seat tally (null for the owner's pick).
+  council_decision: parse(p.decision_json, null),
   platform: ps ? { state: ps.state, at: ps.at ?? null, reason: ps.reason ?? null, close_code: ps.refs?.close_code ?? null, history: ps.history ?? [] } : null
 });
 
@@ -182,14 +189,14 @@ const proposalView = (p, ps) => p && ({
  * with one authoritative status and the next actor. Reads the last 90 days, bounded per table; pages by an offset
  * cursor. A session the owner opened on free text or a topic of their own has no suggestion: its topic is the session's.
  */
-export async function readCouncilArchive(env, { cursor = null, limit = ARCHIVE_PAGE.default, now = Date.now() } = {}) {
+export async function readCouncilArchive(env, { cursor = null, limit = ARCHIVE_PAGE.default, scope = null, status = null, now = Date.now() } = {}) {
   const db = env.DB;
   await ensureCfcSchema(db);
   await ensureSessionSchema(db);
   const since = now - ARCHIVE_DAYS * DAY;
   const sugg = (await db.prepare(`SELECT ${SUGGESTION_COLS} FROM cfc_suggestions WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?`).bind(iso(since), ARCHIVE_READ).all()).results ?? [];
   const sess = (await db.prepare("SELECT id, topic_key, topic_text, type, state, participants, options, reason, created_by, created_ms, updated_ms FROM council_sessions WHERE created_ms >= ? ORDER BY created_ms DESC LIMIT ?").bind(since, ARCHIVE_READ).all()).results ?? [];
-  const props = (await db.prepare("SELECT id, session_id, kind, title, knob, from_value, value, state, note, accepted_by, accepted_ms, updated_ms FROM council_proposals WHERE accepted_ms >= ? ORDER BY accepted_ms DESC LIMIT ?").bind(since, ARCHIVE_READ).all()).results ?? [];
+  const props = (await db.prepare("SELECT id, session_id, kind, title, knob, from_value, value, state, note, accepted_by, accepted_ms, updated_ms, decision_json FROM council_proposals WHERE accepted_ms >= ? ORDER BY accepted_ms DESC LIMIT ?").bind(since, ARCHIVE_READ).all()).results ?? [];
   const sessById = new Map(sess.map((s) => [s.id, s]));
   const propBySession = new Map();
   for (const p of props) if (!propBySession.has(p.session_id)) propBySession.set(p.session_id, p);
@@ -207,35 +214,48 @@ export async function readCouncilArchive(env, { cursor = null, limit = ARCHIVE_P
     c.updated_ms = times.length ? Math.max(...times) : 0;
   }
   chains.sort((a, b) => b.updated_ms - a.updated_ms || a.chain_id.localeCompare(b.chain_id));
+  // CFC-A PR2: every chain's status first (the platform's latest state for each handed-off task, one bounded read), so
+  // the counts cover the whole window and scope / status filter before the page is cut.
+  const handed = chains.map((c) => c.proposal).filter((p) => p && p.state === "handed_off").map((p) => p.id);
+  const platform = handed.length ? await platformStates(env, handed) : {};
+  for (const c of chains) c.state = chainState({ suggestion: c.suggestion, session: c.session, proposal: c.proposal, platform: c.proposal ? platform[c.proposal.id] ?? null : null, now });
+  const counts = { total: chains.length, active: 0, archive: 0, by_status: {}, by_next_actor: {} };
+  for (const c of chains) {
+    counts[c.state.next_actor === "none" ? "archive" : "active"] += 1;
+    counts.by_status[c.state.status] = (counts.by_status[c.state.status] ?? 0) + 1;
+    counts.by_next_actor[c.state.next_actor] = (counts.by_next_actor[c.state.next_actor] ?? 0) + 1;
+  }
+  const sc = ARCHIVE_SCOPES.includes(scope) ? scope : null;
+  const want = typeof status === "string" && /^[a-z_]{1,40}$/.test(status) ? status : null;
+  const shown = chains.filter((c) => (!sc || (sc === "active") === (c.state.next_actor !== "none")) && (!want || c.state.status === want));
   const size = Math.min(ARCHIVE_PAGE.max, Math.max(1, Number(limit) || ARCHIVE_PAGE.default));
   const offset = Math.max(0, Number.parseInt(String(cursor ?? "0"), 10) || 0);
-  const page = chains.slice(offset, offset + size);
+  const page = shown.slice(offset, offset + size);
   // Only the page's sessions and proposals are read further: message counts and the platform's latest state.
   const sids = page.map((c) => c.session?.id).filter(Boolean);
-  const counts = new Map();
+  const msgCounts = new Map();
   if (sids.length) {
     const rows = (await db.prepare(`SELECT session_id, round, stance, COUNT(*) AS n FROM council_messages WHERE session_id IN (${sids.map(() => "?").join(",")}) GROUP BY session_id, round, stance`).bind(...sids).all()).results ?? [];
-    for (const r of rows) (counts.get(r.session_id) ?? counts.set(r.session_id, []).get(r.session_id)).push(r);
+    for (const r of rows) (msgCounts.get(r.session_id) ?? msgCounts.set(r.session_id, []).get(r.session_id)).push(r);
   }
-  const handed = page.map((c) => c.proposal).filter((p) => p && p.state === "handed_off").map((p) => p.id);
-  const platform = handed.length ? await platformStates(env, handed) : {};
   const items = page.map((c) => {
     const ps = c.proposal ? platform[c.proposal.id] ?? null : null;
-    const st = chainState({ suggestion: c.suggestion, session: c.session, proposal: c.proposal, platform: ps, now });
+    const st = c.state;
     const g = c.suggestion;
     const topicKey = g?.topic_key ?? c.session?.topic_key ?? null;
     return {
       chain_id: c.chain_id, status: st.status, status_source: st.source, next_actor: st.next_actor, updated_at: msIso(c.updated_ms),
       topic: { key: topicKey, type: g?.type ?? c.session?.type ?? null, origin: g ? "suggestion" : "owner",
         ...(g ? { suggestion_id: Number(g.id), rule: g.rule, status: effectiveStatus(g, now), created_at: g.created_at, expires_at: g.expires_at ?? suggestionExpiry(g.created_at, g.last_seen_at), decided_at: g.decided_at ?? null, decided_by: g.decided_by ?? null } : {}) },
-      session: sessionView(c.session, counts.get(c.session?.id) ?? []),
+      session: sessionView(c.session, msgCounts.get(c.session?.id) ?? []),
       proposal: proposalView(c.proposal, ps)
     };
   });
   return {
-    items, next_cursor: offset + size < chains.length ? String(offset + size) : null, total: chains.length, window_days: ARCHIVE_DAYS,
+    items, next_cursor: offset + size < shown.length ? String(offset + size) : null, total: shown.length, window_days: ARCHIVE_DAYS,
+    scope: sc, status_filter: want, counts,
     vocab: { chain_status: CHAIN_STATUSES, platform_states: "a handed-off task shows the platform's latest state (council_proposal_updates)", next_actor: NEXT_ACTORS, suggestion_status: SUGGESTION_STATUSES,
-      close_code: "the platform's short code for why a task reached a terminal state, passed through as sent", decided_by: ["owner", "council", "system"] },
+      close_code: "the platform's short code for why a task reached a terminal state, passed through as sent", decided_by: ["owner", "council", "system", "legacy"], scope: ARCHIVE_SCOPES },
     as_of: iso(now)
   };
 }

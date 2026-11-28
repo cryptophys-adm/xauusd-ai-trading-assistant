@@ -11,4 +11,5 @@ export function decideSuggestion(env: unknown, input?: { suggestion_id?: unknown
 export function expireStaleProposals(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
 export function chainState(input?: Record<string, any>): { status: string; source: string | null; next_actor: string };
 export function sessionProgress(session: Record<string, any> | null, counts?: Array<Record<string, any>>): Record<string, any>;
-export function readCouncilArchive(env: unknown, options?: { cursor?: string | null; limit?: number; now?: number }): Promise<Record<string, any>>;
+export function readCouncilArchive(env: unknown, options?: { cursor?: string | null; limit?: number; scope?: string | null; status?: string | null; now?: number }): Promise<Record<string, any>>;
+export const ARCHIVE_SCOPES: readonly string[];

@@ -2604,7 +2604,7 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
   }
   if (url.pathname === "/api/council/archive") {
     // CFC-A4: every topic's chain (topic -> session -> proposal), newest change first, one status and the next actor each.
-    try { return dashboardJson({ status: "ok", ...(await readCouncilArchive(env, { cursor: url.searchParams.get("cursor"), limit: Number(url.searchParams.get("limit") || "20") || 20 })) }); }
+    try { return dashboardJson({ status: "ok", ...(await readCouncilArchive(env, { cursor: url.searchParams.get("cursor"), limit: Number(url.searchParams.get("limit") || "20") || 20, scope: url.searchParams.get("scope"), status: url.searchParams.get("status") })) }); }
     catch (error) { console.error("council_archive_read_failed", error instanceof Error ? error.message : String(error)); return dashboardJson({ status: "error" }, 500); }
   }
   if (url.pathname === "/api/council/sessions") {
