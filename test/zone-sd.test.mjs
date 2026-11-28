@@ -457,7 +457,7 @@ test("ZS-17 the era: ERA_SWITCHES has zone_sd; at its default it adds nothing (t
 });
 
 test("ZS-18 the hashes: ENGINE_BEHAVIOUR_HASH (V14) does not move; ENGINE_CODE gains Z6's functions and the code hash moves", async () => {
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineBehaviourSource()), ENGINE_BEHAVIOUR_HASH, "the fixtures carry no '/sd' token: they replay as before");
   assert.doesNotMatch(engineBehaviourSource(), /\/sd[",]/);
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);

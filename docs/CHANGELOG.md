@@ -5,6 +5,26 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-27
+- fix(engine): the liquidity lens's rollover window follows US daylight time (RQ1 variant B; owner 2026-11-28 via the orchestrator, "Sekarang, sebelum buka (Recommended)"). **A recorded exception: a new parity era at its deploy.**
+  - **The change.** `inRollover` (`src/liquidity-lens.mjs`) is now `rolloverQuarantineAt`: 16:55-18:15 New York time, the clock of Omega's entry quarantine (`isRolloverQuarantine`, #663). Before, it was a fixed 21:55-22:15 UTC.
+  - **What reads it.** The 1m fast-protect layer's noise rules and the 1m re-entry, through `fastNoise`, and the lens's spread baseline.
+  - **Its effect.**
+    - In winter the window covers 21:55-23:15 UTC, so the first 15 minutes after the daily reopen are quarantined as `rollover` (before: `reopen` for 5 minutes, then the warm-up).
+    - In summer it covers 20:55-22:15 UTC.
+    - The pm-fast rollover text now says "16:55-18:15 New York time".
+  - **Hashes.**
+    - `ENGINE_CODE_HASH` c6708137… → 0caa6260….
+    - `ENGINE_BEHAVIOUR_HASH` ecfe3f90… → d0c07f02…: the pm-fast fixtures' reopen cases now read `rollover`. The recorded-exception note is beside the constant.
+    - The new behaviour hash starts a new parity era at the deploy, so the v4 parity count restarts.
+  - **Rollback.** No switch restores the old window; the rollback is a revert of this PR.
+  - **Tests.** test/pm-fast.test.mjs:
+    - F4: noise/reopen reads `rollover`.
+    - F7: on the 2026-11-22 reopen, 15 rollover minutes then 4 of warm-up. The catch-up bar is held by the rollover.
+    - The minute-by-minute winter and summer windows.
+    - The hash pins move in feature-switches, room-waive, zone-types, zone-aim, zone-ahead and pm-line-breaker.
+    - test/reentry-1m.test.mjs R7: the daily and weekly reopen cases and 23:00-23:14 read `rollover`. R13: the off fingerprint before RE1 is recomputed (d0def5bb… → fae163f3…).
+    - test/limit-supersede.test.mjs SS1-9: the off fingerprint before SS1 is recomputed (39c10287… → e1b295a4…).
+    - test/positioning-liquidity.test.mjs PL26: the backfill replay scores 40 of 94, one more scored reading.
 - docs(ssot): drift fixes SD1 (orchestrator 2026-11-28, docs only). `docs/SSOT.md` now says what the code and production say:
   - `POST /webhook` answers 410 since S3, and the AI Worker's role no longer starts with "Webhooks".
   - The news Worker's cron is `:04` (`4 * * * *`), not `:05`.

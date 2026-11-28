@@ -113,7 +113,7 @@ export function fastNoise(bars, { now, knobs = PM_FAST_1M.intraday } = {}) {
   if (!(closeMs <= now) || now - closeMs > knobs.fresh_ms) return { code: "stale", text: `the latest closed broker M1 bar closed at ${hhmm(closeMs)} UTC, more than ${knobs.fresh_ms / 1000} s ago` };
   for (const ms of [last.t, now]) {
     if (goldPausedAt(ms)) return { code: "market_paused", text: "gold is not trading" };
-    if (inRollover(ms)) return { code: "rollover", text: "the rollover quarantine 21:55-22:15 UTC" };
+    if (inRollover(ms)) return { code: "rollover", text: "the rollover quarantine 16:55-18:15 New York time" };
     const d = new Date(ms);
     if (d.getUTCHours() === 23 && d.getUTCMinutes() < knobs.reopen_min) return { code: "reopen", text: `the reopen quarantine 23:00-23:${String(knobs.reopen_min).padStart(2, "0")} UTC` };
     for (let k = 1; k <= knobs.reopen_min; k++) if (goldPausedAt(ms - k * M1)) return { code: "reopen", text: `the first ${knobs.reopen_min} minutes after the reopen` };

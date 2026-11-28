@@ -121,7 +121,7 @@ test("F3. loss reduction: an impulse beyond the 5m swing, not reclaimed: the sto
 });
 
 test("F4. noise: the rollover, the reopen, the market paused, a reconnect batch, a stale bar, the warm-up and a spread spike take no fast action", () => {
-  for (const [name, code] of [["noise/no_stream", "no_stream"], ["noise/stale", "stale"], ["noise/rollover", "rollover"], ["noise/reopen", "reopen"], ["noise/market_paused", "market_paused"],
+  for (const [name, code] of [["noise/no_stream", "no_stream"], ["noise/stale", "stale"], ["noise/rollover", "rollover"], ["noise/reopen", "rollover"], ["noise/market_paused", "market_paused"],
     ["noise/reconnect", "reconnect"], ["noise/warmup", "warmup"], ["noise/no_atr", "no_atr"]]) {
     const f = run(name);
     assert.deepEqual([f.status, f.code], ["inert", code], name);
@@ -134,12 +134,19 @@ test("F4. noise: the rollover, the reopen, the market paused, a reconnect batch,
   assert.equal(fastProtect({ ...caseOf("tp/legacy_lock"), now: close + 91_000 }).code, "stale");
   // A bar still forming (its close after now) is never read.
   assert.equal(fastProtect({ ...caseOf("tp/legacy_lock"), now: close - 1 }).status, "none", "the bar before it is the last closed one");
-  // The quarantine windows, minute by minute (a Tuesday): 21:55-22:15 rollover, 23:00-23:05 reopen.
+  // The quarantine windows, minute by minute (a Tuesday). Variant B (owner 2026-11-28): the rollover is 16:55-18:15 New
+  // York time (rolloverQuarantineAt), 21:55-23:15 UTC in winter, so it covers the reopen's first minutes too.
   const minute = (iso) => fastNoise([{ t: Date.parse(iso) - M1, o: 1, h: 1, l: 1, c: 1 }], { now: Date.parse(iso) + 1000 });
   assert.equal(minute("2026-11-24T21:55:00Z").code, "rollover");
   assert.equal(minute("2026-11-24T21:54:00Z").code, "warmup", "21:53 is outside the rollover");
-  assert.equal(minute("2026-11-24T23:05:00Z").code, "reopen", "the 23:04 bar");
-  assert.equal(minute("2026-11-24T23:06:00Z").code, "warmup");
+  assert.equal(minute("2026-11-24T23:05:00Z").code, "rollover", "the 23:04 bar: inside 23:00-23:15");
+  assert.match(minute("2026-11-24T23:05:00Z").text, /16:55-18:15 New York time/);
+  assert.equal(minute("2026-11-24T23:15:00Z").code, "rollover", "the 23:14 bar is the window's last");
+  assert.equal(minute("2026-11-24T23:16:00Z").code, "warmup");
+  // Summer (US daylight time): 20:55-22:15 UTC.
+  assert.equal(minute("2026-07-14T20:55:00Z").code, "rollover");
+  assert.equal(minute("2026-07-14T20:54:00Z").code, "warmup");
+  assert.equal(minute("2026-07-14T22:16:00Z").code, "warmup");
   // The spread-spike deferral: a trigger in a spike is held (and recorded), the close of the loss branch too.
   assert.match(run("tp/held_spike").why, /held: the spread-spike deferral holds modifications/);
   assert.equal(run("cut/held_spike").status, "held");
@@ -236,15 +243,18 @@ test("F7. the 2026-11-22 reopen replayed minute by minute: no fast action or rec
       const input = shape === "live" ? sub.filter((b) => b.r <= now) : sub.map(({ r, ...b }) => b);
       const f = fastProtect({ position: reopenLong, meta: reopenLongMeta, bars: input, now, sym: SYM });
       const minute = sub.at(-1).t;
-      if (minute < reopen + 5 * M1) assert.deepEqual([f.status, f.code], ["inert", "reopen"], `${shape} ${new Date(minute).toISOString()}`);
+      // Variant B (owner 2026-11-28): the rollover quarantine runs to 18:15 New York time (23:15 UTC in winter), so it
+      // covers the reopen's own 5-minute quarantine; both are inert.
+      if (minute < reopen + 15 * M1) assert.deepEqual([f.status, f.code], ["inert", "rollover"], `${shape} ${new Date(minute).toISOString()}`);
       if (minute < reopen + 19 * M1) assert.equal(f.status, "inert", `${shape} ${new Date(minute).toISOString()}: ${f.code}`);
       seen[f.code ?? f.status] = (seen[f.code ?? f.status] ?? 0) + 1;
     }
-    assert.deepEqual([seen.reopen, seen.warmup], [5, 14], `${shape}: ${JSON.stringify(seen)}`);
+    assert.deepEqual([seen.rollover, seen.reopen, seen.warmup], [15, undefined, 4], `${shape}: ${JSON.stringify(seen)}`);
   }
-  // The weekend's catch-up bar (Friday 21:59, received at 23:00:40): the reconnect quarantine would hold too.
+  // The weekend's catch-up bar (Friday 21:59, received at 23:00:40): since variant B the rollover quarantine (to 23:15 UTC
+  // in winter) holds it first; the reconnect quarantine (noise/reconnect in F4) would hold it too.
   const all = reopenBars(), at = Date.parse("2026-11-22T23:02:00Z");
-  assert.equal(fastNoise(all.filter((b) => b.t < at), { now: at + 1000, knobs: { ...PM_FAST_1M.intraday, reopen_min: 0 } }).code, "reconnect");
+  assert.equal(fastNoise(all.filter((b) => b.t < at), { now: at + 1000, knobs: { ...PM_FAST_1M.intraday, reopen_min: 0 } }).code, "rollover");
   // The teeth: the same bars without the weekend act within the first minutes.
   const tue = reopenBars({ contiguous: true });
   const acted = [];

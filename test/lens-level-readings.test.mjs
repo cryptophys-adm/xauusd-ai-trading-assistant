@@ -175,7 +175,7 @@ test("LR-6 LENS_LEVEL_READINGS: \"off\" records and scores neither; on (default)
 
 test("LR-7 the hashes: V14 unchanged; ENGINE_CODE_HASH moves with manageIntents (the ladder tag) only", async () => {
   assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH);
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.notEqual(ENGINE_CODE_HASH, "b4077f53eef256e3966ae214c126624fb1e8edc39456c739fdb99012ec3d306a", "B19 moved it (manageIntents' ladder tag)");
 });

@@ -266,9 +266,9 @@ test("AD-10 CPU: an adoption build reuses the tick's core run (no core of its ow
 
 test("AD-11 the hashes: V14 and ENGINE_CODE_HASH unchanged (no Omega or Position Manager module changed); no hashed local-engine file edited", async () => {
   assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH);
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "c670813712ce7d4683331d9301a4e6fa15b64fee28729304eaaeb28a92f24e22");
+  assert.equal(ENGINE_CODE_HASH, "0caa626023a8c7838f430273db672b5d28c9b45df8dee3d6bb4ef89eb0454541");
   for (const id of ["prophet", "gmi", "gmi_hud", "prophet_m15", "prophet_h4", "prophet_d1"]) {
     for (const f of ENGINE_PROVENANCE[id].files.implementation) assert.equal(createHash("sha256").update(readFileSync(new URL(f.path, ROOT))).digest("hex"), f.sha256, `${id}: ${f.path}`);
   }

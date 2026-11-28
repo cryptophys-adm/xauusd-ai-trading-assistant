@@ -181,7 +181,7 @@ test("ML-6 [E5] the Position Council: with the same signal and the lens on, the 
 
 test("ML-7 the hashes: V14 (ENGINE_BEHAVIOUR_HASH) does not move; ENGINE_CODE gains managementSpread and the code hash moves", async () => {
   assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH);
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.notEqual(ENGINE_CODE_HASH, "12cdf5a54d2fdd389d29780a142b1f3e0eb3844d210259131bdee5bc0f33e81b", "B17 moved it (brokerKeyLevels, manageIntents, positionFacts, positionAction, runPositionManager, replayOmega4)");
 });
