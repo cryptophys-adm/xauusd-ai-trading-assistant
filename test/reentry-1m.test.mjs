@@ -21,7 +21,8 @@ import {
   T0, SYM, EXIT_I, sellBars, buyBars, sellSetup, buySetup, SELL_SIGNAL, BUY_SIGNAL, nowAfter, checkCases, setupCases, planCases, reentryReplayScenarios, P_TRIGGER, P_SIGNAL
 } from "./fixtures/reentry-1m.mjs";
 
-const BEFORE_RE1_HASH = "d0def5bb1a982e391d9491ff1e7a8e13289f700db5e8a0490c2f8ffccff55120";
+// Since variant B (2026-11-28) the off fingerprint is recomputed with the lens rollover on the New York clock (before: d0def5bb…).
+const BEFORE_RE1_HASH = "fae163f3c05b6f7711421c2235259914b260b52d3feb0311df026840ada6b6ea";
 const check = (name, over = {}) => reentryCheck({ ...checkCases().find(([n]) => n === name)[1], ...over });
 const plan = (name) => planIntents(planCases().find(([n]) => n === name)[1]);
 const opened = (out) => out.intents.filter((it) => it.kind === "open" && isReentryId(it.id));
@@ -156,11 +157,13 @@ test("R6. risk: at most min(the profile's cap, the original's money risk); the s
 
 test("R7. blocked: the rollover, the reopen 23:00-23:15 and the weekly reopen, the spread above 60 or twice the hour's median, the release window; no re-entry in a quarantine", () => {
   for (const [n, status, code] of [["spread", "blocked", "spread"], ["spread_spike", "blocked", "spread_spike"], ["spread_unmeasured", "blocked", "spread_unmeasured"], ["release_window", "blocked", "release_window"],
-    ["rollover", "inert", "rollover"], ["reopen_daily", "inert", "reopen"], ["reopen_weekly", "inert", "reopen"], ["market_paused", "inert", "market_paused"], ["reconnect", "inert", "reconnect"], ["stale", "inert", "stale"], ["warmup", "inert", "warmup"], ["no_stream", "inert", "no_stream"]]) {
+    ["rollover", "inert", "rollover"], ["reopen_daily", "inert", "rollover"], ["reopen_weekly", "inert", "rollover"], ["market_paused", "inert", "market_paused"], ["reconnect", "inert", "reconnect"], ["stale", "inert", "stale"], ["warmup", "inert", "warmup"], ["no_stream", "inert", "no_stream"]]) {
     const r = check(n);
     assert.deepEqual([r.status, r.code], [status, code], n);
   }
-  assert.match(check("reopen_daily").why, /23:00-23:15 UTC/);
+  // Variant B (owner 2026-11-28): the rollover quarantine runs to 18:15 New York time (23:15 UTC in winter) and holds the
+  // reopen's minutes first; RE1's own 23:00-23:15 reopen window still holds them where the rollover does not.
+  assert.match(check("reopen_daily").why, /16:55-18:15 New York time/);
   // RE1's reopen window is longer than PM-1M's 5 minutes: 23:12 is held here; 23:16 is free (the teeth).
   assert.equal(check("reopen_passed").status, "trigger");
   // Minute by minute through the reopen, no trigger before 23:15.
@@ -169,7 +172,7 @@ test("R7. blocked: the rollover, the reopen 23:00-23:15 and the weekly reopen, t
     const shift = Date.parse("2026-11-24T23:00:00Z") + m * M1 - go.bars.at(-1).t;
     const bars = go.bars.map((b) => ({ ...b, t: b.t + shift }));
     const r = reentryCheck({ ...go, bars, now: nowAfter(bars), setup: { ...go.setup, exit_ms: go.setup.exit_ms + shift, issued_ms: go.setup.issued_ms + shift } });
-    assert.deepEqual([r.status, r.code], ["inert", "reopen"], `23:${String(m).padStart(2, "0")}`);
+    assert.deepEqual([r.status, r.code], ["inert", "rollover"], `23:${String(m).padStart(2, "0")}`);
   }
 });
 

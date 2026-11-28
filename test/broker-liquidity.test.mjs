@@ -240,7 +240,7 @@ test("KL18-10 the model's features leave room_liquidity out; the council sees it
   assert.match(text, /room_liquidity/);
   assert.doesNotMatch(text.match(/lens B's liquidity[^"]*/)?.[0] ?? "", /\d{3,5}/);
   assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH);
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.notEqual(ENGINE_CODE_HASH, "9766e73248bbda79d81d45cb3770e9048181462ffffa32109b5ed02d720649e0", "B18 moved it (brokerKeyLevels, managementFields)");
   assert.ok(ENGINE_CODE["ea-signal"][1].includes("managementFields"));

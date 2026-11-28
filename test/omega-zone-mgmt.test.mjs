@@ -501,7 +501,7 @@ test("Z3a-15 the typing flag line: once per KEY_LEVEL_ZONE_TYPES or ZONE_SOURCES
 
 test("Z3a-16 the hashes: V14 holds unedited (untyped fixtures at defaults); ENGINE_CODE gains typedLevels and the code hash moves", async () => {
   assert.equal(await sha256Hex(engineBehaviourSource()), ENGINE_BEHAVIOUR_HASH);
-  assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
+  assert.equal(ENGINE_BEHAVIOUR_HASH, "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65");
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
   assert.notEqual(ENGINE_CODE_HASH, "6c0f8142fca57b7ae1f7f671b1e0c540df01a0139ed92917fa6af95a65c70162");
   for (const n of ["typedLevels", "typedDecisive", "zoneGiveback", "zoneMgmtOn", "ZONE_MGMT_MODES", "ZONE_GIVEBACK_R", "ZONE_MGMT_RATE_MS", "keyLevelPlan", "brokerKeyLevels", "manageIntents", "settingsFrom", "OMEGA_DEFAULTS"]) assert.ok(ENGINE_CODE["omega-engine"][1].includes(n), n);
