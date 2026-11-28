@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { seedEnv, seedTrades } from "./support/cfc-fixtures.mjs";
-import { startSession, closeSession, runSessionStep, readSession, setSessionsSwitch, retryProposalHandoffs, councilPick, resetSessionSchemaForTests, VETO_WINDOW_MS, OPTIONS_SCHEMA, OPTIONS_SCHEMA_LEGACY } from "../src/cfc-session.mjs";
+import { startSession, closeSession, runSessionStep, readSession, setSessionsSwitch, retryProposalHandoffs, councilPick, resetSessionSchemaForTests, VETO_WINDOW_MS, OPTIONS_SCHEMA, OPTIONS_SCHEMA_LEGACY, COUNCIL_QUORUM } from "../src/cfc-session.mjs";
 import { chainState, readCouncilArchive, ARCHIVE_SCOPES } from "../src/cfc-lifecycle.mjs";
 import { resetAiUsageSchemaCacheForTests } from "../src/ai-usage.mjs";
 
@@ -19,34 +19,44 @@ async function setup(over = {}) {
 const enqueue = async () => {};
 // Seats: the Risk Manager opposes, the rest support (5 of 6), unless `oppose` names more. The moderator's options come
 // from `options`.
-function model({ options, oppose = ["Risk"] } = {}) {
+function model({ options, oppose = ["Risk"], silent = [] } = {}) {
   return async (_env, o) => {
     if (o.schemaName === "cfc_synthesis") return { status: "answered", obj: { summary: "s", options } };
     const seat = /You are ([^,]+),/.exec(o.messages[0].content)?.[1] ?? "?";
+    if (silent.some((x) => seat.includes(x))) return { status: "failed" };
     return { status: "answered", obj: { stance: oppose.some((x) => seat.includes(x)) ? "oppose" : "support", opinion: `I think so (${seat}).`, proposal: "p", refs: [], reply_to: [] } };
   };
 }
 const TASK = [{ option_id: "wider_lock", kind: "repository_task", title: "Lock SL+ one level later", hypothesis: "fewer early exits", change: "SL+ after the second key level", risk: "give-backs", spec: "move the SL+ lock to the second key level; measure R per trade" }];
 const KNOB = [{ option_id: "rrr", kind: "policy_parameter", title: "Ask more reward intraday", hypothesis: "h", change: "c", risk: "r", knob: "decision.min_rrr.intraday", value: 1.8 }];
-async function runToSynthesis(env, { options, oppose, now = Date.now() } = {}) {
+async function runToSynthesis(env, { options, oppose, silent, now = Date.now() } = {}) {
   const { session_id } = await startSession(env, { topic_key: "strategy:zone_pullback:exits", enqueue, now });
   const published = [];
   const publish = async (_e, agent, report) => { published.push({ agent, report }); return { outcome: "success", report_id: `rpt_${published.length}` }; };
-  const call = model({ options, oppose });
+  const call = model({ options, oppose, silent });
   for (const step of ["positions", "rebuttals"]) await runSessionStep(env, { session_id, step }, { call, publish, enqueue, now });
   const syn = await runSessionStep(env, { session_id, step: "synthesis" }, { call, publish, enqueue, now });
   return { session_id, syn, published, publish };
 }
 const proposalOf = (env, session_id) => env.DB.prepare("SELECT * FROM council_proposals WHERE session_id = ?").bind(session_id).first();
 
-test("AD-1 councilPick: the top option when 4 of 6 support (2/3 of the seats that spoke) and it is valid; otherwise no_change", () => {
+test("AD-1 councilPick: a quorum of 4 seats; the top option when support >= max(4, 2/3 of those who spoke) and it is valid; otherwise no_change", () => {
   const seats = (support, other = 0) => [...Array(support).fill({ stance: "support" }), ...Array(other).fill({ stance: "oppose" })];
   const task = { option_id: "t", kind: "repository_task", spec: "build it" };
   const knob = { option_id: "k", kind: "policy_parameter", knob: "decision.min_rrr.intraday", value: 1.8 };
   const nc = { option_id: "no_change", kind: "no_change" };
-  assert.equal(councilPick([task, nc], seats(4, 2)).option_id, "t", "4 of 6");
-  assert.equal(councilPick([task, nc], seats(3, 3)).option_id, "no_change", "3 of 6 is not enough");
-  assert.deepEqual([councilPick([task, nc], seats(2, 1)).option_id, councilPick([task, nc], seats(2, 1)).need], ["t", 2], "fewer spoke: 2 of 3");
+  assert.equal(COUNCIL_QUORUM, 4);
+  // Fewer than 4 seats spoke: no auto-decision, whatever they said (the owner picks).
+  for (const n of [1, 3]) {
+    const q = councilPick([task, nc], seats(n));
+    assert.deepEqual([q.quorum, q.option_id, q.decided_by], [false, null, null], `${n} spoke, all support`);
+    assert.match(q.rationale, new RegExp(`^no quorum \\(${n} spoke; needs 4\\)$`));
+  }
+  assert.deepEqual([councilPick([task, nc], seats(4)).option_id, councilPick([task, nc], seats(4)).need], ["t", 4], "4 spoke, all support: max(4, 3) = 4");
+  assert.equal(councilPick([task, nc], seats(4, 2)).option_id, "t", "6 spoke, 4 support: exactly 4/6");
+  const three = councilPick([task, nc], seats(3, 3));
+  assert.deepEqual([three.quorum, three.option_id, three.need], [true, "no_change", 4], "6 spoke, 3 support: quorum, too little support");
+  assert.equal(councilPick([task, nc], seats(4, 1)).need, 4, "5 spoke: max(4, ceil(10/3)) = 4");
   assert.equal(councilPick([knob, nc], seats(5, 1)).option_id, "k", "a knob inside its bounds");
   const bad = councilPick([{ ...knob, value: 9 }, nc], seats(6));
   assert.deepEqual([bad.option_id, bad.valid], ["no_change", false]);
@@ -103,6 +113,14 @@ test("AD-4 auto: a knob goes to its shadow test at once; too little support is n
   const n = await runToSynthesis(env, { options: TASK, oppose: ["Risk", "Technical", "Projection"] });
   assert.deepEqual([n.syn.pick, n.syn.proposal.state], ["no_change", "closed"]);
   assert.match(JSON.parse((await proposalOf(env, n.session_id)).decision_json).rationale, /^no_change: 3 of 6 seats support \(needs 4\)/);
+  // Only 3 of the 6 seats speak: no quorum, so no auto-decision; the session waits for the owner and says why.
+  const q = await runToSynthesis(env, { options: TASK, silent: ["Projection", "Trade", "Interstellar"] });
+  assert.deepEqual([q.syn.status, q.syn.pick, q.syn.quorum, q.syn.spoke], ["awaiting_owner", null, false, 3]);
+  const qs = await readSession(env, q.session_id);
+  assert.deepEqual([qs.state, qs.reason], ["awaiting_owner", "no quorum (3 of 6 spoke)"]);
+  assert.equal(await proposalOf(env, q.session_id), null, "no proposal: the owner picks");
+  const qa = await readCouncilArchive(env, { scope: "active" });
+  assert.equal(qa.items.find((c) => c.chain_id === `session:${q.session_id}`).next_actor, "owner");
   const on = await setup({ CFC_MODE: "on" });
   const o = await runToSynthesis(on, { options: TASK });
   assert.equal(o.syn.status, "awaiting_owner", "only auto decides by itself");

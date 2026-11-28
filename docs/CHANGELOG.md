@@ -6,7 +6,7 @@ what changed and when, by merge commit and PR.
 
 ## 2026-11-28
 - feat(council): CFC-A PR2, the council decides by itself in CFC_MODE "auto" (A2 + A3). Production stays "on", so nothing changes until the owner switches it.
-  - `councilPick` picks the top option other than `no_change` when the support threshold and the validity check both hold (thresholds in SSOT), else `no_change`. It runs `acceptOption` as `council` and stores the rationale and tally in `council_proposals.decision_json`.
+  - `councilPick` needs a quorum of 4 seats that spoke (`COUNCIL_QUORUM`, the orchestrator's review); without it the session stays `awaiting_owner` with the reason `no quorum (n of m spoke)` and the owner picks. With a quorum it picks the moderator's top option other than `no_change` when support reaches max(4, ⌈2/3 of the seats that spoke⌉) and the option is valid, else `no_change`. The stance tally is the position round's, so `support` means support for acting on the topic; a per-option tally is a later item. It runs `acceptOption` as `council` and stores the rationale and tally in `council_proposals.decision_json`.
   - A council-picked `repository_task` waits a 2 h veto window (`veto_window`). The owner's Close inside it vetoes the task (`vetoed`); otherwise the hourly hand-off sends it after the window. A knob goes to its shadow test at once.
   - The `typed_proposal.v1` hand-off gains `chosen_by: "council"`, `topic_approved_by: "owner"`, a top-level `session_id` and `council_decision`.
   - The options report is renamed `council_options.v1`, with `legacy_schema: "council_decision.v1"` for the window.

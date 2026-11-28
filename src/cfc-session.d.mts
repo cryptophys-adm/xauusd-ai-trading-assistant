@@ -30,4 +30,5 @@ export const PROPOSAL_AGENT: string;
 export const OPTIONS_SCHEMA: string;
 export const OPTIONS_SCHEMA_LEGACY: string;
 export const VETO_WINDOW_MS: number;
-export function councilPick(options: unknown, positions: unknown, live?: unknown): { option_id: string; decided_by: "council"; rationale: string; tally: Record<string, number>; spoke: number; need: number; supported: boolean; valid: boolean; top: string | null };
+export const COUNCIL_QUORUM: number;
+export function councilPick(options: unknown, positions: unknown, live?: unknown): { option_id: string | null; decided_by: "council" | null; quorum: boolean; rationale: string; tally: Record<string, number>; spoke: number; need: number; supported: boolean; valid: boolean; top: string | null };

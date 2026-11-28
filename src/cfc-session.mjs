@@ -293,19 +293,25 @@ export const OPTIONS_SCHEMA_LEGACY = "council_decision.v1";
 /** CFC-A2: a repository_task the council picked waits this long for the owner's veto (Close) before it is handed off. */
 export const VETO_WINDOW_MS = 2 * 3_600_000;
 
+/** CFC-A2: the fewest position seats that must have spoken for the council to decide by itself. */
+export const COUNCIL_QUORUM = 4;
 /**
- * Pure, CFC-A2 (CFC_MODE "auto" only): the council's own pick after the synthesis. The top-ranked option that is not
- * no_change is chosen when the position round supports it (at least 4 of 6 seats take stance "support", or at least 2/3
- * of the seats that spoke when fewer spoke) and it is valid (a knob inside its bounds against the live values, or a
- * repository_task with a spec); otherwise no_change. Returns the option and why, with the tally.
+ * Pure, CFC-A2 (CFC_MODE "auto" only): the council's own pick after the synthesis. The stance tally comes from the
+ * position round, before the options exist, so "support" is support for acting on the topic; the pick is the
+ * moderator's top-ranked option that is not no_change. A quorum is needed: at least COUNCIL_QUORUM (4) seats spoke;
+ * without it there is no auto-decision (quorum false, option_id null: the owner picks). With it, the option is chosen
+ * when support >= max(4, ceil(2/3 of the seats that spoke)) and it is valid (a knob inside its bounds against the live
+ * values, or a repository_task with a spec); otherwise no_change. Returns the option and why, with the tally.
  */
 export function councilPick(options, positions, live = null) {
   const opts = Array.isArray(options) ? options : [];
   const tally = { support: 0, oppose: 0, amend: 0, abstain: 0 };
   for (const p of Array.isArray(positions) ? positions : []) if (p?.stance in tally) tally[p.stance] += 1;
   const spoke = Object.values(tally).reduce((a, b) => a + b, 0);
-  const need = Math.ceil((2 * spoke) / 3);
-  const supported = spoke > 0 && tally.support >= need;
+  const quorum = spoke >= COUNCIL_QUORUM;
+  const need = Math.max(COUNCIL_QUORUM, Math.ceil((2 * spoke) / 3));
+  if (!quorum) return { option_id: null, decided_by: null, quorum: false, rationale: `no quorum (${spoke} spoke; needs ${COUNCIL_QUORUM})`, tally, spoke, need, supported: false, valid: false, top: null };
+  const supported = tally.support >= need;
   const top = opts.find((o) => o && o.kind !== "no_change" && o.option_id !== "no_change") ?? null;
   let valid = false, why = "no option other than no_change";
   if (top?.kind === "policy_parameter") { const k = checkKnobValue(top.knob, top.value, live); valid = k.ok; why = k.ok ? "the knob is inside its bounds" : `the knob change is not valid: ${k.error}`; }
@@ -314,7 +320,7 @@ export function councilPick(options, positions, live = null) {
   const rationale = clip(pick === "no_change"
     ? `no_change: ${!top ? why : !supported ? `${tally.support} of ${spoke} seats support (needs ${need})` : why}`
     : `${top.option_id}: ${tally.support} of ${spoke} seats support (needs ${need}); ${why}`, 300);
-  return { option_id: pick, decided_by: "council", rationale, tally, spoke, need, supported, valid, top: top?.option_id ?? null };
+  return { option_id: pick, decided_by: "council", quorum: true, rationale, tally, spoke, need, supported, valid, top: top?.option_id ?? null };
 }
 
 /** Pure: the typed_proposal.v1 report for an accepted option (docs/design/HAIC-H0-H1.md on the platform). */
@@ -512,6 +518,11 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     // CFC-A2: in CFC_MODE "auto" the council decides by itself (the owner approved the topic, never picks an option).
     if (cfcAutoMode(env)) {
       const pick = councilPick(syn.options, spoken.filter((r) => r.round === "position"), live);
+      if (!pick.quorum) {
+        // Too few seats spoke: the owner approved the topic and picks; the session stays awaiting_owner, saying why.
+        await db.prepare("UPDATE council_sessions SET reason = ?, updated_ms = ? WHERE id = ? AND state = 'awaiting_owner'").bind(clip(`no quorum (${pick.spoke} of ${seats.length} spoke)`, 200), now, session_id).run();
+        return { status: "awaiting_owner", options: syn.options.length, pick: null, quorum: false, spoke: pick.spoke };
+      }
       let r = await acceptOption(env, { session_id, option_id: pick.option_id, actor: "council", now, publish, decision: pick });
       // A pick no longer valid at acceptance (the engine moved): the council's answer is no_change.
       if (!r?.ok && pick.option_id !== "no_change") r = await acceptOption(env, { session_id, option_id: "no_change", actor: "council", now, publish, decision: { ...pick, option_id: "no_change", rationale: clip(`no_change: ${r?.error ?? "the pick was refused"}`, 300) } });
