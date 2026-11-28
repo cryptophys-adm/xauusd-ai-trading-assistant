@@ -1,5 +1,5 @@
 // CL1 PR1 (2026-11-28, owner via the orchestrator: cut Workers AI neurons with a Claude API credit; shadow first): the
-// same input as three live callers (decision_council, war_room_conclusion, h1_reasoner) goes to Claude Haiku 5.5 once,
+// same input as two live callers (decision_council, war_room_conclusion; the H1 Reasoner is removed by RM1) goes to Claude Haiku 5.5 once,
 // after the live answer is stored, and its answer is recorded beside the live one: valid or not, the stance it implies,
 // whether it agrees, its tokens and its USD. Nothing reads the shadow answer but the comparison; the live result never
 // changes. Guards before every call: the owner's FS1 switch CLAUDE_SHADOW ("shadow"; default off), the shadow kill
@@ -26,7 +26,7 @@ export const CLAUDE_USD_PER_M = Object.freeze({
 export const CLAUDE_LONG_PROMPT_TOKENS = 100_000;
 /** The hard daily cap (owner budget, the orchestrator's CL1 brief): CLAUDE_SHADOW_USD_PER_DAY may lower it, never raise it. */
 export const CLAUDE_DAILY_CAP_USD = 0.55;
-export const CLAUDE_TIMEOUT_MS = 45_000;
+export const CLAUDE_TIMEOUT_MS = 20_000;
 export const CLAUDE_TIMEOUTS_TO_TRIP = 3;
 export const CLAUDE_BREAKER_KEY = "claude-shadow:breaker:v1";
 const HOUR = 3_600_000;
@@ -37,8 +37,7 @@ const HOUR = 3_600_000;
  */
 export const CLAUDE_ROLES = Object.freeze({
   decision_council: Object.freeze({ thinking: "adaptive", effort: "low", maxTokens: 8000, json: true }),
-  war_room_conclusion: Object.freeze({ thinking: "adaptive", effort: "low", maxTokens: 6000, json: true }),
-  h1_reasoner: Object.freeze({ thinking: "adaptive", effort: "low", maxTokens: 8000, json: false })
+  war_room_conclusion: Object.freeze({ thinking: "adaptive", effort: "low", maxTokens: 6000, json: true })
 });
 
 export const CLAUDE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS claude_shadow_outputs (
@@ -275,13 +274,16 @@ export async function readClaudeShadow(env, { days = 14, now = Date.now() } = {}
     const rows = (await env.DB.prepare(
       "SELECT role, COUNT(*) AS calls, SUM(status = 'ok') AS ok, SUM(status = 'invalid_output') AS invalid, SUM(status = 'refusal') AS refusals, SUM(status = 'timeout') AS timeouts, SUM(status = 'agent_failed') AS failed, " +
       "SUM(agree IS NOT NULL) AS compared, SUM(agree = 1) AS agreed, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens, " +
+      "SUM(status = 'ok' AND COALESCE(live_status, '') NOT IN ('ok', 'ok_after_retry')) AS claude_valid_live_invalid, SUM(status <> 'ok' AND live_status IN ('ok', 'ok_after_retry')) AS claude_invalid_live_valid, " +
       "SUM(usd_micros) AS usd_micros, AVG(latency_ms) AS avg_latency_ms, AVG(live_latency_ms) AS avg_live_latency_ms FROM claude_shadow_outputs WHERE substr(created_at, 1, 10) >= ? GROUP BY role ORDER BY role"
     ).bind(since).all()).results ?? [];
     const byRole = rows.map((r) => {
       const calls = Number(r.calls) || 0, ok = Number(r.ok) || 0, compared = Number(r.compared) || 0;
       return {
         role: r.role, calls, ok, invalid: Number(r.invalid) || 0, refusals: Number(r.refusals) || 0, timeouts: Number(r.timeouts) || 0, failed: Number(r.failed) || 0,
-        validity_rate: calls ? Math.round((ok / calls) * 1000) / 1000 : null, compared, agreement_rate: compared ? Math.round(((Number(r.agreed) || 0) / compared) * 1000) / 1000 : null,
+        validity_rate: calls ? Math.round((ok / calls) * 1000) / 1000 : null,
+        // The number that decides a move: Claude valid where the live answer was not, and the reverse.
+        claude_valid_live_invalid: Number(r.claude_valid_live_invalid) || 0, claude_invalid_live_valid: Number(r.claude_invalid_live_valid) || 0, compared, agreement_rate: compared ? Math.round(((Number(r.agreed) || 0) / compared) * 1000) / 1000 : null,
         input_tokens: Number(r.input_tokens) || 0, output_tokens: Number(r.output_tokens) || 0, cache_read_tokens: Number(r.cache_read_tokens) || 0, cache_write_tokens: Number(r.cache_write_tokens) || 0,
         usd: Math.round(Number(r.usd_micros) || 0) / 1e6, avg_latency_ms: r.avg_latency_ms == null ? null : Math.round(Number(r.avg_latency_ms)), avg_live_latency_ms: r.avg_live_latency_ms == null ? null : Math.round(Number(r.avg_live_latency_ms))
       };

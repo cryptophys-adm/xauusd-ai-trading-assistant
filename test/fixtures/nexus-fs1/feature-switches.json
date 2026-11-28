@@ -797,7 +797,7 @@
     {
       "key": "CLAUDE_SHADOW",
       "label": "Claude Haiku shadow (CL1)",
-      "description": "CL1: after the live call, the same input goes once to Claude Haiku 5.5 (Anthropic API, the Worker secret ANTHROPIC_API_KEY) for the decision council, the 15m War Room conclusion and the H1 reasoner; its answer is only recorded beside the live one (validity, agreement, tokens, USD). Hard cap USD 0.55 a day; a billing, auth or rate-limit error stops it (a breaker). off: no call.",
+      "description": "CL1: after the live call, the same input goes once to Claude Haiku 5.5 (Anthropic API, the Worker secret ANTHROPIC_API_KEY) for the decision council and the 15m War Room conclusion; its answer is only recorded beside the live one (validity, agreement, tokens, USD). Hard cap USD 0.55 a day; a billing, auth or rate-limit error stops it (a breaker). off: no call.",
       "group": "knowledge",
       "worker": "ai",
       "values": [

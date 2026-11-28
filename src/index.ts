@@ -217,7 +217,7 @@ function asText(value: unknown): string {
 
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
-import { claudeShadowEnabled, runClaudeShadow, readClaudeShadow } from "./claude-shadow.mjs";
+import { readClaudeShadow } from "./claude-shadow.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
@@ -1082,7 +1082,6 @@ async function processH1RoomTask(env: Env, task: { candle_key: string }): Promis
     console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, via: "h1_room", ...finalized }));
     // ADR-0015: the concluded 1H room and the decision it feeds, to the open pages.
     if (result.status === "complete") await publishMarket(env, { threads: true, decision: true });
-    await runClaudeJob(finalized);
   }
   // Aether A7: the shadow calls of approved notes, after the decision (a no-op when disabled).
   const shadow = await runShadowJob(result);
@@ -1135,9 +1134,6 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
 
   let decision: JsonObject;
   let reasonerText: string | null = null;
-  // CL1: the reasoner's exact input and latency, for the Claude shadow after the decision is stored.
-  let reasonerMessages: unknown[] | null = null;
-  let reasonerMs: number | null = null;
   let overridden = false;
   // Owner decision 2026-11-09: the H1 decision is the room's quorum; a BUY or SELL takes its prices
   // from the Key Level Agent's zones (the strategy engine's tradeLevels), or stays WAIT without them.
@@ -1164,15 +1160,11 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
           "gen_ai.conversation.id": candleKey,
           "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
         });
-        reasonerMessages = chatMessages(reasonerLines({ evidence, consensus, quorum, plan, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })) as unknown[];
-        const t0 = Date.now();
-        try {
-          return await aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
-            messages: reasonerMessages,
-            maxTokens: MAX_TOKENS.reasoner,
-            effort: "medium"
-          });
-        } finally { reasonerMs = Date.now() - t0; }
+        return aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
+          messages: chatMessages(reasonerLines({ evidence, consensus, quorum, plan, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
+          maxTokens: MAX_TOKENS.reasoner,
+          effort: "medium"
+        });
       });
       reasonerText = extractText(result);
       // parseDecision may turn a priced model answer into WAIT (its own price checks); the quorum and
@@ -1248,34 +1240,7 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     decision: synthesis.decision,
     evidence_fusion: fusionDetails(fusion)
   }, null);
-  const out: JsonObject = { status: "complete", decision: action, consensus: consensus.status, guard_overridden: overridden };
-  // CL1 (src/claude-shadow.mjs): the reasoner's exact input goes once to Claude Haiku 5.5, its answer only recorded beside
-  // the live one. A deferred job (not enumerable, so never logged): every caller runs it after its live work (the store,
-  // the push to the open pages), so the shadow never delays the decision. Off unless the owner's CLAUDE_SHADOW is on.
-  if (claudeShadowEnabled(env) && reasonerMessages && reasonerText !== null) {
-    const liveText = reasonerText;
-    const liveStance = asText(modelDecision(liveText).decision) || null;
-    Object.defineProperty(out, "claude_job", {
-      enumerable: false,
-      value: () => runClaudeShadow(env, {
-        role: "h1_reasoner", candleKey, statementClose: timestamp, messages: reasonerMessages,
-        validate: (text: unknown) => (extractJsonObject(String(text ?? "")) ? { valid: true } : { valid: false, errors: ["no_json_object"] }),
-        toStance: (text: unknown) => modelDecision(String(text ?? "")).decision,
-        live: { model: String(env.AI_MODEL_REASONER ?? ""), status: "ok", stance: liveStance, latency_ms: reasonerMs }
-      })
-    });
-  }
-  return out;
-}
-
-/** CL1: run the H1 reasoner's deferred Claude shadow call, if finalizeH1Decision attached one. Never throws. */
-async function runClaudeJob(finalized: unknown): Promise<void> {
-  const job = (finalized as { claude_job?: unknown } | null)?.claude_job;
-  if (typeof job !== "function") return;
-  try {
-    const r = await (job as () => Promise<Record<string, unknown>>)();
-    if (r && r.status !== "already_done") console.log("claude_shadow", JSON.stringify({ role: "h1_reasoner", ...r }));
-  } catch (error) { console.error("claude_shadow_failed", error instanceof Error ? error.message.slice(0, 200) : String(error)); }
+  return { status: "complete", decision: action, consensus: consensus.status, guard_overridden: overridden };
 }
 
 /** The Reasoner's H1 decision of one bar, for the 1H tab: decided, awaiting the room, or not started. */
@@ -1311,8 +1276,6 @@ async function finalizePendingH1Decisions(env: Env, now = Date.now()): Promise<J
     try { out[row.candle_key] = await finalizeH1Decision(env, row.candle_key, { now }); }
     catch (error) { out[row.candle_key] = { status: "error", message: error instanceof Error ? error.message.slice(0, 200) : String(error) }; }
   }
-  // CL1: the shadow calls after every pending bar is decided.
-  for (const r of Object.values(out)) await runClaudeJob(r);
   return { pending: rows.length, results: out };
 }
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -3529,7 +3492,6 @@ export default {
         if (chart !== "H1" || (result?.status !== "complete" && result?.status !== "already_complete")) return;
         const finalized = await finalizeH1Decision(env, key);
         if (finalized.status !== "not_pending") console.log("h1_consensus_decision", JSON.stringify({ candle_key: key, ...finalized }));
-        await runClaudeJob(finalized);
       };
       ctx.waitUntil(runPendingTimeframeThreads(env, { onRoom }).then(tf => {
         if (tf.status !== "disabled") console.log("tf_threads", JSON.stringify(tf));

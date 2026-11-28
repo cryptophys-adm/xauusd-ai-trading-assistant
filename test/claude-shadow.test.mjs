@@ -1,6 +1,7 @@
 // CL1 PR1 (2026-11-28): the Claude Haiku 5.5 shadow (src/claude-shadow.mjs). No network: an in-memory SQLite D1, a KV stub,
 // and the real Anthropic SDK client with an injected fetch (the request it would send is checked, the answer is canned).
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import Anthropic from "@anthropic-ai/sdk";
@@ -10,6 +11,8 @@ import {
 } from "../src/claude-shadow.mjs";
 import { resetAiUsageSchemaCacheForTests, readAiUsage, recordAiUsage } from "../src/ai-usage.mjs";
 import { FEATURE_SWITCHES } from "../src/feature-switches.mjs";
+import { chatMessages } from "../src/model-text.mjs";
+import { CLAUDE_TIMEOUT_MS } from "../src/claude-shadow.mjs";
 
 function d1() {
   const db = new DatabaseSync(":memory:");
@@ -76,7 +79,7 @@ test("CL1-1 the request: claude-haiku-5-5, adaptive thinking at low effort, the 
   assert.deepEqual(b.system, [{ type: "text", text: "You are the council. Answer in JSON.", cache_control: { type: "ephemeral" } }]);
   assert.deepEqual(b.messages, [{ role: "user", content: "Evidence: the bar." }]);
   assert.equal(b.temperature, undefined, "no sampling parameters");
-  assert.equal(CLAUDE_ROLES.h1_reasoner.json, false, "the reasoner's free text is not forced into a schema");
+  assert.deepEqual(Object.keys(CLAUDE_ROLES), ["decision_council", "war_room_conclusion"], "the H1 Reasoner is not a shadow role (RM1 removes it)");
 });
 
 test("CL1-2 the answer is read by block type (thinking first), checked by the live validator, and recorded with tokens, USD and agreement", async () => {
@@ -184,4 +187,28 @@ test("CL1-7 the FS1 switch: CLAUDE_SHADOW, off by default, shadow or off", () =>
   assert.ok(sw);
   assert.deepEqual([sw.values, sw.default_value, sw.read(undefined), sw.read("shadow"), sw.read("on"), sw.read("yes")], [["shadow", "off"], "off", "off", "shadow", "shadow", "off"]);
   assert.match(sw.description, /0\.55/);
+});
+
+test("CL1-8 the live system prompt byte for byte, cached; a repeat reads the cache; a 20 s timeout and no retry; valid-vs-invalid counts", async () => {
+  const e = env(), seen = [];
+  const live = chatMessages(["You are the moderator of the room.", "STATEMENTS:", "#1 BUY 0.6"]);
+  const reply = (n) => okMessage(JSON.stringify({ stance: "WAIT", confidence: 0.5, summary: "s", reasons: ["r"] }), n === 1 ? { cache_read_input_tokens: 0, cache_creation_input_tokens: 1200 } : { cache_read_input_tokens: 1200, cache_creation_input_tokens: 0 });
+  const client = sdkClient(reply, seen);
+  await runClaudeShadow(e, { role: "war_room_conclusion", candleKey: "c1", messages: live, schema: SCHEMA, validate, live: { stance: "WAIT", status: "ok" }, clock: () => NOW, client });
+  await runClaudeShadow(e, { role: "war_room_conclusion", candleKey: "c2", messages: live, schema: SCHEMA, validate, live: { stance: "WAIT", status: "failed" }, clock: () => NOW, client });
+  assert.equal(seen[0].body.system[0].text, live[0].content, "the system text is the live call's, byte for byte");
+  assert.deepEqual(seen[0].body.system, seen[1].body.system, "the cached prefix is identical on the repeat");
+  assert.deepEqual(seen[0].body.system[0].cache_control, { type: "ephemeral" });
+  assert.equal(seen[0].body.messages[0].content, live[1].content);
+  const rows = e.DB.raw.prepare("SELECT candle_key, cache_read_tokens, cache_write_tokens FROM claude_shadow_outputs ORDER BY candle_key").all();
+  assert.deepEqual(rows.map((r) => [r.candle_key, r.cache_read_tokens, r.cache_write_tokens]), [["c1", 0, 1200], ["c2", 1200, 0]], "the repeat reads the cache");
+  const read = await readClaudeShadow(e, { now: NOW });
+  assert.deepEqual([read.by_role[0].claude_valid_live_invalid, read.by_role[0].claude_invalid_live_valid], [1, 0]);
+  // The timeout: 20 s on every request, no retry.
+  assert.equal(CLAUDE_TIMEOUT_MS, 20_000);
+  let opts = null;
+  const spy = { messages: { create: async (_p, o) => { opts = o; return reply(1).body; } } };
+  await runClaudeShadow(env(), { role: "decision_council", candleKey: "t", messages: live, schema: SCHEMA, validate, clock: () => NOW, client: spy });
+  assert.deepEqual(opts, { timeout: 20_000 });
+  assert.match(readFileSync(new URL("../src/claude-shadow.mjs", import.meta.url), "utf8"), /new Anthropic\(\{ apiKey: [^}]*maxRetries: 0, timeout: timeoutMs \}\)/, "the real client: no retry, the same timeout");
 });
