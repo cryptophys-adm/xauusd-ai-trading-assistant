@@ -229,6 +229,86 @@ rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.3 /opt/o
 
 A `KeepPrivate=1` left in the login file is harmless to 1.8.3.
 
+## 1d. Bridge 1.8.5: the feed keeps its login, like the executor (one VPS change with the owner's go)
+
+**Why.** 1.8.4's install worked, and `KeepPrivate=1` was in `login.ini`. Even so, the guarded restart at 11:29Z on 28 Nov, which started on `startup.ini`, did not log in. On this VPS, MT5 does not log in from a saved password when the start file has no `[Common]` section. The owner chose **"Seperti executor (Recommended)"** (2026-11-28):
+- the feed keeps its password in `login.ini` (owner `mt5`, mode 600), as the executor keeps its own in `terminal_gateway.ini`;
+- so every restart logs in through `feed-run.sh`'s existing `^Password=.+` branch;
+- 1.8.5 no longer clears the password after connect. It logs `feed_login_kept` once instead.
+- `KeepPrivate=1` and the `keep_private_missing` guard stay.
+- `startup.ini` stays the fallback for when no password exists.
+- The owner's **disconnect** on Nexus (Live > Data feeds) empties Login and Password, keeps `KeepPrivate=1` and algo trading off, and restarts only the feed's terminal, which then starts on `startup.ini`. Event: `feed_connection_cleared`.
+- Up to 1.8.4, a disconnect did not reach the feed's ini at all: the bridge saw no connection and did nothing. That was harmless only because the password had already been cleared after login.
+
+The executor, its bridge loop and its EA are not changed.
+
+1. Back up the feed's bridge, then copy the repo's `bridge/omega-bridge` over `/opt/omega-bridge-oanda` at the merged commit (only the feed's copy):
+
+   ```bash
+   cp -a /opt/omega-bridge-oanda /opt/omega-bridge-oanda.bak-1.8.4 && echo backed-up
+   ```
+
+   Check it as for 1.8.1. Expect `export const BRIDGE_VERSION = "1.8.5";` and no `SYNTAX FAIL`. Then restart only the feed's bridge:
+
+   ```bash
+   systemctl restart omega-bridge@oanda
+   ```
+
+2. The owner re-enters the feed login once on Nexus > Live > Data feeds. This is required: the 11:33Z clear under 1.8.4 emptied it. The bridge applies it and restarts the feed terminal with the login file.
+3. Once the terminal reports it is logged in, check by counts only (nothing printed from the file):
+
+   ```bash
+   f=/opt/mt5-oanda/login.ini; echo "password_lines: $(grep -c '^Password=.' "$f") keep_private_1: $(grep -c '^KeepPrivate=1' "$f")"; stat -c '%U %a' "$f"
+   ```
+
+   Expect `password_lines: 1 keep_private_1: 1` and `mt5 600`. The bridge's journal shows `feed_login_kept` and no `feed_credentials_cleared`:
+
+   ```bash
+   journalctl -u omega-bridge@oanda --since -10min -o cat | grep -E '"event":"feed_(started|connection_applied|login_kept|credentials_cleared)"'
+   ```
+
+4. ONE guarded restart of the feed terminal (section 3's guarded line). It must authorize from `login.ini`. After two minutes, check as in 1.8.2's step 4 that `state.json` and `corpus.json` are under a minute old and that `connected` is `True` (the two-field print; no other field).
+5. If it prints `False`, stop and report. Do not restart again.
+
+**Rollback.** Restore the 1.8.4 backup and restart only `omega-bridge@oanda`:
+
+```bash
+rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.4 /opt/omega-bridge-oanda && echo restored
+```
+
+1.8.4 then clears the password again at the next connect.
+
+### 1d-opt. Optional, a separate owner's go: keep unattended upgrades from restarting the terminals
+
+The 27 Nov feed stop came from needrestart restarting services after an unattended upgrade. First a read-only check: whether the drop-in folder exists, and the restart mode (`a` means automatic):
+
+```bash
+ls -d /etc/needrestart/conf.d 2>/dev/null || echo "no conf.d"; grep -hE '^\s*\$nrconf\{restart\}' /etc/needrestart/needrestart.conf /etc/needrestart/conf.d/*.conf 2>/dev/null || echo "restart mode: default"
+```
+
+Only with the owner's go, one drop-in excludes both terminals (the bridges may still be restarted):
+
+```bash
+printf '%s\n' '$nrconf{override_rc}{qr(^mt5-oanda\.service$)} = 0;' '$nrconf{override_rc}{qr(^mt5-terminal\.service$)} = 0;' > /etc/needrestart/conf.d/50-omega-mt5.conf && echo written
+```
+
+To undo it: `rm -f /etc/needrestart/conf.d/50-omega-mt5.conf`.
+## 1e. OmegaFeed 1.03: no corpus on an unconfirmed clock (one VPS change with the owner's go)
+
+**Why.** At 10:25:58Z on 28 Nov the feed terminal was logged out after a restart. A logged-out terminal takes its own clock for the server's, so OmegaFeed's offset (`TimeTradeServer() - TimeGMT()`) read 0 and it wrote 120 M1 bars two hours off. The server now refuses such a batch (CG2) and has repaired that one. 1.03 stops it at the source:
+- `corpus.json` and `corpus_macro.json` are written only while `TERMINAL_CONNECTED` is true and the offset has stayed the same for 60 timer ticks in a row (`TIME_BASE_STABLE_TICKS`, about a minute; after a weekend login the server time can sit stale for a while);
+- a disconnect or any change of the offset starts the count again, and the bars wait until it holds;
+- `state.json` is written as before; it carries `connected`.
+
+There is no change to the bridge, the executor or its EA. Install it with or after bridge 1.8.5 (section 1d).
+
+1. Install OmegaFeed 1.03 with section 3's steps 1 to 4 (copy, compile, check `Result: 0 errors`). Keep the 1.02 `.ex5` as a backup first, as section 3 does.
+2. Restart only the feed's terminal with the guarded line (section 3).
+3. Check with 1.8.2's step 4 (the two-field print): about three minutes after `connected` turns `True` (the 60-tick wait plus the next closed bar), `corpus.json` is under two minutes old. While `connected` is `False`, `state.json` stays fresh and `corpus.json` stops getting newer. That is 1.03 holding the bars back, not a fault.
+4. The agent then checks read-only that the feed source's `corpus_sources.last_error` is not `shifted_copy` after the next reconnect.
+
+**Rollback.** Put the 1.02 file back with section 3's steps (or the backup `.ex5`) and restart only the feed's terminal.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:
