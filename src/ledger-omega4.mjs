@@ -65,6 +65,7 @@ import * as limitSupersede from "./limit-supersede.mjs";
 import * as cdGateModule from "./cd-gate.mjs";
 import { cdGateOn, gateAt, readCdGateHistory } from "./cd-gate.mjs";
 import * as pmLineBreaker from "./pm-line-breaker.mjs";
+import * as marketHours from "./market-hours.mjs";
 import { linesOffAt, readPmLineHistory } from "./pm-line-breaker.mjs";
 
 export { OMEGA4_VERSION, OMEGA4_PARITY_KEY };
@@ -721,7 +722,9 @@ export const ENGINE_CODE = Object.freeze({
   "pm-fast": [pmFast, ["pmFastOn", "fastMode", "fastId", "isFastId", "fastBars", "atr1m", "fastNoise", "fastProtect", "fastMeta", "spikeHolds", "runFastProtect", "PM_FAST_1M", "PM_FAST_RULES", "PM_FAST_MODES", "PM_FAST_READ_MIN", "PM_FAST_RETRY_MS", "zoneBarMs"]],
   // B5 (2026-11-25): the Position Manager lines and their breaker (the registry, the off set in force, the verdict).
   "pm-line-breaker": [pmLineBreaker, ["PM_LINES", "PM_FAST_LINE_IDS", "PM_LINE_RULE", "PM_LINE_EVENTS", "lineBreakerVerdict", "pmLinesOffEnv", "normalizeDoc", "breakerOff", "offLinesOf", "readPmLinesLive", "linesOffAt", "isPmLine", "lineTag", "pmLineBreakerTick", "setPmLine"]],
-  "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]]
+  "liquidity-lens": [liquidityLens, ["liquidityFields", "signalLiquidityLevels", "liveSpreadRatio", "liveSpreadSpike", "deferModifications", "nyHourOfWeek", "DEFERRABLE_KINDS", "LIQUIDITY_MODIFY_DEFER_MAX_MS", "LIQUIDITY_STATE_FRESH_MS", "SWEEP_WITH_MAX_AGE_MIN"]],
+  // The rollover quarantine's clock (isRolloverQuarantine reads it; owner 2026-11-28, DST-aware).
+  "market-hours": [marketHours, ["rolloverQuarantineAt", "ROLLOVER_QUARANTINE_NY"]]
 });
 
 /** The text ENGINE_CODE_HASH is taken of: each name with its function's source or its value, module by module. */
@@ -749,7 +752,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "99850b0021dc294e537d1adcc49d646162dcd01bfb8a3726cc4a34c40d507777";
+export const ENGINE_CODE_HASH = "c670813712ce7d4683331d9301a4e6fa15b64fee28729304eaaeb28a92f24e22";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:

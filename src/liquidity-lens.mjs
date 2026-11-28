@@ -64,7 +64,7 @@ const nyClock = (ms) => { const p = Object.fromEntries(NY.formatToParts(new Date
 /** Pure: the New York hour of the week (0 = Sunday 00:00 to 167), which moves with US daylight time. */
 export function nyHourOfWeek(ms) { const c = nyClock(ms); return c.wd * 24 + c.hour; }
 
-/** Pure: the daily rollover quarantine, 21:55-22:15 UTC (the same window as src/omega-engine.mjs isRolloverQuarantine). */
+/** Pure: the lens's own rollover window, a fixed 21:55-22:15 UTC (the fast 1m layer and the baseline read it; Omega's entry quarantine follows US daylight time since 2026-11-28, src/market-hours.mjs rolloverQuarantineAt). */
 export function inRollover(ms) { const d = new Date(ms); const h = d.getUTCHours(), m = d.getUTCMinutes(); return (h === 21 && m >= 55) || (h === 22 && m < 15); }
 /** Pure: within the first SESSION_OPEN_EXCLUDE_MIN minutes after the weekly or daily reopen or a session open (NY 19, 3, 8). */
 export function inSessionOpen(ms) {

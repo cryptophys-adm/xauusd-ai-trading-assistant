@@ -362,8 +362,8 @@ const EXPECTED_2026_11_20_22 = {
   }
 };
 
-test("Z2-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to 99850b00… (E1 limit-first moved it, after K1, after Track B PR 19, Track B PR 18, Track B PR 17, Track A PR 5, the Z6 sd marker, Z6, B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
+test("Z2-17 no hashed engine function changes: ENGINE_CODE_HASH recomputes to c6708137… (the DST rollover quarantine moved it, after E1 limit-first, after K1, after Track B PR 19, Track B PR 18, Track B PR 17, Track A PR 5, the Z6 sd marker, Z6, B5 and Z3a); the behaviour hash is ecfe3f90…", async () => {
   assert.equal(await sha256Hex(engineCodeSource()), ENGINE_CODE_HASH);
-  assert.equal(ENGINE_CODE_HASH, "99850b0021dc294e537d1adcc49d646162dcd01bfb8a3726cc4a34c40d507777");
+  assert.equal(ENGINE_CODE_HASH, "c670813712ce7d4683331d9301a4e6fa15b64fee28729304eaaeb28a92f24e22");
   assert.equal(ENGINE_BEHAVIOUR_HASH, "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69");
 });

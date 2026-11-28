@@ -212,6 +212,15 @@ test("rollover quarantine gate blocks open intents between 21:55 and 22:15 UTC",
   assert.ok(notes.some((n) => n.code === "rollover_quarantine"));
 });
 
+test("rollover quarantine follows US daylight time: 23:10 UTC in November blocks, 23:15 does not (owner 2026-11-28)", () => {
+  const plan = (iso) => {
+    const now = Date.parse(iso);
+    return planIntents({ signal: { side: "BUY", action: "ENTER_BUY", issued_ms: now, expires_ms: now + 10 * 60_000, entry: 4100, stop: 4095, tp1: 4110 }, settings: { enabled: true, live_armed: true }, executor: { ...EXECUTOR, received_ms: now - 1_000 }, now, engineEnabled: true });
+  };
+  assert.ok(plan("2026-11-24T23:10:00Z").notes.some((n) => n.code === "rollover_quarantine"), "15 minutes after the 23:00 reopen");
+  assert.ok(!plan("2026-11-24T23:15:00Z").notes.some((n) => n.code === "rollover_quarantine"));
+});
+
 test("partial scale out (TP ladder off) closes 50% volume at TP1 when volume >= 0.02", () => {
   const signal = {
     side: "BUY",

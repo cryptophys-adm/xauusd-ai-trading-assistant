@@ -28,6 +28,7 @@
 // The patterns are publicAnalysis().patterns' shape: no decision, plan, entry, stop, trade target, account or price
 // beyond each pattern's own lines and projection.
 import { detectPatterns, normBars, meanRange } from "./chart-patterns.mjs";
+import { barAfterPause } from "./market-hours.mjs";
 import { publicPatterns } from "./public-analysis.mjs";
 import { chartPatternsMode } from "./projection-agent.mjs";
 import { recentReleases } from "./econ-releases.mjs";
@@ -39,6 +40,8 @@ export const PATTERNS_KEY = "public:patterns:v1";
 export const PATTERN_SERIES = Object.freeze({ M15: "15m", H1: "1h", H4: "4h", D1: "1D" });
 /** The Projection Agent's timeframe of each chart (key-level-agent.mjs chartPatterns), in its order. */
 const CHART_TF = Object.freeze({ M15: "15", H1: "60", H4: "240", D1: "D" });
+/** The charts whose breakout after a trading pause has no confirming close (breakoutCloseMs): the intraday ones. A D1 bar is a whole session, so its Monday bar stays a normal bar. */
+const PAUSE_GAP_BAR_MS = Object.freeze({ M15: 15 * 60_000, H1: 60 * 60_000, H4: 4 * 60 * 60_000 });
 export const seriesKey = (interval) => `market-data:v2:series:OANDA:XAUUSD|${interval}`;
 /** PT1b: the freshest series the price is read from (src/feed.mjs M1_KEY). */
 export const PRICE_SERIES = "1m";
@@ -83,9 +86,9 @@ export function barClosePrice(bar) {
  * it was detected on: the first bar of the run of closes beyond its broken line (the upper line going up, the lower one
  * going down; beyond by the detector's margin, 0.1 x the mean range) that ends at the latest bar, after the pattern's
  * last turn (end_bar). The latest bar always counts, as the detector found the breakout there. Null for a forming
- * pattern or bars without close times.
+ * pattern, bars without close times, or (with `barMs`) a run whose first close is the first bar after a trading pause.
  */
-export function breakoutCloseMs(series, p) {
+export function breakoutCloseMs(series, p, { barMs = null } = {}) {
   const dir = Number(p?.direction);
   if (!(dir > 0 || dir < 0)) return null;
   const b = normBars(series), n = b.length;
@@ -98,13 +101,17 @@ export function breakoutCloseMs(series, p) {
   const from = Number.isInteger(p.end_bar) && p.end_bar >= 0 ? p.end_bar + 1 : 0;
   let k = n - 1;
   while (k - 1 >= from && beyond(b[k - 1])) k--;
+  // "gap ≠ breakout" (orchestrator 2026-11-28, as FP1's breakoutAfterPause): a run whose first close is the first bar
+  // after the weekend or a daily break has no fresh confirming close; null, so a fresh-breakout reader (the CTA post's
+  // breakoutState) does not take the gap for a breakout.
+  if (barMs && k > 0 && barAfterPause(b[k - 1].t, b[k].t, barMs)) return null;
   return Number.isFinite(b[k]?.t) ? b[k].t : null;
 }
 
 /** Pure: one chart's public patterns from its bars (the strategy's last PATTERN_BARS), as the analysis shows them. */
 export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
   const series = Array.isArray(bars) ? bars.slice(-PATTERN_BARS) : [];
-  return publicPatterns(detectPatterns(series, { events }).map((p) => ({ tf: CHART_TF[chart], ...p, confirmed_at_ms: p.status === "forming" ? null : breakoutCloseMs(series, p) })));
+  return publicPatterns(detectPatterns(series, { events }).map((p) => ({ tf: CHART_TF[chart], ...p, confirmed_at_ms: p.status === "forming" ? null : breakoutCloseMs(series, p, { barMs: PAUSE_GAP_BAR_MS[chart] ?? null }) })));
 }
 
 /**

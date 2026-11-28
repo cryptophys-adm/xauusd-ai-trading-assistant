@@ -27,7 +27,7 @@ import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 import { zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
 import { openingRanges } from "./opening-range.mjs";
-import { FRESH_PATTERN, breakoutAgeBars, freshPatternRecord } from "./fresh-pattern.mjs";
+import { FRESH_PATTERN, breakoutAgeBars, breakoutAfterPause, freshPatternRecord } from "./fresh-pattern.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
@@ -323,6 +323,7 @@ function patternAgent(family) {
       for (const { p, rec } of fitOf(this.id, dir, ctx, [FRESH_PATTERN.chart])) {
         const age = breakoutAgeBars(ctx.bars, p);
         if (age == null || age > FRESH_PATTERN.max_age_bars) continue;
+        if (breakoutAfterPause(ctx.bars, p)) continue; // the move came with a weekend or daily-break gap: not a fresh breakout
         // Market by design (the replay behind FP1 entered at the close): the entry is price, the stop as plan() puts it.
         const at = placeOf(dir, ctx, p, rec);
         if (dir * (p.target - ctx.price) < gap) continue;
