@@ -60,7 +60,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.equal(calls[0].url, "https://feed.example.invalid/omega/api/bridge/feed-sync");
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.bridge_id, "oanda");
-  assert.equal(body.bridge_version, "1.8.4");
+  assert.equal(body.bridge_version, "1.8.5");
   assert.match(body.kid, /^[0-9a-f]{16}$/);
   assert.deepEqual(Object.keys(body.state).sort(), ["connected", "server", "symbol", "terminal_error"]);
   assert.equal(JSON.stringify(body).includes("balance"), false, "no account amounts leave the VPS");
@@ -72,7 +72,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.ok(buildFeedBody({ bridgeId: "x", kid: "k", publicKeyBase64: "p", state: null, corpus: null }).includes('"state":null'));
 });
 
-test("FD-3. the feed's login: applied to its own ini with algo trading OFF, its own service restarted, then the password cleared", async () => {
+test("FD-3. the feed's login: applied to its own ini with algo trading OFF, its own service restarted; 1.8.5 keeps it there", async () => {
   const s = setup();
   const keys = loadOrCreateKeyPair(s.stateDir, { fs });
   const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
@@ -88,15 +88,16 @@ test("FD-3. the feed's login: applied to its own ini with algo trading OFF, its 
   assert.match(ini, /Expert=OmegaFeed/);
   assert.match(ini, /Symbol=XAUUSD\.sml/);
   assert.deepEqual(execs, [["systemctl", "restart", "mt5-oanda.service"]], "only the feed's own terminal is restarted");
-  // The same version again is not re-applied; once the terminal reports it is logged in, the password leaves the ini.
+  // The same version again is not re-applied; once the terminal reports it is logged in, the login stays (1.8.5).
   payload = { ok: true, connection: { version: 1, server: "OANDA-Demo-1", envelope } };
   // The terminal reports the server with another case and spaces: still the stored one.
   fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: " oanda-demo-1 ", symbol: { name: "XAUUSD.sml" } }));
   await d.syncOnce();
   assert.equal(execs.length, 1, "no second restart");
-  const cleared = fs.readFileSync(s.terminalIni, "utf8");
-  assert.match(cleared, /Password=\s*(\n|$)/m, "the password is gone after login (run.sh then starts without /config)");
-  assert.match(cleared, /AllowLiveTrading=0/);
+  const kept = fs.readFileSync(s.terminalIni, "utf8");
+  assert.ok(iniValue(kept, "Common", "Password"), "the password stays after login (run.sh logs in with it at every start)");
+  assert.match(kept, /Login=1001/);
+  assert.match(kept, /AllowLiveTrading=0/);
 });
 
 test("FD-4. whatever writes the feed's ini, algo trading is forced back off", async () => {
@@ -356,7 +357,7 @@ test("FD-15. the daemon: the cursor from the server, the request file for the EA
   assert.equal(fs.existsSync(path.join(omega, "intents.txt")), false, "a feed never writes intents");
 });
 
-test("FD-16 (1.8.4). the feed's login asks MT5 to save the password (KeepPrivate=1); the clear keeps it; a password without it is never written", async () => {
+test("FD-16 (1.8.4). the feed's login asks MT5 to save the password (KeepPrivate=1); a clear keeps it; a password without it is never written", async () => {
   const s = setup({ ini: "[Common]\nKeepPrivate=0\nLogin=\nPassword=\n[Experts]\nAllowLiveTrading=0\n" });
   const keys = loadOrCreateKeyPair(s.stateDir, { fs });
   const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
@@ -368,12 +369,10 @@ test("FD-16 (1.8.4). the feed's login asks MT5 to save the password (KeepPrivate
   assert.equal(iniValue(ini, "Common", "KeepPrivate"), "1", "the applied login saves its password; an old KeepPrivate=0 is overwritten");
   assert.equal((ini.match(/^KeepPrivate=/gm) || []).length, 1, "one KeepPrivate line");
   assert.ok(iniValue(ini, "Common", "Password"), "the password is in the applied file");
-  // Logged in on that server: the password leaves the file, KeepPrivate=1 stays.
-  fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", symbol: { name: "XAUUSD.sml" } }));
-  await d.syncOnce();
-  const cleared = fs.readFileSync(s.terminalIni, "utf8");
-  assert.ok(logs.some((l) => l.event === "feed_credentials_cleared"));
+  // The clear the feed still uses (the owner's disconnect, 1.8.5) empties the login and keeps KeepPrivate=1.
+  const cleared = clearFeedCredentials(ini);
   assert.deepEqual([iniValue(cleared, "Common", "Password"), iniValue(cleared, "Common", "Login"), iniValue(cleared, "Common", "KeepPrivate")], ["", "", "1"]);
+  assert.equal(logs.filter((l) => l.event === "feed_connection_applied").length, 1);
   // startup.ini has no [Common] section at all: it cannot set KeepPrivate=0 or touch the saved account.
   const startup = feedStartupIni({ symbol: "XAUUSD.sml" });
   assert.doesNotMatch(startup, /^\[Common\]/m);
@@ -397,4 +396,58 @@ test("FD-17 (1.8.4). the feed never writes a login whose password MT5 would not 
   const code = src.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   assert.match(code, /if \(!feedIniSafeToWrite\(next\)\) throw new Error\("keep_private_missing"\);\s*writeIni\(config\.terminalIni, next, fs\);/, "the guard sits right before the login write");
   assert.doesNotMatch(code, /clearCredentials\(/, "the feed clears with clearFeedCredentials only");
+});
+
+test("FD-18 (1.8.5, owner \"Seperti executor\"). logged in on the stored server, the login stays in the ini; no clear; one feed_login_kept line", async () => {
+  const s = setup();
+  const keys = loadOrCreateKeyPair(s.stateDir, { fs });
+  const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
+  const payload = { ok: true, connection: { version: 3, server: "OANDA-Demo-1", envelope }, connection_version: 3, connection_status: "stored" };
+  const logs = [], execs = [];
+  const d = createFeedDaemon({ env: s.env, fetch: async () => okJson(payload), execFile: async (cmd, args) => { execs.push([cmd, ...args]); return ""; }, log: (o) => logs.push(o) });
+  await d.syncOnce();
+  fs.writeFileSync(path.join(s.omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", symbol: { name: "XAUUSD.sml" } }));
+  for (let i = 0; i < 3; i++) await d.syncOnce();
+  const ini = fs.readFileSync(s.terminalIni, "utf8");
+  assert.ok(iniValue(ini, "Common", "Password"), "the password stays");
+  assert.equal(iniValue(ini, "Common", "Login"), "1001");
+  assert.equal(iniValue(ini, "Common", "KeepPrivate"), "1");
+  assert.equal(iniValue(ini, "Experts", "AllowLiveTrading"), "0");
+  assert.equal(feedIniSafeToWrite(ini), true);
+  assert.ok(!logs.some((l) => /cleared/.test(String(l.event))), "no clear event");
+  assert.equal(logs.filter((l) => l.event === "feed_login_kept").length, 1, "logged once per applied version");
+  assert.ok(!JSON.stringify(logs).includes(iniValue(ini, "Common", "Password")), "the password is never logged");
+  assert.equal(execs.length, 1, "only the apply restarted the terminal");
+  // feed-run.sh's existing branch: a non-empty Password= in the login ini starts the terminal with it.
+  const run = fs.readFileSync(new URL("../feed-run.sh", import.meta.url), "utf8");
+  assert.match(run, /\^Password=\.\+/, "run.sh passes the login ini while it holds a password");
+  const code = fs.readFileSync(new URL("../src/feed-daemon.mjs", import.meta.url), "utf8").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  assert.doesNotMatch(code, /feed_credentials_cleared/, "the clear after connect is gone");
+});
+
+test("FD-19 (1.8.5). the owner's disconnect empties the feed's login (KeepPrivate=1 and trading off kept) and restarts its terminal, once; a key mismatch clears nothing", async () => {
+  const s = setup();
+  const keys = loadOrCreateKeyPair(s.stateDir, { fs });
+  const envelope = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1001", password: fakeSecret() });
+  let payload = { ok: true, connection: { version: 3, server: "OANDA-Demo-1", envelope }, connection_version: 3, connection_status: "stored" };
+  const logs = [], execs = [];
+  const d = createFeedDaemon({ env: s.env, fetch: async () => okJson(payload), execFile: async (cmd, args) => { execs.push([cmd, ...args]); return ""; }, log: (o) => logs.push(o) });
+  await d.syncOnce();
+  // A bridge with another key (reinstalled) gets connection null with status "stored": nothing is cleared.
+  payload = { ok: true, connection: null, connection_version: 3, connection_status: "stored" };
+  await d.syncOnce();
+  assert.ok(iniValue(fs.readFileSync(s.terminalIni, "utf8"), "Common", "Password"));
+  // The owner disconnects on the Omega page: version 4, status cleared.
+  payload = { ok: true, connection: null, connection_version: 4, connection_status: "cleared" };
+  await d.syncOnce();
+  await d.syncOnce();
+  const ini = fs.readFileSync(s.terminalIni, "utf8");
+  assert.deepEqual([iniValue(ini, "Common", "Login"), iniValue(ini, "Common", "Password"), iniValue(ini, "Common", "KeepPrivate"), iniValue(ini, "Experts", "AllowLiveTrading")], ["", "", "1", "0"]);
+  assert.equal(logs.filter((l) => l.event === "feed_connection_cleared").length, 1, "once");
+  assert.deepEqual(execs, [["systemctl", "restart", "mt5-oanda.service"], ["systemctl", "restart", "mt5-oanda.service"]], "the apply, then the disconnect: only the feed's terminal");
+  // A new login after the disconnect is applied again (version 5).
+  const env2 = await buildEnvelope(keys.publicKeyBase64, keys.kid, { server: "OANDA-Demo-1", login: "1002", password: fakeSecret() });
+  payload = { ok: true, connection: { version: 5, server: "OANDA-Demo-1", envelope: env2 }, connection_version: 5, connection_status: "stored" };
+  await d.syncOnce();
+  assert.equal(iniValue(fs.readFileSync(s.terminalIni, "utf8"), "Common", "Login"), "1002");
 });

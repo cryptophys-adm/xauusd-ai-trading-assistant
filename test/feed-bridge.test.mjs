@@ -76,11 +76,15 @@ test("FB-2. the feed's login: sealed to its own key, checked per bridge, returne
   // A bridge reinstalled with another key gets no login until it is set again.
   const r2 = await feedSync(e, { bridgeId: "oanda", state: FEED_STATE, publicKey: SPKI, kid: "a".repeat(16) }, { now: NOW + 2000 });
   assert.equal(r2.connection, null);
+  assert.equal(r2.connection_status, "stored", "a key mismatch is not a disconnect (bridge 1.8.5 clears nothing)");
   // Another feed id never sees this one's login.
   assert.equal((await feedSync(e, { bridgeId: "other", state: FEED_STATE, publicKey: SPKI, kid: KID }, { now: NOW })).connection, null);
   assert.equal((await clearFeedConnection(e, { bridgeId: "oanda", actor: "owner", reason: "" })).ok, false, "a reason is required");
   const cleared = await clearFeedConnection(e, { bridgeId: "oanda", actor: "owner", reason: "rotate" }, { now: NOW + 3000 });
   assert.deepEqual([cleared.ok, cleared.version, cleared.status], [true, 2, "cleared"]);
+  // Bridge 1.8.5 reads the disconnect from connection_status with the newer connection_version.
+  const r3 = await feedSync(e, { bridgeId: "oanda", state: FEED_STATE, publicKey: SPKI, kid: KID }, { now: NOW + 3500 });
+  assert.deepEqual([r3.connection, r3.connection_version, r3.connection_status], [null, 2, "cleared"]);
   const view = await feedOverview(e, { now: NOW + 3000 });
   assert.equal(view.length, 2);
   const oanda = view.find((f) => f.bridge_id === "oanda");
