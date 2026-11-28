@@ -46,6 +46,7 @@ import { calendarOutlook, surpriseStrength, surprisePull } from "./calendar-agen
 import { calendarIntel } from "./econ-releases.mjs";
 import { hudLevels } from "./hud-levels.mjs";
 import { callBusModel, BUS_MAX_TOKENS } from "./model-call.mjs";
+import { councilConfRetryMode, confRetryNeeded, takeConfRetry, confRetryRecord, CONF_RETRY_NOTE } from "./council-conf-retry.mjs";
 import { naturalLanguageErrors, onlyNaturalLanguageErrors, NATURAL_LANGUAGE_CORRECTION } from "./natural-language.mjs";
 import { shouldNotifyH1 } from "./h1-telegram.mjs";
 import { fetchEffectiveDoctrine, formatDoctrineDirectives } from "./doctrine-consumer.mjs";
@@ -1600,6 +1601,8 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     fallback_reason: answer ? null : (d.overruled ? `the strategy's ${d.overruled.wanted} was held back (${d.overruled.failed.map((f) => f.check).join(", ")})` : (council?.reason ?? null)),
     summary: text.summary, reasons: text.reasons, risks: text.risks, weighed: answer?.weighed ?? [],
     overruled: d.overruled, trade: d.trade,
+    // CR1 (src/council-conf-retry.mjs): only when the council was re-asked for a missing-confidence WAIT ({ first, second }).
+    ...(council?.conf_retry ? { conf_retry: council.conf_retry } : {}),
     // SV1b: only a BUY or SELL that trades because A6 or A7 lifted a classic veto ({ rule, old_detail }, words only).
     ...(d.veto_softened ? { veto_softened: d.veto_softened } : {}),
     // RM1b: only a BUY or SELL that trades on a side whose room check was waived ({ corridor, broke_at, trend }; ATR, words).
@@ -1698,7 +1701,23 @@ export async function askCouncil(env, evidence, { clock = () => Date.now(), dead
     last = r;
     const obj = r.obj && typeof r.obj === "object" ? { ...r.obj } : null;
     const v = r.truncated ? { valid: false, errors: ["answer_cut_off"] } : validateCouncil(obj);
-    if (v.valid) return withMessages({ answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}) });
+    if (v.valid) {
+      // CR1 (src/council-conf-retry.mjs, COUNCIL_CONF_RETRY): a WAIT for a missing confidence on a decision whose side
+      // passes is asked once more with one correction (capped a day); the second valid answer is the answer.
+      if (councilConfRetryMode(env) === "on" && confRetryNeeded(obj, evidence) && deadline - clock() > COUNCIL_RETRY_MIN_MS && await takeConfRetry(env, { now: clock() })) {
+        const again = [...messages, { role: "assistant", content: clip(r.text, 4000) }, { role: "user", content: CONF_RETRY_NOTE }];
+        let second = null, r2nd = null;
+        try {
+          r2nd = await callBusModel(env, { messages: again, schemaName: "decision_council", schema: COUNCIL_JSON_SCHEMA, maxTokens, effort: "low", deadline, clock, runState, role: "moderator", skipPrimary });
+          const o2 = r2nd?.status === "answered" && r2nd.obj && typeof r2nd.obj === "object" ? { ...r2nd.obj } : null;
+          if (o2 && !r2nd.truncated && validateCouncil(o2).valid) second = o2;
+        } catch { second = null; }
+        const conf_retry = confRetryRecord(obj, second);
+        if (second) return withMessages({ answer: second, model: r2nd.model, fallback_used: r2nd.fallback_used === true, errors, retries: attempt + 1, conf_retry });
+        return withMessages({ answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}), conf_retry });
+      }
+      return withMessages({ answer: obj, model: r.model, fallback_used: r.fallback_used === true, errors, ...(attempt ? { retries: attempt } : {}) });
+    }
     errors = v.errors;
     const timeLeft = deadline - clock() > COUNCIL_RETRY_MIN_MS;
     if (r.truncated && !briefed && timeLeft) {
@@ -1799,7 +1818,7 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     try {
       const doctrinePayload = await fetchEffectiveDoctrine(env, { now });
       if (doctrinePayload?.rules?.length) {
-        context.doctrine = formatDoctrineDirectives(doctrinePayload.rules, { role: "council" });
+        context.doctrine = formatDoctrineDirectives(doctrinePayload.rules, { role: "council", confNote: councilConfRetryMode(env) === "on" });
       }
     } catch { /* keep context */ }
     // The platform's own model, once its prospective record connected it by itself (src/model-baseline.mjs

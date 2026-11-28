@@ -14,6 +14,8 @@
 //     - Falls back safely to CANON_DOCTRINE_RULES when offline or in tests.
 //     - Formats active doctrine directives for LLM prompt injection into Decision Council and Room Agents.
 
+import { CONF_DOCTRINE_NOTE } from "./council-conf-retry.mjs";
+
 export const DOCTRINE_KV_KEY = "aether:doctrine:effective";
 export const DOCTRINE_MEMORY_TTL_MS = 5 * 60_000; // 5 minutes
 export const DOCTRINE_KV_TTL_SECONDS = 3600;       // 1 hour
@@ -162,7 +164,7 @@ export async function getEffectiveDoctrine(env, options = {}) {
  * Formats active doctrine rules into prompt directives for the Decision Council and Room Agents.
  * Emphasizes constitutional boundaries and execution rules.
  */
-export function formatDoctrineDirectives(rules, { role = "council" } = {}) {
+export function formatDoctrineDirectives(rules, { role = "council", confNote = false } = {}) {
   const active = Array.isArray(rules) && rules.length ? rules : CANON_DOCTRINE_RULES;
   const constitutional = active.filter((r) => r.class === "constitutional");
   const operational = active.filter((r) => r.class === "operational");
@@ -187,6 +189,8 @@ export function formatDoctrineDirectives(rules, { role = "council" } = {}) {
     if (targetIds.includes(r.id) || r.amended) {
       const amended = r.amended ? ` [AMENDED: ${r.amended.amendment_id}]` : "";
       lines.push(`- ${r.id}${amended}: ${r.rule}`);
+      // CR1 (src/council-conf-retry.mjs, COUNCIL_CONF_RETRY on): how the council reads the confidence in engine_thresholds.
+      if (confNote && role === "council" && r.id === "engine_thresholds") lines.push(CONF_DOCTRINE_NOTE);
     }
   }
 
