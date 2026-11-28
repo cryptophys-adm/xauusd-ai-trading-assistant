@@ -185,8 +185,8 @@ export const FEATURE_SWITCHES = Object.freeze([
   entry({
     // ET1 (owner 2026-11-28 via the orchestrator, "setuju semua"; src/event-trigger.mjs).
     key: "EVENT_TRIGGER_MODE", label: "5-minute event trigger", group: "agents",
-    description: "ET1: when the latest 15m decision WAITed on a side whose guardrails all passed for the 5m confirmation, and a verified 5m Prophet confirmation on that side closes before the next 15m close, the event is recorded with its counterfactual R (the plan at market through the plan learner's replay). record: rows only; on: also counts the out-of-cycle council run it would ask for (at most 8 a UTC day; no run is wired yet); off: nothing. No order either way.",
-    values: ["record", "on", "off"], default_value: "off", config_value: "record", read: (raw) => { const v = s(raw); return ["record", "on", "off"].includes(v) ? v : "off"; }
+    description: "ET1: when the latest 15m decision WAITed on a side whose guardrails all passed for the 5m confirmation, and a verified 5m Prophet confirmation on that side closes before the next 15m close, the event is recorded with its counterfactual R (the plan at market through the plan learner's replay). record: rows only; off: nothing. No model call and no order either way.",
+    values: ["record", "off"], default_value: "off", config_value: "record", read: (raw) => { const v = s(raw); return v === "record" || v === "on" ? "record" : "off"; }
   }),
   entry({
     key: "CFC_MODE", label: "Call for Councils", group: "agents",

@@ -11,17 +11,15 @@
 // control arm, the plan's own stop and TP1 distances from the fill, its fill window), resolved by a later step.
 //
 // EVENT_TRIGGER_MODE (FS1, group agents; wrangler "record", code default "off"): "record" the rows and their R only;
-// "on" the same, and also counts the out-of-cycle council run it would ask for (at most EVENT_TRIGGER_DAILY_CAP a UTC
-// day, KV counter) through an injected runner; this Worker injects none yet, so "on" acts as "record" plus the count
-// (the out-of-cycle run needs its own decision key through the signal path: a follow-up). "off": nothing.
+// "off" nothing. There is no "on" yet (orchestrator 2026-11-28): the out-of-cycle council run needs its own decision key
+// through the signal path, the ledger and Omega, a separate PR with its own design note; until then "on" reads as
+// "record", so no mode is offered that does nothing.
 import { liveM5Inputs } from "./strategy-engine.mjs";
 import { setupOutcome } from "./plan-learning.mjs";
 import { ledgerSeries } from "./signal-ledger.mjs";
 
 export const EVENT_TRIGGER_SWITCH = "EVENT_TRIGGER_MODE";
-export const EVENT_TRIGGER_MODES = Object.freeze(["record", "on", "off"]);
-export const EVENT_TRIGGER_DAILY_CAP = 8;
-export const EVENT_TRIGGER_KEY_PREFIX = "event-trigger:runs:";
+export const EVENT_TRIGGER_MODES = Object.freeze(["record", "off"]);
 const M15 = 15 * 60_000;
 const DEFAULT_AGENT = "zone_pullback";
 
@@ -29,10 +27,10 @@ const s = (v) => String(v ?? "").trim().toLowerCase();
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const parse = (x) => { if (x == null) return null; if (typeof x !== "string") return x; try { return JSON.parse(x); } catch { return null; } };
 
-/** Pure: EVENT_TRIGGER_MODE as the env holds it ("off" for anything else). */
+/** Pure: EVENT_TRIGGER_MODE as the env holds it ("on" reads as "record" until the out-of-cycle run exists; else "off"). */
 export function eventTriggerMode(env) {
   const v = s(env?.EVENT_TRIGGER_MODE);
-  return EVENT_TRIGGER_MODES.includes(v) ? v : "off";
+  return v === "record" || v === "on" ? "record" : "off";
 }
 
 /** Pure: the side's plan from a decision record (the default agent's, else the first one recorded), or null. */
@@ -50,17 +48,27 @@ export function sidePlanOf(record, side) {
  * guardrails all passed, its entry trigger had not fired, and the verified 5m confirmation on that side (`live`, as
  * liveM5Inputs returns it) closed after the decision's bar and before the next 15m close (`now` too).
  */
-export function eventsOf(record, live, now) {
+/**
+ * Pure: the sides that could still have an event at `now`, from the decision alone (no 5m read): the latest decision is a
+ * WAIT inside its 15m window, and the side's guardrails all passed with its entry trigger not fired. [] when none.
+ */
+export function candidateSidesOf(record, now) {
   if (!record || record.stance !== "WAIT") return [];
   const closeMs = Date.parse(String(record.bar_close ?? ""));
   if (!finite(closeMs) || !(now >= closeMs && now < closeMs + M15)) return [];
+  return ["long", "short"].filter((side) => record.guardrails?.[side]?.allowed === true && record.guardrails?.[side]?.entry_trigger?.fired !== true);
+}
+
+export function eventsOf(record, live, now) {
+  const sides = candidateSidesOf(record, now);
+  if (!sides.length) return [];
+  const closeMs = Date.parse(String(record.bar_close ?? ""));
   const c = live?.confirmation;
   const at = Date.parse(String(c?.candle_time ?? ""));
   if (c?.verified !== true || !finite(at) || !(at > closeMs && at < closeMs + M15)) return [];
   const out = [];
   for (const [side, flag] of [["long", "buy_confirmed"], ["short", "sell_confirmed"]]) {
-    const g = record.guardrails?.[side];
-    if (g?.allowed !== true || g?.entry_trigger?.fired === true || c[flag] !== true) continue;
+    if (!sides.includes(side) || c[flag] !== true) continue;
     const plan = sidePlanOf(record, side);
     if (!plan) continue;
     const atr = Number(record.strategy?.atr_h1);
@@ -89,24 +97,11 @@ async function ensureSchema(db) {
   schemaReady.add(db);
 }
 
-/** Takes one of the day's out-of-cycle runs (KV counter): true while under the cap; false at it or when unreadable. */
-export async function takeEventRun(env, { now = Date.now(), cap = EVENT_TRIGGER_DAILY_CAP } = {}) {
-  const kv = env?.SIGNAL_CACHE;
-  if (!kv?.get || !kv?.put) return false;
-  try {
-    const key = `${EVENT_TRIGGER_KEY_PREFIX}${new Date(now).toISOString().slice(0, 10)}`;
-    const n = Number(await kv.get(key)) || 0;
-    if (n >= cap) return false;
-    await kv.put(key, String(n + 1), { expirationTtl: 2 * 86_400 });
-    return true;
-  } catch { return false; }
-}
-
 /**
  * One step: the new events (rows written once per decision and side), then the open rows' counterfactual R.
- * { status, recorded, resolved, runs } (runs: out-of-cycle runs asked for in "on"). Never throws.
+ * { status, recorded, resolved }. The 5m context is read only while a side is a candidate. Never throws.
  */
-export async function runEventTrigger(env, { now = Date.now(), live = undefined, record = undefined, bars = null, runner = null } = {}) {
+export async function runEventTrigger(env, { now = Date.now(), live = undefined, record = undefined, bars = null } = {}) {
   const mode = eventTriggerMode(env);
   if (mode === "off") return { status: "inactive" };
   const db = env?.DB;
@@ -114,18 +109,14 @@ export async function runEventTrigger(env, { now = Date.now(), live = undefined,
   try {
     await ensureSchema(db);
     const rec = record !== undefined ? record : parse(await env?.SIGNAL_CACHE?.get?.("decision-engine:latest"));
-    const lv = live !== undefined ? live : await liveM5Inputs(env, { now });
-    let recorded = 0, runs = 0;
+    const lv = live !== undefined ? live : candidateSidesOf(rec, now).length ? await liveM5Inputs(env, { now }) : null;
+    let recorded = 0;
     for (const e of eventsOf(rec, lv, now)) {
       const ins = await db.prepare("INSERT OR IGNORE INTO event_triggers (decision_key, side, event_ms, recorded_at, mode, plan_json) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(rec.decision_key, e.side, e.event_ms, new Date(now).toISOString(), mode, JSON.stringify(e.plan)).run();
       if (!Number(ins?.meta?.changes)) continue;
       recorded += 1;
       console.log(JSON.stringify({ event: "event_trigger", decision_key: rec.decision_key, side: e.side, mode }));
-      if (mode === "on" && typeof runner === "function" && await takeEventRun(env, { now })) {
-        runs += 1;
-        try { await runner({ decision_key: rec.decision_key, side: e.side, event_ms: e.event_ms }); } catch { /* the row stands */ }
-      }
     }
     // The counterfactual R of the open rows (the 1m ledger series), at most 20 a step.
     const open = (await db.prepare("SELECT * FROM event_triggers WHERE status = 'open' AND event_ms <= ? ORDER BY event_ms LIMIT 20").bind(now - M15).all()).results ?? [];
@@ -141,7 +132,7 @@ export async function runEventTrigger(env, { now = Date.now(), live = undefined,
         resolved += 1;
       }
     }
-    return { status: "ok", mode, recorded, resolved, runs };
+    return { status: "ok", mode, recorded, resolved };
   } catch (e) {
     return { status: "failed", reason: String(e?.message ?? e).slice(0, 200) };
   }

@@ -1,7 +1,7 @@
 // ET1 (src/event-trigger.mjs): the 5-minute event trigger, record mode. No network: D1 is SQLite, KV a Map.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventTriggerMode, eventsOf, sidePlanOf, eventSetup, runEventTrigger, eventTriggerReport, takeEventRun, resetEventTriggerSchemaForTests, EVENT_TRIGGER_DAILY_CAP } from "../src/event-trigger.mjs";
+import { eventTriggerMode, eventsOf, candidateSidesOf, sidePlanOf, eventSetup, runEventTrigger, eventTriggerReport, resetEventTriggerSchemaForTests, EVENT_TRIGGER_MODES } from "../src/event-trigger.mjs";
 import { switchByKey, readSwitch } from "../src/feature-switches.mjs";
 import { d1, kv } from "./fixtures/mode-shadow.mjs";
 
@@ -39,10 +39,9 @@ test("ET-2 the ledger step: one row per decision and side, its counterfactual R 
   resetEventTriggerSchemaForTests();
   const env = { DB: d1(), SIGNAL_CACHE: kv(), EVENT_TRIGGER_MODE: "record" };
   const at = CLOSE + M5;
-  const runner = async () => assert.fail("record never asks for a council run");
-  const first = await runEventTrigger(env, { now: CLOSE + 6 * M1, record: recordOf(), live: liveAt(at), runner, bars: [] });
-  assert.deepEqual(first, { status: "ok", mode: "record", recorded: 1, resolved: 0, runs: 0 });
-  assert.equal((await runEventTrigger(env, { now: CLOSE + 11 * M1, record: recordOf(), live: liveAt(at), runner, bars: [] })).recorded, 0, "once per decision and side");
+  const first = await runEventTrigger(env, { now: CLOSE + 6 * M1, record: recordOf(), live: liveAt(at), bars: [] });
+  assert.deepEqual(first, { status: "ok", mode: "record", recorded: 1, resolved: 0 });
+  assert.equal((await runEventTrigger(env, { now: CLOSE + 11 * M1, record: recordOf(), live: liveAt(at), bars: [] })).recorded, 0, "once per decision and side");
   // 1m bars rising 0.25 a minute from the event: the market entry at about 4002 reaches its TP1 (+15) in an hour.
   const bars = Array.from({ length: 240 }, (_, i) => ({ open_time: iso(at + i * M1), close_time: iso(at + (i + 1) * M1), open: 4002 + i * 0.25, high: 4002.5 + i * 0.25, low: 4001.5 + i * 0.25, close: 4002.25 + i * 0.25 }));
   const later = await runEventTrigger(env, { now: at + 3 * 60 * M1, record: recordOf(), live: null, bars });
@@ -55,25 +54,32 @@ test("ET-2 the ledger step: one row per decision and side, its counterfactual R 
   assert.doesNotMatch(JSON.stringify(rep), /4002|4015|3990/, "the report carries no price");
 });
 
-test("ET-3 on: counts the out-of-cycle run it would ask for, at most 8 a UTC day; off: nothing", async () => {
+test("ET-3 no mode that does nothing: \"on\" reads as \"record\" (no out-of-cycle run exists yet); off: nothing; the 5m context is read only for a candidate", async () => {
+  assert.deepEqual([...EVENT_TRIGGER_MODES], ["record", "off"]);
+  assert.equal(eventTriggerMode({ EVENT_TRIGGER_MODE: "on" }), "record");
   resetEventTriggerSchemaForTests();
-  const env = { DB: d1(), SIGNAL_CACHE: kv(), EVENT_TRIGGER_MODE: "on" };
-  const asked = [];
-  const out = await runEventTrigger(env, { now: CLOSE + 6 * M1, record: recordOf(), live: liveAt(CLOSE + M5), runner: async (e) => { asked.push(e); }, bars: [] });
-  assert.deepEqual([out.recorded, out.runs, asked.length, asked[0].side], [1, 1, 1, "long"]);
-  assert.equal((await runEventTrigger(env, { now: CLOSE + 6 * M1, record: recordOf(), live: liveAt(CLOSE + M5), bars: [] })).runs, 0, "no runner injected: rows only");
-  const c = kv(), day = CLOSE + 6 * M1;
-  for (let i = 0; i < EVENT_TRIGGER_DAILY_CAP; i++) assert.equal(await takeEventRun({ SIGNAL_CACHE: c }, { now: day }), true);
-  assert.equal(await takeEventRun({ SIGNAL_CACHE: c }, { now: day }), false);
-  assert.equal(await takeEventRun({ SIGNAL_CACHE: c }, { now: day + 86_400_000 }), true);
-  assert.equal(EVENT_TRIGGER_DAILY_CAP, 8);
-  assert.deepEqual(await runEventTrigger({ DB: d1(), SIGNAL_CACHE: kv() }, { now: day }), { status: "inactive" });
+  const reads = [];
+  const store = kv(), getter = store.get;
+  store.get = async (k) => { reads.push(k); return getter(k); };
+  const env = { DB: d1(), SIGNAL_CACHE: store, EVENT_TRIGGER_MODE: "on" };
+  const out = await runEventTrigger(env, { now: CLOSE + 6 * M1, record: recordOf(), live: liveAt(CLOSE + M5), bars: [] });
+  assert.deepEqual([out.mode, out.recorded, "runs" in out], ["record", 1, false]);
+  // No candidate (a BUY, a side that failed, the trigger already fired, outside the window): no 5m context read.
+  for (const r of [recordOf({ stance: "BUY" }), recordOf({ guardrails: { long: { allowed: false }, short: { allowed: false } } }), recordOf({ guardrails: { long: { allowed: true, entry_trigger: { fired: true } }, short: { allowed: false } } })]) {
+    assert.deepEqual(candidateSidesOf(r, CLOSE + 6 * M1), []);
+    reads.length = 0;
+    await runEventTrigger(env, { now: CLOSE + 6 * M1, record: r, bars: [] });
+    assert.equal(reads.includes("context:m5:latest"), false, "no 5m read without a candidate");
+  }
+  assert.deepEqual(candidateSidesOf(recordOf(), CLOSE + M15 + M1), [], "the next 15m bar");
+  assert.deepEqual(candidateSidesOf(recordOf(), CLOSE + 6 * M1), ["long"]);
+  assert.deepEqual(await runEventTrigger({ DB: d1(), SIGNAL_CACHE: kv() }, { now: CLOSE }), { status: "inactive" });
 });
 
 test("ET-4 the switch: FS1 row and accessor", () => {
   const e = switchByKey("EVENT_TRIGGER_MODE");
-  assert.deepEqual([e.group, e.default_value, e.config_value, [...e.values]], ["agents", "off", "record", ["record", "on", "off"]]);
-  for (const [raw, v] of [["record", "record"], [" ON ", "on"], ["off", "off"], ["x", "off"], [undefined, "off"]]) {
+  assert.deepEqual([e.group, e.default_value, e.config_value, [...e.values]], ["agents", "off", "record", ["record", "off"]]);
+  for (const [raw, v] of [["record", "record"], [" ON ", "record"], ["off", "off"], ["x", "off"], [undefined, "off"]]) {
     assert.equal(readSwitch(e, raw), v);
     assert.equal(eventTriggerMode(raw === undefined ? {} : { EVENT_TRIGGER_MODE: raw }), v);
   }

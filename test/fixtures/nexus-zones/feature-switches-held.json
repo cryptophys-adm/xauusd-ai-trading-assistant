@@ -552,12 +552,11 @@
     {
       "key": "EVENT_TRIGGER_MODE",
       "label": "5-minute event trigger",
-      "description": "ET1: when the latest 15m decision WAITed on a side whose guardrails all passed for the 5m confirmation, and a verified 5m Prophet confirmation on that side closes before the next 15m close, the event is recorded with its counterfactual R (the plan at market through the plan learner's replay). record: rows only; on: also counts the out-of-cycle council run it would ask for (at most 8 a UTC day; no run is wired yet); off: nothing. No order either way.",
+      "description": "ET1: when the latest 15m decision WAITed on a side whose guardrails all passed for the 5m confirmation, and a verified 5m Prophet confirmation on that side closes before the next 15m close, the event is recorded with its counterfactual R (the plan at market through the plan learner's replay). record: rows only; off: nothing. No model call and no order either way.",
       "group": "agents",
       "worker": "ai",
       "values": [
         "record",
-        "on",
         "off"
       ],
       "value": "record",
