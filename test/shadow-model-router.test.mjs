@@ -182,7 +182,7 @@ test("SB1-2b on: metric_opening, the note arm, the benched seats and decision_co
   const src = new URL("../src/", import.meta.url);
   const files = readdirSync(src).filter((f) => /\.(mjs|ts)$/.test(f) && !f.endsWith(".d.mts"));
   const text = (f) => readFileSync(new URL(f, src), "utf8");
-  assert.deepEqual(files.filter((f) => /from "\.\/model-router\.mjs"/.test(text(f))).sort(), ["news-shadow-compare.mjs", "shadow-switch.mjs"]);
+  assert.deepEqual(files.filter((f) => /from "\.\/model-router\.mjs"/.test(text(f))).sort(), ["news-shadow-compare.mjs", "provider-router.mjs", "shadow-switch.mjs"]);
   assert.deepEqual(files.filter((f) => /routeShadowCall\(/.test(text(f))).sort(), ["model-router.mjs", "news-shadow-compare.mjs"]);
   assert.doesNotMatch(text("shadow-switch.mjs"), /routeShadowCall/, "the breaker reads the counters only");
   assert.deepEqual([...MODEL_ROUTER_ALLOW], ["news_compare"]);

@@ -131,6 +131,8 @@ export async function readAiUsage(db, { days = 2, now = Date.now() } = {}) {
     for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "cached_tokens", "memo_hits", "memo_same", "reused"]) if (!(shadowKey && (k === "memo_hits" || k === "memo_same"))) d[k] += Number(r[k]) || 0;
     // CL1: a paid API row (model "anthropic:…") carries its own USD; it is never an unpriced Workers AI row.
     if (String(r.model).startsWith("anthropic:")) d.api_usd = Math.round((d.api_usd + (Number(r.usd_micros) || 0) / 1e6) * 1e6) / 1e6;
+    // CL1 PR2: the live router's Beam rows (model "reflection:…") are a free beta API: no neurons, no USD, not unpriced.
+    else if (String(r.model).startsWith("reflection:")) { /* counted in calls and tokens only */ }
     else if (r.neurons == null) d.unpriced_tokens += (Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0);
     else d.neurons += r.neurons;
     byDay.set(r.day, d);

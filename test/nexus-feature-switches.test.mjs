@@ -82,7 +82,7 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
     for (const k of ["label", "description", "group", "worker", "era_switch", "restarts_mode_evidence", "emergency_stop", "read_only", "write"]) assert.deepEqual(r[k], e[k], `${e.key}.${k}`);
   }
   for (const k of ["ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN"]) assert.ok(row(k), `${k}: one of the four beyond the mockup`);
-  assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED", "CLAUDE_SHADOW"]);
+  assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED", "CLAUDE_SHADOW", "ROUTER_DECISION", "ROUTER_TEXT"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.read_only).map((r) => r.key), ["METRIC_REBUTTAL"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.source === "override").map((r) => r.key), ["ENTRY_ZONE_MODE", "CFC_MODE", "change_thresholds"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd", "limit_first"]);
@@ -410,10 +410,10 @@ test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no
   const html = await page(OWNER);
   assert.doesNotMatch(html, /style="/, "no style attribute in the markup");
   // The marks: era on the eight Omega settings (CDG's cd_gate the sixth, Z3a's zone_mgmt the seventh, Z6's zone_sd the eighth, E1's limit_first the ninth), ev on the
-  // mode-evidence switches, the caution on the four emergency stops (CL1's CLAUDE_SHADOW the fourth).
+  // mode-evidence switches, the caution on the six emergency stops (CL1's CLAUDE_SHADOW the fourth, CL1 PR2's ROUTER_DECISION and ROUTER_TEXT the fifth and sixth).
   assert.equal(count(html, />era</g), 9);
   assert.equal(count(html, />ev</g), OWNER.switches.filter((r) => r.restarts_mode_evidence).length);
-  assert.equal(count(html, /aria-label="Emergency stop"/g), 4);
+  assert.equal(count(html, /aria-label="Emergency stop"/g), 6);
   // The description lives in the tooltip only (once per row, inside role="tooltip").
   assert.ok(row("ZONE_PRIORITY").description.includes("zone_ahead check and the zone aims"));
   assert.equal(count(html, /zone_ahead check and the zone aims/g), 1);

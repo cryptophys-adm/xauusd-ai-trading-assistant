@@ -174,6 +174,8 @@ export async function routerKernelStatus(env, { now = Date.now(), fresh = false 
   return statusMemo;
 }
 
+/** The paid sign held in KV ({ at, reason, reported }), or null. Never throws. Shared with the live router (CL1 PR2). */
+export async function readModelRouterPaid(env) { return readPaid(env); }
 async function readPaid(env) {
   try { const v = JSON.parse((await env?.SIGNAL_CACHE?.get?.(MODEL_ROUTER_PAID_KEY)) || "null"); return v && Number.isFinite(Number(v.at)) ? v : null; } catch { return null; }
 }
@@ -274,12 +276,7 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   }
   const paidSign = paidSignOf(res.status, said, billed);
   if (paidSign) {
-    // Routing off org-wide, once, and held off here until the kernel's status reads "on" again.
-    const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { signal: paidSignalOf(paidSign) });
-    const reported = r?.outcome === "succeeded" || r?.outcome === "success";
-    try { await env?.SIGNAL_CACHE?.put?.(MODEL_ROUTER_PAID_KEY, JSON.stringify({ at: clock(), reason: paidSign, reported })); } catch { /* the memo below still holds this isolate */ }
-    statusMemo = { at: clock(), status: "off", detail: "paid" };
-    console.log("model_router_paid", JSON.stringify({ reason: paidSign, reported }));
+    await reportRouterPaidSign(env, paidSign, clock);
     return back(paidSign, sent);
   }
   if (!res.ok) return back(res.status >= 500 ? "http_5xx" : "http_4xx", { ...sent, failure: res.status >= 500 });
@@ -290,6 +287,19 @@ export async function routeShadowCall(env, { site, allow, reading = null, messag
   if (value == null) return back("invalid_answer", sent);
   await recordEvent(db, { at: clock(), site, reading, model: cfg.model, outcome: "routed", reason: null, ...sent });
   return { via: "beam", value };
+}
+
+/**
+ * A paid sign seen on any Beam call (shadow or live): routing off org-wide through the kernel's report_paid, once, and held
+ * off here (KV) until the kernel's status reads "on" again. Never throws.
+ */
+export async function reportRouterPaidSign(env, paidSign, clock = () => Date.now()) {
+  const r = await kernelSyscall(env, MODEL_ROUTER_AGENT, MODEL_ROUTER_CAPABILITIES.report_paid, { signal: paidSignalOf(paidSign) });
+  const reported = r?.outcome === "succeeded" || r?.outcome === "success";
+  try { await env?.SIGNAL_CACHE?.put?.(MODEL_ROUTER_PAID_KEY, JSON.stringify({ at: clock(), reason: paidSign, reported })); } catch { /* the memo below still holds this isolate */ }
+  statusMemo = { at: clock(), status: "off", detail: "paid" };
+  console.log("model_router_paid", JSON.stringify({ reason: paidSign, reported }));
+  return reported;
 }
 
 /** The router's recent events for a read model or a test (never a prompt or an answer). Never throws. */

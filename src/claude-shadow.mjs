@@ -135,6 +135,14 @@ export function claudeSchema(schema) {
 export async function readClaudeBreaker(env) {
   try { const raw = await env?.SIGNAL_CACHE?.get?.(CLAUDE_BREAKER_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
+/**
+ * CL1 PR2: a live Claude call's breaker trip, shared with the shadow (one billing error stops both): billing and auth until
+ * the next UTC day, a rate limit an hour. Never throws.
+ */
+export async function tripClaudeBreaker(env, trip, now = Date.now()) {
+  if (!trip) return;
+  await writeBreaker(env, { reason: trip, until_ms: trip === "rate_limited" ? now + HOUR : nextUtcDay(now), at: new Date(now).toISOString(), timeouts: 0 });
+}
 async function writeBreaker(env, state) {
   try { await env?.SIGNAL_CACHE?.put?.(CLAUDE_BREAKER_KEY, JSON.stringify(state), { expirationTtl: 3 * 86_400 }); } catch { /* best effort */ }
 }
