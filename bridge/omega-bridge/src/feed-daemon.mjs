@@ -22,12 +22,16 @@
 // from there and echoes `backfill_from_ms`); an EA that does not answer within BACKFILL_REQUEST_WAIT_MS is walked with
 // the bars it has. A minute the broker never had (a holiday's early close) cannot be filled: the server keeps answering
 // it, the walk for that value has ended, and the feed stays on its fresh bars. The executor's daemon is unchanged.
+// 1.8.4 (feed incident 2026-11-28 10:16Z: a guarded restart with startup.ini came up logged out, as on 27 Nov 13:09):
+// the login ini carries [Common] KeepPrivate=1, so MT5 saves the password at that login; the clear keeps KeepPrivate=1
+// (clearFeedCredentials), and a login ini with a password but without KeepPrivate=1 is never written
+// (feedIniSafeToWrite: the apply fails with "keep_private_missing"). startup.ini still has no [Common] section.
 import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
 import { readState, readCorpus, readCorpusMacro, resolveOmegaDir, DEFAULT_MT5_FILES_DIR, CORPUS_MAX_BARS, BACKFILL_MAX_BARS, writeBackfillRequest } from "./files.mjs";
-import { applyFeedCredentials, clearCredentials, ensureFeedSettings, feedStartupIni } from "./ini.mjs";
+import { applyFeedCredentials, clearFeedCredentials, ensureFeedSettings, feedStartupIni, feedIniSafeToWrite } from "./ini.mjs";
 import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
 import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE, writeTerminalIniPreservingOwner } from "./daemon.mjs";
 
@@ -292,7 +296,10 @@ export function createFeedDaemon(options = {}) {
       try {
         const creds = openEnvelope(conn.envelope, keys.privateKey, keys.kid);
         const cur = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
-        writeIni(config.terminalIni, applyFeedCredentials(cur, { server: creds.server, login: creds.login, password: creds.password, symbol: config.symbol, expert: config.expert }), fs);
+        const next = applyFeedCredentials(cur, { server: creds.server, login: creds.login, password: creds.password, symbol: config.symbol, expert: config.expert });
+        // 1.8.4: a login the terminal would not save is never written (its first restart after the clear would come up logged out).
+        if (!feedIniSafeToWrite(next)) throw new Error("keep_private_missing");
+        writeIni(config.terminalIni, next, fs);
         await restartTerminal();
         writeJson(appliedPath(), { version: Number(conn.version), server: creds.server, applied_ms: now(), cleared_ms: null }, fs);
         log({ level: "info", event: "feed_connection_applied", version: Number(conn.version), server: creds.server, symbol: config.symbol, service: config.terminalService });
@@ -304,7 +311,7 @@ export function createFeedDaemon(options = {}) {
       // while Password= is non-empty, so the next start needs no login file).
       try {
         const cur = fs.readFileSync(config.terminalIni, "utf8");
-        writeIni(config.terminalIni, clearCredentials(cur), fs);
+        writeIni(config.terminalIni, clearFeedCredentials(cur), fs);
         writeJson(appliedPath(), { ...applied, cleared_ms: now() }, fs);
         log({ level: "info", event: "feed_credentials_cleared", server: applied.server });
       } catch (err) {
