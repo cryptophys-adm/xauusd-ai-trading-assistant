@@ -1,0 +1,13 @@
+export const CONF_RETRY_SWITCH: "COUNCIL_CONF_RETRY";
+export const CONF_RETRY_DAILY_CAP: number;
+export const CONF_RETRY_KEY_PREFIX: string;
+export const CONF_DOCTRINE_NOTE: string;
+export const CONF_RETRY_NOTE: string;
+export type ConfRetryRecord = { first: { stance: string | null; confidence: number | null }; second: { stance: string | null; confidence: number | null } | null };
+export function councilConfRetryMode(env: unknown): "on" | "off";
+export function citesMissingConfidence(answer: unknown): boolean;
+export function confRetryNeeded(answer: unknown, evidence: unknown): boolean;
+export function confRetryKey(ms: number): string;
+export function takeConfRetry(env: unknown, opts?: { now?: number; cap?: number }): Promise<boolean>;
+export function confRetryCount(env: unknown, opts?: { now?: number }): Promise<number>;
+export function confRetryRecord(first: unknown, second: unknown): ConfRetryRecord;

@@ -177,6 +177,12 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["two_sided", "classic"], default_value: "classic", config_value: "two_sided", read: (raw) => (s(raw) === "two_sided" ? "two_sided" : "classic")
   }),
   entry({
+    // CR1 (owner 2026-11-28 via the orchestrator, "setuju semua"; src/council-conf-retry.mjs).
+    key: "COUNCIL_CONF_RETRY", label: "Council missing-confidence retry", group: "agents",
+    description: "CR1: the decision council reads the doctrine's confidence threshold as its own answer, never as a missing input; a WAIT with confidence 0, or one that cites a missing confidence, on a decision where a side passes its guardrails is asked once more with one correction, at most 20 times a UTC day (decision.conf_retry). Off: neither.",
+    values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn
+  }),
+  entry({
     key: "CFC_MODE", label: "Call for Councils", group: "agents",
     description: "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page); off runs nothing.",
     values: ["off", "suggest", "on"], default_value: "suggest", config_value: "on",

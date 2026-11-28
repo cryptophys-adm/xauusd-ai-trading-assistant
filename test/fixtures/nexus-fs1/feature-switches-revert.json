@@ -510,6 +510,28 @@
       }
     },
     {
+      "key": "COUNCIL_CONF_RETRY",
+      "label": "Council missing-confidence retry",
+      "description": "CR1: the decision council reads the doctrine's confidence threshold as its own answer, never as a missing input; a WAIT with confidence 0, or one that cites a missing confidence, on a decision where a side passes its guardrails is asked once more with one correction, at most 20 times a UTC day (decision.conf_retry). Off: neither.",
+      "group": "agents",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "CFC_MODE",
       "label": "Call for Councils",
       "description": "suggest runs the hourly suggestion flags (no model call); on also lets the owner open council sessions (with the switch on the Councils page); off runs nothing.",

@@ -30,4 +30,4 @@ export function resetDoctrineConsumerCacheForTests(): void;
 export function normaliseDoctrineRules(rawRules: unknown): readonly DoctrineRule[];
 export function fetchEffectiveDoctrine(env?: any, options?: { force?: boolean; now?: number }): Promise<EffectiveDoctrinePayload>;
 export function getEffectiveDoctrine(env?: any, options?: { force?: boolean; now?: number }): Promise<readonly DoctrineRule[]>;
-export function formatDoctrineDirectives(rules: readonly DoctrineRule[], options?: { role?: string }): string;
+export function formatDoctrineDirectives(rules: readonly DoctrineRule[], options?: { role?: string; confNote?: boolean }): string;
