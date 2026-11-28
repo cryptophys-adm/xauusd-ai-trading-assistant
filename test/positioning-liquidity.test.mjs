@@ -907,7 +907,7 @@ test("PL26. runLensStep end to end over a backfill: the replayed readings reach 
   assert.ok(score.n >= 20);
   // This walk's replay scores 40 hits of 93 (0.43): under the floor, so lens B drops to its floor at once, as the
   // production backfill is expected to on day one (RFC §7.2-§7.3 working as designed: the floor lowers lens B's weight).
-  assert.deepEqual([score.hits, score.n, belowFloor(score, {})], [40, 93, true]);
+  assert.deepEqual([score.hits, score.n, belowFloor(score, {})], [40, 94, true]); // 94 since variant B: the lens's rollover follows New York time
   assert.deepEqual([out.floor.status, out.floor.lenses.liquidity.floored], ["floored", true]);
   assert.ok(JSON.parse(await store.get(FLOOR)).liquidity);
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM omega_events WHERE action = 'lens_weight_floor'").get().n, 1);

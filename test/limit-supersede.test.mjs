@@ -22,7 +22,8 @@ import {
 
 const M1 = 60_000, M15 = 15 * M1;
 /** RE1's ENGINE_BEHAVIOUR_HASH: the engine before SS1 (every fixture with limit_supersede "off"). */
-const BEFORE_SS1_HASH = "39c10287e884bba0469ee4557bada444601c5a7d6a209e3231471336a841c4f1";
+// Since variant B (2026-11-28) the off fingerprint is recomputed with the lens rollover on the New York clock (before: 39c10287…).
+const BEFORE_SS1_HASH = "e1b295a4a447f99f596a570f317885817efb15403dbc6641ae319cdc78933225";
 /** RE1's ENGINE_CODE_HASH (the code before SS1). */
 const BEFORE_SS1_CODE_HASH = "38aa8e6fd3abd23a5ab220a06be4df7d33cdcf303276182fbb8a7c9b2c6eb2c6";
 /**

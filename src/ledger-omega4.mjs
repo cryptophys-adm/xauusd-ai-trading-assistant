@@ -752,7 +752,7 @@ export async function sha256Hex(text) {
  * it from the source and fails, printing the new value, until a change to any function above updates it here. It is
  * informational: the era records it, and a new code hash with the same behaviour carries the era over (nextEra).
  */
-export const ENGINE_CODE_HASH = "c670813712ce7d4683331d9301a4e6fa15b64fee28729304eaaeb28a92f24e22";
+export const ENGINE_CODE_HASH = "0caa626023a8c7838f430273db672b5d28c9b45df8dee3d6bb4ef89eb0454541";
 /**
  * The engine's behaviour fingerprint: the SHA-256 of its outputs over the committed fixtures with every switch at its
  * default (OMEGA_DEFAULTS), as test/fixtures/engine-behaviour.mjs engineBehaviourSource writes them:
@@ -790,10 +790,15 @@ export const ENGINE_CODE_HASH = "c670813712ce7d4683331d9301a4e6fa15b64fee2872930
  * fixtures cannot move it (no limit rests there): the fingerprint covers the supersede's own cases
  * (test/fixtures/limit-supersede.mjs: planIntents under entry_order "limit" and "council", and the limit counterfactual
  * beside v4), written with it on only.
+ * RQ1 variant B (owner 2026-11-28 via the orchestrator, "Sekarang, sebelum buka (Recommended)", a recorded exception):
+ * the liquidity lens's rollover window (inRollover, read by the 1m fast-protect layer's noise rules and the baseline)
+ * follows the DST-aware quarantine 16:55-18:15 New York time (rolloverQuarantineAt) instead of a fixed 21:55-22:15 UTC.
+ * It moved the hash from ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69, a new era at its deploy. No
+ * switch restores the old window; the rollback is a revert of the PR.
  * test/ledger-omega-v4.test.mjs V14 recomputes it and fails, printing the new value, when the behaviour changes. A new
  * value starts a new parity era at the deploy; a source change that leaves it as it is carries the era over.
  */
-export const ENGINE_BEHAVIOUR_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69";
+export const ENGINE_BEHAVIOUR_HASH = "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65";
 /**
  * The behaviour switches of the stored Omega settings (omega_settings id 1) whose value off their default
  * (OMEGA_DEFAULTS) changes what the live engine does: the era's switch signature (eraSwitches). A switch that turns

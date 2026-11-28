@@ -262,7 +262,7 @@ test("B5-7 no line off: every Position Manager and PM-1M output is byte for byte
   assert.equal(h(b), h(a));
   const fa = fastCases().map(([, i]) => fastProtect(i)), fb = fastCases().map(([, i]) => fastProtect({ ...i, off: [] }));
   assert.equal(h(fb), h(fa));
-  assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH, "V14: ecfe3f90… unmoved");
+  assert.equal(createHash("sha256").update(engineBehaviourSource()).digest("hex"), ENGINE_BEHAVIOUR_HASH, "V14: d0c07f02… (variant B moved it)");
 });
 
 test("B5-8 the runner: lines_json on each record, PM_LINES_OFF skips the lines it names, and the breaker's off line too", async () => {

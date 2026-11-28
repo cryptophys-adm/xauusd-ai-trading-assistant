@@ -32,7 +32,7 @@ import { d1 as zoneD1, kv as zoneKv } from "./fixtures/mode-shadow.mjs";
 const M1 = 60_000, M15 = 15 * M1, H = 3_600_000, DAY = 86_400_000;
 const NOW = Date.parse("2026-11-25T12:00:00Z");
 const PREV_CODE_HASH = "c4aa5772b5ee81fecdde470f5070ebecffc94b0ecfcfef0062edba41dbf8e620";
-const V14_HASH = "ecfe3f90dbca623504efcbe7f70b778a4b6134a941a27b282c034f6c402baa69";
+const V14_HASH = "d0c07f020f44f9694b794aafa73684488aaf55848fdabdf0fa9a67804b916e65";
 const iso = (ms) => new Date(ms).toISOString();
 
 function d1() {
