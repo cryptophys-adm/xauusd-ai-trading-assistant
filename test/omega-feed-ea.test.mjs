@@ -85,8 +85,20 @@ test("OF-6. 1.03 time base (feed incident 2026-11-28 10:25:58Z): the corpus file
   assert.equal(src.match(/#property version\s+"([\d.]+)"/)?.[1], "1.03");
   const fn = (name) => code.slice(code.indexOf(`void ${name}()`), code.indexOf("\n  }\n", code.indexOf(`void ${name}()`)));
   const base = fn("UpdateTimeBase");
-  assert.match(base, /if\(!\(bool\)TerminalInfoInteger\(TERMINAL_CONNECTED\)\) \{ g_offsetSeen = false; g_timeBaseReady = false; return; \}/, "a disconnect clears it");
-  assert.match(base, /g_timeBaseReady = g_offsetSeen && offset == g_offsetLast;/, "the same offset on two reads in a row");
+  assert.match(code, /const int\s+TIME_BASE_STABLE_TICKS = 60;/, "60 ticks (seconds) of one offset");
+  assert.match(src, /TIME_BASE_STABLE_TICKS \(60\)/, "documented in the header");
+  assert.match(base, /if\(!\(bool\)TerminalInfoInteger\(TERMINAL_CONNECTED\)\) \{ g_offsetStableTicks = 0; g_timeBaseReady = false; return; \}/, "a disconnect resets the count");
+  assert.match(base, /if\(g_offsetStableTicks == 0 \|\| offset != g_offsetLast\) \{ g_offsetLast = offset; g_offsetStableTicks = 1; g_timeBaseReady = false; return; \}/, "a change of the offset starts the count again");
+  assert.match(base, /g_timeBaseReady = g_offsetStableTicks >= TIME_BASE_STABLE_TICKS;/, "ready only after the full count");
+  assert.doesNotMatch(code, /g_offsetSeen/, "no two-read shortcut left");
+  // The same rule in JS, tick by tick: connected, offset; ready after 60 unchanged ticks, never before.
+  const sim = (ticks) => { let n = 0, last = 0, ready = false; const out = [];
+    for (const [conn, off] of ticks) { if (!conn) { n = 0; ready = false; } else if (n === 0 || off !== last) { last = off; n = 1; ready = false; } else { if (n < 60) n++; ready = n >= 60; } out.push(ready); }
+    return out; };
+  const steady = Array(60).fill([true, 7200]);
+  assert.deepEqual([sim(steady).slice(-2), sim(steady.slice(1)).at(-1)], [[false, true], false], "the 60th unchanged tick, not the 59th");
+  assert.equal(sim([...Array(59).fill([true, 0]), [true, 7200], ...Array(59).fill([true, 7200])]).at(-1), true, "a change restarts the count at 1");
+  assert.equal(sim([...Array(59).fill([true, 7200]), [false, 7200], ...Array(59).fill([true, 7200])]).at(-1), false, "a disconnect resets it to 0");
   assert.match(code, /void OnTimer\(\)\n  \{\n   UpdateTimeBase\(\);/, "read once per tick, before any write");
   const corpus = fn("WriteCorpusJson"), macro = fn("WriteCorpusMacroJson"), state = fn("WriteStateJson");
   assert.match(corpus, /^void WriteCorpusJson\(\)\n  \{\n   if\(!g_timeBaseReady\) return;/, "the gold corpus waits for the time base");
