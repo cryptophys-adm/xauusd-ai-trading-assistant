@@ -52,6 +52,8 @@ export const KEYS = Object.freeze({ feed: FEED_KEY, feedNew: FEED_KEY_NEW, execu
 
 // ------------------------------------------------------------------ the Access JWT (as test/support/nexus-h3f-seed.mjs)
 export const TEAM = "cryptophys.cloudflareaccess.com", AUD = "c".repeat(64);
+// CF2a: every Omega write is the owner's alone (OWNER_ACCESS_SUB); the seeded owner is that sub.
+export const OWNER_SUB = "owner-sub-f4-fixture";
 const NOW_S = Math.floor(NOW / 1000);
 const b64url = (bytes) => Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const enc = (obj) => b64url(new TextEncoder().encode(JSON.stringify(obj)));
@@ -65,7 +67,7 @@ export async function access() {
   };
   return {
     opts: { fetchImpl: async () => new Response(JSON.stringify({ keys: [jwk] }), { status: 200 }), now: NOW_S },
-    owner: await jwt({ email: "owner@example.com", sub: "owner-sub-f4-fixture" }),
+    owner: await jwt({ email: "owner@example.com", sub: OWNER_SUB }),
     viewer: await jwt({ common_name: "ci.access" }),
     bridge: await jwt({ common_name: BRIDGE_ID }),
     feed: await jwt({ common_name: FEED_ID })
@@ -134,7 +136,7 @@ export async function seedF4() {
     resetCorpusSchemaCacheForTests();
     const db = await migratedD1();
     const gw = new mod.OmegaGateway(ctx, { DB: db, SIGNAL_CACHE: kv() });
-    const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OMEGA_BRIDGE_CLIENT_ID: BRIDGE_ID, OMEGA_FEED_CLIENT_ID: FEED_ID, OMEGA: gw };
+    const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OWNER_ACCESS_SUB: OWNER_SUB, OMEGA_BRIDGE_CLIENT_ID: BRIDGE_ID, OMEGA_FEED_CLIENT_ID: FEED_ID, OMEGA: gw };
     const must = (r, what) => { if (r.status !== 200 || r.body?.ok === false) throw new Error(`${what}: ${JSON.stringify(r)}`); return r; };
     const overview = (token) => call(env, token, { method: "GET", path: "/omega/api/overview" }).then((r) => must(r, "overview").body);
     const sealed = (spki, kid) => buildEnvelope(spki, kid, PLACEHOLDER);
