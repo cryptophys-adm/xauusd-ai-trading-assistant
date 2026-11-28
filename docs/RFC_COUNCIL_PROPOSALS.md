@@ -91,8 +91,8 @@ The body never carries a price. The send is bound by the kernel's limit of 4 rep
 The platform reports what it does with a handed-off proposal through `council.decisions.read` (platform V3, relayed 2026-11-17), a tier-0 observe capability of `xauusd-moderator`:
 
 - **Call:** `AGENTS.observe("xauusd-moderator", "council.decisions.read", { cursor })`.
-- **Answer:** `{ available, origin, updates: [{ schema: "typed_proposal.v1", proposal_id, state, reason, refs{intent_id, evolution_id, cr_id, merge_sha, deploy_ref}, at }], next_cursor }`. At most 20 a call, oldest first, this origin only, never a price.
-- **States:** received, queued, waiting_external, rejected, in_progress, proposed, merged, deployed, deployed_unmeasured, closed, refused, unfit, reverted.
+- **Answer:** `{ available, origin, updates: [{ schema: "typed_proposal.v1", proposal_id, state, reason, refs{intent_id, evolution_id, cr_id, merge_sha, deploy_ref, close_code}, at }], next_cursor }`. At most 20 a call, oldest first, this origin only, never a price.
+- **States:** received, queued, waiting_external, queued_external, rejected, in_progress, proposed, merged, deployed, deployed_unmeasured, closed, refused, unfit, reverted, expired (`queued_external`, `expired` and the `close_code` ref since platform PR-A, 2026-11-28).
 
 `src/council-decisions.mjs` reads it once an hour, from the stored cursor, and stores each update about one of this repo's proposals (`council_proposal_updates`). Nexus shows the latest state beside the proposal. It changes nothing xauusd does: a knob proposal still runs its own shadow test, live and rollback.
 
