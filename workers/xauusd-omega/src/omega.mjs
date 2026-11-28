@@ -183,7 +183,9 @@ async function personJson(request, url, identity, maxBytes) {
 async function rpc(fn, failure) {
   try {
     const r = await fn();
-    return json(r, r?.ok === false ? 400 : 200);
+    // A refusal may name its own client-error status (CFC-A1: 409 already_decided / expired, 404 not_found).
+    const code = Number(r?.http_status);
+    return json(r, r?.ok === false ? (Number.isInteger(code) && code >= 400 && code < 500 ? code : 400) : 200);
   } catch (error) {
     console.error(failure, String(error?.message ?? error));
     return json({ error: failure }, 502);
@@ -476,19 +478,24 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
         expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_arm_failed");
     }
-    // Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, switch sessions. Owner only.
+    // Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, switch sessions. Owner only. CFC-A1: decide
+    // approves (the session starts at once) or rejects a suggested topic: { action: "decide", suggestion_id, decision:
+    // approve | reject, idempotency_key }; 409 { code: already_decided | expired | session_refused }, 404 not_found.
     if (route === "POST /api/council") {
       const r = await personJson(request, url, identity, 4096);
       if (r.response) return r.response;
       if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
       const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
       if (!ownerSub || identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
-      const b = r.body, action = ["start", "message", "close", "reopen", "accept", "switch"].includes(b.action) ? b.action : "";
-      if (!action) return json({ error: "action must be start, message, close, reopen, accept or switch" }, 400);
+      const b = r.body, action = ["start", "message", "close", "reopen", "accept", "switch", "decide"].includes(b.action) ? b.action : "";
+      if (!action) return json({ error: "action must be start, message, close, reopen, accept, switch or decide" }, 400);
       if (typeof env.OMEGA.council !== "function") return json({ error: "council_unavailable" }, 503);
       const strs = (v, n) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").map((x) => x.slice(0, 40)).slice(0, n) : []);
       return rpc(() => env.OMEGA.council({ action, topic_key: typeof b.topic_key === "string" ? b.topic_key.slice(0, 120) : null, text: typeof b.text === "string" ? b.text.slice(0, 1000) : null,
-        seats: strs(b.seats, 6), session_id: typeof b.session_id === "string" ? b.session_id.slice(0, 60) : null, option_id: typeof b.option_id === "string" ? b.option_id.slice(0, 40) : null, to: strs(b.to, 2), on: b.on === true, actor: identity.subject, actor_sub: identity.sub ?? null }), "council_failed");
+        seats: strs(b.seats, 6), session_id: typeof b.session_id === "string" ? b.session_id.slice(0, 60) : null, option_id: typeof b.option_id === "string" ? b.option_id.slice(0, 40) : null, to: strs(b.to, 2), on: b.on === true,
+        suggestion_id: Number.isInteger(b.suggestion_id) ? b.suggestion_id : null, decision: b.decision === "approve" || b.decision === "reject" ? b.decision : null,
+        idempotency_key: typeof b.idempotency_key === "string" ? b.idempotency_key.slice(0, 64) : (request.headers.get("idempotency-key") || "").slice(0, 64) || null,
+        actor: identity.subject, actor_sub: identity.sub ?? null }), "council_failed");
     }
     // The owner's "Council auto-arm" toggle and unpin (owner 2026-11-17): owner only, like the arm itself.
     if (route === "POST /api/strategy-council" || route === "POST /api/strategy-arm/unpin") {

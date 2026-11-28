@@ -66,6 +66,20 @@ test("GET /api/council/suggestions: the stored suggestions, the mode and a catal
   assert.notEqual(post.status, 200, "no write route in P1");
 });
 
+test("CFC-A4 GET /api/council/archive: the chains with one status and the next actor, paged; GET only", async () => {
+  resetCfcSchemaCacheForTests();
+  const env = await seedEnv();
+  await seedTrades(env, { agent: "zone_pullback", n: 20, exits: [["stop", "stop"]], start: NOW - 5 * 86_400_000 });
+  await runCfcTriggers(env, { now: Date.now() });
+  const r = await get(env, "/api/council/archive?limit=2");
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.items.length >= 1 && r.body.items.length <= 2);
+  assert.ok(r.body.items.every((c) => c.status === "awaiting_approval" && c.next_actor === "owner" && c.topic.origin === "suggestion"), JSON.stringify(r.body.items));
+  assert.ok(Array.isArray(r.body.vocab.next_actor));
+  const post = await worker.fetch(new Request("https://worker.test/api/council/archive", { method: "POST", body: "{}" }), env, ctx);
+  assert.notEqual(post.status, 200, "read-only");
+});
+
 test("Nexus proxies the council routes to the AI Worker over its binding, GET only", async () => {
   const nexus = await bundle("workers/xauusd-nexus-dashboard/src/index.ts");
   const seen = [];

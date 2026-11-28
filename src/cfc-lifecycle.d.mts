@@ -1,0 +1,14 @@
+export const DECISIONS: readonly string[];
+export const PROPOSAL_FOLLOWUP_MS: number;
+export const ARCHIVE_DAYS: number;
+export const ARCHIVE_READ: number;
+export const ARCHIVE_PAGE: Readonly<{ default: number; max: number }>;
+export const NEXT_ACTORS: readonly string[];
+export const CHAIN_STATUSES: readonly string[];
+export function cleanKey(k: unknown): string | null;
+export function suggestionView(row: Record<string, any> | null, now?: number): Record<string, any> | null;
+export function decideSuggestion(env: unknown, input?: { suggestion_id?: unknown; decision?: string; idempotency_key?: string | null; now?: number; enqueue?: (t: unknown) => Promise<unknown>; start?: (...a: any[]) => Promise<any> }): Promise<Record<string, any>>;
+export function expireStaleProposals(env: unknown, options?: { now?: number }): Promise<Record<string, any>>;
+export function chainState(input?: Record<string, any>): { status: string; source: string | null; next_actor: string };
+export function sessionProgress(session: Record<string, any> | null, counts?: Array<Record<string, any>>): Record<string, any>;
+export function readCouncilArchive(env: unknown, options?: { cursor?: string | null; limit?: number; now?: number }): Promise<Record<string, any>>;

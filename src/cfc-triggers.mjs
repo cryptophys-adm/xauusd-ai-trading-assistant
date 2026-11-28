@@ -23,12 +23,18 @@
 //   cost      a meter source's neurons up 50 % week on week (at least 1,000 a week); a shadow breaker trip in 7 days
 //
 // Rate limits (RFC §1.2): one open suggestion per topic key; a fingerprint (topic key and rule) is not suggested
-// again within 7 days; at most 3 new suggestions per UTC day. In P1 a suggestion stays open (the owner's dismiss
-// arrives with the write route in P2); while its flag still fires, its signal and last_seen_at are refreshed.
+// again within 7 days; at most 3 new suggestions per UTC day. While its flag still fires, a suggestion's signal and
+// last_seen_at are refreshed.
 //
-// CFC_MODE (Worker variable): "off" runs nothing; "suggest" (the default) runs the hourly flags; "on" is kept for
-// the sessions of phase P2 and in P1 behaves as "suggest". Any other value counts as "off". No mode starts a
-// session in P1, and the evidence route stays readable in every mode.
+// Lifecycle (CFC-A1, orchestrator brief 2026-11-28, src/cfc-lifecycle.mjs): open -> approved | rejected | expired.
+// A suggestion expires 48 hours after it was last seen (SUGGESTION_TTL_MS); a re-seen trigger extends it, never past
+// 7 days after it was created (SUGGESTION_MAX_MS). Only the owner approves or rejects (POST /omega/api/council
+// action "decide"); approval starts the session at once. The legacy "dismissed" (never written) reads as "rejected".
+//
+// CFC_MODE (Worker variable): "off" runs nothing; "suggest" (the default) runs the hourly flags; "on" also lets the
+// owner open sessions (with the switch on the Councils page); "auto" is "on" plus the council-led steps of CFC-A
+// (PR1: the decided proposals' 7-day follow-up expiry; the council's own pick arrives in PR2). Any other value counts
+// as "off". The evidence route stays readable in every mode.
 
 import { AGENT_IDS, DEFAULT_AGENT, agentStatuses, suspendedAgents, suspendedPatterns, AGENT_BREAKER, PATTERN_BREAKER } from "./strategy-agents.mjs";
 import { TRADING_MODES } from "./signal-ledger.mjs";
@@ -41,7 +47,7 @@ import {
   CHARTS, SESSIONS, STUCK_FEEDS, STOP_EXITS, TOPIC_TYPES, parseTopicKey, readDecisionTrades, releasesNear, usageBySource, weekOverWeek, sha256Hex, USAGE_SQL, PACK_LIMITS
 } from "./cfc-pack.mjs";
 
-export const CFC_MODES = Object.freeze(["off", "suggest", "on"]);
+export const CFC_MODES = Object.freeze(["off", "suggest", "on", "auto"]);
 export const CFC_DEFAULT_MODE = "suggest";
 /** The Worker variable: unset is the default ("suggest"); an unknown value fails closed ("off"). */
 export function cfcMode(env) {
@@ -51,6 +57,28 @@ export function cfcMode(env) {
   return CFC_MODES.includes(v) ? v : "off";
 }
 export const cfcSuggestionsEnabled = (env) => cfcMode(env) !== "off";
+/** Sessions may run ("on" or "auto"; the owner's switch on the Councils page is checked as well). */
+export const cfcSessionsMode = (env) => ["on", "auto"].includes(cfcMode(env));
+/** The council-led steps of CFC-A run only in "auto". */
+export const cfcAutoMode = (env) => cfcMode(env) === "auto";
+
+/** CFC-A1: a suggestion lives 48 hours after it was last seen, and never past 7 days after it was made. */
+export const SUGGESTION_TTL_MS = 48 * 3_600_000;
+export const SUGGESTION_MAX_MS = 7 * 86_400_000;
+export const SUGGESTION_STATUSES = Object.freeze(["open", "approved", "rejected", "expired"]);
+/** Pure: when a suggestion made at `createdAt` and last seen at `lastSeenAt` expires (ISO). */
+export function suggestionExpiry(createdAt, lastSeenAt) {
+  const c = toMs(createdAt), l = toMs(lastSeenAt);
+  if (!Number.isFinite(c) || !Number.isFinite(l)) return null;
+  return new Date(Math.min(l + SUGGESTION_TTL_MS, c + SUGGESTION_MAX_MS)).toISOString();
+}
+/** Pure: the status a stored row stands at now (an open row past its expiry reads expired; legacy dismissed reads rejected). */
+export function effectiveStatus(row, now = Date.now()) {
+  const st = row?.status === "dismissed" ? "rejected" : row?.status;
+  if (st !== "open") return SUGGESTION_STATUSES.includes(st) ? st : "rejected";
+  const exp = toMs(row.expires_at ?? suggestionExpiry(row.created_at, row.last_seen_at));
+  return Number.isFinite(exp) && exp <= now ? "expired" : "open";
+}
 
 export const CFC_RULES = Object.freeze({
   strategy: Object.freeze({ last_n: 20, stop_share: 0.65, context_min_setups: 20, agent_breaker_setups: AGENT_BREAKER.min_setups, pattern_breaker_setups: PATTERN_BREAKER.min_setups }),
@@ -256,35 +284,66 @@ export function selectNew(candidates, { open = new Set(), recent = new Set(), cr
 
 // ---------------------------------------------------------------------------------------------- storage
 
-/** D1 cfc_suggestions (migration 0024; also made at run time, since production applies no migration). */
-export const CFC_SCHEMA_SQL = [
-  `CREATE TABLE IF NOT EXISTS cfc_suggestions (
+/** The v2 table (CFC-A1): the lifecycle statuses, the expiry and who decided, when, with which session and request key. */
+const tableSql = (name) => `CREATE TABLE IF NOT EXISTS ${name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     topic_key TEXT NOT NULL,
     type TEXT NOT NULL,
     rule TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     signal_json TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'dismissed')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'approved', 'rejected', 'expired')),
     created_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL
-  )`,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT,
+    decided_at TEXT,
+    decided_by TEXT,
+    session_id TEXT,
+    decision_key TEXT
+  )`;
+const INDEX_SQL = [
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_cfc_suggestions_open ON cfc_suggestions(topic_key) WHERE status = 'open'",
   "CREATE INDEX IF NOT EXISTS idx_cfc_suggestions_created ON cfc_suggestions(created_at)",
   "CREATE INDEX IF NOT EXISTS idx_cfc_suggestions_fingerprint ON cfc_suggestions(fingerprint, created_at)"
+];
+/** D1 cfc_suggestions (migrations 0024 and 0028; also made at run time, since production applies no migration). */
+export const CFC_SCHEMA_SQL = [tableSql("cfc_suggestions"), ...INDEX_SQL];
+// SQLite cannot change a CHECK in place, so the v1 table (status open | dismissed) is rebuilt once, in one batch (atomic on
+// D1): the v2 table, the rows copied (dismissed as rejected, each open row's expiry from its own times), the swap, the
+// indexes. Idempotent: a v2 table is left as it is.
+const ISO = (expr) => `strftime('%Y-%m-%dT%H:%M:%fZ', ${expr})`;
+export const CFC_MIGRATE_V2_SQL = [
+  "DROP TABLE IF EXISTS cfc_suggestions_v2",
+  tableSql("cfc_suggestions_v2"),
+  `INSERT INTO cfc_suggestions_v2 (id, topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at, expires_at, decided_at, decided_by)
+   SELECT id, topic_key, type, rule, fingerprint, signal_json, CASE WHEN status = 'dismissed' THEN 'rejected' ELSE 'open' END, created_at, last_seen_at,
+     MIN(${ISO("last_seen_at, '+48 hours'")}, ${ISO("created_at, '+7 days'")}),
+     CASE WHEN status = 'dismissed' THEN last_seen_at END, CASE WHEN status = 'dismissed' THEN 'legacy' END
+   FROM cfc_suggestions`,
+  "DROP TABLE cfc_suggestions",
+  "ALTER TABLE cfc_suggestions_v2 RENAME TO cfc_suggestions",
+  ...INDEX_SQL
 ];
 let schemaReady = false;
 export function resetCfcSchemaCacheForTests() { schemaReady = false; }
 export async function ensureCfcSchema(db) {
   if (schemaReady) return;
-  for (const sql of CFC_SCHEMA_SQL) await db.prepare(sql).run();
+  await db.prepare(CFC_SCHEMA_SQL[0]).run();
+  const row = await db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cfc_suggestions'").first();
+  if (row?.sql && !String(row.sql).includes("'approved'")) {
+    const list = CFC_MIGRATE_V2_SQL.map((q) => db.prepare(q));
+    if (typeof db.batch === "function") await db.batch(list); else for (const q of list) await q.run();
+  }
+  for (const sql of INDEX_SQL) await db.prepare(sql).run();
   schemaReady = true;
 }
 
 export const OPEN_KEYS_SQL = "SELECT topic_key FROM cfc_suggestions WHERE status = 'open' LIMIT 500";
 export const RECENT_FINGERPRINTS_SQL = "SELECT fingerprint FROM cfc_suggestions WHERE created_at >= ? LIMIT 2000";
 export const CREATED_SINCE_SQL = "SELECT COUNT(*) AS n FROM cfc_suggestions WHERE created_at >= ?";
-export const SUGGESTIONS_SQL = "SELECT id, topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at FROM cfc_suggestions ORDER BY created_at DESC LIMIT ?";
+export const SUGGESTIONS_SQL = "SELECT id, topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at, expires_at, decided_at, decided_by, session_id FROM cfc_suggestions ORDER BY created_at DESC LIMIT ?";
+/** CFC-A1: open suggestions past their expiry become expired (the hourly run; a read shows the same through effectiveStatus). */
+export const EXPIRE_SQL = "UPDATE cfc_suggestions SET status = 'expired', decided_at = ?, decided_by = 'system' WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at <= ?";
 const SETUP_ARMS_SQL = `SELECT agent, pattern, opened_at, json_extract(results_json, '$."e0@s1".s') AS s, json_extract(results_json, '$."e0@s1".f') AS f
   FROM plan_setups WHERE status = 'resolved' AND source = 'live' AND opened_at >= ? ORDER BY opened_at DESC LIMIT ?`;
 
@@ -333,6 +392,8 @@ export async function runCfcTriggers(env, { now = Date.now() } = {}) {
   if (!db) return { status: "unavailable" };
   try {
     await ensureCfcSchema(db);
+    const at0 = iso(now);
+    const expired = Number((await db.prepare(EXPIRE_SQL).bind(at0, at0).run())?.meta?.changes) || 0;
     const inputs = await readTriggerInputs(env, { now });
     const flags = computeFlags(inputs, { now });
     for (const c of flags) c.fingerprint = await fingerprintOf(c);
@@ -343,13 +404,14 @@ export async function runCfcTriggers(env, { now = Date.now() } = {}) {
     const sel = selectNew(flags, { open, recent, createdToday });
     const at = iso(now);
     const writes = [
-      ...sel.insert.map((c) => db.prepare("INSERT OR IGNORE INTO cfc_suggestions (topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)").bind(c.topic_key, c.type, c.rule, c.fingerprint, JSON.stringify(c.signal), at, at)),
-      ...sel.touch.map((c) => db.prepare("UPDATE cfc_suggestions SET last_seen_at = ?, signal_json = ? WHERE topic_key = ? AND status = 'open'").bind(at, JSON.stringify(c.signal), c.topic_key))
+      ...sel.insert.map((c) => db.prepare("INSERT OR IGNORE INTO cfc_suggestions (topic_key, type, rule, fingerprint, signal_json, status, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)").bind(c.topic_key, c.type, c.rule, c.fingerprint, JSON.stringify(c.signal), at, at, suggestionExpiry(at, at))),
+      // A re-seen trigger extends the expiry to 48 hours from now, capped at 7 days after the suggestion was made.
+      ...sel.touch.map((c) => db.prepare(`UPDATE cfc_suggestions SET last_seen_at = ?, signal_json = ?, expires_at = MIN(?, ${ISO("created_at, '+7 days'")}) WHERE topic_key = ? AND status = 'open'`).bind(at, JSON.stringify(c.signal), new Date(now + SUGGESTION_TTL_MS).toISOString(), c.topic_key))
     ];
     if (writes.length) { if (typeof db.batch === "function") await db.batch(writes); else for (const w of writes) await w.run(); }
     const gate = inputs.model.current;
     if (gate && gate !== inputs.model.previous) await env.SIGNAL_CACHE?.put?.(MODEL_GATE_KEY, JSON.stringify({ status: gate, at }));
-    return { status: "ok", flags: flags.length, created: sel.insert.map((c) => c.topic_key), refreshed: sel.touch.length, skipped: sel.skipped.length, unavailable: inputs.unavailable };
+    return { status: "ok", flags: flags.length, created: sel.insert.map((c) => c.topic_key), refreshed: sel.touch.length, expired, skipped: sel.skipped.length, unavailable: inputs.unavailable };
   } catch (e) {
     return { status: "failed", error: String(e?.message ?? e).slice(0, 200) };
   }
@@ -360,9 +422,11 @@ export async function readSuggestions(env, { now = Date.now(), limit = 50 } = {}
   await ensureCfcSchema(env.DB);
   const rows = ((await env.DB.prepare(SUGGESTIONS_SQL).bind(Math.min(200, Math.max(1, limit))).all()).results) || [];
   const items = rows.map((r) => ({
-    id: r.id, topic_key: r.topic_key, type: r.type, rule: r.rule, status: r.status, created_at: r.created_at, last_seen_at: r.last_seen_at,
+    id: r.id, topic_key: r.topic_key, type: r.type, rule: r.rule, status: effectiveStatus(r, now), created_at: r.created_at, last_seen_at: r.last_seen_at,
+    expires_at: r.expires_at ?? suggestionExpiry(r.created_at, r.last_seen_at), decided_at: r.decided_at ?? null, decided_by: r.decided_by ?? null, session_id: r.session_id ?? null,
     // Still firing: seen by one of the last two hourly runs.
     active: toMs(r.last_seen_at) >= now - 2 * 3_600_000, fingerprint: r.fingerprint, signal: parse(r.signal_json, null)
   })).sort((a, b) => (a.status === b.status ? 0 : a.status === "open" ? -1 : 1));
-  return { mode: cfcMode(env), rules: CFC_RULES, sessions: "phase P2: the owner opens a session on the Councils page (GET /api/council/sessions)", suggestions: items };
+  return { mode: cfcMode(env), rules: CFC_RULES, lifecycle: { statuses: SUGGESTION_STATUSES, ttl_hours: SUGGESTION_TTL_MS / 3_600_000, max_days: SUGGESTION_MAX_MS / 86_400_000, decide: "POST /omega/api/council { action: \"decide\", suggestion_id, decision: approve | reject, idempotency_key } (owner only)" },
+    sessions: "the owner opens a session on the Councils page (GET /api/council/sessions), or approves a suggestion", suggestions: items };
 }

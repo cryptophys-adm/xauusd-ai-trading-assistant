@@ -385,6 +385,32 @@ test("POST /api/council (Call for Councils P2) is owner only; actions start, mes
   assert.deepEqual(calls[1].to, ["risk", "technical"], "at most 2 seats per message");
 });
 
+test("CFC-A1 POST /api/council decide: owner only; passes the suggestion, the decision and the idempotency key; a refusal's 409/404 reaches the page", async () => {
+  resetKeyCacheForTests();
+  const calls = [];
+  const answers = [{ ok: true, decision: "approve", session_id: "cfc_x_1" }, { ok: false, code: "already_decided", http_status: 409, error: "this suggestion is already approved" },
+    { ok: false, code: "expired", http_status: 409, error: "this suggestion has expired" }, { ok: false, code: "not_found", http_status: 404, error: "unknown suggestion" },
+    { ok: false, error: "plain refusal", http_status: 302 }];
+  const O = { ...omega(), council: async (i) => { calls.push(i); return answers[calls.length - 1]; } };
+  const opts = { fetchImpl: certsFetch, now: NOW };
+  const owner = await jwt({ email: "Owner@Example.com", sub: "owner-sub-0001" }), other = await jwt({ email: "g@example.com", sub: "guest-sub-0002" });
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: "owner-sub-0001" };
+  const post = (token, body) => handle(req("/api/council", { token, method: "POST", body }), env, opts);
+  assert.equal((await post(other, { action: "decide", suggestion_id: 7, decision: "approve" })).status, 403);
+  assert.equal(calls.length, 0, "a guest never reaches the RPC");
+  const ok = await post(owner, { action: "decide", suggestion_id: 7, decision: "approve", idempotency_key: "k-1" });
+  assert.equal(ok.status, 200);
+  assert.deepEqual([calls[0].action, calls[0].suggestion_id, calls[0].decision, calls[0].idempotency_key, calls[0].actor_sub], ["decide", 7, "approve", "k-1", "owner-sub-0001"]);
+  const again = await post(owner, { action: "decide", suggestion_id: 7, decision: "reject", idempotency_key: "k-2" });
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).code, "already_decided");
+  const expired = await post(owner, { action: "decide", suggestion_id: 8, decision: "approve" });
+  assert.deepEqual([expired.status, (await expired.json()).code], [409, "expired"]);
+  assert.equal((await post(owner, { action: "decide", suggestion_id: 99, decision: "reject" })).status, 404);
+  assert.equal((await post(owner, { action: "decide", suggestion_id: 9, decision: "approve" })).status, 400, "a status outside 4xx falls back to 400");
+  assert.deepEqual([calls[3].decision, calls[4].suggestion_id], ["reject", 9]);
+});
+
 test("Modify and Delegate (owner 2026-11-19): the owner alone, same origin, JSON; prices or empty", async () => {
   resetKeyCacheForTests();
   const O = broker();
