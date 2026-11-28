@@ -184,7 +184,7 @@ test("FSU7 the confirms say what changes: ZONE_PRIORITY: off → on, the era lin
   assert.deepEqual([zp.title, zp.change, zp.lines, zp.tone, zp.typed, zp.confirmLabel], ["Turn zone priority on?", "ZONE_PRIORITY: off → on", ["Restarts mode evidence."], "fault", "ZONE_PRIORITY", "Turn on"]);
   assert.equal(zp.caution, row("ZONE_PRIORITY").description, "an emergency stop says what it stops");
   const era = u.confirmText(r("reentry_1m"), { value: "off" });
-  assert.deepEqual([era.title, era.change, era.lines, era.tone, era.typed], ["Turn 1m re-entry after a lock stop off?", "reentry_1m: on → off", ["Starts a new parity era."], "late", null]);
+  assert.deepEqual([era.title, era.change, era.lines, era.tone, era.typed], ["Turn 1m re-entry after a lock stop off?", "reentry_1m: on → off", ["Starts a new era."], "late", null]);
   const ev = u.confirmText(r("ZONE_AHEAD_MODE"), { value: "all" });
   assert.deepEqual([ev.title, ev.change, ev.lines, ev.tone, ev.confirmLabel], ["Set zone-ahead check to all?", "ZONE_AHEAD_MODE: trend → all", ["Restarts mode evidence."], "late", "Set"]);
   const estop = u.confirmText(r("KEY_LEVEL_ZONE_TYPES"), { value: "off" });
@@ -196,7 +196,7 @@ test("FSU7 the confirms say what changes: ZONE_PRIORITY: off → on, the era lin
   const tok = u.confirmText(r("ZONE_AIM_OFF"), { value: ["tp"] });
   assert.deepEqual([tok.title, tok.change, tok.confirmLabel], ["Change zone aims?", "ZONE_AIM_OFF: none → tp", "Save"]);
   const ct = u.confirmText(r("change_thresholds"), { value: ["conf"] });
-  assert.deepEqual([ct.change, ct.lines], ["change_thresholds: conf,tpw,limit,skip → conf", ["Starts a new parity era."]]);
+  assert.deepEqual([ct.change, ct.lines], ["change_thresholds: conf,tpw,limit,skip → conf", ["Starts a new era."]]);
   assert.equal(u.inSentence("TP1 at the nearest key zone"), "TP1 at the nearest key zone", "an acronym keeps its capitals");
   // The typed key: the confirm button stays disabled until the key is typed (ConfirmDialog's typed option).
   const cd = src("components/ConfirmDialog.tsx");
@@ -272,7 +272,7 @@ test("FSU9 every POST error code shows, with its words; the reply parser follows
   assert.deepEqual([url, init.method, init.credentials, init.headers["content-type"], init.body], ["/omega/api/feature-switches", "POST", "same-origin", "application/json", '{"key":"ZONE_PRIORITY","value":"off"}']);
   // Saved and saving.
   const saved = await page(OWNER, { status: { change_thresholds: { phase: "saved", at: Date.parse("2026-11-25T03:42:00Z"), changed: true, era: true } } });
-  assert.ok(saved.includes(">saved</span>") && saved.includes("03:42 UTC · 10:42 GMT+7 · owner · new parity era"));
+  assert.ok(saved.includes(">saved</span>") && saved.includes("03:42 UTC · 10:42 GMT+7 · owner · new era"));
   assert.ok((await page(OWNER, { status: { ENTRY_ZONE_MODE: { phase: "saving" } } })).includes("saving…"));
 });
 

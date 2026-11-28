@@ -27,7 +27,7 @@ export default function PriorityQueue() {
             <div className="glass-inner flex items-start gap-2.5 px-3 py-2 text-slate-300"><span className="mt-1.5"><Dot tone="ok" /></span><span>No open items. The system is nominal.</span></div>
           ) : open.map((a) => (
             <div key={a.alert_key} className="glass-inner flex items-start gap-2.5 px-3 py-2 text-slate-200">
-              <span className="mt-1.5"><Dot tone={a.kind === "parity_revoked" || a.kind === "war_room_stale" ? "fault" : "late"} pulse /></span>
+              <span className="mt-1.5">{/* parity_revoked stays a fault while the server still emits it (src/health-alerts.mjs); it goes with the server side of S5. */}<Dot tone={a.kind === "parity_revoked" || a.kind === "war_room_stale" ? "fault" : "late"} pulse /></span>
               <span className="flex-1">{a.subject}<span className="mt-0.5 block text-[10px] text-slate-500">since {ago(a.opened_at)}{a.reported ? ` · reported (${a.reported})` : ""}</span></span>
             </div>
           ))}

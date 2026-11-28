@@ -13,7 +13,7 @@ export function calibrationText(c: unknown): string | null {
   if (typeof c === "string") return c;
   const x = c as { total_lines?: number; verified_lines?: number; derived_lines?: number; label?: string };
   if (x.total_lines != null) {
-    // Three tiers: verified by parity, computed from verified bars, not yet calibrated.
+    // Three tiers: verified, computed from verified bars, not yet calibrated.
     const parts = [x.verified_lines ? `${x.verified_lines} verified` : null, x.derived_lines ? `${x.derived_lines} from verified bars` : null].filter(Boolean);
     return parts.length ? `${parts.join(" · ")} of ${x.total_lines}` : "uncalibrated";
   }

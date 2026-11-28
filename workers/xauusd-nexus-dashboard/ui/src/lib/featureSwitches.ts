@@ -165,13 +165,13 @@ export function inSentence(label: string): string {
   return label.length > 1 && /[A-Z]/.test(label[0]) && !/[A-Z0-9]/.test(label[1]) ? label[0].toLowerCase() + label.slice(1) : label;
 }
 
-export const ERA_LINE = "Starts a new parity era.";
+export const ERA_LINE = "Starts a new era.";
 export const EV_LINE = "Restarts mode evidence.";
 export const VETO_RESET_LINE = "The automatic revert and the config decide again.";
 export type ConfirmText = { title: string; change: string; lines: string[]; caution: string | null; tone: "ok" | "late" | "fault"; confirmLabel: string; typed: string | null };
 
 /**
- * The confirm of one change: what changes ("ZONE_PRIORITY: off → on"), "Starts a new parity era." for an era switch,
+ * The confirm of one change: what changes ("ZONE_PRIORITY: off → on"), "Starts a new era." for an era switch,
  * "Restarts mode evidence." for a mode-evidence switch, and an emergency stop's description with its key to type.
  * Tone: an emergency stop fault red, an era or mode-evidence switch late amber, any other ok cyan.
  */
@@ -247,7 +247,7 @@ export function setLine(r: SwitchRow): string {
   if (r.source === "default") return r.write === "omega-settings" ? "OMEGA_DEFAULTS" : "code default";
   return "—";
 }
-export const MARK_ERA = "era: a change starts a new parity era.";
+export const MARK_ERA = "era: a change starts a new era.";
 export const MARK_EV = "ev: a change restarts the mode evidence (rule_version moves, so the mode selector counts setups again).";
 export const MARK_STOP = "Emergency stop: a change asks for the key to be typed.";
 export const READ_ONLY_LINE = "Read only: shown for information; it changes in the config only.";

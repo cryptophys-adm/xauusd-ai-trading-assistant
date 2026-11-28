@@ -149,7 +149,7 @@ function RoomTab({ room, tab }: { room: any; tab: Tab }) {
   const confirmation = tab === "M15" ? (
     <><span className="eyebrow mr-2">Entry confirmation</span>H1 Prophet R38: {side(cf.h1_prophet_r38)} · 5m: {side(cf.m5_prophet_r38)}{cf.m5_prophet_r38 && !cf.m5_prophet_r38.verified ? " (unverified)" : ""}</>
   ) : cf.chart_prophet_r38 ? (
-    <><span className="eyebrow mr-2">Entry confirmation</span>{label} Prophet R38: {side(cf.chart_prophet_r38)}{cf.chart_prophet_r38.approved_by_parity === false ? " (not parity approved)" : ""}</>
+    <><span className="eyebrow mr-2">Entry confirmation</span>{label} Prophet R38: {side(cf.chart_prophet_r38)}</>
   ) : null;
   return (
     <div className="space-y-3">

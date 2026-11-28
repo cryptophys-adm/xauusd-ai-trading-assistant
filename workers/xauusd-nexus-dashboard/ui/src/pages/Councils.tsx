@@ -25,7 +25,7 @@ const TYPE_TEXT: Record<string, string> = {
   risk: "The ledger's trades in one session, trading mode or 1H regime",
   news: "Trades around high-impact releases",
   execution: "Omega and the EA: recoveries, failed intents, fills, SL+ in practice",
-  data: "Stuck states, parity, market data and the TradingView budget",
+  data: "Stuck states, market data and the TradingView budget",
   cost: "Workers AI usage of one meter source, or the shadow arms",
   knowledge: "A learned note: its verdicts and its shadow test",
   free: "A topic the owner writes (its sections come with the sessions)"
