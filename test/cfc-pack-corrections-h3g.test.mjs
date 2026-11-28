@@ -39,6 +39,9 @@ function spyDb(inner) {
 }
 
 const ids = (block) => block.items.map((x) => x.correction_id);
+// The leak checks look for the price's digits. Ids (cor_ + 16 random hex) and the pack's sha256 are hex and can hold
+// "4095" by chance (CI 2026-11-28, about 1 run in 1,000), so hex runs of 16+ characters are masked before the check.
+const noHex = (text) => text.replace(/[0-9a-f]{16,}/g, "<hex>");
 const correctionRefs = (pack) => pack.refs.filter((r) => r.startsWith("ev:xauusd/owner_corrections/"));
 
 test("H3g: the seat pack carries the masked text; original_json is never selected and its price never appears", async () => {
@@ -60,8 +63,10 @@ test("H3g: the seat pack carries the masked text; original_json is never selecte
   assert.equal(item.text, "The risk seat read the support at [level] as broken; it held");
   assert.deepEqual([item.label, item.category, item.subject, item.target_ref], ["owner_correction", "reading_wrong", "agent:risk", "ev:xauusd/agent_thread_messages/12"]);
   assert.deepEqual(item.redactions, ["price"]);
-  const json = JSON.stringify(pack);
+  const json = noHex(JSON.stringify(pack));
   for (const leak of ["4095", ORIGINAL_ONLY, "owner@example.com"]) assert.ok(!json.includes(leak), `${leak} leaked into the pack`);
+  // The mask hides ids and hashes only: a price in text is still caught, a hex id holding the digits is not a leak.
+  assert.ok(noHex('{"text":"held at 4095.5"}').includes("4095") && !noHex('{"id":"cor_a1b2c34095d6e7f8"}').includes("4095"));
   assert.deepEqual(priceKeysIn(pack), []);
   const reads = seen.filter((s) => /owner_corrections/.test(s));
   assert.equal(reads.length, 1, "one read of the table");
@@ -141,7 +146,7 @@ test("H3g: a record text that still holds a 3+ digit run is dropped (belt and br
   env.DB.db.prepare("INSERT INTO owner_corrections (correction_id, original_json, record_json, dedup_sha256, status, attempts, created_ms) VALUES (?, '{}', ?, 'x', 'pending', 0, ?)").run(dirty, JSON.stringify(record), NOW - HOUR);
   const pack = await buildEvidencePack(env, "seat:risk", { now: NOW });
   assert.deepEqual(ids(pack.sections.owner_corrections), [clean]);
-  assert.ok(!JSON.stringify(pack).includes("4095") && !pack.refs.includes(`ev:xauusd/owner_corrections/${dirty}`));
+  assert.ok(!noHex(JSON.stringify(pack)).includes("4095") && !pack.refs.includes(`ev:xauusd/owner_corrections/${dirty}`));
 });
 
 test("H3g: the learned-item pack reads the item's own refs and subject, never a longer item id's", async () => {
