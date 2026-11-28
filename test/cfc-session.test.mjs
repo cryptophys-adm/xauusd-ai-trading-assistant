@@ -69,7 +69,8 @@ test("CS2. a full session: opinions in each seat's voice, rebuttals by the disse
   assert.ok(reb.includes("risk") && reb.length <= 4, "the dissent (risk) and the majority's holder speak");
   assert.deepEqual(s.options.options.map((o) => o.option_id), ["wider_lock", "no_change"], "no_change is always an option");
   assert.equal(published[0].agent, "xauusd-moderator");
-  assert.equal(published[0].report.body.schema, "council_decision.v1");
+  assert.equal(published[0].report.body.schema, "council_options.v1");
+  assert.equal(published[0].report.body.legacy_schema, "council_decision.v1", "the window: the platform reads both names");
   // The owner writes to two seats; they answer.
   queue.length = 0;
   assert.deepEqual((await ownerMessage(env, { session_id, text: "Why not lock at break-even?", to: ["risk", "technical", "m15"], enqueue })).answered_by, ["risk", "technical"]);
@@ -239,7 +240,7 @@ function closingModel(env, session_id) {
   return { call };
 }
 
-test("CS11. C1: a Close during positions, rebuttals or the synthesis stays closed: no awaiting_owner, no next step, no council_decision.v1", async () => {
+test("CS11. C1: a Close during positions, rebuttals or the synthesis stays closed: no awaiting_owner, no next step, no options report", async () => {
   for (const at of ["positions", "rebuttals", "synthesis"]) {
     const env = await setup();
     await setSessionsSwitch(env, { on: true });
@@ -256,7 +257,7 @@ test("CS11. C1: a Close during positions, rebuttals or the synthesis stays close
     assert.equal(s.state, "closed", `${at}: the owner's Close wins`);
     assert.match(s.reason, /^owner_closed/);
     assert.deepEqual(queue, [], `${at}: no next step is queued`);
-    assert.equal(published.filter((p) => p.body?.schema === "council_decision.v1").length, 0, `${at}: nothing published for a closed session`);
+    assert.equal(published.filter((p) => p.body?.schema === "council_options.v1" || p.body?.schema === "council_decision.v1").length, 0, `${at}: nothing published for a closed session`);
     // A later step on the closed session does nothing.
     assert.equal((await runSessionStep(env, { session_id, step: "synthesis" }, { call: model().call, publish, enqueue })).status, "closed");
   }

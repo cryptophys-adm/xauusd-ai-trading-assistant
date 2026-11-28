@@ -5,6 +5,13 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-28
+- feat(council): CFC-A PR2, the council decides by itself in CFC_MODE "auto" (A2 + A3). Production stays "on", so nothing changes until the owner switches it.
+  - `councilPick` picks the top option other than `no_change` when the support threshold and the validity check both hold (thresholds in SSOT), else `no_change`. It runs `acceptOption` as `council` and stores the rationale and tally in `council_proposals.decision_json`.
+  - A council-picked `repository_task` waits a 2 h veto window (`veto_window`). The owner's Close inside it vetoes the task (`vetoed`); otherwise the hourly hand-off sends it after the window. A knob goes to its shadow test at once.
+  - The `typed_proposal.v1` hand-off gains `chosen_by: "council"`, `topic_approved_by: "owner"`, a top-level `session_id` and `council_decision`.
+  - The options report is renamed `council_options.v1`, with `legacy_schema: "council_decision.v1"` for the window.
+  - `GET /api/council/archive` gains `scope=active|archive`, `status=` and `counts` (total, active, archive, by_status, by_next_actor over the 90 days). The chain statuses gain `veto_window` and `vetoed`, and `vocab.decided_by` gains `legacy`.
+  - Tests: AD-1 to AD-5 (`test/cfc-auto-decide.test.mjs`). The CS2 and CS11 rename pins are updated. SSOT updated.
 - fix(feed): bridge 1.8.5, the feed keeps its login like the executor (the owner's "Seperti executor (Recommended)", 2026-11-28; feed role only).
   - Why: after 1.8.4 the 11:29Z guarded restart on `startup.ini` still did not log in. On this VPS MT5 does not log in from a saved password with a start file that has no `[Common]` section.
   - The feed's login now stays in its `login.ini` (owner `mt5`, mode 600), as the executor's does in `terminal_gateway.ini`. Every restart logs in through `feed-run.sh`'s `^Password=.+` branch.

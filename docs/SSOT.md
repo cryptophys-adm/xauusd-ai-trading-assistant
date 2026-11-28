@@ -1037,6 +1037,29 @@ The parity sweep cron also backfills `runAnalysis` for any closed H1 candle with
   - **Decide (owner only):** `POST /omega/api/council` `{ action: "decide", suggestion_id, decision: "approve" | "reject", idempotency_key }` (the Omega Worker's owner check, same origin, a person; the AI Worker's `council` RPC checks the owner again). The row is claimed first (only while open and unexpired), so a double click starts one session. Approve calls `startSession` at once on a fresh pack; a refused start (the switch, a limit, no evidence) answers 409 `session_refused` and leaves the suggestion open. The same key and decision again answer with the stored result (`replay: true`); any other decision on a decided suggestion is 409 `already_decided`, on an expired one 409 `expired`; an unknown id is 404 `not_found` (the Omega Worker passes a refusal's `http_status` when it is a 4xx). `decided_by` is stored as `owner`, never the person's identity.
 - **Follow-up freshness (CFC-A4, `CFC_MODE` `auto` only):** hourly, before the hand-off retry, a repository task that never reached the platform (`handoff_pending`) 7 days after its decision becomes `expired` and is not re-sent (`expireStaleProposals`). A knob change in its shadow test has started (`queued_shadow` counts as started).
 - **Archive (CFC-A4):** `GET /api/council/archive?cursor=&limit=` (read-only, the last 90 days, at most 300 rows per table, 20 chains a page, at most 50; an offset `next_cursor`). Each chain is a topic → session → proposal with one authoritative `status`, its `status_source` (`suggestion`, `session`, `proposal`, `platform`) and the `next_actor` (`owner`, `council`, `platform`, `shadow`, `none`): `awaiting_approval` (owner), `approved` (council), `rejected`, `expired`, `in_session` (council), `awaiting_pick` (owner), `decided`, `closed`, `aborted`, `no_change`, `shadow_test` and `live` (shadow), `rolled_back`, `superseded`, `handoff_pending` (platform), `handed_off` (platform), or the platform's own latest state from `council_proposal_updates` with its `close_code` (terminal states: `none`). A session the owner opened on free text or a topic of their own is its own chain (`topic.origin` `owner`). Each session carries its progress (positions done of expected, rebuttals, answers, owner messages, synthesis options) and the stance tally of the opening positions; the per-option tally comes with the council's own pick (PR2). No email (reasons are scrubbed, actors read `owner` or `council`), no price.
+- **The council decides by itself (CFC-A2 + A3, PR2, 2026-11-28; `CFC_MODE` "auto" only, production stays "on").** In "auto", after the synthesis the council picks its own option (`councilPick`, `src/cfc-session.mjs`); the owner approves topics only, never options.
+  - **The pick:** the top-ranked option that is not `no_change` is chosen when two things hold:
+    - the position round supports it: at least 4 of 6 seats take stance `support`, or at least 2/3 of the seats that spoke when fewer spoke;
+    - it is valid: a knob inside its bounds against the live values (`checkKnobValue`), or a `repository_task` with a spec.
+  - Otherwise the pick is `no_change`. A pick that is refused at acceptance (the engine moved) also becomes `no_change`.
+  - **What is stored:** `acceptOption` runs with actor `council`, and `council_proposals.decision_json` holds the pick, its rationale and the seat tally. The column is added at run time.
+  - **What happens next, by kind:**
+    - a `policy_parameter` goes to its shadow test at once (`queued_shadow`, harmless; the #429 shadow, auto-live and rollback, unchanged);
+    - a `repository_task` waits a 2-hour veto window (`veto_window`, `VETO_WINDOW_MS`, orchestrator OK 2026-11-28) before the hourly hand-off sends it;
+    - the owner's Close on that decided session inside the window vetoes it (`vetoed`), and it is never handed off.
+  - **The hand-off (`typed_proposal.v1`, A3)** carries:
+    - `chosen_by` (`council`, or `owner:<actor>` for the owner's pick);
+    - `topic_approved_by: "owner"` (the identity is never stored);
+    - a top-level `session_id`;
+    - for a council pick, `council_decision` (the rationale and the tally).
+  - **The options report** sent at the synthesis is now `council_options.v1`, with `legacy_schema: "council_decision.v1"` during the window (the platform's finding: it carries options, not a pick; `council.decision.v1` stays the pick record's name).
+  - **The archive:**
+    - `?scope=active` lists the chains someone still acts on (`next_actor` other than `none`); this becomes the UI default (the owner's concern that expired topics fill the page);
+    - `?scope=archive` lists the rest;
+    - `?status=<chain status>` filters by status;
+    - `counts` covers the whole 90-day window: `total`, `active`, `archive`, `by_status` and `by_next_actor`;
+    - no scope keeps the old behaviour;
+    - new chain statuses are `veto_window` (next actor owner) and `vetoed`, and `vocab.decided_by` now includes `legacy`.
 
 ### Indicator manifests and registry (RFC_INDICATOR_AGENT_PLATFORM P2, owner go 2026-11-07)
 - **Manifests** (`src/indicator-manifests.mjs`): one per agent. They cover the engines Prophet R38, Prophet R37 and GMI v12.70, the Mizan library, the 14 HUD agents, the P6 indicator agents, the desks and the moderator. Each manifest gives:
