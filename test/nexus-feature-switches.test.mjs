@@ -82,7 +82,7 @@ test("FSU2 the fixtures are the seed's answers, byte for byte, and carry the rea
     for (const k of ["label", "description", "group", "worker", "era_switch", "restarts_mode_evidence", "emergency_stop", "read_only", "write"]) assert.deepEqual(r[k], e[k], `${e.key}.${k}`);
   }
   for (const k of ["ZONE_SOURCES_OFF", "LIQUIDITY_WITNESS", "LENS_ROOM_LINE", "CALENDAR_CONTRARIAN"]) assert.ok(row(k), `${k}: one of the four beyond the mockup`);
-  assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED"]);
+  assert.deepEqual(OWNER.switches.filter((r) => r.emergency_stop).map((r) => r.key), ["ZONE_PRIORITY", "KEY_LEVEL_ZONE_TYPES", "SHADOW_KNOWLEDGE_ENABLED", "CLAUDE_SHADOW"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.read_only).map((r) => r.key), ["METRIC_REBUTTAL"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.source === "override").map((r) => r.key), ["ENTRY_ZONE_MODE", "CFC_MODE", "change_thresholds"]);
   assert.deepEqual(OWNER.switches.filter((r) => r.write === "omega-settings").map((r) => r.key), ["profit_lock_gate", "change_thresholds", "pm_fast_1m", "reentry_1m", "limit_supersede", "cd_gate", "zone_mgmt", "zone_sd", "limit_first"]);
@@ -108,7 +108,7 @@ test("FSU4 the pure view over the fixture: groups in the payload's order, one co
   assert.deepEqual([sw.canControl, sw.overrides, sw.at], [true, 3, Date.parse("2026-11-25T03:40:00Z")]);
   const kinds = Object.fromEntries(sw.rows.map((r) => [r.key, u.controlKind(r)]));
   assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "tokens").map(([k]) => k), ["ZONE_AIM_OFF", "ZONE_SOURCES_OFF", "PM_LINES_OFF", "change_thresholds"]);
-  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "SD_LEVELS", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "FRESH_PATTERN_MODE", "AGENT_VETO_RULE", "EVENT_TRIGGER_MODE", "CFC_MODE", "LENS_ROOM_LINE", "profit_lock_gate", "zone_mgmt"]);
+  assert.deepEqual(Object.entries(kinds).filter(([, k]) => k === "segmented").map(([k]) => k), ["ZONE_AHEAD_MODE", "ZONE_AIM_TP", "SD_LEVELS", "ENTRY_ZONE_MODE", "GRID_ADAPT_MODE", "FRESH_PATTERN_MODE", "AGENT_VETO_RULE", "EVENT_TRIGGER_MODE", "CFC_MODE", "LENS_ROOM_LINE", "CLAUDE_SHADOW", "profit_lock_gate", "zone_mgmt"]);
   for (const r of sw.rows) if (kinds[r.key] === "toggle") assert.deepEqual([...r.values].sort(), ["off", "on"], r.key);
   assert.deepEqual(sw.rows.filter(u.wideControl).map((r) => r.key), ["ZONE_SOURCES_OFF", "PM_LINES_OFF"], "only the five sources and B5's lines take their own line");
   const cols = u.columnsOf(sw.groups);
@@ -141,7 +141,7 @@ test("FSU5 owner against read only: controls only when viewer.can_control, never
   const owner = await page(OWNER), viewer = await page(VIEWER);
   const toggles = OWNER.switches.filter((r) => Array.isArray(r.values) && [...r.values].sort().join() === "off,on" && !r.read_only).length;
   assert.equal(count(owner, /role="switch"/g), toggles);
-  assert.equal(count(owner, /role="group"/g), 16, "12 segmented (Z3a's zone_mgmt the ninth, Z6's SD_LEVELS the tenth, FP1's FRESH_PATTERN_MODE the eleventh, ET1's EVENT_TRIGGER_MODE the twelfth) and 4 token lists (B5's PM_LINES_OFF the fourth)");
+  assert.equal(count(owner, /role="group"/g), 17, "13 segmented (Z3a's zone_mgmt the ninth, Z6's SD_LEVELS the tenth, FP1's FRESH_PATTERN_MODE the eleventh, ET1's EVENT_TRIGGER_MODE the twelfth, CL1's CLAUDE_SHADOW the thirteenth) and 4 token lists (B5's PM_LINES_OFF the fourth)");
   assert.ok(!owner.includes('aria-label="Metric rebuttals (METRIC_REBUTTAL)"'), "a read-only row never shows a control, even for the owner");
   for (const t of ["role=\"switch\"", "aria-pressed", "Reset to", "role=\"group\""]) assert.ok(!viewer.includes(t), `viewer: ${t}`);
   for (const t of ["Settings · viewer", "read only", "none on", "conf,tpw,limit,skip", "two_sided", "suggest"]) assert.ok(viewer.includes(t), `viewer: ${t}`);
@@ -410,10 +410,10 @@ test("FSU13 CSP and the owner rule: no inline style strings, no HTML strings, no
   const html = await page(OWNER);
   assert.doesNotMatch(html, /style="/, "no style attribute in the markup");
   // The marks: era on the eight Omega settings (CDG's cd_gate the sixth, Z3a's zone_mgmt the seventh, Z6's zone_sd the eighth, E1's limit_first the ninth), ev on the
-  // mode-evidence switches, the caution on the three emergency stops.
+  // mode-evidence switches, the caution on the four emergency stops (CL1's CLAUDE_SHADOW the fourth).
   assert.equal(count(html, />era</g), 9);
   assert.equal(count(html, />ev</g), OWNER.switches.filter((r) => r.restarts_mode_evidence).length);
-  assert.equal(count(html, /aria-label="Emergency stop"/g), 3);
+  assert.equal(count(html, /aria-label="Emergency stop"/g), 4);
   // The description lives in the tooltip only (once per row, inside role="tooltip").
   assert.ok(row("ZONE_PRIORITY").description.includes("zone_ahead check and the zone aims"));
   assert.equal(count(html, /zone_ahead check and the zone aims/g), 1);

@@ -77,7 +77,7 @@ export async function access() {
 // ------------------------------------------------------------------ the bundled AI Worker and a migrated D1 (as H3f)
 export async function loadWorkerModule() {
   const out = await build({
-    entryPoints: [join(root, "src/index.ts")], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent",
+    entryPoints: [join(root, "src/index.ts")], bundle: true, format: "esm", platform: "browser", conditions: ["workerd", "worker", "browser"], write: false, logLevel: "silent",
     alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") }
   });
   const dir = await mkdtemp(join(tmpdir(), "ai-worker-f4-ui-"));

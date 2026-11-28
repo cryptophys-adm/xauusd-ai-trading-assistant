@@ -12,7 +12,7 @@ export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 export async function loadWorker(entry = join(ROOT, "src/index.ts")) {
   const out = await build({
     entryPoints: [entry],
-    bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent",
+    bundle: true, format: "esm", platform: "browser", conditions: ["workerd", "worker", "browser"], write: false, logLevel: "silent",
     alias: { "cloudflare:workers": join(ROOT, "test/support/cloudflare-workers-stub.mjs") }
   });
   const dir = await mkdtemp(join(tmpdir(), "ai-worker-webhook-"));

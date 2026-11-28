@@ -151,7 +151,7 @@ test("PM5. the runner: once per position and 5m bar, live only, no Telegram line
   assert.equal((await runPositionManager(env, { ...base, now: now + 60_000 })).positions.length, 0, "once per 5m bar");
   assert.deepEqual((await pendingPositionActions(db, { now: now + 60_000 })).map((a) => a.action), ["close"]);
   // The cap reached: no council call, no action, one Telegram line a day.
-  db.raw.prepare("INSERT INTO ai_usage_daily VALUES ('2026-11-17', 'position_council', '@cf/openai/gpt-oss-120b', 1, 100000000, 10000000, 0)").run();
+  db.raw.prepare("INSERT INTO ai_usage_daily (day, source, model, calls, prompt_tokens, completion_tokens, cached_tokens) VALUES ('2026-11-17', 'position_council', '@cf/openai/gpt-oss-120b', 1, 100000000, 10000000, 0)").run();
   const before = calls.length;
   const capped = await runPositionManager(env, { ...base, now: now + 300_000 });
   assert.equal(calls.length, before, "no council call past the cap");

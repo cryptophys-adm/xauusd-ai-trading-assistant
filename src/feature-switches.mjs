@@ -249,6 +249,11 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn
   }),
   entry({
+    key: "CLAUDE_SHADOW", label: "Claude Haiku shadow (CL1)", group: "knowledge", emergency_stop: true,
+    description: "CL1: after the live call, the same input goes once to Claude Haiku 5.5 (Anthropic API, the Worker secret ANTHROPIC_API_KEY) for the decision council, the 15m War Room conclusion and the H1 reasoner; its answer is only recorded beside the live one (validity, agreement, tokens, USD). Hard cap USD 0.55 a day; a billing, auth or rate-limit error stops it (a breaker). off: no call.",
+    values: ["shadow", "off"], default_value: "off", config_value: null, read: (raw) => { const v = s(raw); return v === "shadow" || v === "on" ? "shadow" : "off"; }
+  }),
+  entry({
     key: "SHADOW_MODEL_ROUTER", label: "Shadow model router: news comparison on Beam (SB1)", group: "knowledge",
     description: "SB1: the news shadow comparison's two daily readings asked of Reflection's Beam (free Beta, its own caps: 100k input and 20k output tokens, 20 requests a day, 2 a minute) instead of the Workers AI agent model; no other call routes. Any limit, error, timeout, paid sign, missing retention terms, invalid answer or a platform router status other than on falls back to Workers AI for that call. off: as before.",
     values: ["on", "off"], default_value: "off", config_value: null, read: offUnlessOn

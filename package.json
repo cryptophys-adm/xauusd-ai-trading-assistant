@@ -13,5 +13,8 @@
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "wrangler": "^4.45.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.14.0"
   }
 }

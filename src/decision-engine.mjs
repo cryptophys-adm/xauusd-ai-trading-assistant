@@ -59,6 +59,7 @@ import { effectiveLearnedPack } from "./learned-live.mjs";
 import { modelAdvice } from "./model-dataset.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
+import { claudeShadowEnabled, runClaudeShadow } from "./claude-shadow.mjs";
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
 import { roomBreakoutWaiveOf, roomWaiverFor, resolveRoomBreakoutWaive, loadRoomCorridors } from "./room-waive.mjs";
@@ -1890,6 +1891,17 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     if (arenaEnabled(env) && isArenaBar(closeIso, arenaEvery(env))) {
       jobs.push(["arena", () => runArenaCall(env, {
         role: "decision_council", candleKey: key, statementClose: closeIso, clock, schema: COUNCIL_JSON_SCHEMA, schemaName: "decision_council", maxTokens: COUNCIL_MAX_TOKENS,
+        messages: council.messages ?? councilMessages(evidence),
+        validate: (o) => validateCouncil(o),
+        toStance: (o) => decide({ answer: o, guards: assessment.guards, strategy: data.strategy ?? null, quorum: assessment.quorum }).stance,
+        live: { model: council.model ?? null, status: !council.answer ? "failed" : council.retries || council.fallback_used ? "ok_after_retry" : "ok", stance: record.stance, latency_ms: councilMs }
+      })]);
+    }
+    // CL1 (src/claude-shadow.mjs): the council's messages go once to Claude Haiku 5.5 after the decision is stored, its
+    // answer through the same guardrails, beside the stance that was decided. Off unless the owner's CLAUDE_SHADOW is on.
+    if (claudeShadowEnabled(env)) {
+      jobs.push(["claude", () => runClaudeShadow(env, {
+        role: "decision_council", candleKey: key, statementClose: closeIso, clock, schema: COUNCIL_JSON_SCHEMA,
         messages: council.messages ?? councilMessages(evidence),
         validate: (o) => validateCouncil(o),
         toStance: (o) => decide({ answer: o, guards: assessment.guards, strategy: data.strategy ?? null, quorum: assessment.quorum }).stance,

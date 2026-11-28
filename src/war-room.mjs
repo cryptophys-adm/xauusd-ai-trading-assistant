@@ -30,6 +30,7 @@ import { readAllocationState, rosterSplit } from "./agent-allocation.mjs";
 import { gateShadowTurns } from "./shadow-switch.mjs";
 import { metricShadowEnabled, runMetricShadow, runMetricRebuttals, readMetricShadowBar, metricMenu, metricLiveAgents, metricToOpening, metricMessages, METRIC_OPENING_SCHEMA } from "./metric-shadow.mjs";
 import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-arena.mjs";
+import { claudeShadowEnabled, runClaudeShadow } from "./claude-shadow.mjs";
 import { agentReputation, sessionOf } from "./outcome-scoring.mjs";
 import { learnedBlock, learnedPackInfo, learnedKnowledgeEnabled } from "./learned-knowledge.mjs";
 import { shadowKnowledgeEnabled, shadowItems, planShadowCalls, runShadowCalls } from "./shadow-knowledge.mjs";
@@ -804,6 +805,15 @@ export async function runWarRoomBar(env, task, { clock = () => Date.now() } = {}
     jobs.push(["arena", () => runArenaCall(env, {
       role: "war_room_conclusion", candleKey: m15KeyForClose(barTime), statementClose: barTime, clock,
       messages: concludeOpts.messages, schemaName: "war_room_conclusion", schema: CONCLUSION_SCHEMA, maxTokens: concludeOpts.maxTokens, validate: concludeOpts.validate,
+      live: { model: concluded?.model ?? null, status: concluded?.status !== "ok" ? (concluded?.status ?? "missing") : concluded.corrections || concluded.fallback_used ? "ok_after_retry" : "ok", stance: concluded?.status === "ok" ? concluded.stance : null, latency_ms: concluded?.latency_ms ?? null }
+    })]);
+  }
+  // CL1 (src/claude-shadow.mjs): the conclusion's messages go once to Claude Haiku 5.5 after the live conclusion, checked by
+  // the room's own validation, beside it. Off unless the owner's CLAUDE_SHADOW is on.
+  if (claudeShadowEnabled(env) && concludeOpts?.messages) {
+    jobs.push(["claude", () => runClaudeShadow(env, {
+      role: "war_room_conclusion", candleKey: m15KeyForClose(barTime), statementClose: barTime, clock,
+      messages: concludeOpts.messages, schema: CONCLUSION_SCHEMA, validate: concludeOpts.validate,
       live: { model: concluded?.model ?? null, status: concluded?.status !== "ok" ? (concluded?.status ?? "missing") : concluded.corrections || concluded.fallback_used ? "ok_after_retry" : "ok", stance: concluded?.status === "ok" ? concluded.stance : null, latency_ms: concluded?.latency_ms ?? null }
     })]);
   }
