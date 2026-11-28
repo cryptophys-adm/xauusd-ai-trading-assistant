@@ -2,7 +2,8 @@
 // loop from the executor's daemon (src/daemon.mjs, unchanged: the default role stays the executor, byte for byte). A
 // feed bridge reads its own terminal's state.json and corpus.json (written by OmegaFeed.mq5, which has no trade code),
 // syncs them to POST {OMEGA_URL}/api/bridge/feed-sync with its bridge id, applies its own sealed login to its own
-// terminal ini and service, and clears the password from the ini once the terminal reports it logged in. It never
+// terminal ini and service (1.8.5: and keeps it there, as the executor does; up to 1.8.4 it cleared the password once
+// the terminal reported it logged in). It never
 // writes intents.txt, never a reference file, never the executor's terminal; algo trading stays off in its ini.
 // 1.8.1 (macro export step 2, owner 08:15 "yang bisa ambil data raw dari mt5 ambil saja"): the feed also sends its
 // terminal's corpus_macro.json (OmegaFeed 1.01), per base only the bars after the server's cursor, and only once the
@@ -26,6 +27,12 @@
 // the login ini carries [Common] KeepPrivate=1, so MT5 saves the password at that login; the clear keeps KeepPrivate=1
 // (clearFeedCredentials), and a login ini with a password but without KeepPrivate=1 is never written
 // (feedIniSafeToWrite: the apply fails with "keep_private_missing"). startup.ini still has no [Common] section.
+// 1.8.5 (the owner 2026-11-28, "Seperti executor (Recommended)": on this VPS a [Common]-less startup.ini start did not
+// log in from the saved password, 11:29Z): the feed keeps its login in its own ini (owner mt5, mode 600), like the
+// executor's terminal_gateway.ini, so every restart logs in through feed-run.sh's Password branch. The clear after
+// connect is gone (one feed_login_kept line per applied version instead). The owner's disconnect on the Omega page
+// (the server answers connection_status "cleared" with a newer connection_version) empties Login and Password, keeps
+// KeepPrivate=1 and algo trading off, and restarts only the feed's terminal, which then starts on startup.ini.
 import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
@@ -196,6 +203,7 @@ export function createFeedDaemon(options = {}) {
   let macroCursors = null;
   let macroSentMtime = null;
   let stopped = false;
+  let keptLoggedVersion = null; // 1.8.5: feed_login_kept once per applied version
   let keys = null;
   const appliedPath = () => path.join(config.stateDir, "feed-applied.json");
 
@@ -292,7 +300,19 @@ export function createFeedDaemon(options = {}) {
 
     const applied = readJson(appliedPath(), fs) || { version: 0, server: null, cleared_ms: null };
     const conn = payload?.connection;
-    if (conn && typeof conn === "object" && Number(conn.version) > Number(applied.version)) {
+    const connVersion = Number(payload?.connection_version);
+    if (payload?.connection_status === "cleared" && Number.isFinite(connVersion) && connVersion > Number(applied.version)) {
+      // 1.8.5: the owner disconnected the feed on the Omega page: the login leaves the ini and the terminal restarts.
+      try {
+        const cur = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
+        writeIni(config.terminalIni, clearFeedCredentials(cur), fs);
+        await restartTerminal();
+        writeJson(appliedPath(), { version: connVersion, server: null, applied_ms: now(), cleared_ms: now() }, fs);
+        log({ level: "info", event: "feed_connection_cleared", version: connVersion, service: config.terminalService });
+      } catch (err) {
+        log({ level: "error", event: "feed_connection_clear_failed", version: connVersion, error: err instanceof Error ? err.message.slice(0, 120) : "clear_failed" });
+      }
+    } else if (conn && typeof conn === "object" && Number(conn.version) > Number(applied.version)) {
       try {
         const creds = openEnvelope(conn.envelope, keys.privateKey, keys.kid);
         const cur = fs.existsSync(config.terminalIni) ? fs.readFileSync(config.terminalIni, "utf8") : "";
@@ -306,17 +326,11 @@ export function createFeedDaemon(options = {}) {
       } catch (err) {
         log({ level: "error", event: "feed_connection_apply_failed", version: Number(conn.version), error: err instanceof Error ? err.message.slice(0, 120) : "apply_failed" });
       }
-    } else if (applied.server && !applied.cleared_ms && state?.connected === true && String(state.server ?? "").trim().toLowerCase() === String(applied.server).trim().toLowerCase()) {
-      // Logged in on the stored server: the password leaves the ini (MT5 keeps the session; run.sh passes /config only
-      // while Password= is non-empty, so the next start needs no login file).
-      try {
-        const cur = fs.readFileSync(config.terminalIni, "utf8");
-        writeIni(config.terminalIni, clearFeedCredentials(cur), fs);
-        writeJson(appliedPath(), { ...applied, cleared_ms: now() }, fs);
-        log({ level: "info", event: "feed_credentials_cleared", server: applied.server });
-      } catch (err) {
-        log({ level: "warn", event: "feed_credentials_clear_failed", error: err instanceof Error ? err.message.slice(0, 120) : "clear_failed" });
-      }
+    } else if (applied.server && !applied.cleared_ms && state?.connected === true && String(state.server ?? "").trim().toLowerCase() === String(applied.server).trim().toLowerCase()
+      && keptLoggedVersion !== Number(applied.version)) {
+      // 1.8.5: logged in on the stored server. The login stays in the ini (the executor's way), so the next restart logs in.
+      keptLoggedVersion = Number(applied.version);
+      log({ level: "info", event: "feed_login_kept", version: Number(applied.version), server: applied.server });
     }
     if (enforceFeedSettings()) log({ level: "warn", event: "feed_algo_trading_forced_off" });
     try { if (ensureStartupIni()) log({ level: "info", event: "feed_startup_ini_written", path: config.startupIni }); }
