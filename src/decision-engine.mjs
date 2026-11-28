@@ -1306,8 +1306,9 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
   guards.strategy_execution = strategyExecutionEnabled(env);
   guards.consensus = consensus;
-  // FP1: the fresh plans and the mode, for the decision record (decision.fresh_plans, on a side the guardrails allow).
-  if (fresh) { guards.fresh = fresh; guards.fresh_mode = freshMode; }
+  // FP1: the fresh plans and the mode, for the decision record (decision.fresh_plans, on a side the guardrails allow);
+  // a decision without a fresh plan records nothing new (its record is as before, byte for byte).
+  if (fresh && (Object.keys(fresh.long ?? {}).length || Object.keys(fresh.short ?? {}).length)) { guards.fresh = fresh; guards.fresh_mode = freshMode; }
   // SV1b (src/agent-veto.mjs): the two-sided veto rule, only when it is in force (runDecisionEngine resolves it into env).
   if (agentVetoRuleOf(env) === "two_sided") guards.veto_rule = "two_sided";
   try { guards.agent_confidence = agentConfidences(plans, { score: quorum.score, records: agentRecords, passes, statuses }); } catch { guards.agent_confidence = null; }

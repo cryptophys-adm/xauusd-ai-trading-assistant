@@ -365,6 +365,30 @@
       "auto_revert": null
     },
     {
+      "key": "FRESH_PATTERN_MODE",
+      "label": "Fresh 15m pattern exception",
+      "description": "FP1: a pattern agent whose 15m pattern broke out within the last 2 closed bars gets a plan that ignores TP1-KZ (TP1 the measured target, only when it pays at least 1R with the agent's own stop), on a side the guardrails allow; on offers it to the council even alone and trades it at market; record only records it; off nothing. It goes to record by itself when its first 30 trades average below +0.10R at the broker. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
+      "group": "plans",
+      "worker": "ai",
+      "values": [
+        "on",
+        "record",
+        "off"
+      ],
+      "value": "on",
+      "source": "config",
+      "config_value": "on",
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": false,
+      "read_only": false,
+      "write": "feature-switch",
+      "auto_revert": null
+    },
+    {
       "key": "PM_LINES_OFF",
       "label": "Position Manager lines",
       "description": "B5: the Position Manager's rules that send a close, a stop or a target, one line each; the tokens listed are the lines ON. A line also goes off by itself when its last 15 closes average below 0R, and comes back only with a new version or the owner's turn-on (POST /omega/api/pm-lines). An off line's rule acts as if it did not fire. Not set in the config: every line on.",
