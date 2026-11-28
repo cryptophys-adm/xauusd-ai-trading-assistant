@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import lens from "../../../../test/fixtures/nexus-intel/lens.json";
 import liquidity from "../../../../test/fixtures/nexus-intel/liquidity.json";
 import unavailable from "../../../../test/fixtures/nexus-intel/liquidity-unavailable.json";
+import levelReadingsOff from "../../../../test/fixtures/nexus-intel/liquidity-level-readings-off.json";
 import decision from "../../../../test/fixtures/nexus-intel/engine-decision.json";
 import ez1Global from "../../../../test/fixtures/nexus-ez1/conclusion-global.json";
 import ez1Overview from "../../../../test/fixtures/nexus-ez1/omega-overview.json";
@@ -122,7 +123,8 @@ export function merged(base: any, add: any): any {
 
 /**
  * The Liquidity page (Track C2) over its reads. /api/liquidity is the contract (test/fixtures/nexus-intel/
- * liquidity.json, and liquidity-unavailable.json: no recent broker bar). Since B15 the fixture carries the LIQUIDITY
+ * liquidity.json; liquidity-unavailable.json: no recent broker bar; liquidity-level-readings-off.json: the seed's answer
+ * with LENS_LEVEL_READINGS off, level_moves null and the skip unscored). Since B15 the fixture carries the LIQUIDITY
  * card and the quorum with liquidity (the latest decision's decision.liquidity), since B16 lens B's conditions, and
  * since B19 the skips' outcomes and effects.level_moves. LATER is the page's own stand-in for the level moves until backends B17-B19
  * publish theirs (the mockup's "all backend PRs deployed" board); it is not a contract. The clock is the fixture's
@@ -172,8 +174,13 @@ export const LENS_OFF = merged(lens, { switches: { liquidity_enabled: false }, l
  * The live mix of 2026-11-23 (the reviewer's 14-day D1 count after B8 went live): every effects list empty but makers,
  * one row whose outcome is "pending" (B8's outcomeOf reads anything not hit/miss/neutral, NULL included, as pending).
  */
-/** Before B19: no level moves (null) and a skip without an outcome, so both B19 placeholders show. */
-export const PRE_B19 = { effects: { level_moves: null, skips: ((liquidity as any).effects.skips ?? []).map((x: any) => ({ ...x, outcome: null })) } };
+/** LENS_LEVEL_READINGS on and a skip not scored yet (its outcome still unknown): level moves listed, the skip waits. */
+export const SKIP_UNSCORED = { effects: { skips: ((liquidity as any).effects.skips ?? []).map((x: any) => ({ ...x, outcome: null })) } };
+/** The texts the page no longer writes since B17-B19 are live (any of them in a render is stale). */
+export const PRE_BACKEND = ["B19 is deployed", "B17 is deployed", "B18 is deployed", "Fills after backend B1"];
+/** LENS_LEVEL_READINGS off: the level moves' line and the skip's. */
+export const READINGS_OFF = "Not recorded: LENS_LEVEL_READINGS is off.";
+export const LEVEL_READINGS_OFF = levelReadingsOff;
 /**
  * B19's level moves in every outcome (src/liquidity-view.mjs: { at_ms, side, mode, action, outcome }, no price): the
  * fixture's two, a missed ladder lock on a short, a key level lock with no side, mode or known outcome (pending), a
@@ -668,7 +675,7 @@ export const VIEWS: Entry[] = [
       "fresh sweep, H1 and M15 agree", "sweep_with_agreeing_witness", "made", "14:47 UTC", "lens B state", "14:46 UTC", "Quorum with liquidity", "Informational: the quorum with the LIQUIDITY card added at its weight. No gate reads it.", "▲ 0.67", "+0.17", "▲ long",
       "Level moves", "ladder lock", "key level lock", "past a lens B level", "1 hit", "1 pending", "Position Manager actions",
       "Mon 09:20 NY", "14:20 UTC · 21:20 GMT+7", "Mon 05:00 NY", "10:00 UTC · 17:00 GMT+7", "▼ short", "intraday", LEVEL_MOVES_HINT, "baseline insufficient · 2 of 4 weeks", "backfill done"],
-    hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted", "Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."],
+    hides: ["No LIQUIDITY card in the latest decision", "council only", "never counted", "LENS_LEVEL_READINGS", "Not in this answer", ...PRE_BACKEND],
     missing: [NOT_FOUND]
   },
   {
@@ -718,16 +725,25 @@ export const VIEWS: Entry[] = [
   },
   {
     name: "LiquidityViewNoLevelMoves", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, { effects: { level_moves: [] } }),
-    shows: ["Level moves", "No level move in the last 7 days.", LEVEL_MOVES_HINT], hides: ["ladder lock", "past a lens B level", "Fills after backend B19 is deployed."]
+    shows: ["Level moves", "No level move in the last 7 days.", LEVEL_MOVES_HINT], hides: ["ladder lock", "past a lens B level", READINGS_OFF, ...PRE_BACKEND]
   },
+  // LENS_LEVEL_READINGS off (the seed's own answer): the level moves' heading and hint, the off line with the way to the
+  // switch, the skip not scored with the switch named.
   {
-    name: "LiquidityViewPreB19", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, PRE_B19),
-    shows: ["Fills after backend B19 is deployed.", "Scored after backend B19 is deployed.", "Not scored yet"],
-    hides: ["ladder lock", "past a lens B level"]
+    name: "LiquidityViewLevelReadingsOff", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: levelReadingsOff,
+    shows: [...PANELS, "Level moves", LEVEL_MOVES_HINT, READINGS_OFF, 'href="/#/switches"', "Feature switches", "not scored", "LENS_LEVEL_READINGS off", "Position Manager actions"],
+    hides: ["ladder lock", "past a lens B level", "No level move in the last 7 days.", "Not scored yet", "Not in this answer", ...PRE_BACKEND],
+    missing: [NOT_FOUND]
+  },
+  // The switch on and a skip whose outcome is not known yet: the level moves listed, the skip waiting, no time invented.
+  {
+    name: "LiquidityViewSkipUnscored", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, SKIP_UNSCORED),
+    shows: ["Not scored yet", "Each skip is scored once its outcome is known.", "ladder lock", "past a lens B level"],
+    hides: ["LENS_LEVEL_READINGS", ...PRE_BACKEND]
   },
   {
     name: "LiquidityViewPendingMaker", View: ({ d }) => <LiquidityView d={d} lens={lens} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, LIVE_EFFECTS),
-    shows: ["1 pending", "none in 7 days", "No Position Manager action on a sweep in the last 7 days.", "Fills after backend B19 is deployed."]
+    shows: ["1 pending", "none in 7 days", "No Position Manager action on a sweep in the last 7 days.", READINGS_OFF], hides: PRE_BACKEND
   },
   { name: "LiquidityViewLensOff", View: ({ d }) => <LiquidityView d={d} lens={LENS_OFF} decision={decision} now={LIQUIDITY_NOW} />, fixture: merged(liquidity, { state: { on: false } }), shows: ["lens B off", "Omega ignores these levels (lens B off)", "Switched off by the owner."] },
   { name: "LiquidityViewLens", View: ({ d }) => <LiquidityView d={liquidity} lens={d} decision={decision} now={LIQUIDITY_NOW} />, fixture: lens, shows: ["Lens B · Liquidity (broker M1)", "Score against the floor"] },

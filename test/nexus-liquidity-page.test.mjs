@@ -1,7 +1,7 @@
 // The Nexus Liquidity page (Track C2, "feat(nexus): Liquidity", as the owner-approved mockup): its route, its reads (GET
 // only, one poll each, one /api/lens read in the whole UI), its render over backend B8's contract
-// (test/fixtures/nexus-intel/liquidity.json and liquidity-unavailable.json), the not-yet states of the fields backends
-// B16-B19 fill, no order text or line, the bands only from *_feed values and none without a known basis, a scale on
+// (test/fixtures/nexus-intel/liquidity.json, liquidity-unavailable.json and liquidity-level-readings-off.json), the
+// fields backends B16-B19 fill (and LENS_LEVEL_READINGS off, the one null they leave), no order text or line, the bands only from *_feed values and none without a known basis, a scale on
 // every price, the LIQUIDITY card and the quorum with liquidity from backend B15's contract, and the states the mockup
 // draws.
 import test from "node:test";
@@ -16,7 +16,7 @@ const UI = fileURLToPath(new URL("../workers/xauusd-nexus-dashboard/ui/", import
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const src = (p) => read(`workers/xauusd-nexus-dashboard/ui/src/${p}`);
 const fixture = (f) => JSON.parse(read(`test/fixtures/nexus-intel/${f}`));
-const LIQ = fixture("liquidity.json"), UNAV = fixture("liquidity-unavailable.json");
+const LIQ = fixture("liquidity.json"), UNAV = fixture("liquidity-unavailable.json"), OFF = fixture("liquidity-level-readings-off.json");
 
 // The page's views run from an esbuild bundle of the UI (as the render check: CommonJS, lightweight-charts on its stub).
 const NO_UI_DEPS = ["esbuild", "react", "react-dom"].some((p) => !existsSync(`${UI}node_modules/${p}/package.json`))
@@ -28,7 +28,7 @@ async function ui() {
   const { build } = req("esbuild");
   const out = await build({
     absWorkingDir: UI, bundle: true, platform: "node", format: "cjs", target: ["node20"], jsx: "automatic", write: false, logLevel: "silent",
-    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LEVEL_MOVES, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, COND_WARN, COND_UNMEASURED, COND_EXCLUDED, COND_OFF, COND_BRIEF, COND_STALE, COND_NO_THRESHOLDS, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
+    stdin: { contents: 'export * from "./src/lib/intel"; export * from "./src/pages/Liquidity"; export { render, merged, LATER, LIVE_EFFECTS, LEVEL_MOVES, LIQUIDITY_NOW, LENS_AETHER, LENS_OFF, SKIP_UNSCORED, PRE_BACKEND, READINGS_OFF, NO_CARD, CARD_REASONS, CARD_BEARISH, CARD_STALE, QUORUM_NOT_MET, COND_WARN, COND_UNMEASURED, COND_EXCLUDED, COND_OFF, COND_BRIEF, COND_STALE, COND_NO_THRESHOLDS, VIEWS } from "./scripts/render-entry";', resolveDir: UI, loader: "tsx" },
     alias: { "lightweight-charts": "./scripts/lw-stub.mjs" }, loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' }
   });
   const m = { exports: {} };
@@ -101,7 +101,7 @@ test("LQ3 GET only, from the page's allow-list: five reads, one poll each, at th
 
 test("LQ4 the page renders over B8's contract and its unavailable case, each top-level key nulled and each array emptied", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
-  for (const [name, d] of [["liquidity.json", LIQ], ["liquidity-unavailable.json", UNAV]]) {
+  for (const [name, d] of [["liquidity.json", LIQ], ["liquidity-unavailable.json", UNAV], ["liquidity-level-readings-off.json", OFF]]) {
     const html = await page(d);
     clean(html);
     for (const t of ["Positioning &amp; Liquidity analyst", "Score against the floor", "Levels on the chart", "Facts, last 24 hours", "Sweeps and outcomes", "Baseline per New York hour of the week", "What it changed in Omega", "In the latest decision", "Liquidity never opens, sizes or prices an entry."]) assert.ok(html.includes(t), `${name}: ${t}`);
@@ -121,12 +121,12 @@ test("LQ4 the page renders over B8's contract and its unavailable case, each top
   const names = u.VIEWS.map((v) => v.name);
   for (const n of ["LiquidityView", "LiquidityViewNoCard", "LiquidityViewCard", "LiquidityViewQuorumWithLiquidity", "LiquidityViewCardBearish", "LiquidityViewCardStale", "LiquidityViewQuorumNotMet",
     "LiquidityViewReason_no_agreeing_witness", "LiquidityViewReason_sweep_stale", "LiquidityViewReason_not_reclaimed", "LiquidityViewReason_no_sweep",
-    "LiquidityViewUnavailable", "LiquidityViewLater", "LiquidityViewPendingMaker", "LiquidityViewLensOff", "LiquidityViewLens", "LiquidityViewDecision"]) assert.ok(names.includes(n), n);
+    "LiquidityViewUnavailable", "LiquidityViewLater", "LiquidityViewPendingMaker", "LiquidityViewLevelReadingsOff", "LiquidityViewSkipUnscored", "LiquidityViewLensOff", "LiquidityViewLens", "LiquidityViewDecision"]) assert.ok(names.includes(n), n);
   const entry = read("workers/xauusd-nexus-dashboard/ui/scripts/render-entry.tsx");
-  for (const f of ["liquidity.json", "liquidity-unavailable.json", "lens.json", "engine-decision.json"]) assert.match(entry, new RegExp(`test/fixtures/nexus-intel/${f.replace(".", "\\.")}`), f);
+  for (const f of ["liquidity.json", "liquidity-unavailable.json", "liquidity-level-readings-off.json", "lens.json", "engine-decision.json"]) assert.match(entry, new RegExp(`test/fixtures/nexus-intel/${f.replace(".", "\\.")}`), f);
 });
 
-test("LQ5 the B16-B19 fields null: the not-yet Empties; filled: the level moves; B15's card and quorum with liquidity null: one Empty", { skip: NO_UI_DEPS }, async () => {
+test("LQ5 the B16-B19 fields filled, no not-yet wording left; filled: the level moves; B15's card and quorum with liquidity null: one Empty", { skip: NO_UI_DEPS }, async () => {
   const u = await ui();
   // B16 filled conditions (lens B's liquidity conditions, the rooms' line, no price); the unavailable case keeps it null.
   assert.ok(LIQ.conditions && typeof LIQ.conditions.line === "string", "conditions filled since B16");
@@ -140,13 +140,14 @@ test("LQ5 the B16-B19 fields null: the not-yet Empties; filled: the level moves;
   const launch = await page({ ...LIQ, ...u.NO_CARD });
   clean(launch);
   for (const t of ["No LIQUIDITY card in the latest decision", "None while the switch is off, lens B is off, floored or stale, or the decision came before the card (B15).", "Level moves"]) assert.ok(launch.includes(t), t);
-  for (const t of ["Fills after backend B19 is deployed.", "Scored after backend B19 is deployed."]) assert.ok(!launch.includes(t), `B19 is live: no "${t}"`);
+  for (const t of u.PRE_BACKEND) assert.ok(!launch.includes(t), `B17-B19 are live: no "${t}"`);
+  assert.ok(!launch.includes("LENS_LEVEL_READINGS"), "the switch on: no off text");
   assert.ok(!launch.includes("Quorum with liquidity"), "no quorum with liquidity without decision.liquidity");
   assert.ok(!launch.includes("Fills after backend B15"), "B15 is live: no not-yet wording for it");
   assert.ok(launch.includes("Quorum") && launch.includes("WAIT"), "the quorum beside it is unchanged");
   const later = await page(u.merged(LIQ, u.LATER), { lens: u.LENS_AETHER });
   clean(later);
-  for (const t of ["No LIQUIDITY card in the latest decision", "Fills after backend B19 is deployed."]) assert.ok(!later.includes(t), `filled: no "${t}"`);
+  for (const t of ["No LIQUIDITY card in the latest decision", ...u.PRE_BACKEND]) assert.ok(!later.includes(t), `filled: no "${t}"`);
   for (const t of ["LIQUIDITY", "Quorum with liquidity", "Level moves"]) assert.ok(later.includes(t), t);
 });
 
@@ -157,10 +158,11 @@ test("LQ5b a pending maker or block is pending (plain, not yet scored), never a 
   clean(live);
   const panel = live.slice(live.indexOf("What it changed in Omega"), live.indexOf("In the latest decision"));
   assert.match(panel, /<td[^>]*>maker<\/td>(?:(?!<\/tr>).)*<td[^>]*>1<\/td>(?:(?!<\/tr>).)*class="chip [^"]*text-fg-2">1 pending</s, "the maker row: 1, one plain pending chip");
-  assert.doesNotMatch(panel, /\bmiss\b|none scored yet|text-fault/, "pending is not a miss and not an error");
+  // The level moves' hint (its aria-label and title) defines "miss"; the rows must not say it.
+  assert.doesNotMatch(panel.replace(/ (?:aria-label|title)="[^"]*"/g, ""), /\bmiss\b|none scored yet|text-fault/, "pending is not a miss and not an error");
   for (const a of ["block", "deferral", "skip"]) assert.match(panel, new RegExp(`<td[^>]*>${a}</td>(?:(?!</tr>).)*none in 7 days`, "s"), `${a}: none in 7 days`);
-  assert.ok(panel.includes("No Position Manager action on a sweep in the last 7 days.") && panel.includes("Fills after backend B19 is deployed."));
-  assert.ok(!panel.includes("Scored after backend B19 is deployed."), "no skip, no scoring note");
+  assert.ok(panel.includes("No Position Manager action on a sweep in the last 7 days.") && panel.includes(u.READINGS_OFF), "level_moves null: the switch is off");
+  assert.ok(!panel.includes("LENS_LEVEL_READINGS off") && !panel.includes("Not scored yet"), "no skip, no scoring note");
   // B8's outcomeOf: NULL and anything unknown read as pending; a pending block too.
   const counts = u.outcomeCounts([{ outcome: "hit" }, { outcome: "pending" }, { outcome: null }, { outcome: "odd" }, {}]);
   assert.deepEqual(counts, { hit: 1, miss: 0, neutral: 0, pending: 4 });
@@ -195,6 +197,43 @@ test("LQ5c B19's level moves: grouped by action, each move's time in New York, U
   assert.deepEqual(chips.map((m) => m[2]), ["2 pending", "pending", "pending", "1 hit", "1 miss", "1 neutral", "hit", "miss", "neutral"]);
   // No price: no number with a decimal point in the panel's text (the hint's 0.1 × ATR15 is in its attributes).
   for (const t of textOf(panel)) assert.doesNotMatch(t, /\d\.\d/, t);
+});
+
+test("LQ5d LENS_LEVEL_READINGS off (the seed's answer): the level moves and the skip say so, with the way to Feature switches; on: no off text; no not-yet wording anywhere", { skip: NO_UI_DEPS }, async () => {
+  const u = await ui();
+  // The fixture is the seed's answer with the switch off (test/liquidity-view.test.mjs LV1): level_moves null, the skip
+  // recorded by the entry council but never scored.
+  assert.equal(OFF.effects.level_moves, null);
+  assert.ok(Array.isArray(OFF.effects.pm_actions) && Array.isArray(LIQ.effects.pm_actions), "pm_actions is always an array");
+  assert.ok(OFF.effects.skips.length && OFF.effects.skips.every((x) => x.outcome == null), "a skip with no outcome");
+  const effects = (html) => html.slice(html.indexOf("What it changed in Omega"), html.indexOf("In the latest decision"));
+  const off = await page(OFF);
+  clean(off);
+  const op = effects(off);
+  // The level moves: the heading and its hint as when filled, then the off line in grey and the link to the switch.
+  assert.match(op, /Level moves<span tabindex="0" role="note" aria-label="Each row is a protective lock/, "the heading with its hint");
+  assert.match(op, /<span class="min-w-0 text-\[12px\] text-off">Not recorded: LENS_LEVEL_READINGS is off\.<\/span><a href="\/#\/switches" [^>]*>(?:<svg(?:(?!<\/svg>).)*<\/svg>)Feature switches<\/a>/s, "the off line in grey, the link to Feature switches");
+  assert.equal((op.match(/href="\/#\/switches"/g) ?? []).length, 1);
+  // The skip: not scored, the switch named, in grey; never an outcome colour.
+  assert.match(op, /<td[^>]*>skip<\/td>(?:(?!<\/tr>).)*<td[^>]*>1<\/td>(?:(?!<\/tr>).)*class="chip border-white\/10 bg-white\/4 text-fg-2">not scored<\/span><span class="text-muted">LENS_LEVEL_READINGS off<\/span>/s);
+  for (const t of ["ladder lock", "No level move in the last 7 days.", "Not scored yet", "Not in this answer"]) assert.ok(!op.includes(t), `off: no "${t}"`);
+  assert.ok(op.includes("Position Manager actions") && op.includes("target moved"), "the Position Manager's actions unchanged");
+  // On: no off text; the level moves table, or its own Empty when none; a skip not yet scored waits without a time.
+  const on = await page(LIQ), none = await page(u.merged(LIQ, { effects: { level_moves: [] } })), unscored = await page(u.merged(LIQ, u.SKIP_UNSCORED));
+  for (const html of [on, none, unscored]) { clean(html); assert.ok(!html.includes("LENS_LEVEL_READINGS") && !html.includes('href="/#/switches"'), "on: no off text"); }
+  assert.ok(effects(on).includes("past a lens B level") && effects(on).includes("ladder lock"), "on: the level moves table");
+  assert.ok(effects(none).includes("No level move in the last 7 days."), "on, none: its Empty");
+  assert.match(effects(unscored), /<td[^>]*>skip<\/td>(?:(?!<\/tr>).)*Not scored yet<\/span><span[^>]*>Each skip is scored once its outcome is known\.<\/span>/s);
+  assert.ok(effects(unscored).includes("ladder lock"), "the switch on: the level moves stay");
+  // pm_actions is always an array; a null one still reads a null-safe Empty under its heading.
+  assert.match(effects(await page(u.merged(LIQ, { effects: { pm_actions: null } }))), /Position Manager actions<\/div><p class="py-3 text-\[12px\] text-muted">Not in this answer<\/p>/);
+  // No not-yet wording for a live backend anywhere on the page, in any variant rendered here.
+  const variants = [off, on, none, unscored, await page(UNAV), await page(u.merged(LIQ, u.LIVE_EFFECTS)), await page(u.merged(LIQ, u.LATER), { lens: u.LENS_AETHER }),
+    await page(u.merged(LIQ, { effects: { pm_actions: null } })), await page({ ...LIQ, effects: null }), await page({ ...LIQ, management: null }), await page(u.merged(OFF, { effects: { skips: [] } }))];
+  assert.deepEqual(u.PRE_BACKEND, ["B19 is deployed", "B17 is deployed", "B18 is deployed", "Fills after backend B1"]);
+  for (const [i, html] of variants.entries()) for (const t of u.PRE_BACKEND) assert.ok(!html.includes(t), `variant ${i}: no "${t}"`);
+  const srcText = src("pages/Liquidity.tsx");
+  assert.doesNotMatch(srcText, /is deployed|Fills after backend|Scored after backend/, "the page's source has no not-yet wording");
 });
 
 test("LQ6 no order text or line: no Entry, Stop or TP but the hint and \"management only, never an entry\"", { skip: NO_UI_DEPS }, async () => {

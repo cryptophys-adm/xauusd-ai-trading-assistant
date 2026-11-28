@@ -89,6 +89,14 @@ test("LV1. the fixture is the view's answer: keys and types, the outcomes and st
   assert.deepEqual(main.effects.level_moves.map((m) => [m.action, m.outcome]), [["key_level_lock", "pending"], ["ladder_lock", "hit"]]);
   assert.deepEqual(main.effects.skips.map((x) => x.outcome), ["hit"]);
   assert.equal((await view({ env: { LENS_LEVEL_READINGS: "off" } })).v.effects.level_moves, null, "off: no level moves");
+  // liquidity-level-readings-off.json is the seed's answer with the switch off, byte for byte: no skip or hold reading
+  // recorded, so level_moves is null and the entry council's skip carries no outcome; pm_actions stays an array.
+  const off = fixture("liquidity-level-readings-off.json");
+  assert.deepEqual((await view({ env: { LENS_LEVEL_READINGS: "off" } })).v, off);
+  sameShape(off, main);
+  assert.equal(off.effects.level_moves, null);
+  assert.ok(off.effects.skips.length && off.effects.skips.every((x) => x.outcome === null));
+  assert.ok(Array.isArray(off.effects.pm_actions) && off.effects.pm_actions.length);
   // B16: the conditions the 15m and 1H rooms read (liquidityConditions), filled from the latest state; none without
   // available facts.
   assert.deepEqual(v.conditions, main.conditions);
@@ -139,7 +147,7 @@ test("LV2. without a known basis the feed's scale is null: low_feed, high_feed, 
 
 test("LV3. no account, login, server, source or identity in the answer or the fixtures (key or value)", async () => {
   const { v } = await view();
-  for (const body of [v, fixture("liquidity.json"), fixture("liquidity-unavailable.json")]) {
+  for (const body of [v, fixture("liquidity.json"), fixture("liquidity-unavailable.json"), fixture("liquidity-level-readings-off.json")]) {
     for (const k of keysIn(body)) assert.doesNotMatch(k, /account|login|server|identity|ticket/i, k);
     const text = JSON.stringify(body);
     for (const secret of [REF, SERVER, SERVER.toLowerCase(), SOURCE, LOGIN_HASH, "acct_", "9001", "9002"]) assert.ok(!text.includes(secret), secret);

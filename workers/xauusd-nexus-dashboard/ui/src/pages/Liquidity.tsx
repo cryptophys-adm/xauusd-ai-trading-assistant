@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type SVGProps } from "react";
-import { Activity, CandlestickChart, Droplets, Gauge, GitBranch, Grid3x3, Info, Layers, Scale, Target } from "lucide-react";
+import { Activity, CandlestickChart, Droplets, Gauge, GitBranch, Grid3x3, Info, Layers, Scale, Target, ToggleRight } from "lucide-react";
 import clsx from "clsx";
 import { Badge, Empty, Hint, Panel, PollBody } from "../components/ui";
 import IntelChart, { barsOf, type IntelMarker } from "../components/IntelChart";
@@ -22,11 +22,13 @@ import {
 // backend B8), /api/lens, the feed's 15m candles, the 15m chart plane and the latest decision.
 //
 // LiquidityView is pure and null-safe (the page render check renders it over test/fixtures/nexus-intel/liquidity.json
-// and its variants). A field a later backend PR fills (B17 the Position Manager's actions, B18 the management
-// candidates, B19 the skip outcomes and the level moves) is null until then and shows an Empty saying when it fills,
-// never an error. Since B19 the level moves are a table per action (ladder lock, key level lock): each move's time in
-// New York, UTC and GMT+7, its side in its direction colour, its mode, and its outcome in a neutral chip; no price. B15's LIQUIDITY card and quorum with liquidity are null when the latest decision has no
-// decision.liquidity (the switch off; lens B off, floored or stale; a decision before B15): an Empty says so.
+// and its variants). B17-B19 are live. effects.level_moves is null only while LENS_LEVEL_READINGS is off: the panel says
+// "Not recorded: LENS_LEVEL_READINGS is off." with a link to Feature switches, and an unscored skip says the switch is
+// off. effects.pm_actions (and management) are always arrays; a null one reads a null-safe "Not in this answer", never
+// an error. Since B19 the level moves are a table per action (ladder lock, key level lock): each move's time in New
+// York, UTC and GMT+7, its side in its direction colour, its mode, and its outcome in a neutral chip; no price. B15's
+// LIQUIDITY card and quorum with liquidity are null when the latest decision has no decision.liquidity (the switch off;
+// lens B off, floored or stale; a decision before B15): an Empty says so.
 //
 // Prices: every one carries its scale (feed or broker). The chart is the feed's, so lens B's bands come only from
 // low_feed / high_feed, and none is drawn while the broker-to-feed basis is unknown. Liquidity never opens, sizes or
@@ -369,7 +371,7 @@ function LevelsPanel({ d, candles, plane, mark, ignored, zonesOn, onToggleZones,
         {/* Lens B's own levels in the management set are its rows already: the table adds the key zones. */}
         <LevelsTable levels={levels} raw={arr(d?.levels)} management={management.filter((m) => m.source === "key_level")} last={last} atr={atr} />
         <div className="text-[11px] leading-normal text-muted">ATR distance: from the level's middle to the last close, {price(last)} {SCALE.feed}</div>
-        {d?.management == null ? <Empty when="Fills after backend B18 is deployed.">No management levels yet</Empty> : null}
+        {d?.management == null ? <Empty>Management levels not in this answer</Empty> : null}
       </>
     );
   })();
@@ -798,17 +800,33 @@ function LevelMovesTable({ rows }: { rows: any[] }) {
   );
 }
 
+/** LENS_LEVEL_READINGS off: no skip or hold reading is recorded or scored, with the way to the switch (Zones' off state). */
+function LevelReadingsOff() {
+  return (
+    <div className="glass-inner flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3.5 py-2.5">
+      <span className="min-w-0 text-[12px] text-off">Not recorded: LENS_LEVEL_READINGS is off.</span>
+      <a href="/#/switches" className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-2.5 text-[12px] font-medium text-fg transition hover:border-white/20 hover:bg-white/8 sm:h-8">
+        <ToggleRight className="h-3.5 w-3.5 text-ok" aria-hidden="true" />Feature switches
+      </a>
+    </div>
+  );
+}
+
 function EffectsPanel({ d, now }: { d: any; now: number }) {
   const e = obj(d?.effects);
   const blocks = recent(e?.blocks, now), makers = recent(e?.makers, now), skips = recent(e?.skips, now), deferrals = recent(e?.deferrals, now);
   const held = deferrals.reduce((n, x) => n + (num(x?.intents) ? x.intents : 0), 0);
-  // Skips carry an outcome once backend B19 scores them.
+  // B19 scores each skip once its outcome is known; while LENS_LEVEL_READINGS is off (level_moves null) none is scored.
   const skipScored = skips.some((x) => str(x?.outcome) != null);
+  const readingsOff = e != null && e.level_moves == null;
+  const skipOut = !skips.length ? <NoneIn7 /> : skipScored ? <OutcomeChips rows={skips} />
+    : readingsOff ? <span className="inline-flex flex-wrap items-center gap-1"><Badge tone="plain">not scored</Badge><Muted>LENS_LEVEL_READINGS off</Muted></span>
+    : <Empty when="Each skip is scored once its outcome is known.">Not scored yet</Empty>;
   const rows = e ? [
     { action: "block", why: "spread widened against the hour's median", n: blocks.length, out: <OutcomeChips rows={blocks} /> },
     { action: "deferral", why: "spread spike: an open position's level change held up to 10 min (closes never wait)", n: deferrals.length, out: deferrals.length ? <span className="inline-flex flex-wrap gap-1"><Badge tone="plain">not scored</Badge>{held ? <Muted>{held} change{held === 1 ? "" : "s"} held</Muted> : null}</span> : <NoneIn7 /> },
     { action: "maker", why: "15m thin · maker R against taker R", n: makers.length, out: <OutcomeChips rows={makers} /> },
-    { action: "skip", why: "sweep against, last 15 min", n: skips.length, out: !skips.length ? <NoneIn7 /> : skipScored ? <OutcomeChips rows={skips} /> : <Empty when="Scored after backend B19 is deployed.">Not scored yet</Empty> }
+    { action: "skip", why: "sweep against, last 15 min", n: skips.length, out: skipOut }
   ] : [];
   const sub = (t: string) => <div className="mt-1 text-[12px] font-semibold text-fg">{t}</div>;
   const moves = e?.level_moves == null ? null : recent(e.level_moves, now);
@@ -819,12 +837,10 @@ function EffectsPanel({ d, now }: { d: any; now: number }) {
         <>
           <EffectsTable rows={rows} />
           <div className="mt-3 flex flex-col gap-2">
-            {moves == null ? <Empty when="Fills after backend B19 is deployed.">Level moves</Empty> : (
-              <><div className="mt-1 flex items-center gap-1.5 text-[12px] font-semibold text-fg">Level moves<Hint text={LEVEL_MOVES_HINT} /></div>{moves.length ? <LevelMovesTable rows={moves} /> : <Empty>No level move in the last 7 days.</Empty>}</>
-            )}
-            {pm == null ? <Empty when="Fills after backend B17 is deployed.">Position Manager actions</Empty> : (
-              <>{sub("Position Manager actions")}{pm.length ? <EffectsTable rows={grouped(pm, (r) => PM_ACTION[str(r?.action) ?? ""] ?? words(r?.action), "on a sweep against", "status")} /> : <Empty>No Position Manager action on a sweep in the last 7 days.</Empty>}</>
-            )}
+            <div className="mt-1 flex items-center gap-1.5 text-[12px] font-semibold text-fg">Level moves<Hint text={LEVEL_MOVES_HINT} /></div>
+            {moves == null ? <LevelReadingsOff /> : moves.length ? <LevelMovesTable rows={moves} /> : <Empty>No level move in the last 7 days.</Empty>}
+            {sub("Position Manager actions")}
+            {pm == null ? <Empty>Not in this answer</Empty> : pm.length ? <EffectsTable rows={grouped(pm, (r) => PM_ACTION[str(r?.action) ?? ""] ?? words(r?.action), "on a sweep against", "status")} /> : <Empty>No Position Manager action on a sweep in the last 7 days.</Empty>}
           </div>
         </>
       )}
