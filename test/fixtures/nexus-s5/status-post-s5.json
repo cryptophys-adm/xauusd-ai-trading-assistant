@@ -1,0 +1,15 @@
+{
+  "ai_worker": {
+    "status": "ok",
+    "ingest_url": "https://news.cryptophys.work",
+    "ingest_secret": true,
+    "webhook_secret": true,
+    "local_lane": {
+      "rpc_entrypoint": "LocalComputationIngress",
+      "indicator_source": "local",
+      "fresh": true
+    }
+  },
+  "ingestion_worker": { "status": "ok", "oauth_authorized": true, "last_scheduled_ingest": { "status": "ok", "checked_at": "2026-11-28T07:55:00.000Z" } },
+  "timestamp": "2026-11-28T08:00:00.000Z"
+}
