@@ -5,7 +5,7 @@ export interface FeatureSwitchEntry {
   readonly worker: "ai" | "omega"; readonly values: FeatureSwitchValues; readonly config_only: readonly string[];
   readonly default_value: FeatureSwitchValue; readonly config_value: FeatureSwitchValue | null;
   readonly era_switch: boolean; readonly restarts_mode_evidence: boolean; readonly emergency_stop: boolean; readonly read_only: boolean;
-  readonly write: "feature-switch" | "omega-settings"; readonly resolve: "env" | "agent-veto" | "omega-settings"; readonly hold: "room-waive" | null;
+  readonly write: "feature-switch" | "omega-settings"; readonly resolve: "env" | "agent-veto" | "omega-settings"; readonly hold: "room-waive" | "fresh-pattern" | null; readonly hold_value: string;
   read(raw: unknown): FeatureSwitchValue; toEnv?(value: FeatureSwitchValue): string;
 }
 export interface FeatureSwitchRow {

@@ -26,6 +26,7 @@ import {
 } from "./feature-switches.mjs";
 import { resolveAgentVetoRule, readOwnerForceDoc, setAgentVetoForce, AGENT_VETO_AUTO_KEY, autoRevertAt } from "./agent-veto.mjs";
 import { readRoomHold } from "./room-waive.mjs";
+import { readFreshPatternHold } from "./fresh-pattern.mjs";
 import { zoneHoldRows } from "./zone-readings.mjs";
 import { readSettings, writeSettings, readSettingsKeyMeta } from "./omega-broker.mjs";
 import { OMEGA_DEFAULTS } from "./omega-engine.mjs";
@@ -104,8 +105,11 @@ async function omegaState(env) {
 
 /** RM1b: the automatic revert's hold of a "hold" row ({ since, until } while it holds), or null (also when unreadable). */
 async function holdState(env, e, now) {
-  if (e.hold !== "room-waive") return null;
-  try { return await readRoomHold(env?.SIGNAL_CACHE, now); } catch { return null; }
+  try {
+    if (e.hold === "room-waive") return await readRoomHold(env?.SIGNAL_CACHE, now);
+    if (e.hold === "fresh-pattern") return await readFreshPatternHold(env?.SIGNAL_CACHE);
+    return null;
+  } catch { return null; }
 }
 
 /** Pure: one row from the states read. */
@@ -133,10 +137,11 @@ function rowFrom(e, { env, doc, veto, omega, holds = {}, zoneHolds = null }) {
   }
   const r = resolveEnvSwitch(e, { override: doc[e.key] ?? null, env });
   if (e.hold) {
-    // RM1b (ROOM_BREAKOUT_WAIVE): the owner's override wins over the hold; else "off" while the automatic revert holds.
+    // RM1b (ROOM_BREAKOUT_WAIVE), FP1 (FRESH_PATTERN_MODE): the owner's override wins over the hold; else the row's
+    // hold_value ("off"; FP1 "record") while the automatic revert holds (FP1: only over "on").
     if (r.source === "override") return { ...switchRow(e, { ...r, config_value }), auto_revert: null };
-    const h = holds[e.key] ?? null;
-    return { ...switchRow(e, { ...r, value: h ? "off" : r.value, config_value }), auto_revert: h ? { since: isoOrNull(h.since), until: isoOrNull(h.until) } : null };
+    const h = e.hold === "fresh-pattern" && r.value !== "on" ? null : holds[e.key] ?? null;
+    return { ...switchRow(e, { ...r, value: h ? e.hold_value : r.value, config_value }), auto_revert: h ? { since: isoOrNull(h.since), until: isoOrNull(h.until) } : null };
   }
   // Z5: the breaker's decision-side hold beside the owner's value (never instead of it).
   if (e.zone_hold) return { ...switchRow(e, { ...r, config_value }), zone_hold: zoneHolds?.[e.zone_hold] ?? null };

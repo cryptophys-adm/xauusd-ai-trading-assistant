@@ -62,7 +62,7 @@ const CHANGE_TOKENS = Object.freeze(["conf", "tpw", "limit", "skip", "stance"]);
 const tokensGiven = (raw) => new Set(String(raw ?? "").split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean));
 
 const entry = (e) => Object.freeze({
-  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [], hold: null, zone_hold: null,
+  era_switch: false, restarts_mode_evidence: false, emergency_stop: false, read_only: false, worker: "ai", write: "feature-switch", resolve: "env", config_only: [], hold: null, hold_value: "off", zone_hold: null,
   ...e,
   values: Array.isArray(e.values) ? Object.freeze([...e.values]) : Object.freeze({ type: "tokens", tokens: Object.freeze([...e.values.tokens]) })
 });
@@ -71,7 +71,8 @@ const entry = (e) => Object.freeze({
  * The registry, one entry per switch. Internal fields (not in the GET payload): `read` (raw value → panel value, the
  * accessor's rule), `toEnv` (panel value → the env form; the identity when absent), `config_only` (values the code reads
  * but the panel never sets), `resolve` ("env": copied onto the run's env; "agent-veto": the owner's force of SV1b;
- * "omega-settings": D1 omega_settings), `hold` ("room-waive": an env row with its own automatic revert, RM1b; null).
+ * "omega-settings": D1 omega_settings), `hold` ("room-waive": an env row with its own automatic revert, RM1b; "fresh-pattern": FP1's; null), `hold_value`
+ * (the value the row reads while its revert holds: "off", FP1's "record").
  */
 export const FEATURE_SWITCHES = Object.freeze([
   // ---- Demand and supply zones (Z0, Z2, Z2b; src/zone-types.mjs)
@@ -152,6 +153,13 @@ export const FEATURE_SWITCHES = Object.freeze([
     key: "ROOM_BREAKOUT_WAIVE", label: "Room waiver on a with-trend breakout", group: "plans", hold: "room-waive",
     description: "RM1b: the room check passes when it alone holds a side back, the 15m close is beyond the facing edge of a corridor recorded in the last hour, and the trend is with the side; it goes off by itself for 7 days when its waived trades lose. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
     values: ["on", "off"], default_value: "off", config_value: "on", read: offUnlessOn
+  }),
+  entry({
+    // FP1 (owner 2026-11-28 via the orchestrator, "setuju semua"; src/fresh-pattern.mjs). Its own automatic revert
+    // (`hold` "fresh-pattern", to "record" once): the GET row carries auto_revert; the owner's override wins over it.
+    key: "FRESH_PATTERN_MODE", label: "Fresh 15m pattern exception", group: "plans", hold: "fresh-pattern", hold_value: "record",
+    description: "FP1: a pattern agent whose 15m pattern broke out within the last 2 closed bars gets a plan that ignores TP1-KZ (TP1 the measured target, only when it pays at least 1R with the agent's own stop), on a side the guardrails allow; on offers it to the council even alone and trades it at market; record only records it; off nothing. It goes to record by itself when its first 30 trades average below +0.10R at the broker. The owner's choice here wins over that revert; reset hands it back to the revert and the config.",
+    values: ["on", "record", "off"], default_value: "off", config_value: "on", read: (raw) => { const v = s(raw); return ["on", "record", "off"].includes(v) ? v : "off"; }
   }),
   entry({
     // B5 (src/pm-line-breaker.mjs): the hand switch of the Position Manager lines; each line also has its own breaker.

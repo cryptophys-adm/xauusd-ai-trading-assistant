@@ -61,9 +61,10 @@ import { arenaEnabled, isArenaBar, arenaEvery, runArenaCall } from "./model-aren
 import { sessionOf } from "./outcome-scoring.mjs";
 import { agentVetoRuleOf, resolveAgentVetoRule, A6_MIN_ONE_SIDED } from "./agent-veto.mjs";
 import { roomBreakoutWaiveOf, roomWaiverFor, resolveRoomBreakoutWaive, loadRoomCorridors } from "./room-waive.mjs";
+import { freshPatternModeOf, resolveFreshPatternMode, freshPlansRecord } from "./fresh-pattern.mjs";
 import { aroundSet, zoneAheadMode, zoneAheadChecks, zoneAheadCheck, zonePlanPasses, zoneAimMode, zoneAimHeld, zoneFactorOf, zoneAheadSd } from "./zone-types.mjs";
 import { sessionRangeReading, orbMode } from "./opening-range.mjs";
-import { agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
+import { freshPatternPlans, withFreshPlans, agentStatuses, agentContext, agentPlans, agentCatalog, agentsConsensus, priceActionReading, suspendedPatterns, slimPlan, AGENT_IDS, DEFAULT_AGENT, strategyExecutionEnabled, agentConfidences, keyLevelTargets } from "./strategy-agents.mjs";
 import { readPlanLearning, contextOf } from "./plan-learning.mjs";
 import { readArmState, strategyArmMode } from "./strategy-arm.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
@@ -795,7 +796,8 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
   // sees its setup there (else the evidence is as before: one plan).
   const strategies = (g) => {
     const live = liveAgentPlans(g);
-    if (live.length < 2) return null;
+    // FP1: a fresh 15m pattern plan is offered even when it is the only live plan on the side.
+    if (live.length < 2 && !live.some(([, a]) => a.plan?.fresh_pattern)) return null;
     const catalog = agentCatalog();
     // What each strategy earned on this system's own setups (the plan learner's replay, in R per setup),
     // overall and in the present market condition; null while it has no resolved setup.
@@ -810,7 +812,7 @@ export function councilEvidence({ barClose, cards, quorum, guards, context = {},
       const x = pattern ? ((Array.isArray(agentRecords) ? agentRecords : []).find((r) => r?.agent === id)?.patterns || []).find((q) => q.pattern === pattern) : null;
       return x ? { setups: x.setups, mean_r_per_setup: x.mean_r } : null;
     };
-    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), ...(a.plan.pattern ? { this_pattern_record: patternRecord(id, a.plan.pattern) } : {}), plan: plan({ plan: a.plan }) }));
+    return live.map(([id, a]) => ({ id, name: catalog.find((c) => c.id === id)?.label ?? id, made_for: catalog.find((c) => c.id === id)?.fits ?? null, setup: a.plan.setup ?? null, record: record(id), ...(a.plan.pattern ? { this_pattern_record: patternRecord(id, a.plan.pattern) } : {}), ...(a.plan.fresh_pattern ? { fresh_breakout: { chart: a.plan.fresh_pattern.chart, closed_bars_ago: a.plan.fresh_pattern.breakout_age_bars, measured_target_r: a.plan.fresh_pattern.target_r } } : {}), plan: plan({ plan: a.plan }) }));
   };
   const side = (g) => ({ allowed: g.allowed, checks: g.checks.map((c) => ({ check: c.id, pass: c.pass, detail: c.detail })), entry_trigger: g.entry_trigger ? { fired: g.entry_trigger.fired, note: g.entry_trigger.note } : null, plan: plan(g), ...(g.liquidity ? { liquidity: g.liquidity } : {}), ...(strategies(g) ? { strategies: strategies(g) } : {}), vetoes: g.vetoes, cautions: g.cautions, supports: g.supports ?? [] });
   return {
@@ -990,6 +992,9 @@ export function decide({ answer = null, guards, strategy = null, quorum, minConf
       }
     }
     if (overruled) stance = "WAIT";
+    // FP1: a trade from a fresh 15m pattern plan carries its record.
+    const fp = trade?.agent ? pick(dir)?.plans?.[trade.agent]?.plan?.fresh_pattern ?? null : null;
+    if (fp) trade = { ...trade, fresh_pattern: fp };
   }
   const bias = answer?.bias ?? quorum.bias;
   // SV1b: a BUY or SELL that trades only because A6 or A7 lifted a veto the classic rule would have kept says so.
@@ -1255,10 +1260,20 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   const entryZone = entryZoneMode(env) !== "off";
   // The patterns the breaker holds back: their own trades here lost (a pattern family skips them).
   const heldPatterns = suspendedPatterns(agentRecords).map((x) => `${x.agent}:${x.id}`);
+  const ctxOf = (dir) => agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone, entryZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone, entryZone, events: inputs.calendar?.events ?? [] });
   const plansOf = (dir) => {
-    try { return agentPlans(dir, agentContext({ strategy, bars: inputs.m15Bars ?? [], regime, scalp, basePlan: planForDirection(strategy, dir, { scalp, keyZone, entryZone }), calibration: inputs.patternCalibration ?? null, suspendedPatterns: heldPatterns, keyZone, entryZone, events: inputs.calendar?.events ?? [] }), statuses); } catch { return {}; }
+    try { return agentPlans(dir, ctxOf(dir), statuses); } catch { return {}; }
   };
   const plans = { long: plansOf(1), short: plansOf(-1) };
+  // FP1 (src/fresh-pattern.mjs, FRESH_PATTERN_MODE as runDecisionEngine resolved it): the pattern agents' fresh 15m
+  // plans, which ignore TP1-KZ. "on": they join the agents' plans (an agent without a plan takes its fresh plan; one on
+  // the same pattern carries fresh_pattern) before the consensus; "record": only recorded; "off": none.
+  const freshMode = freshPatternModeOf(env);
+  let fresh = null;
+  if (freshMode !== "off") {
+    try { fresh = { long: freshPatternPlans(1, ctxOf(1), statuses), short: freshPatternPlans(-1, ctxOf(-1), statuses) }; } catch { fresh = null; }
+    if (freshMode === "on" && fresh) { plans.long = withFreshPlans(plans.long, fresh.long); plans.short = withFreshPlans(plans.short, fresh.short); }
+  }
   let consensus = null;
   const passes = (plan) => agentPlanPasses(plan, { target_rule: scalp ? "nearest" : "rrr", min_rrr: thresholds.min_rrr, ...(keyZone ? { tp1_min_r: TP1_MIN_R } : {}) });
   try { consensus = agentsConsensus(plans, { records: agentRecords, statuses, passes }); } catch { consensus = null; }
@@ -1291,6 +1306,8 @@ export function assess(loaded, { now = Date.now(), env = null, analytics = null,
   // agent that speaks on the decision's side, and each live agent's confidence on both sides at this 15m close.
   guards.strategy_execution = strategyExecutionEnabled(env);
   guards.consensus = consensus;
+  // FP1: the fresh plans and the mode, for the decision record (decision.fresh_plans, on a side the guardrails allow).
+  if (fresh) { guards.fresh = fresh; guards.fresh_mode = freshMode; }
   // SV1b (src/agent-veto.mjs): the two-sided veto rule, only when it is in force (runDecisionEngine resolves it into env).
   if (agentVetoRuleOf(env) === "two_sided") guards.veto_rule = "two_sided";
   try { guards.agent_confidence = agentConfidences(plans, { score: quorum.score, records: agentRecords, passes, statuses }); } catch { guards.agent_confidence = null; }
@@ -1613,6 +1630,10 @@ export function buildDecisionRecord({ key, barClose, loaded, assessment = null, 
     // Every strategy agent's own plan per side (src/strategy-agents.mjs), live or shadow: what each would
     // have traded here, kept so the plan learner can measure each agent on the bars that follow.
     strategy_plans: strategyPlansOf(assessment?.guards ?? guards),
+    // FP1 (src/fresh-pattern.mjs): the fresh 15m pattern plans on a side the guardrails allow, and the mode in force;
+    // the plan learner records them as source pattern_fresh whatever the council chose.
+    ...(((assessment?.guards ?? guards)?.fresh_mode) ? { fresh_pattern_mode: (assessment?.guards ?? guards).fresh_mode } : {}),
+    ...(() => { const g = assessment?.guards ?? guards; const f = g?.fresh ? freshPlansRecord(g.fresh, g, slimPlan) : null; return f ? { fresh_plans: f } : {}; })(),
     // Track A PR 9: the open session's opening range the council read (no price), only inside a session window.
     ...(assessment?.session_range ? { session_range: assessment.session_range } : {}),
     // The Projection Agent's chart patterns behind those levels (src/chart-patterns.mjs): which pattern, on
@@ -1735,6 +1756,11 @@ export async function runDecisionEngine(env, { barClose, now = Date.now(), clock
     let roomWaive = "off";
     try { roomWaive = (await resolveRoomBreakoutWaive(env, { now })).value; } catch { roomWaive = "off"; }
     env = { ...env, ROOM_BREAKOUT_WAIVE: roomWaive };
+    // FP1 (src/fresh-pattern.mjs): the fresh pattern mode in force (the owner's FS1 override, else "record" once its
+    // automatic revert ran, else FRESH_PATTERN_MODE), on the same copy. Unreadable: "record".
+    let freshMode = "off";
+    try { freshMode = (await resolveFreshPatternMode(env)).value; } catch { freshMode = "record"; }
+    env = { ...env, FRESH_PATTERN_MODE: freshMode };
     // Z5 (src/zone-readings.mjs): the zone breaker's held rules, read into this run's env copy as their own switches off
     // (ZONE_AHEAD_MODE "record", ZONE_AIM_OFF tokens), for this decision only: the owner's FS1 values are never written.
     // Recorded as zone_rules_held when a hold changed a rule. ZONE_READINGS "off", or nothing held: env as it is.

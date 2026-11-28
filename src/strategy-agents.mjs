@@ -27,6 +27,7 @@ import { patternInfo, PATTERN_CATALOG } from "./chart-patterns.mjs";
 import { CONFIDENCE_STABLE_BAND } from "./agent-confidence.mjs";
 import { zoneWords, typedZones, withZoneAhead } from "./zone-types.mjs";
 import { openingRanges } from "./opening-range.mjs";
+import { FRESH_PATTERN, breakoutAgeBars, freshPatternRecord } from "./fresh-pattern.mjs";
 export { confidenceTrend, flatConfidences, parseConfidences } from "./agent-confidence.mjs";
 
 export const STRATEGY_AGENTS_VERSION = "cryptophys.strategy-agents.v1";
@@ -257,43 +258,81 @@ const familyOf = (id) => { const info = patternInfo(id); return info?.applies ? 
 function patternAgent(family) {
   const F = PATTERN_FAMILIES[family], R = AGENT_RULES.pattern;
   const band = F.entry === "momentum" ? R.momentum_atr : R.retest_atr;
+  const line = (dir, p) => (dir > 0 ? p.upper : p.lower), other = (dir, p) => (dir > 0 ? p.lower : p.upper);
+  // The family's broken-out patterns a plan may stand on, best first (`charts`: the charts read).
+  const fitOf = (id, dir, ctx, charts = R.charts) => {
+    const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
+    return (ctx.patterns || []).filter((p) => charts.includes(String(p?.tf)) && familyOf(p.id) === family && p.status !== "forming" && p.direction === dir && [line(dir, p), p.target, p.height].every(isNum) && p.height > 0)
+      // Price has not fallen back into the pattern.
+      .filter((p) => dir * (ctx.price - line(dir, p)) >= -R.retest_atr * ctx.atr)
+      // The pattern's own trades here: held back by the breaker.
+      .filter((p) => !held.includes(`${id}:${p.id}`))
+      .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
+      // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
+      .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
+      // The best measured record first, then the lower chart, then the freshest.
+      .sort((a, b) => (b.rec?.active ? b.rec.factor : 1) - (a.rec?.active ? a.rec.factor : 1) || Number(a.p.tf) - Number(b.p.tf) || (a.p.bars_ago ?? 0) - (b.p.bars_ago ?? 0));
+  };
+  // A pattern's entry, stop and words, as the plan places them.
+  const placeOf = (dir, ctx, p, rec) => {
+    const broken = line(dir, p), near = Math.abs(ctx.price - broken) <= band * ctx.atr;
+    const entry = near ? ctx.price : broken;
+    const cap = F.stop.cap * ctx.atr, far = other(dir, p);
+    const structural = F.stop.other && isNum(far) && dir * (broken - far) > 0;
+    const back = structural ? Math.min(dir * (broken - far), cap) : Math.min((F.stop.height ?? 0.5) * p.height, cap);
+    const chart = p.chart ?? (String(p.tf) === "15" ? "15m" : "1H"), word = p.status === "busted" ? "busted " : "", name = `${chart} ${word}${p.name}`;
+    return {
+      broken, near, entry, chart, name,
+      fields: {
+        entry, atLevel: near, stop: broken - dir * (back + AGENT_RULES.pad_atr * ctx.atr),
+        entryNote: near ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}`,
+        stopNote: back >= cap ? `${F.stop.cap} times the 1H average range behind the broken line (the pattern is larger)` : structural ? "beyond the pattern's other line" : `${F.stop.height === 0.5 ? "half" : "a third of"} the pattern's height behind the broken line`,
+        setup: `the Projection Agent's ${name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`
+      }
+    };
+  };
   return Object.freeze({
     id: `pattern_${family}`, version: 1, label: F.label, family,
     fits: `${F.style} The Projection Agent's ${F.what}, broken out or busted on the 15m or 1H chart with the measured target still ahead; a pattern whose measured record on gold is below the rate of all patterns, or whose own trades here lost, is left out.`,
     plan(dir, ctx) {
       if (!isNum(ctx.price)) return null;
       const gap = (ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr) * ctx.atr;
-      const line = (p) => (dir > 0 ? p.upper : p.lower), other = (p) => (dir > 0 ? p.lower : p.upper);
-      const held = Array.isArray(ctx.suspendedPatterns) ? ctx.suspendedPatterns : [];
-      const fit = (ctx.patterns || []).filter((p) => R.charts.includes(String(p?.tf)) && familyOf(p.id) === family && p.status !== "forming" && p.direction === dir && [line(p), p.target, p.height].every(isNum) && p.height > 0)
-        // Price has not fallen back into the pattern.
-        .filter((p) => dir * (ctx.price - line(p)) >= -R.retest_atr * ctx.atr)
-        // The pattern's own trades here: held back by the breaker.
-        .filter((p) => !held.includes(`${this.id}:${p.id}`))
-        .map((p) => ({ p, rec: recordOf(ctx.calibration, p.id) }))
-        // The Projection Agent's own record decides: a measured pattern below the rate of all patterns is left out.
-        .filter(({ rec }) => !(rec?.active && isNum(rec.factor) && rec.factor < R.min_factor))
-        // The best measured record first, then the lower chart, then the freshest.
-        .sort((a, b) => (b.rec?.active ? b.rec.factor : 1) - (a.rec?.active ? a.rec.factor : 1) || Number(a.p.tf) - Number(b.p.tf) || (a.p.bars_ago ?? 0) - (b.p.bars_ago ?? 0));
-      for (const { p, rec } of fit) {
-        const broken = line(p), near = Math.abs(ctx.price - broken) <= band * ctx.atr;
-        const entry = near ? ctx.price : broken;
-        const tp1 = F.first === 1 ? p.target : broken + F.first * (p.target - broken);
-        if (dir * (tp1 - entry) < gap) continue;
-        const cap = F.stop.cap * ctx.atr, far = other(p);
-        const structural = F.stop.other && isNum(far) && dir * (broken - far) > 0;
-        const back = structural ? Math.min(dir * (broken - far), cap) : Math.min((F.stop.height ?? 0.5) * p.height, cap);
-        const chart = p.chart ?? (String(p.tf) === "15" ? "15m" : "1H"), word = p.status === "busted" ? "busted " : "", name = `${chart} ${word}${p.name}`;
+      for (const { p, rec } of fitOf(this.id, dir, ctx)) {
+        const at = placeOf(dir, ctx, p, rec);
+        const tp1 = F.first === 1 ? p.target : at.broken + F.first * (p.target - at.broken);
+        if (dir * (tp1 - at.entry) < gap) continue;
         const plan = finishPlan(this.id, dir, {
-          entry, atLevel: near, stop: broken - dir * (back + AGENT_RULES.pad_atr * ctx.atr),
-          entryNote: near ? `price is at the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}` : `a return to the broken ${dir > 0 ? "upper" : "lower"} line of the ${name}`,
-          stopNote: back >= cap ? `${F.stop.cap} times the 1H average range behind the broken line (the pattern is larger)` : structural ? "beyond the pattern's other line" : `${F.stop.height === 0.5 ? "half" : "a third of"} the pattern's height behind the broken line`,
-          setup: `the Projection Agent's ${name}, broken ${dir > 0 ? "upward" : "downward"}${rec ? ` (on gold it reached its target ${Math.round(rec.rate * 100)}% of ${rec.n} times${rec.active ? "" : ", too few to weigh"})` : " (no record on gold yet)"}`,
+          ...at.fields,
           targets: { ...(F.first === 1
-            ? { tp1: p.target, tp1_note: `${name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
-            : { tp1, tp1_note: `${name}: half the measured move`, tp2: p.target, tp2_note: `${name}: measured target` }), measured: { price: p.target, note: `${name}: measured target` } }
+            ? { tp1: p.target, tp1_note: `${at.name}: measured target`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
+            : { tp1, tp1_note: `${at.name}: half the measured move`, tp2: p.target, tp2_note: `${at.name}: measured target` }), measured: { price: p.target, note: `${at.name}: measured target` } }
         }, ctx);
-        if (plan) return { ...plan, pattern: p.id, chart };
+        if (plan) return { ...plan, pattern: p.id, chart: at.chart };
+      }
+      return null;
+    },
+    /**
+     * FP1 (src/fresh-pattern.mjs): the plan of a 15m pattern whose breakout is fresh (confirmed within the last
+     * FRESH_PATTERN.max_age_bars + 1 closed 15m bars, from ctx.bars), ignoring TP1-KZ: the entry at price (market by
+     * design), the stop as plan() places it, TP1 the pattern's measured target, only when it pays at least FRESH_PATTERN.min_target_r; else none
+     * (no fallback to a key zone). The breaker, the held-back patterns and the measured record apply as in plan().
+     */
+    fresh(dir, ctx) {
+      if (!isNum(ctx.price) || !isNum(ctx.atr) || ctx.atr <= 0) return null;
+      const gap = (ctx.scalp ? SCALP_TARGET.targetGapAtr : AGENT_RULES.target_gap_atr) * ctx.atr;
+      for (const { p, rec } of fitOf(this.id, dir, ctx, [FRESH_PATTERN.chart])) {
+        const age = breakoutAgeBars(ctx.bars, p);
+        if (age == null || age > FRESH_PATTERN.max_age_bars) continue;
+        // Market by design (the replay behind FP1 entered at the close): the entry is price, the stop as plan() puts it.
+        const at = placeOf(dir, ctx, p, rec);
+        if (dir * (p.target - ctx.price) < gap) continue;
+        const plan = finishPlan(this.id, dir, {
+          ...at.fields, entry: ctx.price, atLevel: true,
+          entryNote: `price, ${age === 0 ? "on the close that broke" : "one closed bar after the close that broke"} the ${dir > 0 ? "upper" : "lower"} line of the ${at.name} (a fresh breakout, entered at market)`,
+          targets: { tp1: p.target, tp1_note: `${at.name}: measured target (fresh breakout)`, tp2: p.target + dir * 0.5 * p.height, tp2_note: "half the pattern's height beyond the measured target" }
+        }, { ...ctx, keyZone: false });
+        if (!plan || !((plan.rrr?.tp1 ?? 0) >= FRESH_PATTERN.min_target_r)) continue;
+        return { ...plan, pattern: p.id, chart: at.chart, fresh_pattern: freshPatternRecord({ pattern: p.id, ageBars: age, targetR: plan.rrr.tp1 }) };
       }
       return null;
     }
@@ -578,6 +617,37 @@ export function agentPlans(dir, ctx, statuses) {
   return out;
 }
 
+/**
+ * FP1 (src/fresh-pattern.mjs): each pattern family agent that is not off and has a fresh 15m pattern on this side:
+ * { id: { status, plan } }, the plan carrying fresh_pattern. An agent that throws has none.
+ */
+export function freshPatternPlans(dir, ctx, statuses) {
+  const out = {};
+  if (!(dir === 1 || dir === -1) || !isNum(ctx?.price) || !isNum(ctx?.atr) || ctx.atr <= 0) return out;
+  for (const agent of PATTERN_AGENTS) {
+    const status = statuses?.[agent.id] ?? "shadow";
+    if (status === "off") continue;
+    let plan = null;
+    try { plan = agent.fresh(dir, ctx); } catch { plan = null; }
+    if (plan) out[agent.id] = { status, plan };
+  }
+  return out;
+}
+
+/**
+ * Pure, FP1 "on": the plans with the fresh plans in: an agent without a plan on the side takes its fresh plan; an agent
+ * whose plan stands on the same fresh pattern carries its fresh_pattern; any other plan is as it was.
+ */
+export function withFreshPlans(plans, fresh) {
+  const out = { ...(plans || {}) };
+  for (const [id, a] of Object.entries(fresh || {})) {
+    const own = out[id];
+    if (!own?.plan) out[id] = a;
+    else if (own.plan.pattern === a.plan.pattern && own.plan.chart === a.plan.chart) out[id] = { ...own, plan: { ...own.plan, fresh_pattern: a.plan.fresh_pattern } };
+  }
+  return out;
+}
+
 /** Pure: the registry as the council and the pages read it (`suspended`: held back by the breaker). */
 export function agentCatalog(statuses, { suspended = [] } = {}) {
   return STRATEGY_AGENTS.map((a) => ({
@@ -658,7 +728,7 @@ export function priceActionReading(patterns, calibration = null) {
 
 /** Pure: an agent's plan as the decision record keeps it (levels and why; the notes stay in the trade). */
 // Z0: zone_types and opposing_ahead only when the plan has them (KEY_LEVEL_ZONE_TYPES on).
-export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}), ...(p.pattern && typeof p.chart === "string" ? { chart: p.chart } : {}), ...(isNum(p.valid_until_ms) ? { valid_until_ms: p.valid_until_ms } : {}), ...(p.zone_types ? { zone_types: p.zone_types } : {}), ...(p.opposing_ahead ? { opposing_ahead: p.opposing_ahead } : {}) });
+export const slimPlan = (p) => ({ entry: p.entry, ...(isNum(p.entry_low) && isNum(p.entry_high) ? { entry_low: p.entry_low, entry_high: p.entry_high } : {}), stop: p.stop, tp1: p.tp1, tp2: p.tp2, at_level: p.at_level === true, rrr: p.rrr ?? null, setup: p.setup ?? null, ...(p.pattern ? { pattern: p.pattern } : {}), ...(p.pattern && typeof p.chart === "string" ? { chart: p.chart } : {}), ...(isNum(p.valid_until_ms) ? { valid_until_ms: p.valid_until_ms } : {}), ...(p.zone_types ? { zone_types: p.zone_types } : {}), ...(p.opposing_ahead ? { opposing_ahead: p.opposing_ahead } : {}), ...(p.fresh_pattern ? { fresh_pattern: p.fresh_pattern } : {}) });
 
 /**
  * Execution per the strategy agents (owner 2026-11-16, docs/RFC_STRATEGY_EXECUTION.md): a BUY or SELL trades only

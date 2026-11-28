@@ -79,6 +79,7 @@
     // Off by itself for 7 days once its latest 15 closed waived trades average below 0R (KV room-waive:auto:v1); the
     // owner's FS1 override wins. Unset or any other value: "off", the room check as before.
     "ROOM_BREAKOUT_WAIVE": "on",
+    "FRESH_PATTERN_MODE": "on",
     // The council auto-arm ceiling (platform ADR-0020 Amendment 2, merged 2026-11-17, platform main 6df9a34): "allowed"
     // lets the owner's Nexus toggle act; the toggle itself stays off until the owner turns it on. "off" keeps the
     // council to proposals.

@@ -26,6 +26,7 @@ export function runPlanLearning(env: unknown, options?: { now?: number; bars?: u
 export function readPlanLearning(env: unknown): Promise<Record<string, any> | null>;
 export const LIVE_SETUPS: string;
 export function shadowSetupsFrom(decisions: unknown[]): Array<Record<string, any>>;
+export function freshSetupsFrom(rows: unknown[]): Array<Record<string, any>>;
 export const CONTROL_ONLY: ReadonlyArray<Readonly<{ id: string; entry_shift: number; stop_scale: number }>>;
 export function setupOutcome(setup: unknown, bars: unknown[], options?: { now?: number }): { status: string; results: Record<string, any>; resolved_ms?: number };
 export function setupFromRow(row: Record<string, any>): Record<string, any>;
