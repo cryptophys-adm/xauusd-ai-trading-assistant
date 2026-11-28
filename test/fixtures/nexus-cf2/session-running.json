@@ -1,0 +1,172 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mx0dn3mo_ntco03",
+    "topic_key": "strategy:zone_pullback@intraday|normal-trending",
+    "topic_text": null,
+    "type": "strategy",
+    "question": "What should change about strategy:zone_pullback@intraday|normal-trending, if anything?",
+    "state": "rebuttals",
+    "participants": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      },
+      {
+        "id": "projection",
+        "name": "Projection Agent",
+        "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "interstellar_eyes",
+        "name": "The Interstellar Eyes",
+        "role": "the The Interstellar Eyes HUD reading of the room's chart"
+      }
+    ],
+    "calls": 9,
+    "options": null,
+    "reason": null,
+    "pack_hash": "caf9f0ea2feb0022d0b69f27ded4e2f754d81d7e55ca104458a53b7c53cce478",
+    "created_by": "owner",
+    "created_ms": 1795868340000,
+    "updated_ms": 1795869120000,
+    "pack_refs": 72,
+    "pack_stale": false,
+    "terminal": false,
+    "messages": [
+      {
+        "id": 39,
+        "round": "position",
+        "seat": "risk",
+        "stance": "oppose",
+        "opinion": "The losses come from the first hour of the trend, not the pullback.",
+        "proposal": "Wait for the second pullback.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:19:00.000Z",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:19:00.000Z#r_omega"
+        ],
+        "ms": 1795868520000,
+        "name": "Risk Manager",
+        "at": "2026-11-28T12:22:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/39"
+      },
+      {
+        "id": 40,
+        "round": "position",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "The pullbacks that lost were shallow.",
+        "proposal": "Ask for a deeper pullback in a trend.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:19:00.000Z#r_tp1"
+        ],
+        "ms": 1795868580000,
+        "name": "Technical Analyst",
+        "at": "2026-11-28T12:23:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/40"
+      },
+      {
+        "id": 41,
+        "round": "position",
+        "seat": "projection",
+        "stance": "amend",
+        "opinion": "Deeper, but only on the 1H trend's side.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-28T12:19:00.000Z",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-28T12:19:00.000Z#r_omega"
+        ],
+        "ms": 1795868640000,
+        "name": "Projection Agent",
+        "at": "2026-11-28T12:24:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/41"
+      },
+      {
+        "id": 42,
+        "round": "position",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "The 15m structure agrees.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-28T12:19:00.000Z#r_tp1"
+        ],
+        "ms": 1795868700000,
+        "name": "15m Desk",
+        "at": "2026-11-28T12:25:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/42"
+      },
+      {
+        "id": 43,
+        "round": "position",
+        "seat": "trade_management",
+        "stance": "abstain",
+        "opinion": "The exits are not the question here.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [],
+        "ms": 1795868760000,
+        "name": "Trade Management",
+        "at": "2026-11-28T12:26:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/43"
+      },
+      {
+        "id": 44,
+        "round": "rebuttal",
+        "seat": "risk",
+        "stance": "oppose",
+        "opinion": "A deeper pullback is the second pullback by another name.",
+        "proposal": null,
+        "reply_to": [
+          "technical"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:19:00.000Z"
+        ],
+        "ms": 1795869060000,
+        "name": "Risk Manager",
+        "at": "2026-11-28T12:31:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/44"
+      },
+      {
+        "id": 45,
+        "round": "rebuttal",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "Not quite: depth is measured, the count is not.",
+        "proposal": null,
+        "reply_to": [
+          "risk"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:19:00.000Z#r_tp1"
+        ],
+        "ms": 1795869120000,
+        "name": "Technical Analyst",
+        "at": "2026-11-28T12:32:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/45"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dn3mo_ntco03"
+  }
+}

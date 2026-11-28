@@ -1,0 +1,548 @@
+{
+  "status": "ok",
+  "items": [
+    {
+      "chain_id": "suggestion:17",
+      "status": "veto_window",
+      "status_source": "proposal",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T13:10:00.000Z",
+      "topic": {
+        "key": "execution:fills",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 17,
+        "rule": "fill_slippage",
+        "status": "approved",
+        "created_at": "2026-11-28T11:28:00.000Z",
+        "expires_at": "2026-11-30T11:28:00.000Z",
+        "decided_at": "2026-11-28T12:28:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx0dyoao_2u6l02",
+        "topic_key": "execution:fills",
+        "topic_text": null,
+        "type": "execution",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-28T12:28:00.000Z",
+        "updated_at": "2026-11-28T13:10:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 4,
+            "expected": 4
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mx0fgoqo_vbrmi2",
+        "kind": "repository_task",
+        "title": "Place the entry limit 0.1 ATR inside the zone",
+        "state": "veto_window",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-28T13:10:00.000Z",
+        "updated_at": "2026-11-28T13:10:00.000Z",
+        "note": "handed off after the 2 h veto window unless the owner closes it",
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 4 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          },
+          "spoke": 4,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
+        "platform": null
+      }
+    },
+    {
+      "chain_id": "suggestion:18",
+      "status": "in_session",
+      "status_source": "session",
+      "next_actor": "council",
+      "updated_at": "2026-11-28T12:32:00.000Z",
+      "topic": {
+        "key": "strategy:zone_pullback@intraday|normal-trending",
+        "type": "strategy",
+        "origin": "suggestion",
+        "suggestion_id": 18,
+        "rule": "context_negative",
+        "status": "approved",
+        "created_at": "2026-11-28T09:14:00.000Z",
+        "expires_at": "2026-11-30T09:14:00.000Z",
+        "decided_at": "2026-11-28T12:19:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx0dn3mo_ntco03",
+        "topic_key": "strategy:zone_pullback@intraday|normal-trending",
+        "topic_text": null,
+        "type": "strategy",
+        "state": "rebuttals",
+        "terminal": false,
+        "created_at": "2026-11-28T12:19:00.000Z",
+        "updated_at": "2026-11-28T12:32:00.000Z",
+        "started_by": "owner",
+        "reason": null,
+        "reopened_as": null,
+        "progress": {
+          "step": "rebuttals",
+          "positions": {
+            "done": 5,
+            "expected": 6
+          },
+          "rebuttals": 2,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 0,
+          "tally": {
+            "support": 2,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 1
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:16",
+      "status": "awaiting_pick",
+      "status_source": "session",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T10:40:00.000Z",
+      "topic": {
+        "key": "risk:intraday",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 16,
+        "rule": "mode_negative",
+        "status": "approved",
+        "created_at": "2026-11-28T06:00:00.000Z",
+        "expires_at": "2026-11-30T06:00:00.000Z",
+        "decided_at": "2026-11-28T10:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx08ocg0_aclji2",
+        "topic_key": "risk:intraday",
+        "topic_text": null,
+        "type": "risk",
+        "state": "awaiting_owner",
+        "terminal": false,
+        "created_at": "2026-11-28T10:00:00.000Z",
+        "updated_at": "2026-11-28T10:40:00.000Z",
+        "started_by": "owner",
+        "reason": "no quorum (3 of 6 spoke)",
+        "reopened_as": null,
+        "progress": {
+          "step": "awaiting_owner",
+          "positions": {
+            "done": 3,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 2,
+            "oppose": 0,
+            "amend": 1,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:15",
+      "status": "awaiting_approval",
+      "status_source": "suggestion",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T01:48:00.000Z",
+      "topic": {
+        "key": "engine:model",
+        "type": "engine",
+        "origin": "suggestion",
+        "suggestion_id": 15,
+        "rule": "gate_drift",
+        "status": "open",
+        "created_at": "2026-11-28T01:48:00.000Z",
+        "expires_at": "2026-11-29T01:53:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:14",
+      "status": "awaiting_approval",
+      "status_source": "suggestion",
+      "next_actor": "owner",
+      "updated_at": "2026-11-27T18:48:00.000Z",
+      "topic": {
+        "key": "strategy:zone_pullback:exits",
+        "type": "strategy",
+        "origin": "suggestion",
+        "suggestion_id": 14,
+        "rule": "stop_share",
+        "status": "open",
+        "created_at": "2026-11-27T18:48:00.000Z",
+        "expires_at": "2026-11-28T18:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:6",
+      "status": "awaiting_pick",
+      "status_source": "session",
+      "next_actor": "owner",
+      "updated_at": "2026-11-27T16:40:00.000Z",
+      "topic": {
+        "key": "risk:new_york",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 6,
+        "rule": "session_negative",
+        "status": "approved",
+        "created_at": "2026-11-27T13:00:00.000Z",
+        "expires_at": "2026-11-29T13:00:00.000Z",
+        "decided_at": "2026-11-27T16:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwz63gg0_hv0i02",
+        "topic_key": "risk:new_york",
+        "topic_text": null,
+        "type": "risk",
+        "state": "awaiting_owner",
+        "terminal": false,
+        "created_at": "2026-11-27T16:00:00.000Z",
+        "updated_at": "2026-11-27T16:40:00.000Z",
+        "started_by": "owner",
+        "reason": null,
+        "reopened_as": null,
+        "progress": {
+          "step": "awaiting_owner",
+          "positions": {
+            "done": 6,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 3,
+          "tally": {
+            "support": 4,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:3",
+      "status": "in_progress",
+      "status_source": "platform",
+      "next_actor": "platform",
+      "updated_at": "2026-11-27T07:42:00.000Z",
+      "topic": {
+        "key": "execution:rejected_intents",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 3,
+        "rule": "failed_intents",
+        "status": "approved",
+        "created_at": "2026-11-27T03:00:00.000Z",
+        "expires_at": "2026-11-29T03:00:00.000Z",
+        "decided_at": "2026-11-27T04:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwygdj40_qxi901",
+        "topic_key": "execution:rejected_intents",
+        "topic_text": null,
+        "type": "execution",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-27T04:00:00.000Z",
+        "updated_at": "2026-11-27T04:42:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 4,
+            "expected": 4
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mwyhvjk0_jf3ai1",
+        "kind": "repository_task",
+        "title": "Retry a failed intent once, then hand to the EA",
+        "state": "handed_off",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-27T04:42:00.000Z",
+        "updated_at": "2026-11-27T07:42:00.000Z",
+        "note": null,
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 4 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          },
+          "spoke": 4,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
+        "platform": {
+          "state": "in_progress",
+          "at": "2026-11-27T07:42:00.000Z",
+          "reason": "building",
+          "close_code": null,
+          "history": [
+            {
+              "state": "in_progress",
+              "at": "2026-11-27T07:42:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "chain_id": "suggestion:13",
+      "status": "awaiting_approval",
+      "status_source": "suggestion",
+      "next_actor": "owner",
+      "updated_at": "2026-11-26T15:30:00.000Z",
+      "topic": {
+        "key": "execution:recoveries",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 13,
+        "rule": "recoveries_per_day",
+        "status": "open",
+        "created_at": "2026-11-25T15:28:00.000Z",
+        "expires_at": "2026-11-28T15:30:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:1",
+      "status": "shadow_test",
+      "status_source": "proposal",
+      "next_actor": "shadow",
+      "updated_at": "2026-11-26T09:40:00.000Z",
+      "topic": {
+        "key": "strategy:zone_pullback",
+        "type": "strategy",
+        "origin": "suggestion",
+        "suggestion_id": 1,
+        "rule": "stop_share",
+        "status": "approved",
+        "created_at": "2026-11-26T02:00:00.000Z",
+        "expires_at": "2026-11-28T07:00:00.000Z",
+        "decided_at": "2026-11-26T08:31:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwxam6qo_dgr4i0",
+        "topic_key": "strategy:zone_pullback",
+        "topic_text": null,
+        "type": "strategy",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-26T08:31:00.000Z",
+        "updated_at": "2026-11-26T09:40:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted raise_rrr by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 6,
+            "expected": 6
+          },
+          "rebuttals": 4,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 3,
+          "tally": {
+            "support": 4,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mwxd2x6o_5yc600",
+        "kind": "policy_parameter",
+        "title": "Raise the intraday reward floor",
+        "state": "queued_shadow",
+        "knob": "decision.min_rrr.intraday",
+        "from": 1.5,
+        "value": 1.7,
+        "decided_by": "council",
+        "decided_at": "2026-11-26T09:40:00.000Z",
+        "updated_at": "2026-11-26T09:40:00.000Z",
+        "note": "waits for its shadow test against today's setting (phase 2)",
+        "council_decision": {
+          "option_id": "raise_rrr",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "raise_rrr: 4 of 6 seats support (needs 4); the knob is inside its bounds",
+          "tally": {
+            "support": 4,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 0
+          },
+          "spoke": 6,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "raise_rrr"
+        },
+        "platform": null
+      }
+    }
+  ],
+  "next_cursor": null,
+  "total": 9,
+  "window_days": 90,
+  "scope": "active",
+  "status_filter": null,
+  "counts": {
+    "total": 20,
+    "active": 9,
+    "archive": 11,
+    "by_status": {
+      "veto_window": 1,
+      "in_session": 1,
+      "expired": 5,
+      "awaiting_pick": 2,
+      "awaiting_approval": 3,
+      "vetoed": 1,
+      "refused": 1,
+      "in_progress": 1,
+      "rejected": 1,
+      "aborted": 1,
+      "shadow_test": 1,
+      "closed": 2
+    },
+    "by_next_actor": {
+      "owner": 6,
+      "council": 1,
+      "none": 11,
+      "platform": 1,
+      "shadow": 1
+    }
+  },
+  "vocab": {
+    "chain_status": [
+      "awaiting_approval",
+      "approved",
+      "rejected",
+      "expired",
+      "in_session",
+      "awaiting_pick",
+      "decided",
+      "closed",
+      "aborted",
+      "no_change",
+      "shadow_test",
+      "live",
+      "rolled_back",
+      "superseded",
+      "veto_window",
+      "vetoed",
+      "handoff_pending",
+      "handed_off"
+    ],
+    "platform_states": "a handed-off task shows the platform's latest state (council_proposal_updates)",
+    "next_actor": [
+      "owner",
+      "council",
+      "platform",
+      "shadow",
+      "none"
+    ],
+    "suggestion_status": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "close_code": "the platform's short code for why a task reached a terminal state, passed through as sent",
+    "decided_by": [
+      "owner",
+      "council",
+      "system",
+      "legacy"
+    ],
+    "scope": [
+      "active",
+      "archive"
+    ]
+  },
+  "as_of": "2026-11-28T14:48:00.000Z"
+}

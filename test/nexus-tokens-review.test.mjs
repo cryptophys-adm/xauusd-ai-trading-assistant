@@ -78,18 +78,17 @@ test("NR4 labels from keys keep acronyms in capitals (Councils evidence tables)"
   assert.equal(humanKey("trades"), "Trades", "other words in sentence case");
   assert.equal(humanKey("win_rate"), "Win rate");
   const councils = src("pages/Councils.tsx");
-  assert.match(councils, /import \{ ago, humanKey, utc \} from "\.\.\/lib\/format";/);
+  assert.match(councils, /import \{ humanKey, utc \} from "\.\.\/lib\/format";/);
   assert.match(councils, /const human = humanKey;/);
 });
 
 test("NR5 status on the War Room cards is ok / late / fault / off, not the bull green", () => {
   // Re-review of #518: legacy tone names inside a Record ("green" draws bull) are caught too.
-  const councils = src("pages/Councils.tsx");
-  for (const name of ["KIND", "PLATFORM_STATE"]) {
-    const block = councils.slice(councils.indexOf(`const ${name}:`), councils.indexOf("};", councils.indexOf(`const ${name}:`)));
-    assert.doesNotMatch(block, /tone: "(green|red|amber|cyan)"/, `${name} uses state tones, not legacy direction names`);
-  }
-  assert.match(councils, /merged: \{ text: "merged", tone: "ok" \}/);
+  // CF2: the council's statuses are mapped in one place, the adapter's TONES (lib/councilArchive.ts).
+  const councils = src("lib/councilArchive.ts");
+  const block = councils.slice(councils.indexOf("const TONES:"), councils.indexOf("};", councils.indexOf("const TONES:")));
+  assert.doesNotMatch(block, /: "(green|red|amber|cyan|bull|bear)"/, "TONES uses state tones, not legacy direction names");
+  assert.match(block, /merged: "ok"/);
   assert.match(src("pages/Omega.tsx"), /pending: "late",\n  sent: "late",/, "an intent in flight is late, not done");
   assert.match(src("components/PlanLadder.tsx"), /r\.rr >= minRrr \? "text-ok" : "text-late"/, "the R check is pass/fail (the plan ladder, moved from GlobalDecision.tsx with EZ1)");
   assert.match(src("components/OrganismCard.tsx"), /market === "open" \? "text-ok" : "text-off"/, "CLOSED is grey, like its dot");

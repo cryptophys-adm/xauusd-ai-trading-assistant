@@ -1,0 +1,385 @@
+{
+  "status": "ok",
+  "mode": "on",
+  "rules": {
+    "strategy": {
+      "last_n": 20,
+      "stop_share": 0.65,
+      "context_min_setups": 20,
+      "agent_breaker_setups": 30,
+      "pattern_breaker_setups": 15
+    },
+    "risk": {
+      "last_n": 20,
+      "stop_share": 0.65
+    },
+    "engine": {
+      "margin": 0.1,
+      "min_decisive_7d": 30
+    },
+    "seat": {
+      "weight_floor": 0.25
+    },
+    "knowledge": {
+      "days": 7
+    },
+    "news": {
+      "losing_trades": 3,
+      "days": 7
+    },
+    "execution": {
+      "recoveries_per_day": 3,
+      "failed_intents_per_day": 3
+    },
+    "data": {
+      "stuck_candles": 24
+    },
+    "cost": {
+      "growth": 0.5,
+      "min_neurons_week": 1000,
+      "breaker_days": 7
+    },
+    "cooldown_days": 7,
+    "daily_cap": 3,
+    "trades_read": 400,
+    "setups_read": 1500
+  },
+  "lifecycle": {
+    "statuses": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "ttl_hours": 48,
+    "max_days": 7,
+    "decide": "POST /omega/api/council { action: \"decide\", suggestion_id, decision: approve | reject, idempotency_key } (owner only)"
+  },
+  "sessions": "the owner opens a session on the Councils page (GET /api/council/sessions), or approves a suggestion",
+  "suggestions": [
+    {
+      "id": 15,
+      "topic_key": "engine:model",
+      "type": "engine",
+      "rule": "gate_drift",
+      "status": "open",
+      "created_at": "2026-11-28T01:48:00.000Z",
+      "last_seen_at": "2026-11-27T01:53:00.000Z",
+      "expires_at": "2026-11-29T01:53:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-engine:model-1795830480000",
+      "signal": {
+        "summary": "The self-trained baseline's gate passed 30% fewer setups this week."
+      }
+    },
+    {
+      "id": 14,
+      "topic_key": "strategy:zone_pullback:exits",
+      "type": "strategy",
+      "rule": "stop_share",
+      "status": "open",
+      "created_at": "2026-11-27T18:48:00.000Z",
+      "last_seen_at": "2026-11-26T18:00:00.000Z",
+      "expires_at": "2026-11-28T18:00:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-strategy:zone_pullback:exits-1795805280000",
+      "signal": {
+        "summary": "Ended at the stop or SL+: 13 of the last 20."
+      }
+    },
+    {
+      "id": 13,
+      "topic_key": "execution:recoveries",
+      "type": "execution",
+      "rule": "recoveries_per_day",
+      "status": "open",
+      "created_at": "2026-11-25T15:28:00.000Z",
+      "last_seen_at": "2026-11-26T15:30:00.000Z",
+      "expires_at": "2026-11-28T15:30:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-execution:recoveries-1795620480000",
+      "signal": {
+        "summary": "4 self-healing recoveries of the terminal in 24 hours."
+      }
+    },
+    {
+      "id": 17,
+      "topic_key": "execution:fills",
+      "type": "execution",
+      "rule": "fill_slippage",
+      "status": "approved",
+      "created_at": "2026-11-28T11:28:00.000Z",
+      "last_seen_at": "2026-11-28T11:28:00.000Z",
+      "expires_at": "2026-11-30T11:28:00.000Z",
+      "decided_at": "2026-11-28T12:28:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mx0dyoao_2u6l02",
+      "active": false,
+      "fingerprint": "fp-execution:fills-1795865280000",
+      "signal": {
+        "summary": "Fills 0.4 ATR worse than the plan's entry on 6 of the last 20 trades."
+      }
+    },
+    {
+      "id": 18,
+      "topic_key": "strategy:zone_pullback@intraday|normal-trending",
+      "type": "strategy",
+      "rule": "context_negative",
+      "status": "approved",
+      "created_at": "2026-11-28T09:14:00.000Z",
+      "last_seen_at": "2026-11-28T09:14:00.000Z",
+      "expires_at": "2026-11-30T09:14:00.000Z",
+      "decided_at": "2026-11-28T12:19:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mx0dn3mo_ntco03",
+      "active": false,
+      "fingerprint": "fp-strategy:zone_pullback@intraday|normal-trending-1795857240000",
+      "signal": {
+        "summary": "-0.28R per setup over 16 setups in intraday · normal-trending."
+      }
+    },
+    {
+      "id": 16,
+      "topic_key": "risk:intraday",
+      "type": "risk",
+      "rule": "mode_negative",
+      "status": "approved",
+      "created_at": "2026-11-28T06:00:00.000Z",
+      "last_seen_at": "2026-11-28T06:00:00.000Z",
+      "expires_at": "2026-11-30T06:00:00.000Z",
+      "decided_at": "2026-11-28T10:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mx08ocg0_aclji2",
+      "active": false,
+      "fingerprint": "fp-risk:intraday-1795845600000",
+      "signal": {
+        "summary": "-0.18R per trade over 22 intraday trades."
+      }
+    },
+    {
+      "id": 6,
+      "topic_key": "risk:new_york",
+      "type": "risk",
+      "rule": "session_negative",
+      "status": "approved",
+      "created_at": "2026-11-27T13:00:00.000Z",
+      "last_seen_at": "2026-11-27T13:00:00.000Z",
+      "expires_at": "2026-11-29T13:00:00.000Z",
+      "decided_at": "2026-11-27T16:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwz63gg0_hv0i02",
+      "active": false,
+      "fingerprint": "fp-risk:new_york-1795784400000",
+      "signal": {
+        "summary": "-0.27R per trade over 24 trades in the New York session."
+      }
+    },
+    {
+      "id": 5,
+      "topic_key": "risk:normal-trending",
+      "type": "risk",
+      "rule": "regime_negative",
+      "status": "approved",
+      "created_at": "2026-11-27T12:00:00.000Z",
+      "last_seen_at": "2026-11-27T12:00:00.000Z",
+      "expires_at": "2026-11-29T12:00:00.000Z",
+      "decided_at": "2026-11-27T13:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwyznz40_wvuf01",
+      "active": false,
+      "fingerprint": "fp-risk:normal-trending-1795780800000",
+      "signal": {
+        "summary": "-0.25R per trade over 20 trades in the normal-trending regime."
+      }
+    },
+    {
+      "id": 4,
+      "topic_key": "risk:london",
+      "type": "risk",
+      "rule": "session_negative",
+      "status": "approved",
+      "created_at": "2026-11-27T06:00:00.000Z",
+      "last_seen_at": "2026-11-27T06:00:00.000Z",
+      "expires_at": "2026-11-29T06:00:00.000Z",
+      "decided_at": "2026-11-27T07:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwymt0g0_bwoc01",
+      "active": false,
+      "fingerprint": "fp-risk:london-1795759200000",
+      "signal": {
+        "summary": "-0.31R per trade over 18 trades in the London session."
+      }
+    },
+    {
+      "id": 7,
+      "topic_key": "cost:council",
+      "type": "cost",
+      "rule": "neurons_week",
+      "status": "rejected",
+      "created_at": "2026-11-27T05:00:00.000Z",
+      "last_seen_at": "2026-11-27T05:00:00.000Z",
+      "expires_at": "2026-11-29T05:00:00.000Z",
+      "decided_at": "2026-11-27T06:40:00.000Z",
+      "decided_by": "owner",
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-cost:council-1795755600000",
+      "signal": {
+        "summary": "The council meter's neurons rose 64% week on week."
+      }
+    },
+    {
+      "id": 3,
+      "topic_key": "execution:rejected_intents",
+      "type": "execution",
+      "rule": "failed_intents",
+      "status": "approved",
+      "created_at": "2026-11-27T03:00:00.000Z",
+      "last_seen_at": "2026-11-27T03:00:00.000Z",
+      "expires_at": "2026-11-29T03:00:00.000Z",
+      "decided_at": "2026-11-27T04:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwygdj40_qxi901",
+      "active": false,
+      "fingerprint": "fp-execution:rejected_intents-1795748400000",
+      "signal": {
+        "summary": "11 failed Omega intents in 24 hours."
+      }
+    },
+    {
+      "id": 2,
+      "topic_key": "engine:15",
+      "type": "engine",
+      "rule": "hit_rate_drop",
+      "status": "approved",
+      "created_at": "2026-11-26T11:00:00.000Z",
+      "last_seen_at": "2026-11-26T11:00:00.000Z",
+      "expires_at": "2026-11-28T11:00:00.000Z",
+      "decided_at": "2026-11-26T15:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwxoig00_yfx7i0",
+      "active": false,
+      "fingerprint": "fp-engine:15-1795690800000",
+      "signal": {
+        "summary": "The 7-day directional hit rate is 9 points below the 30-day rate."
+      }
+    },
+    {
+      "id": 1,
+      "topic_key": "strategy:zone_pullback",
+      "type": "strategy",
+      "rule": "stop_share",
+      "status": "approved",
+      "created_at": "2026-11-26T02:00:00.000Z",
+      "last_seen_at": "2026-11-26T07:00:00.000Z",
+      "expires_at": "2026-11-28T07:00:00.000Z",
+      "decided_at": "2026-11-26T08:31:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwxam6qo_dgr4i0",
+      "active": false,
+      "fingerprint": "fp-strategy:zone_pullback-1795658400000",
+      "signal": {
+        "summary": "Ended at the stop or SL+: 14 of the last 20."
+      }
+    },
+    {
+      "id": 12,
+      "topic_key": "risk:asia",
+      "type": "risk",
+      "rule": "session_negative",
+      "status": "expired",
+      "created_at": "2026-11-25T14:00:00.000Z",
+      "last_seen_at": "2026-11-25T14:00:00.000Z",
+      "expires_at": "2026-11-27T14:00:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-risk:asia-1795615200000",
+      "signal": {
+        "summary": "-0.22R per trade over 12 trades in the Asia session."
+      }
+    },
+    {
+      "id": 11,
+      "topic_key": "execution:sl_plus",
+      "type": "execution",
+      "rule": "sl_plus_share",
+      "status": "expired",
+      "created_at": "2026-11-25T10:00:00.000Z",
+      "last_seen_at": "2026-11-25T10:00:00.000Z",
+      "expires_at": "2026-11-27T10:00:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-execution:sl_plus-1795600800000",
+      "signal": {
+        "summary": "SL+ closed 9 of the last 20 trades at break-even."
+      }
+    },
+    {
+      "id": 8,
+      "topic_key": "data:market_feed",
+      "type": "data",
+      "rule": "stuck_state",
+      "status": "expired",
+      "created_at": "2026-11-24T22:00:00.000Z",
+      "last_seen_at": "2026-11-24T22:00:00.000Z",
+      "expires_at": "2026-11-26T22:00:00.000Z",
+      "decided_at": "2026-11-28T12:30:00.000Z",
+      "decided_by": "system",
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-data:market_feed-1795557600000",
+      "signal": {
+        "summary": "A field of the market feed has not changed for 6 closed 1H candles."
+      }
+    },
+    {
+      "id": 10,
+      "topic_key": "news:release_horizon",
+      "type": "news",
+      "rule": "losses_near_releases",
+      "status": "expired",
+      "created_at": "2026-11-24T03:00:00.000Z",
+      "last_seen_at": "2026-11-24T03:00:00.000Z",
+      "expires_at": "2026-11-26T03:00:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-news:release_horizon-1795489200000",
+      "signal": {
+        "summary": "-0.4R per trade within an hour of high-impact releases."
+      }
+    },
+    {
+      "id": 9,
+      "topic_key": "seat:risk@15",
+      "type": "seat",
+      "rule": "weight_floor",
+      "status": "expired",
+      "created_at": "2026-11-23T17:00:00.000Z",
+      "last_seen_at": "2026-11-23T17:00:00.000Z",
+      "expires_at": "2026-11-25T17:00:00.000Z",
+      "decided_at": null,
+      "decided_by": null,
+      "session_id": null,
+      "active": false,
+      "fingerprint": "fp-seat:risk@15-1795453200000",
+      "signal": {
+        "summary": "The 15m risk seat sat at the weight floor for 3 days."
+      }
+    }
+  ]
+}
