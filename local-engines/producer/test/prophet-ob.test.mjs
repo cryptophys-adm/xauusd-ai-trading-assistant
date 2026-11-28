@@ -190,8 +190,8 @@ test("Z1a-P6 the worst case, 8 boxes, stays small: about 0.8 KB a chart, so 4 ch
   assert.ok(JSON.stringify({ prophet: filled }).length <= 900, String(JSON.stringify({ prophet: filled }).length));
 });
 
-/** B11 (orchestrator 2026-11-26, Q3): only the adoption records' identities may list adopt/ files. */
-const ADOPT_IDENTITIES = new Set(["gmi_adopt", "prophet_adopt"]);
+/** B11 (orchestrator 2026-11-26, Q3): only the adoption records' identities may list adopt/ files (prophet_adopt retired in S4). */
+const ADOPT_IDENTITIES = new Set(["gmi_adopt"]);
 test("Z1a-P7 the Prophet core and the hashed engines are unedited: every provenance file hashes to its record; hud-snapshot.mjs is in none, adopt/ only in the adopt identities (B11)", () => {
   const paths = new Set();
   for (const [id, engine] of Object.entries(ENGINE_PROVENANCE)) {

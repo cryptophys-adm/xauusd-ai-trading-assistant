@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SERIES } from "../src/tradingview-source.mjs";
+import { readFileSync } from "node:fs";
 
 const { default: worker, internals } = await import("../src/index.mjs");
 
@@ -241,8 +242,8 @@ test("publisher posts mizan+prophet+gmi local_computation for the latest closed 
 
   const first = await publishLocalComputation(e, { now });
   assert.equal(first.status, "published", JSON.stringify(first));
-  // gmi_hud: the Grid Bot Protocol parity record (separate identity), posted after the engines.
-  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi", "gmi_hud"]);
+  // S4 (2026-11-28): the gmi_hud parity record is retired; only the three engine records are posted.
+  assert.deepEqual(ai.posts.map((p) => p.body.engine), ["mizan", "prophet", "gmi"]);
   assert.equal(first.candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
   assert.equal(ai.posts[1].body.values.candle.c, lastH1.close);
   // The Prophet setup state rides on the prophet record (owner report 2026-11-09), consistent with its events.
@@ -253,16 +254,11 @@ test("publisher posts mizan+prophet+gmi local_computation for the latest closed 
   assert.equal(typeof setup.buy_ready, "boolean");
   assert.equal(ai.posts[2].body.values.setup, undefined, "only the prophet record carries it");
   assert.deepEqual(first.not_produced, []);
-  assert.equal(first.hud_parity.engine, "gmi_hud");
-  assert.equal(first.hud_parity.http_status, 202);
-  const hud = ai.posts[3].body;
-  assert.equal(hud.candle_key, first.candle_key);
-  assert.deepEqual(Object.keys(hud.values.comparable), ["gmi_v12_70_hud"]);
-  assert.deepEqual(hud.values.comparable.gmi_v12_70_hud.verdict, ai.posts[2].body.values.comparable.gmi_v12_70.verdict);
+  assert.equal("hud_parity" in first, false, "no HUD parity result since S4");
 
   const again = await publishLocalComputation(e, { now });
   assert.equal(again.status, "already_published");
-  assert.equal(ai.posts.length, 4);
+  assert.equal(ai.posts.length, 3);
 
   const stale = await publishLocalComputation(e, { now: now + 30 * 60_000 });
   assert.equal(stale.status, "no_fresh_h1_close");
@@ -293,28 +289,22 @@ test("a published H1 bar that TradingView revises later is rebuilt on the final 
   assert.equal(r.status, "revised");
   assert.equal(r.candles[0].status, "republished");
   assert.equal(r.candles[0].candle_key, `OANDA:XAUUSD:60:${lastH1.time * 1000}`);
-  const reposted = ai.posts.slice(4).map((p) => p.body);
-  assert.deepEqual(reposted.map((b) => b.engine), ["mizan", "prophet", "gmi", "gmi_hud"], "the Grid Bot parity record is rebuilt on the final bar too");
+  const reposted = ai.posts.slice(3).map((p) => p.body);
+  assert.deepEqual(reposted.map((b) => b.engine), ["mizan", "prophet", "gmi"], "the engine records only (gmi_hud retired in S4)");
+  assert.equal("hud_parity" in r.candles[0], false);
   assert.equal(reposted[1].values.candle.c, bar.close, "rebuilt on the final bar");
   assert.equal(reposted[1].values.candle.volume, bar.volume);
 
   assert.equal((await republishRevisedH1(e, { now: now + 61 * 60_000, bundle: revised })).status, "unchanged", "republished once only");
-  assert.equal(ai.posts.length, 8);
+  assert.equal(ai.posts.length, 6);
 });
 
-test("a rejected gmi_hud record never blocks or repeats the H1 engine publish", async () => {
-  const posts = [];
-  const ai = { posts, async submit(body) { posts.push({ body }); return body.engine === "gmi_hud" ? { status: 400, body: { error: "Invalid candle_key or engine" } } : { status: 202, body: { status: "accepted" } }; } };
-  const e = env({ TV_GATEWAY: fakeGateway(), AI_WORKER: ai });
-  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
-  await worker.fetch(new Request("https://m/pull", { method: "POST", headers: auth }), e);
-  const lastH1 = (await buildBundle(e)).timeframes.H1.candles.at(-1);
-  const now = Date.parse(lastH1.close_time) + 60_000;
-  const first = await publishLocalComputation(e, { now });
-  assert.equal(first.status, "published");
-  assert.equal(first.hud_parity.http_status, 400);
-  assert.equal((await publishLocalComputation(e, { now })).status, "already_published");
-  assert.equal(posts.length, 4);
+test("S4: the retired parity-only producers are gone from the pull adapter (gmi_hud, the Prophet adoption records)", async () => {
+  const publisher = await import("../src/local-publisher.mjs");
+  for (const name of ["publishAdoptRecords", "ADOPT_ENGINES_PUBLISHED", "ADOPT_CHARTS", "ADOPT_PUBLISHED_PREFIX", "ADOPT_MAX_BUILDS_PER_TICK"]) assert.equal(name in publisher, false, name);
+  const src = readFileSync(new URL("../src/local-publisher.mjs", import.meta.url), "utf8") + readFileSync(new URL("../src/index.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /gmi-hud-producer|prophet-adopt|PROPHET_ADOPT_PUBLISH|publishGmiHud|publishAdoptRecords/);
+  assert.doesNotMatch(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"), /"PROPHET_ADOPT_PUBLISH"/);
 });
 
 test("bundleUntil cuts every series at a close, so a past bar is rebuilt as it was then", () => {
@@ -340,7 +330,7 @@ test("publisher stays off without the AI Worker RPC binding and records failures
   assert.equal(failed.status, "partial_failure");
   const retry = await publishLocalComputation(e, { now });
   assert.equal(retry.status, "partial_failure"); // retried, not deduplicated
-  assert.equal(ai.posts.length, 8); // 3 engine records and the gmi_hud record, twice
+  assert.equal(ai.posts.length, 6); // 3 engine records, twice
 });
 
 test("5m publisher is off unless M5_PARITY_PUBLISH is true, then posts timeframe-5 records once per closed 5m bar", async () => {

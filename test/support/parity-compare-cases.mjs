@@ -1,5 +1,6 @@
 // B7: comparison cases for compareWithWebhooks without the field-group options. Their outputs on
-// main (before B7) are frozen in test/fixtures/parity-b7-compare-main.json.
+// main (before B7) are frozen in test/fixtures/parity-b7-compare-main.json. S4 (2026-11-28) dropped the
+// "gmi_hud match" case with the gmi_hud identity; its frozen output stays in the fixture, unread.
 const candle = { o: 3950.1, h: 3955.2, l: 3948.0, c: 3953.4, volume: 2103 };
 const R38 = { direction: 1, buy_confirmed: true, sell_confirmed: false, buy_high_quality: false, sell_high_quality: false, t_enc: 2, d_enc: -1, structure_subtype: 0 };
 const R37 = { direction: 1, d_enc: -1, b_enc: 2, structure_subtype: 0, bull_event: true, bear_event: false };
@@ -17,7 +18,6 @@ const prophet = (over = {}) => rec("prophet", { prophet_r38: { ...R38, ...(over.
 export const COMPARE_CASES = [
   ["prophet match", prophet(), hooks()],
   ["gmi match", rec("gmi", { gmi_v12_70: GMI }), hooks()],
-  ["gmi_hud match", rec("gmi_hud", { gmi_v12_70_hud: HUD }), hooks()],
   ["gmi mismatch", rec("gmi", { gmi_v12_70: GMI }), hooks({ gmi_v12_70: { verdict: -3 } })],
   ["gmi tolerance", rec("gmi", { gmi_v12_70: { ...GMI, gate: 2 + 1e-7 } }), hooks()],
   ["prophet input only", prophet(), hooks({ prophet_r38: { c: 3954 }, prophet_r37_ssot: { c: 3954 } })],

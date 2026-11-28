@@ -46,9 +46,9 @@ export const TRUSTED_IDENTITIES = Object.freeze([
 export const UNTRUSTED_IDENTITIES = Object.freeze([
   Object.freeze({ engine: "mizan", source_hash: MIZAN.source_hash, implementation_hash: MIZAN.implementation_hash, reason: "trusted only through a trusted Prophet and GMI pair on the same chart" }),
   Object.freeze({ engine: "prophet_d1", source_hash: PROPHET_SOURCE, implementation_hash: "8ddfee0378b7abe3dc933e53ee5c967398cde31f660e5177714166dba4d969e6", reason: "candidate at the freeze" }),
-  Object.freeze({ engine: "gmi_d1", source_hash: GMI_SOURCE, implementation_hash: "9c7bcf5e582b4c1dcfd5d8b4abe72c1f189edad719190120184590f43fb77433", reason: "candidate at the freeze" }),
-  Object.freeze({ engine: "gmi_hud", source_hash: "1bf3c79ea6c1cac5eaf16a593cdcc5719e2730af6fe79d244b80a796382c41f4", implementation_hash: "7ceed7ad9a2cad6e856a81097fbdb22777d65474c49d833331be1b84a6ebaae3", reason: "revoked at the freeze" }),
-  Object.freeze({ engine: "prophet_adopt", source_hash: "cd83ac2e0525ed687e290438deb4734b64e610a4c4e9b8671d6394ed8bafa46e", implementation_hash: "e78ff21ac0f0fd0e79cfa4ed1c3509a500c8d661dc0debaaac2100274210fa98", reason: "parity groups only, never trusted (retired in S4)" })
+  Object.freeze({ engine: "gmi_d1", source_hash: GMI_SOURCE, implementation_hash: "9c7bcf5e582b4c1dcfd5d8b4abe72c1f189edad719190120184590f43fb77433", reason: "candidate at the freeze" })
+  // S4 (2026-11-28) retired gmi_hud ("revoked at the freeze") and prophet_adopt ("parity groups only"): no producer
+  // emits them any more.
 ]);
 
 const same = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();

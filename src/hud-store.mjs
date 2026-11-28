@@ -8,7 +8,7 @@
 // that record. A statement that is a pure formula of closed bars reads as "computed from
 // verified bars" when that trusted record was built on native bars (barsVerified, S2).
 // Everything else reads as not yet calibrated.
-import { containsCredentialFields, INGEST_ENGINES, ADOPT_ENGINES } from "./evidence-fusion.mjs";
+import { containsCredentialFields, INGEST_ENGINES } from "./evidence-fusion.mjs";
 import { PARITY_GROUPS } from "./parity-registry.mjs";
 import { readHud, verifiedFields, HUD_IDS } from "./hud-reading.mjs";
 
@@ -87,10 +87,10 @@ export async function approvedComparable(env, candleKey, { groups = PARITY_GROUP
     if (!isRecord(comparable)) { Object.assign(out, comparable); return; }
     for (const [source, fields] of Object.entries(comparable)) out[source] = isRecord(out[source]) && isRecord(fields) ? { ...out[source], ...fields } : fields;
   };
-  // B11: the adoption records' groups are never read here (no reader in B11; no HUD field points at them).
-  const groupIds = Object.keys(groups || {}).filter((id) => INGEST_ENGINES.includes(groups[id]?.engine) && !ADOPT_ENGINES.includes(groups[id]?.engine));
-  // gmi_hud: the HUD parity identity (Grid Bot Protocol fields, source gmi_v12_70_hud).
-  for (const key of ["prophet", "gmi", "gmi_hud", ...groupIds]) {
+  // Only groups of an ingested engine (the decision lane since S4, 2026-11-28, which retired the gmi_hud copy and
+  // the adoption records); no group is declared for one today.
+  const groupIds = Object.keys(groups || {}).filter((id) => INGEST_ENGINES.includes(groups[id]?.engine));
+  for (const key of ["prophet", "gmi", ...groupIds]) {
     const raw = await env.WEBHOOK_BUFFER?.get?.("localcalc:" + candleKey + ":" + key);
     if (!raw) continue;
     try { merge(JSON.parse(raw)?.values?.comparable || {}); } catch { /* malformed record is ignored */ }

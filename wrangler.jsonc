@@ -122,8 +122,6 @@
     "RANGE_SHADOW_MODE": "on",
     // K1 (cost brief 2026-11-27): the EA signal reads the 48-bar tail of the gold 5m series ("shadow" compares, "off" as before).
     "EA_SIGNAL_TAIL": "on",
-    // B11 (RFC_INDICATOR_ADOPTION): accept the adoption records for group parity only; "off" refuses them at ingest.
-    "ADOPT_INGEST": "on",
     "CALIBRATION_INTERVAL_DAYS": "30",
     // Omega broker engine (owner decision 2026-11-09): enabled on the server; controlled live by the
     // "Engine enabled" toggle on the Omega page (and "Arm live" for real accounts).

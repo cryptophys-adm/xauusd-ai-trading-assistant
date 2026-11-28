@@ -217,11 +217,6 @@ export const FEATURE_SWITCHES = Object.freeze([
     values: ["conditions", "brief"], default_value: "conditions", config_value: "conditions", read: (raw) => (s(raw) === "brief" ? "brief" : "conditions")
   }),
   entry({
-    key: "ADOPT_INGEST", label: "Indicator adoption records", group: "knowledge",
-    description: "B11: on accepts the adoption records (Prophet now, GMI in B11b/c) so each field group is compared with its v2 alert; nothing reads them. Off refuses them at ingest; no trading behaviour changes either way.",
-    values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff
-  }),
-  entry({
     key: "LENS_LEVEL_READINGS", label: "Lens B skip and hold readings", group: "lens",
     description: "B19: on records and scores lens B's skip readings (a limit-council skip on liquidity_sweep_against) and hold readings (a stop moved to a lens B level); reported only, never in the automatic floor. Off stops both; no trading behaviour changes either way.",
     values: ["on", "off"], default_value: "on", config_value: "on", read: onUnlessOff

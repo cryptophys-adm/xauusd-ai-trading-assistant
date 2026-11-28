@@ -218,7 +218,7 @@ export function readHud(agentId, hud = {}) {
     }
     case "grid_bot_protocol": {
       // Ported 2026-11-07 (Mizan cshi_engine and GMI's deploy status). Grid levels are Reasoner output.
-      // Verified when the gmi_hud identity is approved against the GMI HUD candidate alert.
+      // Never verified: its comparator identity (gmi_hud) was retired in S4 (2026-11-28).
       const STATUS = {
         muddy_waters_on: "muddy waters, a high-entropy chop where a grid bot may run",
         toxic_chop_off: "toxic chop, too erratic for a grid bot",

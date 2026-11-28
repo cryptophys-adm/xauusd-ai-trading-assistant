@@ -28,7 +28,7 @@ const read = (path) => readFileSync(new URL("../" + path, import.meta.url), "utf
 const C = "pinescript/candidates/";
 const FILES = {
   gmi: { v1: C + "Global-Multiverse-Interceptor-v12.70.hud.v1.txt", v2: C + "Global-Multiverse-Interceptor-v12.70.hud.v2.txt", from: "· R11 CPR CONTEXT ENGINE\"", to: "· R12 ADOPTION HUD\"", marker: "// R12 ADOPTION HUD ALERT", source: "gmi_v12_70_adopt_hud", engine: "gmi_adopt", payloadFn: "f_gmi_adopt_payload", requests: 24 },
-  prophet: { v1: C + "The-Prophet-v7.02-R38.hud.v1.txt", v2: C + "The-Prophet-v7.02-R38.hud.v2.txt", from: "· R38\"", to: "· R38 ADOPTION HUD\"", marker: "// R38 ADOPTION HUD ALERT", source: "prophet_r38_adopt_hud", engine: "prophet_adopt", payloadFn: "f_prophet_adopt_payload", requests: 2 }
+  prophet: { v1: C + "The-Prophet-v7.02-R38.hud.v1.txt", v2: C + "The-Prophet-v7.02-R38.hud.v2.txt", from: "· R38\"", to: "· R38 ADOPTION HUD\"", marker: "// R38 ADOPTION HUD ALERT", source: "prophet_r38_adopt_hud", engine: "prophet_adopt", payloadFn: "f_prophet_adopt_payload", requests: 2, retired: "S4" }
 };
 const PROBE = C + "Cryptophys-Mizan-Probe.v1.txt";
 const ENVELOPE = new Set(["v", "source", "src", "ticker", "symbol", "timeframe", "tf", "candle_time", "timestamp", "t", "o", "h", "l", "c", "volume", "secret"]);
@@ -158,7 +158,9 @@ for (const [name, spec] of Object.entries(FILES)) {
     assert.equal(keys.at(-1), "secret");
     assert.equal(parts[1].expr, `"\\"source\\":\\"${spec.source}\\""`);
     const fields = keys.filter((k) => !ENVELOPE.has(k));
-    assert.deepEqual([...fields].sort(), [...groupFields(spec.source), ...NOT_COMPARED[spec.source]].sort(), "every sent field is in exactly one group (or listed as never compared)");
+    // S4 (2026-11-28): the prophet_adopt groups are retired with their records; the alert itself stays a candidate.
+    if (spec.retired) assert.deepEqual(groupFields(spec.source), [], `${name}: its groups were retired in ${spec.retired}`);
+    else assert.deepEqual([...fields].sort(), [...groupFields(spec.source), ...NOT_COMPARED[spec.source]].sort(), "every sent field is in exactly one group (or listed as never compared)");
     assert.equal(new Set(groupFields(spec.source)).size, groupFields(spec.source).length, "a field is in one group only");
     console.log(`B10 ${name}: ${parts.length} parts, longest payload ${longest} characters`);
   });
@@ -232,11 +234,11 @@ test("B10 groups: declared, sound, none starts with mizan, each on its source; p
   assert.ok(Object.keys(PARITY_GROUPS).every((id) => !id.startsWith("mizan")));
   const by = (engine) => Object.entries(PARITY_GROUPS).filter(([, g]) => g.engine === engine).map(([id]) => id);
   assert.deepEqual(by("gmi_adopt"), ["gmi_adopt_hud", "gmi_adopt_flow", "gmi_adopt_kin", "gmi_adopt_zone", "gmi_adopt_zone_levels", "gmi_adopt_burst", "gmi_adopt_order", "gmi_adopt_levels", "gmi_adopt_plan"]);
-  assert.deepEqual(by("prophet_adopt"), ["prophet_adopt_hud", "prophet_adopt_core", "prophet_adopt_ob", "prophet_adopt_scalp", "prophet_adopt_plan"]);
+  assert.deepEqual(by("prophet_adopt"), [], "S4 retired the prophet_adopt groups");
   assert.deepEqual(by("probe_mizan"), ["probe_mizan_witness", "probe_mizan_core", "probe_mizan_mtf", "probe_mizan_decision", "probe_mizan_state"]);
   for (const [id, g] of Object.entries(PARITY_GROUPS)) {
     if (id === "probe_mizan_witness") continue;
-    assert.equal(g.source, { gmi_adopt: "gmi_v12_70_adopt_hud", prophet_adopt: "prophet_r38_adopt_hud", probe_mizan: "probe_mizan_hud" }[g.engine], id);
+    assert.equal(g.source, { gmi_adopt: "gmi_v12_70_adopt_hud", probe_mizan: "probe_mizan_hud" }[g.engine], id);
     assert.equal(g.kind, "hud");
     assert.equal(g.nullEqual, true);
     assert.ok(Object.entries(g.fields).every(([a, b]) => a === b));
@@ -244,19 +246,18 @@ test("B10 groups: declared, sound, none starts with mizan, each on its source; p
   assert.ok(groupFields("probe_mizan_hud").includes("prior_edge"));
 });
 
-test("B10 then B11: the adoption engines are ingested and their groups have identities; probe_mizan stays inert until B26", async () => {
-  // B11a (RFC_INDICATOR_ADOPTION): gmi_adopt and prophet_adopt are ingested base engines; their groups earn trust on their own.
-  for (const engine of ["gmi_adopt", "prophet_adopt"]) {
-    assert.equal(INGEST_ENGINES.includes(engine), true, engine);
-    assert.equal(BASE_ENGINES.includes(engine), true, engine);
-    const record = { engine, timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
-    for (const id of groupsFor(engine)) assert.equal(groupIdentityOf(record, id)?.engine, id + "_m15", id);
-  }
+test("B10, B11 then S4: no adoption engine is ingested; gmi_adopt keeps its groups as a base engine (B11b/c), prophet_adopt is retired; probe_mizan stays inert until B26", async () => {
+  // S4 (2026-11-28): the prophet_adopt records and the adoption intake (ADOPT_ENGINES, ADOPT_INGEST) are retired.
+  assert.deepEqual([...INGEST_ENGINES], ["mizan", "prophet", "gmi"]);
+  assert.equal(BASE_ENGINES.includes("gmi_adopt"), true);
+  assert.equal(BASE_ENGINES.includes("prophet_adopt"), false);
+  const gmiAdopt = { engine: "gmi_adopt", timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
+  for (const id of groupsFor("gmi_adopt")) assert.equal(groupIdentityOf(gmiAdopt, id)?.engine, id + "_m15", id);
   assert.equal(INGEST_ENGINES.includes("probe_mizan"), false);
   assert.equal(BASE_ENGINES.includes("probe_mizan"), false);
   const probe = { engine: "probe_mizan", timeframe: "15", provenance: { source_hash: "a".repeat(64), implementation_hash: "b".repeat(64) } };
   for (const id of groupsFor("probe_mizan")) assert.equal(groupIdentityOf(probe, id), null, id);
-  for (const engine of INGEST_ENGINES.filter((e) => !["gmi_adopt", "prophet_adopt"].includes(e))) assert.deepEqual(groupsFor(engine), [], engine);
+  for (const engine of INGEST_ENGINES) assert.deepEqual(groupsFor(engine), [], engine);
   for (const source of ["gmi_v12_70_adopt_hud", "prophet_r38_adopt_hud", "probe_mizan_hud"]) assert.equal(isHudSource(source), true);
 });
 

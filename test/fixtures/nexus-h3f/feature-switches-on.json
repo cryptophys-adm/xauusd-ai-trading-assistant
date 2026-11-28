@@ -670,28 +670,6 @@
       "write": "feature-switch"
     },
     {
-      "key": "ADOPT_INGEST",
-      "label": "Indicator adoption records",
-      "description": "B11: on accepts the adoption records (Prophet now, GMI in B11b/c) so each field group is compared with its v2 alert; nothing reads them. Off refuses them at ingest; no trading behaviour changes either way.",
-      "group": "knowledge",
-      "worker": "ai",
-      "values": [
-        "on",
-        "off"
-      ],
-      "value": "on",
-      "source": "default",
-      "config_value": null,
-      "default_value": "on",
-      "set_by": null,
-      "set_at": null,
-      "era_switch": false,
-      "restarts_mode_evidence": false,
-      "emergency_stop": false,
-      "read_only": false,
-      "write": "feature-switch"
-    },
-    {
       "key": "LENS_LEVEL_READINGS",
       "label": "Lens B skip and hold readings",
       "description": "B19: on records and scores lens B's skip readings (a limit-council skip on liquidity_sweep_against) and hold readings (a stop moved to a lens B level); reported only, never in the automatic floor. Off stops both; no trading behaviour changes either way.",

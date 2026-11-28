@@ -57,19 +57,19 @@ test("TI-2 byte-identity: for every identity the producers emit, the frozen tabl
     "INSERT INTO engine_parity_registry (engine, source_hash, implementation_hash, status, mizan_source_hash, mizan_implementation_hash, first_seen_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(engine, p.source_hash, p.implementation_hash, status, engine.startsWith("mizan") ? null : mizan.source_hash, engine.startsWith("mizan") ? null : mizan.implementation_hash, now, now);
   // The snapshot's shape (statuses per identity, no data rows): the eight approved, the D1 identities and
-  // Mizan per chart candidates, gmi_hud revoked, plus older approved hashes no producer emits any more.
+  // Mizan per chart candidates, plus older approved hashes no producer emits any more. (gmi_hud, revoked at the
+  // freeze, and prophet_adopt are no longer emitted since S4, 2026-11-28.)
   for (const t of TRUSTED_IDENTITIES) insert(t.engine, t, "approved");
   insert("prophet_d1", ENGINE_PROVENANCE.prophet_d1, "candidate");
   insert("gmi_d1", ENGINE_PROVENANCE.gmi_d1, "candidate");
-  insert("gmi_hud", ENGINE_PROVENANCE.gmi_hud, "revoked");
   for (const s of ["", "_m5", "_m15", "_h4", "_d1"]) insert("mizan" + s, MIZAN, "candidate");
   const stale = { source_hash: ENGINE_PROVENANCE.gmi.source_hash, implementation_hash: "d".repeat(64) };
   insert("gmi", stale, "approved");
 
   const emitted = [];
-  for (const [engine, p] of Object.entries(ENGINE_PROVENANCE)) if (engine !== "mizan" && engine !== "prophet_adopt") emitted.push(idOf(engine, p));
+  for (const [engine, p] of Object.entries(ENGINE_PROVENANCE)) if (engine !== "mizan") emitted.push(idOf(engine, p));
   for (const tf of ["60", "5", "15", "240", "1D"]) emitted.push(idOf(scopedEngine("mizan", tf), MIZAN));
-  assert.equal(emitted.length, 16, "11 engines and Mizan on five charts");
+  assert.equal(emitted.length, 15, "10 engines and Mizan on five charts");
   for (const id of emitted) assert.equal(await isTrusted(db, id), await registryApproved(db, id), id.engine);
   assert.deepEqual((await Promise.all(emitted.map((id) => isTrusted(db, id)))).filter(Boolean).length, 12, "8 engines and Mizan on 1H, 5m, 15m and 4H");
   assert.equal(await isTrusted(db, idOf("mizan_d1", MIZAN)), false, "no D1 pair vouches for Mizan on D1");
@@ -91,5 +91,7 @@ test("TI-3 the 5m approval and the Mizan rule read the table; an injected table 
   assert.equal(frozenTrusted(idOf("mizan", { source_hash: MIZAN.source_hash, implementation_hash: "e".repeat(64) })), false, "another Mizan library is not vouched for");
   assert.equal(frozenTrusted(idOf("prophet_m5", { ...ENGINE_PROVENANCE.prophet_m5, implementation_hash: ENGINE_PROVENANCE.prophet_m5.implementation_hash.toUpperCase() })), true, "hashes compare case-insensitively, as normalizeHash does");
   assert.equal(frozenTrusted(null), false);
-  assert.equal(frozenTrusted({ engine: "prophet_adopt_m15", sourceHash: ENGINE_PROVENANCE.prophet_adopt.source_hash, implementationHash: ENGINE_PROVENANCE.prophet_adopt.implementation_hash }), false, "a group identity is never trusted");
+  assert.equal(frozenTrusted({ engine: "prophet_adopt_m15", sourceHash: "cd83ac2e0525ed687e290438deb4734b64e610a4c4e9b8671d6394ed8bafa46e", implementationHash: "e78ff21ac0f0fd0e79cfa4ed1c3509a500c8d661dc0debaaac2100274210fa98" }), false, "the retired adoption group identity (S4) was never trusted");
+  assert.equal(frozenTrusted({ engine: "gmi_hud", sourceHash: "1bf3c79ea6c1cac5eaf16a593cdcc5719e2730af6fe79d244b80a796382c41f4", implementationHash: "7ceed7ad9a2cad6e856a81097fbdb22777d65474c49d833331be1b84a6ebaae3" }), false, "the retired gmi_hud identity (S4) is not trusted");
+  assert.equal(ENGINE_PROVENANCE.gmi_hud ?? ENGINE_PROVENANCE.prophet_adopt, undefined, "S4: no producer emits gmi_hud or prophet_adopt");
 });

@@ -9,9 +9,7 @@ import { buildM15LocalCalculations, m15WebhookCandleKey } from "../../local-engi
 import { buildHtfLocalCalculations, HTF_CHARTS, htfWebhookCandleKey } from "../../local-engines/producer/src/htf-local-producer.mjs";
 import { m5ContextFromRecords } from "../../local-engines/producer/src/m5-context.mjs";
 import { buildHudSnapshot } from "../../local-engines/producer/src/hud-snapshot.mjs";
-import { buildGmiHudRecord } from "../../local-engines/producer/src/gmi-hud-producer.mjs";
-import { attachProphetSetup, SETUP_CHARTS, hasChartProphetCore } from "../../local-engines/producer/src/prophet-setup.mjs";
-import { buildProphetAdoptRecord } from "../../local-engines/producer/src/adopt/prophet-adopt.mjs";
+import { attachProphetSetup } from "../../local-engines/producer/src/prophet-setup.mjs";
 
 const PUBLISHED_PREFIX = "market-data:v2:local-published:";
 
@@ -63,20 +61,6 @@ const MAX_PUBLISH_DELAY_MS = 25 * 60 * 1000;
 
 const asString = (v) => (typeof v === "string" ? v : "");
 
-/**
- * The gmi_hud parity record of a built H1 candle (Grid Bot Protocol comparator, RFC_HUD_AGENTS §3).
- * Posted apart from the engine records: its result never decides the publish marker, so a HUD
- * parity failure can neither block nor repeat the H1 engine publish.
- */
-async function publishGmiHud(env, built, bundle) {
-  let record = null;
-  try { record = buildGmiHudRecord(built, bundle, { mintick: Number(env.CHART_MINTICK) || 0.001 }); }
-  catch (error) { return { engine: "gmi_hud", http_status: null, error: asString(error?.code) || "gmi_hud_failed" }; }
-  if (!record) return { engine: "gmi_hud", http_status: null, error: "not_produced" };
-  try { return await postRecord(env, record); }
-  catch (error) { return { engine: "gmi_hud", http_status: null, error: asString(error?.name) || "post_failed" }; }
-}
-
 async function postRecord(env, record) {
   // RPC Service Binding (entrypoint "LocalComputationIngress" on the AI Worker).
   const { status, body } = await env.AI_WORKER.submit(record);
@@ -123,14 +107,12 @@ export async function publishLocalComputation(env, { now = Date.now(), force = f
     }
   }
   const ok = results.every((r) => r.http_status && r.http_status < 300);
-  const hudParity = await publishGmiHud(env, built, resolvedBundle);
   const summary = {
     status: ok ? "published" : "partial_failure",
     candle_key: built.candle_key,
     candle_time: built.candle_time,
     published_at: new Date(now).toISOString(),
     engines: results,
-    hud_parity: hudParity,
     not_produced: built.records.some((r) => r.engine === "gmi") ? [] : ["gmi"],
     gmi_error: built.gmi_error || null,
     prophet_setup: prophetSetup,
@@ -188,12 +170,10 @@ export async function republishRevisedH1(env, { now = Date.now(), bundle = null 
       catch (error) { results.push({ engine: record.engine, http_status: null, error: asString(error?.name) || "post_failed" }); }
     }
     const ok = results.every((r) => r.http_status && r.http_status < 300);
-    // The revised bar changes the Grid Bot fields too: republish the HUD parity record with it.
-    const hudParity = await publishGmiHud(env, built, bundleUntil(resolvedBundle, Date.parse(bar.close_time)));
     if (ok) {
       await kv.put(PUBLISHED_PREFIX + candleKey, JSON.stringify({ ...marker, bar: barSnapshot(bar), previous_bar: marker.bar, republished_at: new Date(now).toISOString() }), { expirationTtl: 60 * 60 * 24 * 7 });
     }
-    out.push({ candle_key: candleKey, status: ok ? "republished" : "partial_failure", previous_bar: marker.bar, bar: barSnapshot(bar), engines: results, hud_parity: hudParity });
+    out.push({ candle_key: candleKey, status: ok ? "republished" : "partial_failure", previous_bar: marker.bar, bar: barSnapshot(bar), engines: results });
   }
   return { status: out.length ? "revised" : "unchanged", candles: out };
 }
@@ -422,69 +402,4 @@ export async function publishHudSnapshots(env, { now = Date.now(), bundle = null
   const summary = { status: "done", published_at: new Date(now).toISOString(), charts: results };
   await kv.put(LAST_HUD_PUBLISH_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 7 });
   return summary;
-}
-
-// ---------------------------------------------------------------- B11: the adoption records (parity only)
-
-/**
- * B11 (RFC_INDICATOR_ADOPTION; owner 2026-11-19 "adopsi semuanya", 2026-11-22 (a)-(c)): the adoption records, compared
- * group by group with the v2 alerts and read by nothing else. Per engine a switch ("true" publishes), per chart the
- * latest closed bar while it is fresh enough for the AI Worker (its candle age limits: 45 min, 3 h, 12 h, 72 h).
- * One build per bar (the marker is read first, as every publisher here). CPU (orchestrator 2026-11-26): an adoption
- * build never runs a Prophet core of its own. It reads the core run the publishers' setup state made for the same
- * bundle this tick (prophet-setup.mjs chartProphetCore), so it costs only its own zone and latch replay (about 10 ms
- * in node). A chart whose core was not run this tick (its local record was not published this tick) is not built
- * ("waiting_for_core"); at most ADOPT_MAX_BUILDS_PER_TICK reused builds a tick.
- */
-export const ADOPT_ENGINES_PUBLISHED = Object.freeze([
-  Object.freeze({ engine: "prophet_adopt", flag: "PROPHET_ADOPT_PUBLISH", build: buildProphetAdoptRecord })
-]);
-export const ADOPT_CHARTS = Object.freeze({
-  M15: Object.freeze({ maxDelayMs: 30 * 60 * 1000, markerTtlS: 60 * 60 * 24 }),
-  H1: Object.freeze({ maxDelayMs: 2 * 60 * 60 * 1000, markerTtlS: 60 * 60 * 24 * 7 }),
-  H4: Object.freeze({ maxDelayMs: 8 * 60 * 60 * 1000, markerTtlS: 60 * 60 * 24 * 3 }),
-  D1: Object.freeze({ maxDelayMs: 48 * 60 * 60 * 1000, markerTtlS: 60 * 60 * 24 * 3 })
-});
-export const ADOPT_PUBLISHED_PREFIX = "market-data:v2:adopt-published:";
-export const ADOPT_MAX_BUILDS_PER_TICK = 4;
-
-export async function publishAdoptRecords(env, { now = Date.now(), bundle = null } = {}) {
-  const engines = ADOPT_ENGINES_PUBLISHED.filter((e) => String(env[e.flag] || "").toLowerCase() === "true");
-  if (!engines.length) return { status: "adopt_publish_disabled" };
-  const kv = env.MARKET_DATA_CACHE;
-  if (!kv) return { status: "cache_not_configured" };
-  if (typeof env.AI_WORKER?.submit !== "function") return { status: "publisher_not_configured" };
-  const resolvedBundle = bundle || await buildBundle(env, now);
-  const results = {};
-  let builds = 0;
-  for (const { engine, build } of engines) {
-    for (const [chart, { maxDelayMs, markerTtlS }] of Object.entries(ADOPT_CHARTS)) {
-      const id = `${engine}:${chart}`;
-      const last = resolvedBundle.timeframes?.[SETUP_CHARTS[chart].series]?.candles?.at(-1);
-      if (!last) { results[id] = { status: "no_data" }; continue; }
-      const closeMs = Date.parse(last.close_time), openMs = Date.parse(last.open_time);
-      if (!Number.isFinite(closeMs) || closeMs > now) { results[id] = { status: "bar_not_closed" }; continue; }
-      if (now - closeMs > maxDelayMs) { results[id] = { status: "no_fresh_close" }; continue; }
-      const peekKey = [CHART_TICKERID, SETUP_CHARTS[chart].period, String(openMs)].join(":");
-      const markerKey = ADOPT_PUBLISHED_PREFIX + engine + ":" + peekKey;
-      if (await isPublished(kv, markerKey)) { results[id] = { status: "already_published", candle_key: peekKey }; continue; }
-      const mintick = Number(env.CHART_MINTICK) || 0.001;
-      if (!hasChartProphetCore(resolvedBundle, chart, { mintick })) { results[id] = { status: "waiting_for_core", candle_key: peekKey }; continue; }
-      if (builds >= ADOPT_MAX_BUILDS_PER_TICK) { results[id] = { status: "deferred", candle_key: peekKey }; continue; }
-      builds += 1;
-      let record = null;
-      try { record = build(resolvedBundle, chart, { now, mintick, reuseOnly: true }); }
-      catch (error) { results[id] = { status: asString(error?.code) || "adopt_build_failed" }; continue; }
-      if (!record || record.candle_key !== peekKey) { results[id] = { status: record ? "candle_mismatch" : "not_produced" }; continue; }
-      try {
-        const posted = await postRecord(env, record);
-        const ok = Number(posted.http_status) < 300;
-        if (ok) { await kv.put(markerKey, "1", { expirationTtl: markerTtlS }); remember(kv, markerKey); }
-        results[id] = { status: ok ? "published" : "rejected", candle_key: record.candle_key, http_status: posted.http_status, error: posted.error };
-      } catch (error) {
-        results[id] = { status: "post_failed", candle_key: record.candle_key, error: asString(error?.name) || "post_failed" };
-      }
-    }
-  }
-  return { status: "done", builds, charts: results };
 }

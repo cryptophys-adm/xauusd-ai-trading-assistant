@@ -10,8 +10,11 @@ test("every registry engine id has a canonical label with its timeframe", () => 
   assert.equal(engineLabel("prophet"), "Prophet R38 + R37 1H (prophet)");
   assert.equal(engineLabel("prophet_hud_h4"), "Prophet HUD 4H (prophet_hud_h4)");
   assert.equal(engineLabel("mizan_d1"), "MizanLib D1 (mizan_d1)");
-  assert.equal(engineName("gmi_hud_m5"), "GMI HUD");
-  assert.equal(engineTimeframe("gmi_hud_m5"), "5m");
+  assert.equal(engineName("prophet_hud_m5"), "Prophet HUD");
+  assert.equal(engineTimeframe("prophet_hud_m5"), "5m");
+  // S4 (2026-11-28): gmi_hud and prophet_adopt are retired; their old registry ids show by the bare id.
+  assert.equal(engineName("gmi_hud_m5"), "gmi_hud");
+  assert.equal(engineLabel("prophet_adopt_m15"), "prophet_adopt 15m (prophet_adopt_m15)");
   assert.equal(engineName("unknown_m5"), "unknown", "an unknown id falls back to its base id");
 });
 
