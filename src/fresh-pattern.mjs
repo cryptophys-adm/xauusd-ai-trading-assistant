@@ -5,14 +5,14 @@
 // that ignores TP1-KZ: TP1 is the pattern's measured target, only when it pays at least FRESH_PATTERN.min_target_r with
 // the agent's own entry and stop (no fallback to a key zone). The breaker and the held-back patterns still apply.
 //
-// FRESH_PATTERN_MODE (FS1, group plans): "on" (production) the plan is the agent's on that side (when it has none) or
-// marks its plan for that pattern: it is offered to the council in `strategies` even alone, a trade from it carries
+// FRESH_PATTERN_MODE (FS1, group plans): "on" (production) the plan is the agent's on that side (when it has none, or in
+// place of its own plan on the same pattern): it is offered to the council in `strategies` even alone, a trade from it carries
 // fresh_pattern, and a pullback's E1 limit never applies (pattern agents are market-by-design); "record" the plans are
 // only recorded (decision.fresh_plans, plan_setups source pattern_fresh); "off" (code default, so the fixtures replay as
 // before) nothing. Recorded only on a side whose guardrails allow it.
 //
 // The automatic revert (freshPatternRevert, 5-minute ledger step): once FRESH_PATTERN_REVERT.trades fresh_pattern
-// trades closed at the broker, a mean broker R below FRESH_PATTERN_REVERT.below_r sets the mode in force to "record"
+// trades closed (the Signal Ledger's r_omega), a mean R below FRESH_PATTERN_REVERT.below_r sets the mode in force to "record"
 // (KV FRESH_PATTERN_REVERT_KEY), with one Telegram line and one Omega event. The owner's FS1 override wins over it,
 // as ROOM_BREAKOUT_WAIVE's (src/room-waive.mjs): the order owner override > automatic revert > env.
 import { normBars, meanRange } from "./chart-patterns.mjs";
@@ -114,36 +114,20 @@ export function freshPatternVerdict(rs) {
 
 /** Pure: the revert's Telegram line (R only). */
 export function freshPatternRevertLine(v) {
-  return `XAUUSD SYSTEM · Fresh 15m pattern exception (FRESH_PATTERN_MODE) set to record: its first ${v.n} trades averaged ${v.mean_r > 0 ? "+" : ""}${v.mean_r}R at the broker, below +${FRESH_PATTERN_REVERT.below_r}R. Fresh pattern plans are only recorded from now on; the owner can turn it on again in the feature switches.`;
+  return `XAUUSD SYSTEM · Fresh 15m pattern exception (FRESH_PATTERN_MODE) set to record: its first ${v.n} trades averaged ${v.mean_r > 0 ? "+" : ""}${v.mean_r}R (Omega R, Signal Ledger), below +${FRESH_PATTERN_REVERT.below_r}R. Fresh pattern plans are only recorded from now on; the owner can turn it on again in the feature switches.`;
 }
 
+/** The revert's window starts with FP1 (no decision before it carries trade.fresh_pattern): it bounds the scan. */
+export const FRESH_PATTERN_SINCE = "2026-11-28T00:00:00.000Z";
+
 /**
- * The closed fresh_pattern trades' broker R, oldest first: the decisions whose trade carries fresh_pattern, their
- * Omega entry intent (a market open or a filled limit, matched by the signal's bar), and that position's deals. A
- * trade not yet closed in full ends the list there (the window waits for it).
+ * The closed fresh_pattern trades' R, oldest first, as the Signal Ledger has it (the house R: signal_ledger.r_omega once
+ * Omega's policy has closed the position, as SV1b, RM1b and the grid count): the decisions since FRESH_PATTERN_SINCE whose
+ * trade carries fresh_pattern, joined on their candle key. One bounded query; at most `limit` rows.
  */
-export async function freshPatternTrades(db, { limit = FRESH_PATTERN_REVERT.trades } = {}) {
-  const keys = (await db.prepare("SELECT decision_key FROM engine_decisions WHERE json_extract(decision_json, '$.trade.fresh_pattern') IS NOT NULL ORDER BY bar_close LIMIT 500").all()).results ?? [];
-  const out = [];
-  for (const { decision_key: key } of keys) {
-    if (out.length >= limit) break;
-    const ms = Number(String(key).split(":").at(-1));
-    if (!finite(ms)) continue;
-    const it = await db.prepare("SELECT payload, result FROM omega_intents WHERE kind IN ('open', 'place_limit') AND status = 'done' AND CAST(json_extract(payload, '$.signal_issued_ms') AS INTEGER) = ? ORDER BY created_ms LIMIT 1").bind(ms).first();
-    if (!it) continue;
-    const p = parse(it.payload, {}) ?? {}, res = parse(it.result, {}) ?? {};
-    const ticket = Number(res.ticket);
-    if (!finite(ticket)) continue;
-    const deals = (await db.prepare("SELECT volume, exit_price FROM ea_deals WHERE position_ticket = ? AND exit_price > 0").bind(ticket).all()).results ?? [];
-    if (!deals.length) continue;
-    const vol0 = Number(p.lot ?? p.volume), rd = Number(p.r_dist) > 0 ? Number(p.r_dist) : Math.abs(Number(p.planned_entry ?? p.entry) - Number(p.sl_plan ?? p.sl));
-    const fill = Number(res.fill_price) > 0 ? Number(res.fill_price) : Number(p.fill_price) > 0 ? Number(p.fill_price) : Number(p.planned_entry ?? p.entry);
-    const closed = deals.reduce((a, d) => a + Number(d.volume || 0), 0);
-    if (!(vol0 > 0) || !(rd > 0) || !(fill > 0) || closed < vol0 - 1e-9) break;
-    const dir = p.side === "BUY" ? 1 : -1;
-    out.push(deals.reduce((a, d) => a + dir * (Number(d.exit_price) - fill) * Number(d.volume || 0), 0) / (rd * vol0));
-  }
-  return out;
+export async function freshPatternTrades(db, { limit = FRESH_PATTERN_REVERT.trades, since = FRESH_PATTERN_SINCE } = {}) {
+  const rows = (await db.prepare("SELECT l.r_omega AS r FROM engine_decisions d JOIN signal_ledger l ON l.candle_key = d.decision_key WHERE d.bar_close >= ? AND json_extract(d.decision_json, '$.trade.fresh_pattern') IS NOT NULL AND l.source = 'decision' AND l.omega_status = 'closed' AND l.r_omega IS NOT NULL ORDER BY d.bar_close LIMIT ?").bind(since, limit).all()).results ?? [];
+  return rows.map((r) => Number(r.r)).filter(finite);
 }
 
 /**

@@ -635,15 +635,15 @@ export function freshPatternPlans(dir, ctx, statuses) {
 }
 
 /**
- * Pure, FP1 "on": the plans with the fresh plans in: an agent without a plan on the side takes its fresh plan; an agent
- * whose plan stands on the same fresh pattern carries its fresh_pattern; any other plan is as it was.
+ * Pure, FP1 "on": the plans with the fresh plans in: an agent without a plan on the side, or whose plan stands on the
+ * same fresh pattern, takes its fresh plan (entry at price, TP1 the measured target: exactly what FP1 trades and its
+ * revert judges; the agent's own retest limit or key-zone TP1 never carries fresh_pattern); any other plan is as it was.
  */
 export function withFreshPlans(plans, fresh) {
   const out = { ...(plans || {}) };
   for (const [id, a] of Object.entries(fresh || {})) {
     const own = out[id];
-    if (!own?.plan) out[id] = a;
-    else if (own.plan.pattern === a.plan.pattern && own.plan.chart === a.plan.chart) out[id] = { ...own, plan: { ...own.plan, fresh_pattern: a.plan.fresh_pattern } };
+    if (!own?.plan || (own.plan.pattern === a.plan.pattern && own.plan.chart === a.plan.chart)) out[id] = { ...(own ?? {}), status: own?.status ?? a.status, plan: a.plan };
   }
   return out;
 }

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FRESH_PATTERN, FRESH_PATTERN_REVERT, FRESH_PATTERN_REVERT_KEY, FRESH_PATTERN_SOURCE, freshPatternModeOf, resolveFreshPattern, resolveFreshPatternMode,
-  breakoutAgeBars, freshPlansRecord, freshPatternVerdict, freshPatternRevert, freshPatternRevertLine, readFreshPatternHold
+  breakoutAgeBars, freshPlansRecord, freshPatternVerdict, freshPatternRevert, freshPatternRevertLine, readFreshPatternHold, freshPatternTrades, FRESH_PATTERN_SINCE
 } from "../src/fresh-pattern.mjs";
 import { STRATEGY_AGENTS, freshPatternPlans, withFreshPlans, slimPlan } from "../src/strategy-agents.mjs";
 import { assess, buildDecisionRecord, decisionKeyFor, councilEvidence } from "../src/decision-engine.mjs";
@@ -67,8 +67,11 @@ test("FP-4 withFreshPlans: an agent without a plan takes its fresh plan; a plan 
   const out = withFreshPlans({ zone_pullback: { status: "live", plan: { agent: "zone_pullback", entry: 1 } } }, fresh);
   assert.deepEqual(Object.keys(out), ["zone_pullback", "pattern_lines"]);
   assert.equal(out.pattern_lines.plan.fresh_pattern.target_r, 1.21);
-  const own = { pattern_lines: { status: "live", plan: { agent: "pattern_lines", entry: 4000, pattern: "broadening_wedge_descending", chart: "15m" } } };
-  assert.deepEqual(withFreshPlans(own, fresh).pattern_lines.plan, { ...own.pattern_lines.plan, fresh_pattern: fresh.pattern_lines.plan.fresh_pattern }, "its own plan stays; it carries the record");
+  // The agent's own plan on the same pattern (a retest limit at the broken line, TP1 on the key zone) is replaced by the
+  // fresh plan: what carries fresh_pattern is exactly what FP1 trades and its revert judges.
+  const own = { pattern_lines: { status: "live", plan: { agent: "pattern_lines", entry: 4000, at_level: false, tp1: 4012, pattern: "broadening_wedge_descending", chart: "15m" } } };
+  assert.deepEqual(withFreshPlans(own, fresh).pattern_lines, { status: "live", plan: fresh.pattern_lines.plan });
+  assert.deepEqual(withFreshPlans({ pattern_lines: { status: "shadow", plan: own.pattern_lines.plan } }, fresh).pattern_lines.status, "shadow", "the agent's own status");
   const other = { pattern_lines: { status: "live", plan: { agent: "pattern_lines", entry: 4000, pattern: "triangle_symmetrical", chart: "15m" } } };
   assert.deepEqual(withFreshPlans(other, fresh), other, "a plan on another pattern stays as it was");
   assert.equal(slimPlan(fresh.pattern_lines.plan).fresh_pattern.pattern, "broadening_wedge_descending");
@@ -112,6 +115,24 @@ test("FP-6 on: the fresh plan is offered to the council even alone, chosen, and 
   assert.equal(record.strategy_plans.long.pattern_lines.fresh_pattern.pattern, "broadening_wedge_descending");
 });
 
+test("FP-6b on: an agent's own plan on the same pattern (retest limit, key-zone TP1) gives way to the fresh plan in strategies and in the trade", () => {
+  // A key zone at 4011.5–4012.5 pays the agent's own retest plan (entry 4000, stop 3989) 1.05R under TP1-KZ, so plan() has one.
+  const z12 = [...zones.filter((z) => z.price !== 4006), { low: 4011.5, high: 4012.5, price: 4012, candidate: true }];
+  const l = loaded(); l.strategy = { ...l.strategy, key_levels: { ...l.strategy.key_levels, zones: z12 } };
+  const env = { ...LIVE, FRESH_PATTERN_MODE: "off" };
+  const own = assess(l, { now: NOW, env }).guards.long.plans.pattern_lines.plan;
+  assert.deepEqual([own.entry, own.at_level, own.tp1, own.pattern, "fresh_pattern" in own], [4000, false, 4011.5, "broadening_wedge_descending", false], "the agent's own plan: TP1 at the key zone's near edge");
+  const onEnv = { ...LIVE, FRESH_PATTERN_MODE: "on" }, a = assess(l, { now: NOW, env: onEnv }), g = a.guards.long;
+  const p = g.plans.pattern_lines.plan;
+  assert.deepEqual([p.entry, p.at_level, p.tp1, p.fresh_pattern.target_r], [4003, true, 4020, 1.21], "the fresh plan, not the agent's");
+  const ev = councilEvidence({ barClose: CLOSE, cards: [], quorum: a.quorum, guards: { long: g, short: a.guards.short } });
+  const offered = ev.long.strategies.find((x) => x.id === "pattern_lines");
+  assert.deepEqual([offered.plan.entry, offered.plan.at_level, offered.plan.tp1, offered.fresh_breakout.measured_target_r], [4003, true, 4020, 1.21]);
+  const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded: l, assessment: a, council: council("pattern_lines"), now: NOW, env: onEnv });
+  assert.deepEqual([rec.trade.strategy, rec.trade.entry, rec.trade.action, rec.trade.fresh_pattern.target_r], ["pattern_lines", 4003, "ENTER_MARKET", 1.21]);
+  assert.ok([4020, 4027.5].includes(rec.trade.tp), "a target of the fresh plan, never the key zone's 4011.5");
+});
+
 test("FP-7 record: recorded, never offered nor traded; off: nothing; a 3-bar-old breakout: nothing", () => {
   const rec = decision({ ...LIVE, FRESH_PATTERN_MODE: "record" }).record;
   assert.equal(rec.fresh_pattern_mode, "record");
@@ -153,63 +174,55 @@ test("FP-8 the mode in force: the owner's override > the automatic revert > env;
   assert.deepEqual(await readFreshPatternHold(kv), { since: "2026-12-05T00:00:00.000Z", until: null });
 });
 
-/** A D1 stand-in for the revert's reads (fresh decisions, their entry intents, the deals) and its one Omega event. */
-function dbOf({ trades }) {
-  const events = [];
-  const db = {
-    events,
-    prepare(sql) {
-      let args = [];
-      const stmt = {
-        bind: (...a) => { args = a; return stmt; },
-        all: async () => {
-          if (sql.includes("FROM engine_decisions")) return { results: trades.map((t) => ({ decision_key: `xauusd:15m:${t.ms}` })) };
-          if (sql.includes("FROM ea_deals")) { const t = trades.find((x) => x.ticket === args[0]); return { results: t ? t.deals : [] }; }
-          return { results: [] };
-        },
-        first: async () => {
-          if (sql.includes("FROM omega_intents")) { const t = trades.find((x) => x.ms === args[0]); return t ? { payload: JSON.stringify({ side: "BUY", lot: 0.1, r_dist: 10, planned_entry: 4000 }), result: JSON.stringify({ ticket: t.ticket, fill_price: 4000 }) } : null; }
-          return null;
-        },
-        run: async () => { if (sql.includes("INSERT INTO omega_events")) events.push(args); return {}; }
-      };
-      return stmt;
-    }
-  };
+/** A D1 (SQLite) with the decisions and the Signal Ledger rows the revert reads: one fresh decision per trade, its ledger row by candle key. */
+async function dbOf(trades, { since = FRESH_PATTERN_SINCE } = {}) {
+  const { d1 } = await import("./fixtures/mode-shadow.mjs");
+  const db = d1();
+  db.raw.exec("CREATE TABLE engine_decisions (decision_key TEXT PRIMARY KEY, bar_close TEXT NOT NULL, decision_json TEXT NOT NULL)");
+  db.raw.exec("CREATE TABLE signal_ledger (id TEXT PRIMARY KEY, source TEXT NOT NULL, candle_key TEXT, omega_status TEXT, r_omega REAL)");
+  db.raw.exec("CREATE TABLE omega_events (ms INTEGER, actor TEXT, action TEXT, detail TEXT)");
+  const t0 = Date.parse(since);
+  trades.forEach((t, i) => {
+    const close = t0 + (i + 1) * 900_000, key = `OANDA:XAUUSD:15:${close - 900_000}`;
+    db.raw.prepare("INSERT INTO engine_decisions VALUES (?, ?, ?)").run(key, new Date(close).toISOString(), JSON.stringify({ trade: { side: "BUY", ...(t.fresh === false ? {} : { fresh_pattern: { pattern: "x", chart: "15m", breakout_age_bars: 0, target_r: 1.2 } }) } }));
+    db.raw.prepare("INSERT INTO signal_ledger VALUES (?, 'decision', ?, ?, ?)").run(`d:${i}`, key, t.status ?? "closed", t.r ?? null);
+  });
   return db;
 }
-const tradesAt = (rs) => rs.map((r, i) => ({ ms: 1_800_000_000_000 + i * 900_000, ticket: 1000 + i, deals: [{ volume: 0.1, exit_price: 4000 + r * 10 }] }));
+const tradesAt = (rs) => rs.map((r) => ({ r }));
+const eventsOf = (db) => db.raw.prepare("SELECT action, actor FROM omega_events").all().map((r) => ({ ...r }));
 
-test("FP-9 the automatic revert: after 30 closed fresh trades a mean below +0.10R sets record once (one event, one Telegram line)", async () => {
+test("FP-9 the automatic revert: after 30 closed fresh trades (the ledger's r_omega) a mean below +0.10R sets record once (one event, one Telegram line)", async () => {
   assert.deepEqual(freshPatternVerdict([0.5, -1]), { n: 2, mean_r: -0.25, ready: false, revert: false });
   assert.equal(FRESH_PATTERN_REVERT.trades, 30);
   const sent = [], send = async (t) => { sent.push(t); };
   const env = (db, kv, extra = {}) => ({ FRESH_PATTERN_MODE: "on", DB: db, SIGNAL_CACHE: kv, ...extra });
-  // 29 closed: waiting.
+  // 29 closed (and one still open, one not fresh, one before FP1): waiting.
   const kv = kvOf();
-  assert.deepEqual(await freshPatternRevert(env(dbOf({ trades: tradesAt(Array(29).fill(-0.2)) }), kv), { send }), { status: "waiting", n: 29, mean_r: -0.2 });
-  // 30 closed below +0.10R: reverted.
-  const db = dbOf({ trades: tradesAt([...Array(15).fill(1), ...Array(15).fill(-0.9)]) });
+  const db29 = await dbOf([...tradesAt(Array(29).fill(-0.2)), { status: "open" }, { r: -5, fresh: false }]);
+  db29.raw.prepare("INSERT INTO engine_decisions VALUES ('OANDA:XAUUSD:15:1', '2026-11-20T00:00:00.000Z', ?)").run(JSON.stringify({ trade: { fresh_pattern: { pattern: "x" } } }));
+  db29.raw.prepare("INSERT INTO signal_ledger VALUES ('old', 'decision', 'OANDA:XAUUSD:15:1', 'closed', -9)").run();
+  assert.deepEqual(await freshPatternRevert(env(db29, kv), { send }), { status: "waiting", n: 29, mean_r: -0.2 });
+  // 30 closed below +0.10R: reverted (the 31st is not read).
+  const db = await dbOf(tradesAt([...Array(15).fill(1), ...Array(15).fill(-0.9), 5]));
   const out = await freshPatternRevert(env(db, kv), { send, now: Date.parse("2026-12-05T00:00:00Z") });
   assert.deepEqual(out, { status: "reverted", n: 30, mean_r: 0.05 });
   assert.equal(JSON.parse(kv.m.get(FRESH_PATTERN_REVERT_KEY)).status, "reverted");
-  assert.deepEqual([db.events.length, db.events[0][1]], [1, "fresh_pattern_reverted"]);
+  assert.deepEqual(eventsOf(db), [{ action: "fresh_pattern_reverted", actor: "agent:fresh-pattern" }]);
   assert.deepEqual(sent, [freshPatternRevertLine({ n: 30, mean_r: 0.05 })]);
-  assert.match(sent[0], /set to record: its first 30 trades averaged \+0\.05R at the broker, below \+0\.1R/);
+  assert.match(sent[0], /set to record: its first 30 trades averaged \+0\.05R \(Omega R, Signal Ledger\), below \+0\.1R/);
   assert.doesNotMatch(sent[0], /lot|account|ticket/i);
   assert.equal((await resolveFreshPatternMode(env(db, kv))).value, "record");
   // Once: the next step does nothing.
   assert.deepEqual(await freshPatternRevert(env(db, kv), { send }), { status: "done", verdict: "reverted" });
   assert.equal(sent.length, 1);
-  // A good record is kept (no Telegram), the owner's override and a mode other than on run nothing.
-  const kept = kvOf(), dbk = dbOf({ trades: tradesAt(Array(30).fill(0.4)) });
-  assert.equal((await freshPatternRevert(env(dbk, kept), { send })).status, "kept");
-  assert.deepEqual([dbk.events[0][1], sent.length], ["fresh_pattern_kept", 1]);
+  // A good record is kept (no Telegram); the owner's override and a mode other than on run nothing.
+  const dbk = await dbOf(tradesAt(Array(30).fill(0.4)));
+  assert.equal((await freshPatternRevert(env(dbk, kvOf()), { send })).status, "kept");
+  assert.deepEqual([eventsOf(dbk)[0].action, sent.length], ["fresh_pattern_kept", 1]);
   assert.equal((await freshPatternRevert(env(dbk, kvOf(), { [FEATURE_SWITCH_OVERRIDDEN]: ["FRESH_PATTERN_MODE"] }), { send })).status, "owner");
   assert.equal((await freshPatternRevert(env(dbk, kvOf(), { FRESH_PATTERN_MODE: "record" }), { send })).status, "inactive");
-  // A trade not closed in full ends the window there.
-  const open = tradesAt(Array(30).fill(-1)); open[3].deals = [{ volume: 0.05, exit_price: 3990 }];
-  assert.deepEqual(await freshPatternRevert(env(dbOf({ trades: open }), kvOf()), { send }), { status: "waiting", n: 3, mean_r: -1 });
+  assert.deepEqual(await freshPatternTrades(dbk, { limit: 3 }), [0.4, 0.4, 0.4], "bounded by LIMIT");
 });
 
 test("FP-10 the plan learner's hourly run: pattern_fresh rows of a WAIT decision, replayed on the control arm only, apart from the live record", async () => {

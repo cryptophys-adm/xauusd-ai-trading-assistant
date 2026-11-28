@@ -16,5 +16,6 @@ export function freshPatternRecord(input: { pattern: string; ageBars: number; ta
 export function freshPlansRecord(fresh: unknown, guards: unknown, slim: (plan: unknown) => Record<string, unknown>): Record<string, Record<string, Record<string, unknown>>> | null;
 export function freshPatternVerdict(rs: unknown): { n: number; mean_r: number | null; ready: boolean; revert: boolean };
 export function freshPatternRevertLine(v: { n: number; mean_r: number | null }): string;
-export function freshPatternTrades(db: unknown, opts?: { limit?: number }): Promise<number[]>;
+export const FRESH_PATTERN_SINCE: string;
+export function freshPatternTrades(db: unknown, opts?: { limit?: number; since?: string }): Promise<number[]>;
 export function freshPatternRevert(env: unknown, opts?: { now?: number; send?: ((t: string) => Promise<unknown>) | null }): Promise<{ status: string; [k: string]: unknown }>;
