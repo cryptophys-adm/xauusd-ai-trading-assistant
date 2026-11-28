@@ -110,7 +110,7 @@ test("ORV5. the switches: orb_breakout off reads mode off (the sessions still re
 });
 
 async function bundle(entry) {
-  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
+  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "browser", conditions: ["workerd", "worker", "browser"], write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
   const dir = await mkdtemp(join(tmpdir(), "orb-"));
   const file = join(dir, "worker.mjs");
   await writeFile(file, out.outputFiles[0].text);

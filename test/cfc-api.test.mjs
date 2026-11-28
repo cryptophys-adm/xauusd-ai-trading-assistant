@@ -17,7 +17,7 @@ import { resetCfcSchemaCacheForTests, runCfcTriggers } from "../src/cfc-triggers
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 async function bundle(entry) {
-  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
+  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "browser", conditions: ["workerd", "worker", "browser"], write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
   const dir = await mkdtemp(join(tmpdir(), "cfc-"));
   const file = join(dir, "worker.mjs");
   await writeFile(file, out.outputFiles[0].text);

@@ -24,6 +24,10 @@ export interface Env {
   ROOM_TRANSCRIPTS?: R2Bucket;
   /** Call for Councils (docs/RFC_CALL_FOR_COUNCILS.md): "off" | "suggest" (default: the hourly suggestion flags) | "on" (P2 sessions; in P1 as "suggest"). */
   CFC_MODE?: string;
+  /** CL1 (src/claude-shadow.mjs): the owner's FS1 switch "shadow" | "off" (default off) and the Worker secret the owner sets; no key, no call. */
+  CLAUDE_SHADOW?: string;
+  CLAUDE_SHADOW_USD_PER_DAY?: string;
+  ANTHROPIC_API_KEY?: string;
   /** "off" turns the Decision Engine off: the EA, Telegram and the ledger follow the H1 decision again. */
   DECISION_ENGINE?: string;
   /** Runtime trading mode override (scalp|intraday|swing); KV-backed selector takes precedence. */
@@ -213,6 +217,7 @@ function asText(value: unknown): string {
 
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
+import { readClaudeShadow } from "./claude-shadow.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
@@ -2712,6 +2717,15 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
     } catch (error) {
       console.error("model_arena_read_failed", error instanceof Error ? error.message : String(error));
       return dashboardJson({ status: "error", error: "model_arena_unavailable" }, 500);
+    }
+  }
+  if (url.pathname === "/api/claude-shadow") {
+    // CL1: the Claude Haiku shadow against the live callers (src/claude-shadow.mjs); read-only, the key's presence only.
+    try {
+      return dashboardJson({ status: "ok", ...(await readClaudeShadow(env, { days: Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "14") || 14)) })) });
+    } catch (error) {
+      console.error("claude_shadow_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "claude_shadow_unavailable" }, 500);
     }
   }
   if (url.pathname === "/api/metric-shadow") {

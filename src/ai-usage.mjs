@@ -48,6 +48,10 @@ export async function ensureAiUsageSchema(db) {
   for (const sql of AI_USAGE_SCHEMA_SQL) await db.prepare(sql).run();
   // A5 (2026-11-14): cached input tokens, added to a table made before them (production applies no migration).
   try { await db.prepare("ALTER TABLE ai_usage_daily ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0").run(); } catch { /* already there */ }
+  // CL1 (2026-11-28): a paid API's own spend (src/claude-shadow.mjs, micro-dollars) and its cache-write tokens, beside the
+  // neuron estimate; additive, zero for every Workers AI row.
+  try { await db.prepare("ALTER TABLE ai_usage_daily ADD COLUMN usd_micros INTEGER NOT NULL DEFAULT 0").run(); } catch { /* already there */ }
+  try { await db.prepare("ALTER TABLE ai_usage_daily ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0").run(); } catch { /* already there */ }
   schemaReady = true;
 }
 export function resetAiUsageSchemaCacheForTests() { schemaReady = false; }
@@ -73,13 +77,13 @@ const label = (s) => String(s || "unlabelled").replace(/[^a-zA-Z0-9_:.-]/g, "_")
  * (shadow: the same input was answered before), "memo_same" (and the new answer kept the same stance
  * and bias), "reused" (the stored answer was used, no model call). Never throws.
  */
-export async function recordAiUsage(db, { source, model, outcome = "ok", prompt = 0, completion = 0, cached = 0, now = Date.now() } = {}) {
+export async function recordAiUsage(db, { source, model, outcome = "ok", prompt = 0, completion = 0, cached = 0, cacheWrite = 0, usdMicros = 0, now = Date.now() } = {}) {
   if (!db?.prepare) return false;
   try {
     await ensureAiUsageSchema(db);
     const day = new Date(now).toISOString().slice(0, 10);
-    const add = { calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0, cached_tokens: 0 };
-    if (outcome === "ok") { add.calls = 1; add.prompt_tokens = int(prompt); add.completion_tokens = int(completion); add.cached_tokens = Math.min(int(cached), int(prompt)); }
+    const add = { calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0, cached_tokens: 0, usd_micros: 0, cache_write_tokens: 0 };
+    if (outcome === "ok") { add.calls = 1; add.prompt_tokens = int(prompt); add.completion_tokens = int(completion); add.cached_tokens = Math.min(int(cached), int(prompt)); add.cache_write_tokens = int(cacheWrite); add.usd_micros = int(usdMicros); }
     else if (outcome === "failed") add.failed = 1;
     else if (outcome === "timeout") add.timeouts = 1;
     else if (outcome === "memo_hit") add.memo_hits = 1;
@@ -120,12 +124,14 @@ export async function readAiUsage(db, { days = 2, now = Date.now() } = {}) {
     .map((r) => ({ ...r, neurons: neuronsOf(r.model, r.prompt_tokens, r.completion_tokens, r.cached_tokens) }));
   const byDay = new Map();
   for (const r of rows) {
-    const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0 };
+    const d = byDay.get(r.day) || { day: r.day, calls: 0, failed: 0, timeouts: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, neurons: 0, unpriced_tokens: 0, memo_hits: 0, memo_same: 0, reused: 0, api_usd: 0 };
     // The evidence-key counters (A4, shadow, source "evidence_memo:<schema>") are another key's: kept on their own
     // rows, never added to the live memo's daily totals.
     const shadowKey = String(r.source).startsWith("evidence_memo:");
     for (const k of ["calls", "failed", "timeouts", "prompt_tokens", "completion_tokens", "cached_tokens", "memo_hits", "memo_same", "reused"]) if (!(shadowKey && (k === "memo_hits" || k === "memo_same"))) d[k] += Number(r[k]) || 0;
-    if (r.neurons == null) d.unpriced_tokens += (Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0);
+    // CL1: a paid API row (model "anthropic:…") carries its own USD; it is never an unpriced Workers AI row.
+    if (String(r.model).startsWith("anthropic:")) d.api_usd = Math.round((d.api_usd + (Number(r.usd_micros) || 0) / 1e6) * 1e6) / 1e6;
+    else if (r.neurons == null) d.unpriced_tokens += (Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0);
     else d.neurons += r.neurons;
     byDay.set(r.day, d);
   }

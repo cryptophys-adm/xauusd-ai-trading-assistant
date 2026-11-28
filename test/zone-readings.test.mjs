@@ -486,7 +486,7 @@ async function bundle(entry) {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const dir = await mkdtemp(join(tmpdir(), "z5-"));
   const file = join(dir, "worker.mjs");
-  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "neutral", write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
+  const out = await build({ entryPoints: [join(root, entry)], bundle: true, format: "esm", platform: "browser", conditions: ["workerd", "worker", "browser"], write: false, logLevel: "silent", alias: { "cloudflare:workers": join(root, "test/support/cloudflare-workers-stub.mjs") } });
   await writeFile(file, out.outputFiles[0].text);
   const mod = await import(pathToFileURL(file).href);
   await rm(dir, { recursive: true, force: true });
