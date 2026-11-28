@@ -16,10 +16,7 @@ import { verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-
 import { HUD_NAMES } from "./hud-reading.mjs";
 import { memoEligible, memoKind, inputHash, memoLookup, memoStore, roomMemoEnabled, evidenceShadow, evidenceMemoEnabled } from "./room-memo.mjs";
 import { recordAiUsage } from "./ai-usage.mjs";
-import {
-  callBusModel, roleModels, buildBusEvidence, validateAgentOutput, validateModeratorOutput,
-  AGENT_JSON_SCHEMA, MODERATOR_JSON_SCHEMA, BUS_DEFAULT_MODEL, BUS_MAX_TOKENS
-} from "./model-call.mjs";
+import { callBusModel, roleModels } from "./model-call.mjs";
 
 export const ROOM_STANCES = Object.freeze(["BUY", "SELL", "HOLD", "WAIT", "CLOSE"]);
 export const THREAD_WALL_BUDGET_MS = 300_000;
@@ -69,11 +66,6 @@ export const THREAD_SCHEMA_SQL = [
 
 export function liveRoomEnabled(env) {
   return String(env?.LIVE_ROOM_ENABLED ?? "false").trim().toLowerCase() === "true";
-}
-
-export function buildNewsThreadTask({ analysisKey, enqueuedAt = new Date().toISOString() } = {}) {
-  if (typeof analysisKey !== "string" || !analysisKey.trim()) throw new TypeError("news thread task requires analysisKey");
-  return { kind: "news_thread", event_id: `news_thread:${analysisKey}`, analysis_key: analysisKey, candle_key: `news:${analysisKey}`, enqueued_at: enqueuedAt };
 }
 
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
@@ -417,127 +409,6 @@ function correctionFor(errors) {
     (wording.length ? " " + CORRECTION_PROMPT : "");
 }
 
-// ---------------------------------------------------------------- news thread
-
-function newsPost(row) {
-  const evidence = parseJson(row.evidence_json, {}) || {};
-  const recommendation = parseJson(row.recommendation_json, {}) || {};
-  const articles = Array.isArray(evidence.articles) ? evidence.articles : [];
-  const headlines = articles.slice(0, 8).map(a => clip(a?.title ?? a?.headline ?? "", 200)).filter(Boolean);
-  return {
-    analysis_key: row.analysis_key,
-    analyzed_at: row.analyzed_at,
-    fetched_at: row.fetched_at,
-    article_count: Number(row.article_count) || 0,
-    headlines,
-    recommendation: {
-      stance: recommendation.stance ?? recommendation.recommendation ?? recommendation.bias ?? null,
-      confidence: recommendation.confidence ?? null,
-      summary: clip(recommendation.summary ?? recommendation.reasoning ?? "", 600)
-    },
-    reasoner_excerpt: clip(row.reasoner_output, 800)
-  };
-}
-
-function newsAgentMessages(agent, round, post, technical, others) {
-  const role = agent === "news"
-    ? "You are the fundamental news analyst agent in an XAUUSD forum thread about one news analysis."
-    : "You are the technical analyst agent in an XAUUSD forum thread about one news analysis. Judge how the news fits the current H1 technical evidence.";
-  const evidence = { post, technical };
-  return chatMessages([
-    role,
-    RULES,
-    `Round ${round} of 2.`,
-    round === 1
-      ? "Reply to the post with your stance on XAUUSD given this news."
-      : "Reply to the other agent's round-1 message below: agree or dispute it with reasons, set responds_to to that agent's name, and give your updated stance.",
-    `Required JSON: {"agent":"${agent}","round":${round},"stance":"BUY|SELL|WAIT","confidence":0..1,"insight":"<= ${INSIGHT_MAX} chars","refs":["..."],"responds_to":${round === 1 ? "null" : "\"<agent>\""}}`,
-    "EVIDENCE:",
-    JSON.stringify(evidence),
-    ...(round > 1 ? ["OTHER AGENT (round 1):", JSON.stringify(others)] : [])
-  ]);
-}
-
-function newsModeratorMessages(post, technical, transcript) {
-  return chatMessages([
-    "You are the moderator of an XAUUSD forum thread about one news analysis.",
-    RULES_NO_REFS,
-    "Summarise the thread into one consensus. agreed is true only when both round-2 replies share a stance. List disagreements in dissent.",
-    `Required JSON: {"stance":"BUY|SELL|WAIT","confidence":0..1,"agreed":true|false,"summary":"<= ${SUMMARY_MAX} chars","dissent":["..."]}`,
-    "H1 CHAIN DECISION (read-only, authoritative): " + JSON.stringify(technical.h1_chain_decision),
-    "POST: " + JSON.stringify({ headlines: post.headlines, recommendation: post.recommendation }),
-    "THREAD:",
-    JSON.stringify(transcript.map(m => ({ agent: m.agent, step: m.step, status: m.status, stance: m.stance, confidence: m.confidence, insight: m.insight })))
-  ]);
-}
-
-/**
- * The news threads' switch (owner 2026-11-15: the H1 bus is retired; its flag gated the news threads too).
- * NEWS_THREADS_ENABLED wins; for one deploy MULTI_AGENT_BUS_ENABLED still counts when it is unset, so the
- * threads never stop during the rename. A later PR removes that fallback.
- */
-export function newsThreadsEnabled(env) {
-  const v = env?.NEWS_THREADS_ENABLED ?? env?.MULTI_AGENT_BUS_ENABLED ?? "false";
-  return String(v).trim().toLowerCase() === "true";
-}
-
-export async function runNewsThread(env, task, { clock = () => Date.now() } = {}) {
-  if (!newsThreadsEnabled(env)) return { status: "disabled", calls: 0 };
-  const db = env.DB;
-  await ensureThreadSchema(db);
-  const analysisKey = String(task.analysis_key);
-  const row = await db.prepare("SELECT * FROM news_analyses WHERE analysis_key = ?").bind(analysisKey).first();
-  if (!row) return { status: "no_news_analysis", calls: 0 };
-  const post = newsPost(row);
-  const threadId = `news:${analysisKey}`;
-  await upsertThread(db, { id: threadId, kind: "news", refKey: analysisKey, title: post.headlines[0] || `News analysis ${analysisKey.slice(0, 12)}`, post, now: clock() });
-
-  const synth = await db.prepare("SELECT candle_key, ai_analysis, prophet_metrics, gmi_metrics FROM ai_syntheses ORDER BY id DESC LIMIT 1").first();
-  const technical = buildBusEvidence(synth || {}).technical;
-
-  const existing = new Map(((await db.prepare("SELECT * FROM agent_thread_messages WHERE thread_id = ? AND run_id = ?").bind(threadId, analysisKey).all()).results || []).map(r => [r.step, rowToThreadMessage(r)]));
-  if (existing.has("moderator")) return { status: "already_complete", calls: 0 };
-
-  const deadline = clock() + THREAD_WALL_BUDGET_MS;
-  const maxPerHour = Number(env.MULTI_AGENT_MAX_CALLS_PER_HOUR ?? 20);
-  const runState = { primaryError: null };
-  let calls = 0;
-  const budgetOk = async () => {
-    if (clock() >= deadline) return false;
-    try { return (await callsInLastHour(db, clock(), "news")) < (Number.isFinite(maxPerHour) ? maxPerHour : 0); } catch { return false; }
-  };
-  const counted = (fn) => async (...args) => { calls += 1; return fn(...args); };
-  const step = counted((base, opts) => runStep(env, db, base, { ...opts, deadline, clock, runState, budgetOk }));
-  const agentToBody = (obj) => ({ body: { insight: clip(obj.insight, INSIGHT_MAX), responds_to: obj.responds_to ?? null }, refs: obj.refs.slice(0, 12).map(r => clip(r, 200)) });
-
-  const msgs = {};
-  for (const agent of ["news", "technical"]) {
-    const key = `r1:${agent}`;
-    msgs[key] = existing.get(key) || await step({ thread_id: threadId, run_id: analysisKey, step: key, agent, parent_id: null }, {
-      messages: newsAgentMessages(agent, 1, post, technical, null), schemaName: "thread_agent", schema: AGENT_JSON_SCHEMA,
-      maxTokens: BUS_MAX_TOKENS.agent, effort: "low", validate: (o) => validateAgentOutput(o, { agent, round: 1 }), toBody: agentToBody
-    });
-  }
-  for (const agent of ["news", "technical"]) {
-    const key = `r2:${agent}`;
-    const other = msgs[`r1:${agent === "news" ? "technical" : "news"}`];
-    msgs[key] = existing.get(key) || await step({ thread_id: threadId, run_id: analysisKey, step: key, agent, parent_id: other?.id ?? null }, {
-      messages: newsAgentMessages(agent, 2, post, technical, other && other.status === "ok" ? { agent: other.agent, stance: other.stance, confidence: other.confidence, insight: other.insight } : null),
-      schemaName: "thread_agent", schema: AGENT_JSON_SCHEMA, maxTokens: BUS_MAX_TOKENS.agent, effort: "low",
-      validate: (o) => validateAgentOutput(o, { agent, round: 2 }), toBody: agentToBody
-    });
-  }
-  const transcript = ["r1:news", "r1:technical", "r2:news", "r2:technical"].map(k => msgs[k]).filter(Boolean);
-  await step({ thread_id: threadId, run_id: analysisKey, step: "moderator", agent: "moderator", parent_id: null }, {
-    messages: newsModeratorMessages(post, technical, transcript), schemaName: "thread_moderator", schema: MODERATOR_JSON_SCHEMA,
-    maxTokens: BUS_MAX_TOKENS.moderator, effort: "high", validate: validateModeratorOutput,
-    toBody: (obj) => ({ body: { agreed: obj.agreed, summary: clip(obj.summary, SUMMARY_MAX), dissent: obj.dissent.map(d => clip(d, 300)).slice(0, 10) }, refs: [] })
-  });
-  return { status: "complete", calls };
-}
-
-// ---------------------------------------------------------------- live room
-
 /** The moderator must name the authoritative H1 decision whenever its stance differs from it. */
 export function validateRoomModerator(obj, h1Decision) {
   const errors = [];
@@ -604,8 +475,9 @@ export async function liveEvidence(env, task, barTime) {
     confidence: decision.confidence ?? null,
     tradingview: synth ? interpretWebhookRow(synth).summary : null
   };
-  const newsThread = await db.prepare("SELECT t.id, t.ref_key, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
-  const news = newsThread ? { analysis_key: newsThread.ref_key, consensus: newsThread.stance ?? null, confidence: newsThread.confidence ?? null, summary: clip(parseJson(newsThread.body_json, {})?.summary, 300) } : null;
+  // AU1 item 8 (owner 2026-11-28, "jawaban bernomor 1-9 setuju semua"): the news thread is removed; the rooms read
+  // News Daily (war-room.mjs newsDeskEvidence) and nothing else, so the live evidence carries no news of its own.
+  const news = null;
 
   const recentBars = Array.isArray(m5Raw.recent_bars) ? m5Raw.recent_bars.slice(-12) : [];
   // C0 step 4: verified only while the 5m implementations are parity-approved.

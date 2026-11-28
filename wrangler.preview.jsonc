@@ -46,7 +46,6 @@
     "CMC_USDT_SHADOW": "off",
     "PARITY_PROMOTE_AFTER": "1",
     // The isolated preview runs the news threads so preview-e2e can prove real model output.
-    "NEWS_THREADS_ENABLED": "true",
     // The preview D1 is shared by every preview-e2e run (all PRs), and the hourly caps count
     // rows in it, so they measure all runs of the hour together. One run uses about 10 bus and
     // news calls, 10 live-room calls and 3 HUD calls: the caps allow ~15 runs an hour and still

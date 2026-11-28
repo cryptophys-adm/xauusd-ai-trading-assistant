@@ -262,15 +262,6 @@
           "task": "macro_room_rebuttal"
         },
         {
-          "task": "news_analyst"
-        },
-        {
-          "task": "news_counselor"
-        },
-        {
-          "task": "news_reasoner"
-        },
-        {
           "task": "news_daily_tags"
         },
         {
@@ -287,12 +278,6 @@
         },
         {
           "task": "tf_room_rebuttal"
-        },
-        {
-          "task": "thread_agent"
-        },
-        {
-          "task": "thread_moderator"
         },
         {
           "task": "war_room_conclusion"

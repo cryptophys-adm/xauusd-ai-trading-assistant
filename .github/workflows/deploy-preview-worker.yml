@@ -485,40 +485,13 @@ jobs:
           assert.ok(["BUY", "SELL", "WAIT", "NO_TRADE"].includes(probe.decision?.decision), "the Reasoner returns a parseable decision");
           assert.ok(!/^\[no answer/.test(probe.text), "the Reasoner answers within its token budget");
 
-          // Phase 3a: news thread. The preview has no news ingestion, so a preview-only fixture
-          // (PREVIEW_FIXTURES_ENABLED, never set in production) creates one news analysis.
+          // The news thread is removed (AU1 item 8, owner 2026-11-28): the preview-only fixture still stores one news
+          // analysis (the evidence News Daily reads), and no thread follows it.
           const fixtureResponse = await fetch(base + "/preview/news-analysis-fixture", { method: "POST", headers });
           const fixture = await fixtureResponse.json();
           assert.equal(fixtureResponse.status, 202, "news fixture: " + JSON.stringify(fixture));
-          const threadDeadline = Date.now() + 300_000;
-          let thread = null;
-          const flat = (list) => list.flatMap(m => [m, ...flat(m.replies || [])]);
-          while (Date.now() < threadDeadline) {
-            const r = await pollFetch(base + "/api/threads/" + encodeURIComponent(fixture.thread_id));
-            if (r.ok) thread = (await r.json()).thread;
-            if (thread && flat(thread.messages || []).some(m => m.step === "moderator")) break;
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          }
-          const threadMessages = flat(thread?.messages || []);
-          console.log("THREAD PROOF " + JSON.stringify({
-            title: thread?.title,
-            roots: (thread?.messages || []).map(m => m.step),
-            messages: threadMessages.map(m => ({ step: m.step, parent_id: m.parent_id, status: m.status, model: m.model, fallback_used: m.fallback_used, stance: m.stance, confidence: m.confidence, text: String(m.insight ?? m.summary ?? "").slice(0, 240), primary_error: m.primary_error }))
-          }, null, 2));
-          assert.equal(threadMessages.length, 5, "news thread: 2 agents x 2 rounds + moderator");
-          assert.ok(threadMessages.every(m => m.status === "ok"), "every thread message must be schema-valid model output");
-          // Per-role models (owner decision 2026-11-07; glm-5.3-flash and nemotron stop answering on
-          // 2026-11-20): the agents speak on gemma-4 (fallback gpt-oss-20b), the moderator concludes on
-          // gpt-oss-120b (fallback gemma-4). The primary of each role must answer at least once.
+          assert.ok(fixture.analysis_key && !("thread_id" in fixture), "the fixture stores an analysis and starts no thread");
           const GEMMA = "@cf/google/gemma-4-26b-a4b-it", OSS120 = "@cf/openai/gpt-oss-120b", OSS20 = "@cf/openai/gpt-oss-20b";
-          const threadAgents = threadMessages.filter(m => m.step !== "moderator"), threadModerator = threadMessages.find(m => m.step === "moderator");
-          assert.ok(threadAgents.every(m => [GEMMA, OSS20].includes(m.model)), "thread agents speak on the room agent model or its fallback");
-          assert.ok(threadAgents.some(m => m.fallback_used === false && m.model === GEMMA), "the room agent model (gemma-4) must answer in the thread");
-          assert.ok([OSS120, GEMMA].includes(threadModerator?.model), "the thread moderator concludes on gpt-oss-120b or its fallback");
-          if (threadModerator?.fallback_used) console.log("::warning::The news thread moderator fell back: " + threadModerator.primary_error);
-          assert.ok(threadMessages.every(m => !codeLike(m.insight) && !codeLike(m.summary)), "thread messages must be natural language");
-          const r2 = threadMessages.filter(m => m.step.startsWith("r2:"));
-          assert.ok(r2.length === 2 && r2.every(m => m.parent_id), "round-2 replies are nested under the other agent's round-1 message");
 
           // Live War Room 15m (owner decision 2026-11-05): every agent opens on the bus, the
           // minority and the Risk Manager rebut (at most 3 minutes), the moderator concludes.
@@ -676,7 +649,8 @@ jobs:
           assertWarRoom(room2, ["news", "technical", "risk", "trade_management", "kinetic_engine"]);
           const tldr = await (await fetch(base + "/api/tldr")).json();
           assert.equal(tldr.status, "ok", "the right-panel TLDR endpoint answers");
-          assert.ok(tldr.h1?.decision && tldr.news?.thread_id, "TLDR covers Threads 1H and the news thread");
+          assert.ok(tldr.h1?.decision, "TLDR covers Threads 1H");
+          assert.ok(tldr.news === null || tldr.news.source === "news_daily", "the TLDR's news card is News Daily's, or empty (AU1 item 8)");
 
           console.log(JSON.stringify({
             preview: base,

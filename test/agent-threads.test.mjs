@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import {
-  runNewsThread, listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
-  buildNewsThreadTask, buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES,
+  listThreads, readThread, readLive, buildMessageTree, validateRoomModerator,
+  buildLiveRoomTask, liveRoomEnabled, resetThreadSchemaCacheForTests, ROOM_STANCES,
   isFifteenMinuteClose, buildFifteenMinuteCandles
   , hudEvidenceLines,
   threadInternals, liveEvidence, ensureThreadSchema
@@ -91,68 +91,14 @@ function env(overrides = {}) {
 test.beforeEach(() => resetThreadSchemaCacheForTests());
 
 test("task builders are deterministic", () => {
-  assert.equal(buildNewsThreadTask({ analysisKey: NEWS_KEY }).event_id, `news_thread:${NEWS_KEY}`);
   assert.equal(buildLiveRoomTask({ barTime: BAR }).event_id, `live_room:${BAR}`);
   assert.throws(() => buildLiveRoomTask({ barTime: "nope" }));
   assert.equal(liveRoomEnabled({}), false);
 });
 
-test("news thread: flag off means no calls", async () => {
-  const e = env({ NEWS_THREADS_ENABLED: "false" });
-  assert.equal((await runNewsThread(e, { analysis_key: NEWS_KEY })).status, "disabled");
-  assert.equal(e.AI.calls.length, 0);
-});
-
-test("news thread flag: NEWS_THREADS_ENABLED wins; the bus's old name counts for one deploy when it is unset", async () => {
-  const { newsThreadsEnabled } = await import("../src/agent-threads.mjs");
-  assert.equal(newsThreadsEnabled({ NEWS_THREADS_ENABLED: "true" }), true);
-  assert.equal(newsThreadsEnabled({ NEWS_THREADS_ENABLED: "false", MULTI_AGENT_BUS_ENABLED: "true" }), false);
-  assert.equal(newsThreadsEnabled({ MULTI_AGENT_BUS_ENABLED: "true" }), true, "the rename never stops the threads");
-  assert.equal(newsThreadsEnabled({}), false);
-});
-
-test("news thread: post + 5 nested replies, round 2 answers the other agent", async () => {
-  const e = env();
-  const result = await runNewsThread(e, { analysis_key: NEWS_KEY });
-  assert.equal(result.status, "complete");
-  assert.equal(e.AI.calls.length, 5);
-  assert.deepEqual(modelsOf(e.AI.calls), [...Array(4).fill(BUS_DEFAULT_MODEL), MODERATOR_DEFAULT_MODEL].sort(), "four agent steps, one moderator");
-  const thread = await readThread(e.DB, `news:${NEWS_KEY}`);
-  assert.equal(thread.title, "Fed holds rates");
-  assert.deepEqual(thread.post.headlines, ["Fed holds rates", "Dollar slips"]);
-  // Roots: r1:news, r1:technical, moderator. Each r1 holds the other agent's r2 reply.
-  const roots = thread.messages.map(m => m.step);
-  assert.deepEqual(roots, ["r1:news", "r1:technical", "moderator"]);
-  const r1news = thread.messages[0];
-  assert.deepEqual(r1news.replies.map(m => m.step), ["r2:technical"]);
-  assert.equal(r1news.replies[0].responds_to, "news");
-  const r1tech = thread.messages[1];
-  assert.deepEqual(r1tech.replies.map(m => m.step), ["r2:news"]);
-  assert.match(e.AI.calls[2].request.messages[1].content, /OTHER AGENT \(round 1\)[\s\S]*technical r1/);
-  const list = await listThreads(e.DB, { kind: "news" });
-  assert.equal(list[0].reply_count, 5);
-  assert.equal(list[0].consensus, "WAIT");
-});
-
-test("news thread: redelivery makes no new calls", async () => {
-  const e = env();
-  await runNewsThread(e, { analysis_key: NEWS_KEY });
-  assert.equal((await runNewsThread(e, { analysis_key: NEWS_KEY })).status, "already_complete");
-  assert.equal(e.AI.calls.length, 5);
-  assert.equal(e.DB.raw.prepare("SELECT COUNT(*) AS n FROM agent_thread_messages").get().n, 5);
-});
-
-test("news thread never writes the H1 chain read models", async () => {
-  const e = env();
-  const before = e.DB.raw.prepare("SELECT ai_analysis FROM ai_syntheses").get().ai_analysis;
-  await runNewsThread(e, { analysis_key: NEWS_KEY });
-  assert.equal(e.DB.raw.prepare("SELECT ai_analysis FROM ai_syntheses").get().ai_analysis, before);
-});
-
-test("news thread: unknown analysis does nothing", async () => {
-  const e = env();
-  assert.equal((await runNewsThread(e, { analysis_key: "missing" })).status, "no_news_analysis");
-  assert.equal(e.AI.calls.length, 0);
+test("AU1 item 8 (owner 2026-11-28): the news thread is removed; no builder, runner or flag is left", async () => {
+  const mod = await import("../src/agent-threads.mjs");
+  for (const name of ["runNewsThread", "buildNewsThreadTask", "newsThreadsEnabled"]) assert.equal(mod[name], undefined, name);
 });
 
 // The legacy live room is retired (owner 2026-11-15): the shared step machinery (runStep: corrections, the
@@ -394,15 +340,11 @@ test("the 5m trigger needs the Prophet 5m trust only: an untrusted GMI 5m leaves
 });
 
 // ---------------------------------------------------------------- HUD agents (Phase C5)
-test("schemas without refs never ask for refs; schemas with refs still do", async () => {
+test("schemas without refs never ask for refs", async () => {
   // preview-e2e (#95): told to back claims with refs but given no refs field, a moderator wrote the paths
   // into its summary and failed the natural-language check. The rooms' moderators use RULES_NO_REFS.
   assert.doesNotMatch(threadInternals.RULES_NO_REFS, /Back every claim with refs/);
   assert.match(threadInternals.RULES_NO_REFS, /no refs field: never write refs, evidence paths/);
-  const thread = env();
-  await runNewsThread(thread, { analysis_key: NEWS_KEY });
-  const [agent] = thread.AI.calls.map(c => c.request.messages.map(m => m.content).join("\n"));
-  assert.match(agent, /Back every claim with refs/, "the news thread's agents keep their refs field and rule");
 });
 
 test("a retried step replaces its stored failure, keeps its id, and never overwrites an ok message", async () => {

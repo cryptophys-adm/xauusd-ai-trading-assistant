@@ -20,7 +20,7 @@ import { naturalLanguageErrors } from "./natural-language.mjs";
 import { HUD_NAMES, calibrationCounts, calibrationNote, calibratedLines, hudAgentsIn } from "./hud-reading.mjs";
 import { loadHudSnapshot, hudReadings } from "./hud-store.mjs";
 import { BUS_DEFAULT_MODEL, BUS_MAX_TOKENS } from "./model-call.mjs";
-import { newsDeskEvidence } from "./news-daily.mjs";
+import { newsDeskEvidence, readNewsDaily } from "./news-daily.mjs";
 import { roomContextLine, roomConditionsLine } from "./lens-steps.mjs";
 import { macroDeskEvidence } from "./macro-room.mjs";
 import { matchRebuts } from "./rebut-names.mjs";
@@ -933,8 +933,11 @@ export async function readTldr(db) {
     const consensus = null;
     h1 = { candle_key: synth.candle_key, decision: String(d.decision || "WAIT").toUpperCase(), confidence: d.confidence ?? null, tldr: clip(d.reasoning, 280), consensus };
   }
-  const t = await db.prepare("SELECT t.id, t.ref_key, t.title, t.created_at, t.post_json, m.stance, m.confidence, m.body_json FROM agent_threads t LEFT JOIN agent_thread_messages m ON m.thread_id = t.id AND m.step = 'moderator' AND m.status = 'ok' WHERE t.kind = 'news' ORDER BY t.created_at DESC LIMIT 1").first();
-  const post = parseJson(t?.post_json, {}) || {};
-  const news = t ? { thread_id: t.id, title: t.title, created_at: t.created_at, consensus: t.stance ?? null, confidence: t.confidence ?? null, tldr: clip(parseJson(t.body_json, {})?.summary, 300), headlines: (post.headlines || []).slice(0, 3) } : null;
+  // AU1 item 8 (owner 2026-11-28): the news thread is removed; the News card reads News Daily's TLDR (same fields).
+  let news = null;
+  try {
+    const d = await readNewsDaily(db);
+    if (d?.tldr?.status === "ok") news = { thread_id: null, source: "news_daily", title: "News Daily", created_at: d.run_at, consensus: d.tldr.stance ?? null, confidence: d.tldr.confidence ?? null, tldr: clip(d.tldr.summary, 300), headlines: (d.items || []).slice(0, 3).map((i) => i.title) };
+  } catch { news = null; }
   return { h1, news };
 }
