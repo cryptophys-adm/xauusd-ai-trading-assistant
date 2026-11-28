@@ -14,11 +14,19 @@
 // without its EA): the daemon keeps a credential-free start file (feedStartupIni: no login, no password; the EA on the
 // feed's symbol, algo trading off) beside the login ini, which run.sh (bridge/omega-bridge/feed-run.sh) passes with
 // /config whenever the login ini holds no password.
+// 1.8.3 (BF1 b, after the 27 Nov 02:13-04:55Z hole; the orchestrator's spec, feed first): the server answers
+// `corpus_backfill_from_ms`, the feed source's first missing trading minute in the last 10 hours (BF1 a). The feed then
+// walks the hole once, oldest first: each sync sends up to BACKFILL_CHUNK_BARS bars from the walk's position plus the
+// newest BACKFILL_FRESH_BARS after the server's cursor (so the feed stays fresh), and moves on. When corpus.json does not
+// reach back that far it asks its EA for the window (omega/corpus_from.json, OmegaFeed 1.02 answers with up to 600 bars
+// from there and echoes `backfill_from_ms`); an EA that does not answer within BACKFILL_REQUEST_WAIT_MS is walked with
+// the bars it has. A minute the broker never had (a holiday's early close) cannot be filled: the server keeps answering
+// it, the walk for that value has ended, and the feed stays on its fresh bars. The executor's daemon is unchanged.
 import { execFile as nodeExecFile } from "node:child_process";
 import nodeFs from "node:fs";
 import path from "node:path";
 import { openEnvelope } from "./envelope.mjs";
-import { readState, readCorpus, readCorpusMacro, resolveOmegaDir, DEFAULT_MT5_FILES_DIR } from "./files.mjs";
+import { readState, readCorpus, readCorpusMacro, resolveOmegaDir, DEFAULT_MT5_FILES_DIR, CORPUS_MAX_BARS, BACKFILL_MAX_BARS, writeBackfillRequest } from "./files.mjs";
 import { applyFeedCredentials, clearCredentials, ensureFeedSettings, feedStartupIni } from "./ini.mjs";
 import { loadOrCreateKeyPair, DEFAULT_STATE_DIR } from "./keys.mjs";
 import { BRIDGE_VERSION, DEFAULT_OMEGA_URL, DEFAULT_TERMINAL_INI, DEFAULT_TERMINAL_SERVICE, writeTerminalIniPreservingOwner } from "./daemon.mjs";
@@ -117,6 +125,46 @@ export function feedBodyHasAllMacro(body, corpusMacro) {
   } catch { return false; }
 }
 
+// ---------------------------------------------------------------- BF1 (b): the backfill walk (1.8.3)
+export const BACKFILL_CHUNK_BARS = 200;
+export const BACKFILL_FRESH_BARS = 40;
+export const BACKFILL_REQUEST_WAIT_MS = 120_000;
+export const CORPUS_FROM_FILE = "corpus_from.json";
+const MINUTE_MS = 60_000;
+
+/**
+ * Pure: one sync's gold bars and the backfill walk's next state.
+ * `bars`: corpus.json's bars (ascending, up to BACKFILL_MAX_BARS), `cursorMs`: the server's newest stored minute,
+ * `backfillFromMs`: the server's first missing minute (or null), `walk`: the previous walk state, `fileFromMs`: the start
+ * the EA's file answers (OmegaFeed 1.02), `now`. Returns { bars, walk, request } where `request` is the
+ * { from_ms, until_ms } the EA should be asked for (kept while the walk runs), or null (no request file).
+ */
+export function planFeedCorpus({ bars = [], cursorMs = null, backfillFromMs = null, walk = null, fileFromMs = null, now = Date.now() } = {}) {
+  const list = Array.isArray(bars) ? bars : [];
+  const after = (t) => cursorMs == null || t > cursorMs;
+  const fresh = list.filter((b) => after(b[0])).slice(-CORPUS_MAX_BARS);
+  const F = Number.isFinite(backfillFromMs) ? backfillFromMs : null;
+  if (F == null) return { bars: fresh, walk: null, request: null };
+  const w = walk && walk.from === F ? { ...walk } : { from: F, next: F, requested_ms: null, done: false };
+  if (w.done) return { bars: fresh, walk: w, request: null };
+  const oldest = list.length ? list[0][0] : null;
+  let covered = (oldest != null && oldest <= w.next) || (Number.isFinite(fileFromMs) && fileFromMs <= w.next);
+  if (!covered) {
+    if (w.requested_ms == null) w.requested_ms = now;
+    const request = { from_ms: F, until_ms: now };
+    if (now - w.requested_ms < BACKFILL_REQUEST_WAIT_MS) return { bars: fresh, walk: w, request };
+    covered = true; // an EA without 1.02, or a terminal with no older history: walk what the file holds
+  }
+  const part = list.filter((b) => b[0] >= w.next).slice(0, BACKFILL_CHUNK_BARS);
+  if (!part.length) { w.done = true; return { bars: fresh, walk: w, request: null }; }
+  const lastPart = part.at(-1)[0];
+  const rest = list.filter((b) => b[0] > lastPart);
+  const tail = rest.filter((b) => after(b[0])).slice(-BACKFILL_FRESH_BARS);
+  w.next = lastPart + MINUTE_MS;
+  w.done = rest.length <= tail.length;
+  return { bars: [...part, ...tail], walk: w, request: w.done || w.requested_ms == null ? null : { from_ms: F, until_ms: w.requested_ms } };
+}
+
 function mtimeMs(p, fs) { try { return fs.statSync(p).mtimeMs; } catch { return null; } }
 function readJson(p, fs) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
 function writeJson(p, v, fs) { const tmp = `${p}.tmp.${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 }); fs.renameSync(tmp, p); }
@@ -137,6 +185,9 @@ export function createFeedDaemon(options = {}) {
   const config = resolveFeedConfig(options);
   const secrets = [config.cfAccessClientSecret];
   let corpusCursorMs = null;
+  // 1.8.3: the server's first missing minute and the walk through it (in memory: a restart walks again).
+  let backfillFromMs = null;
+  let walk = null;
   // Macro export step 2: null until the server answers its per-base cursors (then {} means "send every base").
   let macroCursors = null;
   let macroSentMtime = null;
@@ -170,10 +221,41 @@ export function createFeedDaemon(options = {}) {
     return false;
   }
 
+  /**
+   * 1.8.3: the gold bars of this sync. Without a server hole: the bars after the cursor, as before. With one: the walk
+   * (planFeedCorpus), and the request file for the EA written or removed as the plan says.
+   */
+  function syncCorpus() {
+    if (backfillFromMs == null && !walk) {
+      removeRequest();
+      const c = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
+      return c ? { server: c.server, symbol: c.symbol, timeframe: c.timeframe, bars: c.bars } : null;
+    }
+    const all = readCorpus(config.omegaFilesDir, { fs, maxBars: BACKFILL_MAX_BARS });
+    const plan = planFeedCorpus({ bars: all?.bars ?? [], cursorMs: corpusCursorMs, backfillFromMs, walk, fileFromMs: all?.backfill_from_ms ?? null, now: now() });
+    if (plan.walk && (!walk || walk.from !== plan.walk.from)) log({ level: "info", event: "feed_backfill_started", from_ms: plan.walk.from });
+    if (plan.walk?.done && !(walk?.done && walk.from === plan.walk.from)) log({ level: "info", event: "feed_backfill_walked", from_ms: plan.walk.from });
+    walk = plan.walk;
+    if (plan.request) writeRequest(plan.request); else removeRequest();
+    return all && plan.bars.length ? { server: all.server, symbol: all.symbol, timeframe: all.timeframe, bars: plan.bars } : null;
+  }
+  const requestPath = () => path.join(config.omegaFilesDir, CORPUS_FROM_FILE);
+  function writeRequest(req) {
+    try {
+      const cur = readJson(requestPath(), fs);
+      if (cur && cur.from_ms === req.from_ms) return;
+      writeBackfillRequest(config.omegaFilesDir, req, { fs, now });
+      log({ level: "info", event: "feed_backfill_requested", from_ms: req.from_ms });
+    } catch (err) { log({ level: "warn", event: "feed_backfill_request_failed", error: err instanceof Error ? err.message.slice(0, 120) : "write_failed" }); }
+  }
+  function removeRequest() {
+    try { if (fs.existsSync(requestPath())) fs.unlinkSync(requestPath()); } catch { /* the next sync tries again */ }
+  }
+
   async function syncOnce() {
     if (!keys) keys = loadOrCreateKeyPair(config.stateDir, { fs });
     const state = readState(config.omegaFilesDir, { fs });
-    const corpus = readCorpus(config.omegaFilesDir, { fs, afterMs: corpusCursorMs });
+    const corpus = syncCorpus();
     const macroMtime = macroCursors ? mtimeMs(path.join(config.omegaFilesDir, "corpus_macro.json"), fs) : null;
     const corpusMacro = macroMtime != null && macroMtime !== macroSentMtime ? readCorpusMacro(config.omegaFilesDir, { fs, afterMsByBase: macroCursors }) : null;
     const body = buildFeedBody({ bridgeId: config.bridgeId, kid: keys.kid, publicKeyBase64: keys.publicKeyBase64, state, corpus, corpusMacro });
@@ -192,6 +274,7 @@ export function createFeedDaemon(options = {}) {
     let payload;
     try { payload = await res.json(); } catch { log({ level: "warn", event: "feed_sync_invalid_json" }); return { ok: false }; }
     if (Number.isFinite(payload?.corpus_cursor_ms)) corpusCursorMs = payload.corpus_cursor_ms;
+    backfillFromMs = Number.isFinite(payload?.corpus_backfill_from_ms) ? payload.corpus_backfill_from_ms : null;
     if (payload?.corpus_error) log({ level: "info", event: "feed_corpus_refused", reason: String(payload.corpus_error).slice(0, 60) });
     // The server's macro cursors: absent means it does not take the feed's macro bars (nothing is sent).
     const mc = payload?.corpus_macro_cursors;
