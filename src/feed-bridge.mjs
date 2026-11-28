@@ -6,7 +6,7 @@
 // feed in corpus_feeds), which the MT5 fallback prefers while fresh: the gold reference (MX1) then comes from another
 // broker than the executor's. Inert without a feed bridge: nothing here runs until one syncs.
 import { envelopeError, SERVER_RE, KID_RE, B64_RE, ENVELOPE_MAX_BYTES } from "./omega-broker.mjs";
-import { ingestFeedCorpus } from "./corpus-oracle.mjs";
+import { ingestFeedCorpus, repairShiftedBatchOnce } from "./corpus-oracle.mjs";
 import { feedContentStale, newStaleEpisode, staleDetail } from "./feed-stale.mjs";
 
 /** A feed's id: lower-case letters, digits and dashes, 1-24 (the bridge unit's instance name, e.g. "oanda"). */
@@ -79,6 +79,8 @@ export async function feedSync(env, { bridgeId, state, publicKey, kid, bridgeVer
   // The login is sealed to this bridge's key: a bridge with another key (reinstalled) gets none until it is set again.
   const connection = conn.status === "stored" && conn.kid === kid && conn.envelope ? { version: conn.version, server: conn.server, envelope: parse(conn.envelope) } : null;
   let corpusCursor = null, corpusError = null, corpusBackfill = null;
+  // CG2: the one-time repair of the 2026-11-28 10:25:58Z shifted batch, once per isolate (idempotent), before any ingest.
+  await repairShiftedBatchOnce(env);
   if (corpus) {
     try { const r = await ingestFeedCorpus(env, corpus, { bridgeId: id, connection: conn, state: st, now }); corpusCursor = r.cursor_ms ?? null; corpusError = r.error ?? null; corpusBackfill = r.backfill_from_ms ?? null; } catch { corpusCursor = null; }
   }
