@@ -180,6 +180,14 @@ async function personJson(request, url, identity, maxBytes) {
   } catch { return { response: json({ error: "invalid_json" }, 400) }; }
 }
 
+/** CF2a (2026-11-28): the owner check every mutating route applies, fail closed: the Access user (a person) must equal
+ * OWNER_ACCESS_SUB, and an unset OWNER_ACCESS_SUB refuses everyone. Returns a 403 response, or null for the owner. */
+export function isOwnerIdentity(env, identity) {
+  const ownerSub = String(env?.OWNER_ACCESS_SUB ?? "").trim();
+  return identity?.type === "user" && Boolean(ownerSub) && identity.sub === ownerSub;
+}
+const ownerOnly = (env, identity) => (isOwnerIdentity(env, identity) ? null : json({ error: "owner_only" }, 403));
+
 async function rpc(fn, failure) {
   try {
     const r = await fn();
@@ -210,7 +218,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     return json({ error: "access_denied" }, auth.reason === "access_not_configured" ? 503 : 403);
   }
   const identity = auth.identity;
-  const canControl = identity.type === "user";
+  // CF2a: can_control is the owner check (it was any signed-in person); every mutating route enforces it server-side.
+  const canControl = isOwnerIdentity(env, identity);
 
   if (path.startsWith("/api/")) {
     if (!env.OMEGA || typeof env.OMEGA.overview !== "function") return json({ error: "omega_binding_missing" }, 503);
@@ -247,7 +256,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       return rpc(() => env.OMEGA.feedSync({ bridgeId: body.bridge_id, state: body.state ?? null, publicKey: body.public_key, kid: body.kid, bridgeVersion: body.bridge_version, corpus: body.corpus ?? null }), "feed_sync_failed");
     }
 
-    if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl });
+    // CF2a (2026-11-28): can_control and is_owner are both the owner check (OWNER_ACCESS_SUB); a viewer gets false.
+    if (route === "GET /api/whoami") return json({ subject: identity.subject, type: identity.type, can_control: canControl, is_owner: canControl });
     // The Nexus badge (UI audit DEF-10): connected, armed, server and open positions, from one bridge row.
     if (route === "GET /api/status") {
       if (typeof env.OMEGA.status !== "function") return json({ error: "status_unavailable" }, 503);
@@ -339,6 +349,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     if (route === "POST /api/control") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       const req = controlRequest(r.body);
       if (req.error) return json({ error: req.error }, 400);
       return rpc(() => env.OMEGA.setControl({ mode: req.mode, reason: req.reason, actor: identity.subject }), "control_failed");
@@ -394,27 +406,39 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     if (route === "POST /api/connection") {
       const r = await personJson(request, url, identity, 16384);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       return rpc(() => env.OMEGA.setConnection({ envelope: r.body.envelope, server: r.body.server, trade_symbol: r.body.trade_symbol ?? null, units_per_usd: r.body.units_per_usd ?? null, actor: identity.subject }), "connection_failed");
     }
     if (request.method === "GET" && path === "/api/connection" && url.searchParams.get("disconnect") === "1") {
+      // CF2a: the owner only, and never from another site (this GET changes state; a cross-site link must not disconnect).
+      if (request.headers.get("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin") return json({ error: "same_origin_only" }, 403);
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       const reason = (url.searchParams.get("reason") || "disconnect requested from omega page").slice(0, 200);
       return rpc(() => env.OMEGA.clearConnection({ reason, actor: identity.subject }), "connection_failed");
     }
     if (route === "DELETE /api/connection") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       return rpc(() => env.OMEGA.clearConnection({ reason: r.body.reason, actor: identity.subject }), "connection_failed");
     }
     // F1: a feed bridge's login, sealed in the browser to that feed's key (like POST /api/connection); a person only.
     if (route === "POST /api/feed-connection") {
       const r = await personJson(request, url, identity, 16384);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       if (typeof env.OMEGA.setFeedConnection !== "function") return json({ ok: false, error: "feed_unavailable" }, 503);
       return rpc(() => env.OMEGA.setFeedConnection({ bridgeId: r.body.bridge_id, envelope: r.body.envelope, server: r.body.server, actor: identity.subject }), "feed_connection_failed");
     }
     if (route === "DELETE /api/feed-connection") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       if (typeof env.OMEGA.clearFeedConnection !== "function") return json({ ok: false, error: "feed_unavailable" }, 503);
       return rpc(() => env.OMEGA.clearFeedConnection({ bridgeId: r.body.bridge_id, reason: r.body.reason, actor: identity.subject }), "feed_connection_failed");
     }
@@ -426,6 +450,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     if (route === "POST /api/feed-fallback") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       const mode = typeof r.body.mode === "string" ? r.body.mode : "";
       const reason = typeof r.body.reason === "string" ? r.body.reason.trim().slice(0, 200) : "";
       if (mode !== "auto" && mode !== "off") return json({ error: "mode must be auto or off" }, 400);
@@ -440,6 +466,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     if (route === "POST /api/shadow-mode") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       const mode = typeof r.body.mode === "string" ? r.body.mode : "";
       const reason = typeof r.body.reason === "string" ? r.body.reason.trim().slice(0, 200) : "";
       if (mode !== "on" && mode !== "off") return json({ error: "mode must be on or off" }, 400);
@@ -451,6 +479,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       // Owner 2026-11-13: the trading mode changes only here (a person, same origin), never by a GET.
       const r = await personJson(request, url, identity, 1024);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       // Phase 4 (owner 2026-11-18): a mode pins it; action "auto" or "veto". The AI Worker checks the owner again.
       const mode = typeof r.body.mode === "string" ? r.body.mode.trim().toLowerCase() : "";
       const action = r.body.action === "auto" || r.body.action === "veto" ? r.body.action : null;
@@ -472,8 +502,9 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       const action = r.body.action === "arm" || r.body.action === "disarm" ? r.body.action : "";
       if (!id || !action) return json({ error: "strategy_id and action (arm or disarm) are required" }, 400);
       // Owner only (RFC §11.3): the Access user id must equal OWNER_ACCESS_SUB once it is set; the AI Worker checks again.
-      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
-      if (ownerSub && identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      // CF2a: fail closed like every other write; the owner's sub is configured, never learned (no first-visitor bootstrap).
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       if (typeof env.OMEGA.setStrategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
       return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
         expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_arm_failed");
@@ -595,6 +626,8 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
     if (route === "POST /api/position/close") {
       const r = await personJson(request, url, identity, 2048);
       if (r.response) return r.response;
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       const ticket = Number(r.body?.ticket);
       if (!Number.isFinite(ticket) || ticket <= 0) return json({ error: "invalid_ticket" }, 400);
       return rpc(() => env.OMEGA.closePosition({ ticket, reason: r.body?.reason, actor: identity.subject }), "close_position_failed");

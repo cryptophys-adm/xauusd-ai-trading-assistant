@@ -336,7 +336,7 @@ import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compa
 import { runPositionManager, runPositionReport, readPositionManager } from "./position-manager.mjs";
 import { pmLineBreakerTick, setPmLine } from "./pm-line-breaker.mjs";
 import { runLimitCouncil } from "./limit-council.mjs";
-import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode, ownerCheck, noteOwnerSub } from "./strategy-arm.mjs";
+import { setStrategyArm, disarmAll, readStrategyArm, dailyLossHit, strategyArmMode, ownerCheck } from "./strategy-arm.mjs";
 import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
@@ -1935,9 +1935,9 @@ export class OmegaGateway extends WorkerEntrypoint<Env> {
   /** The strategy arm's state for the Strategy Agents page (owner 2026-11-17). */
   async strategyArm(input?: { viewer?: string; viewer_sub?: string | null }): Promise<JsonObject> {
     await this.fs();
+    // CF2a: the owner's sub is configured, never learned; can_arm is the owner alone (an unset var arms nobody).
     const check = ownerCheck(this.env, input?.viewer_sub ?? null);
-    if (check === "unset" && input?.viewer_sub) await noteOwnerSub(this.env, { sub: input.viewer_sub, actor: input?.viewer });
-    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check !== "not_owner", council: await readCouncilState(this.env) } as JsonObject;
+    return { ...(await readStrategyArm(this.env)), allowed: await liveAgentIds(this.env), blocked: await armBlocked(this.env), owner_check: check, can_arm: check === "owner", council: await readCouncilState(this.env) } as JsonObject;
   }
   /** Call for Councils P2 (owner 2026-11-17): start a session, write to its seats, or switch sessions on or off. Owner only. */
   async council(input: { action?: string; topic_key?: string; text?: string; seats?: string[]; session_id?: string; option_id?: string; to?: string[]; on?: boolean; actor?: string; actor_sub?: string | null; suggestion_id?: number | null; decision?: string; idempotency_key?: string | null }): Promise<JsonObject> {
