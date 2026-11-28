@@ -85,7 +85,7 @@ export async function feedSync(env, { bridgeId, state, publicKey, kid, bridgeVer
     try { const r = await ingestFeedCorpus(env, corpus, { bridgeId: id, connection: conn, state: st, now }); corpusCursor = r.cursor_ms ?? null; corpusError = r.error ?? null; corpusBackfill = r.backfill_from_ms ?? null; } catch { corpusCursor = null; }
   }
   await checkFeedStale(db, { bridgeId: id, now });
-  return { ok: true, role: "feed", bridge_id: id, connection, connection_version: conn.version, corpus_cursor_ms: corpusCursor, corpus_backfill_from_ms: corpusBackfill, ...(corpusError ? { corpus_error: corpusError } : {}) };
+  return { ok: true, role: "feed", bridge_id: id, connection, connection_version: conn.version, connection_status: conn.status, corpus_cursor_ms: corpusCursor, corpus_backfill_from_ms: corpusBackfill, ...(corpusError ? { corpus_error: corpusError } : {}) };
 }
 
 // Feed content staleness (src/feed-stale.mjs): checked at most once a minute per bridge and isolate. Never throws.
