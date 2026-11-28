@@ -1,0 +1,72 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mwvu2gw0_shl1i0",
+    "topic_key": "free:zone-pullback-exits-review",
+    "topic_text": "Zone pullback exits review",
+    "type": "free",
+    "question": "Zone pullback exits review",
+    "state": "closed",
+    "participants": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      },
+      {
+        "id": "projection",
+        "name": "Projection Agent",
+        "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "news",
+        "name": "News Analyst",
+        "role": "the fundamental news of the last 24 hours: the daily bias for gold and the headlines behind it"
+      }
+    ],
+    "calls": 6,
+    "options": null,
+    "reason": "reopened as cfc_mwvwkhmo_kz6300 by owner@example.com",
+    "pack_hash": "014161cb9b5b51a969ff1043f8aaa21d52e251a862a5c8decdc545fabc9c53d3",
+    "created_by": "owner@example.com",
+    "created_ms": 1795593600000,
+    "updated_ms": 1795597800000,
+    "pack_refs": 82,
+    "pack_stale": true,
+    "terminal": true,
+    "messages": [
+      {
+        "id": 1,
+        "round": "position",
+        "seat": "risk",
+        "stance": "amend",
+        "opinion": "The last 20 closed setups say more than one seat expected.",
+        "proposal": "Look at the exits again on fresh evidence.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/engine_decisions/OANDA:XAUUSD:15:1795150080000#stance"
+        ],
+        "ms": 1795593720000,
+        "name": "Risk Manager",
+        "at": "2026-11-25T08:02:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/1"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mwvu2gw0_shl1i0"
+  }
+}

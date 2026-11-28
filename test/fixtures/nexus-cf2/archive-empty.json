@@ -1,0 +1,48 @@
+{
+  "status": "ok",
+  "items": [],
+  "next_cursor": null,
+  "total": 0,
+  "window_days": 90,
+  "vocab": {
+    "chain_status": [
+      "awaiting_approval",
+      "approved",
+      "rejected",
+      "expired",
+      "in_session",
+      "awaiting_pick",
+      "decided",
+      "closed",
+      "aborted",
+      "no_change",
+      "shadow_test",
+      "live",
+      "rolled_back",
+      "superseded",
+      "handoff_pending",
+      "handed_off"
+    ],
+    "platform_states": "a handed-off task shows the platform's latest state (council_proposal_updates)",
+    "next_actor": [
+      "owner",
+      "council",
+      "platform",
+      "shadow",
+      "none"
+    ],
+    "suggestion_status": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "close_code": "the platform's short code for why a task reached a terminal state, passed through as sent",
+    "decided_by": [
+      "owner",
+      "council",
+      "system"
+    ]
+  },
+  "as_of": "2026-11-28T14:48:00.000Z"
+}

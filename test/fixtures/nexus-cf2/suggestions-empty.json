@@ -1,0 +1,60 @@
+{
+  "status": "ok",
+  "mode": "on",
+  "rules": {
+    "strategy": {
+      "last_n": 20,
+      "stop_share": 0.65,
+      "context_min_setups": 20,
+      "agent_breaker_setups": 30,
+      "pattern_breaker_setups": 15
+    },
+    "risk": {
+      "last_n": 20,
+      "stop_share": 0.65
+    },
+    "engine": {
+      "margin": 0.1,
+      "min_decisive_7d": 30
+    },
+    "seat": {
+      "weight_floor": 0.25
+    },
+    "knowledge": {
+      "days": 7
+    },
+    "news": {
+      "losing_trades": 3,
+      "days": 7
+    },
+    "execution": {
+      "recoveries_per_day": 3,
+      "failed_intents_per_day": 3
+    },
+    "data": {
+      "stuck_candles": 24
+    },
+    "cost": {
+      "growth": 0.5,
+      "min_neurons_week": 1000,
+      "breaker_days": 7
+    },
+    "cooldown_days": 7,
+    "daily_cap": 3,
+    "trades_read": 400,
+    "setups_read": 1500
+  },
+  "lifecycle": {
+    "statuses": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "ttl_hours": 48,
+    "max_days": 7,
+    "decide": "POST /omega/api/council { action: \"decide\", suggestion_id, decision: approve | reject, idempotency_key } (owner only)"
+  },
+  "sessions": "the owner opens a session on the Councils page (GET /api/council/sessions), or approves a suggestion",
+  "suggestions": []
+}

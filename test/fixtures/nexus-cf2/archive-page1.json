@@ -1,0 +1,310 @@
+{
+  "status": "ok",
+  "items": [
+    {
+      "chain_id": "suggestion:14",
+      "status": "in_session",
+      "status_source": "session",
+      "next_actor": "council",
+      "updated_at": "2026-11-28T12:32:00.000Z",
+      "topic": {
+        "key": "strategy:zone_pullback@intraday|normal-trending",
+        "type": "strategy",
+        "origin": "suggestion",
+        "suggestion_id": 14,
+        "rule": "context_negative",
+        "status": "approved",
+        "created_at": "2026-11-28T09:14:00.000Z",
+        "expires_at": "2026-11-30T09:14:00.000Z",
+        "decided_at": "2026-11-28T12:19:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx0dn3mo_wvuf01",
+        "topic_key": "strategy:zone_pullback@intraday|normal-trending",
+        "topic_text": null,
+        "type": "strategy",
+        "state": "rebuttals",
+        "terminal": false,
+        "created_at": "2026-11-28T12:19:00.000Z",
+        "updated_at": "2026-11-28T12:32:00.000Z",
+        "started_by": "owner",
+        "reason": null,
+        "reopened_as": null,
+        "progress": {
+          "step": "rebuttals",
+          "positions": {
+            "done": 5,
+            "expected": 6
+          },
+          "rebuttals": 2,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 0,
+          "tally": {
+            "support": 2,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 1
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:6",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-28T12:30:00.000Z",
+      "topic": {
+        "key": "data:market_feed",
+        "type": "data",
+        "origin": "suggestion",
+        "suggestion_id": 6,
+        "rule": "stuck_state",
+        "status": "expired",
+        "created_at": "2026-11-24T22:00:00.000Z",
+        "expires_at": "2026-11-26T22:00:00.000Z",
+        "decided_at": "2026-11-28T12:30:00.000Z",
+        "decided_by": "system"
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:13",
+      "status": "awaiting_approval",
+      "status_source": "suggestion",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T01:48:00.000Z",
+      "topic": {
+        "key": "engine:model",
+        "type": "engine",
+        "origin": "suggestion",
+        "suggestion_id": 13,
+        "rule": "gate_drift",
+        "status": "open",
+        "created_at": "2026-11-28T01:48:00.000Z",
+        "expires_at": "2026-11-29T01:53:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:12",
+      "status": "awaiting_approval",
+      "status_source": "suggestion",
+      "next_actor": "owner",
+      "updated_at": "2026-11-27T18:48:00.000Z",
+      "topic": {
+        "key": "strategy:zone_pullback:exits",
+        "type": "strategy",
+        "origin": "suggestion",
+        "suggestion_id": 12,
+        "rule": "stop_share",
+        "status": "open",
+        "created_at": "2026-11-27T18:48:00.000Z",
+        "expires_at": "2026-11-28T18:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:4",
+      "status": "refused",
+      "status_source": "platform",
+      "next_actor": "none",
+      "updated_at": "2026-11-27T10:02:00.000Z",
+      "topic": {
+        "key": "risk:london",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 4,
+        "rule": "session_negative",
+        "status": "approved",
+        "created_at": "2026-11-27T06:00:00.000Z",
+        "expires_at": "2026-11-29T06:00:00.000Z",
+        "decided_at": "2026-11-27T07:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwymt0g0_bwoc01",
+        "topic_key": "risk:london",
+        "topic_text": null,
+        "type": "risk",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-27T07:00:00.000Z",
+        "updated_at": "2026-11-27T07:47:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 4,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 2,
+            "oppose": 0,
+            "amend": 1,
+            "abstain": 1
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mwyohgdc_4e9di1",
+        "kind": "repository_task",
+        "title": "Skip the first London hour after a range night",
+        "state": "handed_off",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-27T07:47:00.000Z",
+        "updated_at": "2026-11-27T10:02:00.000Z",
+        "note": null,
+        "platform": {
+          "state": "refused",
+          "at": "2026-11-27T10:02:00.000Z",
+          "reason": "outside the platform's scope",
+          "close_code": "out_of_scope",
+          "history": [
+            {
+              "state": "refused",
+              "at": "2026-11-27T10:02:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "chain_id": "suggestion:3",
+      "status": "in_progress",
+      "status_source": "platform",
+      "next_actor": "platform",
+      "updated_at": "2026-11-27T07:02:00.000Z",
+      "topic": {
+        "key": "execution:rejected_intents",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 3,
+        "rule": "failed_intents",
+        "status": "approved",
+        "created_at": "2026-11-27T03:00:00.000Z",
+        "expires_at": "2026-11-29T03:00:00.000Z",
+        "decided_at": "2026-11-27T04:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwygdj40_qxi901",
+        "topic_key": "execution:rejected_intents",
+        "topic_text": null,
+        "type": "execution",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-27T04:00:00.000Z",
+        "updated_at": "2026-11-27T04:47:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 4,
+            "expected": 4
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 2,
+            "oppose": 0,
+            "amend": 1,
+            "abstain": 1
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mwyi1z1c_jf3ai1",
+        "kind": "repository_task",
+        "title": "Retry a failed intent once, then hand to the EA",
+        "state": "handed_off",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-27T04:47:00.000Z",
+        "updated_at": "2026-11-27T07:02:00.000Z",
+        "note": null,
+        "platform": {
+          "state": "in_progress",
+          "at": "2026-11-27T07:02:00.000Z",
+          "reason": "building",
+          "close_code": null,
+          "history": [
+            {
+              "state": "in_progress",
+              "at": "2026-11-27T07:02:00.000Z"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "next_cursor": "6",
+  "total": 16,
+  "window_days": 90,
+  "vocab": {
+    "chain_status": [
+      "awaiting_approval",
+      "approved",
+      "rejected",
+      "expired",
+      "in_session",
+      "awaiting_pick",
+      "decided",
+      "closed",
+      "aborted",
+      "no_change",
+      "shadow_test",
+      "live",
+      "rolled_back",
+      "superseded",
+      "handoff_pending",
+      "handed_off"
+    ],
+    "platform_states": "a handed-off task shows the platform's latest state (council_proposal_updates)",
+    "next_actor": [
+      "owner",
+      "council",
+      "platform",
+      "shadow",
+      "none"
+    ],
+    "suggestion_status": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "close_code": "the platform's short code for why a task reached a terminal state, passed through as sent",
+    "decided_by": [
+      "owner",
+      "council",
+      "system"
+    ]
+  },
+  "as_of": "2026-11-28T14:48:00.000Z"
+}

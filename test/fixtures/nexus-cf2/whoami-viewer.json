@@ -1,0 +1,5 @@
+{
+  "subject": "viewer@example.com",
+  "type": "user",
+  "can_control": true
+}

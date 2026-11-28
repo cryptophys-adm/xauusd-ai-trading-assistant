@@ -312,5 +312,5 @@ test("HC8 the views: every state renders, no green for up, no inline style, no e
 test("HC9 the render check registers the H3f views and their fixtures", () => {
   const entry = read("workers/xauusd-nexus-dashboard/ui/scripts/render-entry.tsx");
   for (const f of FIXTURES) assert.match(entry, new RegExp(`test/fixtures/nexus-h3f/${f.replace(".", "\\.")}`), f);
-  assert.match(entry, /\.\.\.H3F_VIEWS\n\];/);
+  assert.match(entry, /\.\.\.H3F_VIEWS,\n  \.\.\.CF2_VIEWS\n\];/);
 });

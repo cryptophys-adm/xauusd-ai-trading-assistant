@@ -1,0 +1,275 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mwxam6qo_dgr4i0",
+    "topic_key": "strategy:zone_pullback",
+    "topic_text": null,
+    "type": "strategy",
+    "question": "What should change about strategy:zone_pullback, if anything?",
+    "state": "decided",
+    "participants": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      },
+      {
+        "id": "projection",
+        "name": "Projection Agent",
+        "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "interstellar_eyes",
+        "name": "The Interstellar Eyes",
+        "role": "the The Interstellar Eyes HUD reading of the room's chart"
+      }
+    ],
+    "calls": 12,
+    "options": {
+      "summary": "Four seats see the stops come from the shortest targets; the Risk Manager wants to keep the floor.",
+      "options": [
+        {
+          "option_id": "raise_rrr",
+          "rank": 1,
+          "kind": "policy_parameter",
+          "title": "Raise the intraday reward floor",
+          "hypothesis": "The stopped setups had the shortest targets; a higher floor drops them first.",
+          "change": "small",
+          "risk": "low",
+          "dissent": "Risk Manager",
+          "knob": "decision.min_rrr.intraday",
+          "from": 1.5,
+          "value": 1.7,
+          "unit": "R",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0#options.raise_rrr"
+        },
+        {
+          "option_id": "hold_exits",
+          "rank": 2,
+          "kind": "repository_task",
+          "title": "Hold exits past the first key level",
+          "hypothesis": "Exits at the first key level cut the trades that would have paid.",
+          "change": "medium",
+          "risk": "medium",
+          "dissent": null,
+          "spec": "Hold the exit past the first key level when the 15m trend holds.",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0#options.hold_exits"
+        },
+        {
+          "option_id": "no_change",
+          "rank": 3,
+          "kind": "no_change",
+          "title": "No change",
+          "hypothesis": "What runs today stays.",
+          "change": "none",
+          "risk": "none",
+          "dissent": null,
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0#options.no_change"
+        }
+      ]
+    },
+    "reason": "accepted raise_rrr by council",
+    "pack_hash": "51f496d743034992cf213bb7c5af81c90fe1fd53b4cdfe7165732556196b00fc",
+    "created_by": "owner",
+    "created_ms": 1795681860000,
+    "updated_ms": 1795686000000,
+    "pack_refs": 72,
+    "pack_stale": true,
+    "terminal": true,
+    "messages": [
+      {
+        "id": 2,
+        "round": "position",
+        "seat": "risk",
+        "stance": "oppose",
+        "opinion": "A higher reward floor removes the setups that pay for the stops.",
+        "proposal": "Keep the floor; tighten the stop instead.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-26T08:31:00.000Z",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-26T08:31:00.000Z#r_omega",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-26T08:31:00.000Z#r_tp1"
+        ],
+        "ms": 1795681980000,
+        "name": "Risk Manager",
+        "at": "2026-11-26T08:33:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/2"
+      },
+      {
+        "id": 3,
+        "round": "position",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "The stopped setups had the shortest targets.",
+        "proposal": "Raise the intraday reward floor.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-26T08:31:00.000Z#r_omega",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-26T08:31:00.000Z#r_tp1",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795106880000@2026-11-26T08:31:00.000Z"
+        ],
+        "ms": 1795682040000,
+        "name": "Technical Analyst",
+        "at": "2026-11-26T08:34:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/3"
+      },
+      {
+        "id": 4,
+        "round": "position",
+        "seat": "projection",
+        "stance": "amend",
+        "opinion": "The floor helps only in trending hours.",
+        "proposal": "Raise it a little, not to the swing floor.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795106880000@2026-11-26T08:31:00.000Z#r_omega",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795106880000@2026-11-26T08:31:00.000Z#r_tp1",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795110480000@2026-11-26T08:31:00.000Z"
+        ],
+        "ms": 1795682100000,
+        "name": "Projection Agent",
+        "at": "2026-11-26T08:35:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/4"
+      },
+      {
+        "id": 5,
+        "round": "position",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "Fewer, longer targets fit the 15m structure.",
+        "proposal": "Raise the intraday reward floor.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795114080000@2026-11-26T08:31:00.000Z",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795114080000@2026-11-26T08:31:00.000Z#r_omega"
+        ],
+        "ms": 1795682160000,
+        "name": "15m Desk",
+        "at": "2026-11-26T08:36:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/5"
+      },
+      {
+        "id": 6,
+        "round": "position",
+        "seat": "trade_management",
+        "stance": "support",
+        "opinion": "The trades that reached TP1 had room to run.",
+        "proposal": "Raise the intraday reward floor.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795114080000@2026-11-26T08:31:00.000Z#r_tp1",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795117680000@2026-11-26T08:31:00.000Z",
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795117680000@2026-11-26T08:31:00.000Z#r_omega"
+        ],
+        "ms": 1795682220000,
+        "name": "Trade Management",
+        "at": "2026-11-26T08:37:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/6"
+      },
+      {
+        "id": 7,
+        "round": "position",
+        "seat": "interstellar_eyes",
+        "stance": "support",
+        "opinion": "The same setups lost in the same hours.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795117680000@2026-11-26T08:31:00.000Z#r_tp1"
+        ],
+        "ms": 1795682280000,
+        "name": "The Interstellar Eyes",
+        "at": "2026-11-26T08:38:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/7"
+      },
+      {
+        "id": 8,
+        "round": "rebuttal",
+        "seat": "risk",
+        "stance": "oppose",
+        "opinion": "The trades a floor removes are the ones that pay.",
+        "proposal": null,
+        "reply_to": [
+          "technical"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-26T08:31:00.000Z"
+        ],
+        "ms": 1795682460000,
+        "name": "Risk Manager",
+        "at": "2026-11-26T08:41:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/8"
+      },
+      {
+        "id": 9,
+        "round": "rebuttal",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "Only the shortest targets go; the rest stay.",
+        "proposal": null,
+        "reply_to": [
+          "risk"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-26T08:31:00.000Z#r_omega"
+        ],
+        "ms": 1795682520000,
+        "name": "Technical Analyst",
+        "at": "2026-11-26T08:42:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/9"
+      },
+      {
+        "id": 10,
+        "round": "rebuttal",
+        "seat": "projection",
+        "stance": "amend",
+        "opinion": "A step of 0.2 R is enough to test.",
+        "proposal": null,
+        "reply_to": [
+          "risk"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795106880000@2026-11-26T08:31:00.000Z#r_omega"
+        ],
+        "ms": 1795682580000,
+        "name": "Projection Agent",
+        "at": "2026-11-26T08:43:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/10"
+      },
+      {
+        "id": 11,
+        "round": "rebuttal",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "Agreed with the smaller step.",
+        "proposal": null,
+        "reply_to": [
+          "projection"
+        ],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795114080000@2026-11-26T08:31:00.000Z"
+        ],
+        "ms": 1795682640000,
+        "name": "15m Desk",
+        "at": "2026-11-26T08:44:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/11"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0"
+  }
+}

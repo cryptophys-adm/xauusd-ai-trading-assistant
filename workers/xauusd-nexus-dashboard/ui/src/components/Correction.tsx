@@ -47,6 +47,16 @@ function switchedOff() { gate = { ...gate, on: false, show: false }; emit(); }
 const useSharedGate = () => useSyncExternalStore(subscribe, () => gate, () => HIDDEN);
 /** For the render check and tests: a gate given to every control below it instead of the shared read. */
 export const GateOverride = createContext<Gate | null>(null);
+/**
+ * The owner gate of the shared read (the feature-switch GET's viewer.can_control: the owner's Access sub and the AI
+ * Worker's own check), for a page's other owner-only controls (CF2: the Councils page's Approve and Reject). Omega's
+ * /api/whoami can_control is true for any signed-in person, so it is not the owner gate.
+ */
+export function useOwnerGate(): boolean {
+  const override = useContext(GateOverride);
+  const shared = useSharedGate();
+  return (override ?? shared).canControl;
+}
 
 // ------------------------------------------------------------------ the chips, until the page reloads (v1)
 const sentByTarget = new Map<string, Sent>();
