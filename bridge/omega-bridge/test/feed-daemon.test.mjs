@@ -60,7 +60,7 @@ test("FD-2. the sync body: bridge id, key, a state without any account data, the
   assert.equal(calls[0].url, "https://feed.example.invalid/omega/api/bridge/feed-sync");
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.bridge_id, "oanda");
-  assert.equal(body.bridge_version, "1.8.2");
+  assert.equal(body.bridge_version, "1.8.3");
   assert.match(body.kid, /^[0-9a-f]{16}$/);
   assert.deepEqual(Object.keys(body.state).sort(), ["connected", "server", "symbol", "terminal_error"]);
   assert.equal(JSON.stringify(body).includes("balance"), false, "no account amounts leave the VPS");
@@ -253,4 +253,105 @@ test("FD-10 (1.8.2): a credential-free startup.ini beside the login ini, kept cu
   assert.match(sh, /CONFIG="\$STARTUP_INI"/);
   assert.match(sh, /\/config:\$\(winpath "\$CONFIG"\)/);
   assert.doesNotMatch(sh, /cat |echo "\$\(/, "never prints a file");
+});
+
+// ---------------------------------------------------------------- BF1 (b), 1.8.3: the backfill walk
+import { planFeedCorpus, BACKFILL_CHUNK_BARS, BACKFILL_FRESH_BARS, BACKFILL_REQUEST_WAIT_MS, CORPUS_FROM_FILE } from "../src/feed-daemon.mjs";
+const BM = 60_000;
+const B0 = Date.parse("2026-11-27T02:00:00Z");
+const bfBars = (fromMs, n) => Array.from({ length: n }, (_, i) => [fromMs + i * BM, 3600 + i, 3601 + i, 3599 + i, 3600.5 + i, 10, 20]);
+
+test("FD-11. no server hole: the bars after the cursor, newest 240, no walk and no request (1.8.2's behaviour)", () => {
+  const bars = bfBars(B0, 300);
+  const p = planFeedCorpus({ bars, cursorMs: B0 + 9 * BM, backfillFromMs: null, now: B0 + 300 * BM });
+  assert.equal(p.walk, null);
+  assert.equal(p.request, null);
+  assert.equal(p.bars.length, 240);
+  assert.equal(p.bars.at(-1)[0], B0 + 299 * BM);
+});
+
+test("FD-12. a hole the file holds: oldest-first chunks plus the newest bars, until the walk reaches the end", () => {
+  const bars = bfBars(B0, 600);                    // 02:00 .. 11:59
+  const cursor = B0 + 599 * BM, F = B0 + 10 * BM;  // the server misses 02:10 onwards (say), newest stored 11:59
+  let p = planFeedCorpus({ bars, cursorMs: cursor - BM, backfillFromMs: F, now: cursor + 2 * BM });
+  assert.equal(p.request, null, "the file reaches back: nothing to ask");
+  assert.equal(p.bars[0][0], F, "the chunk starts at the hole");
+  assert.equal(p.bars.length, BACKFILL_CHUNK_BARS + 1, "200 oldest-first plus the one bar after the cursor");
+  assert.ok(p.bars.every((b, i, a) => i === 0 || b[0] > a[i - 1][0]), "ascending, no duplicate");
+  assert.equal(p.walk.next, F + BACKFILL_CHUNK_BARS * BM);
+  assert.equal(p.walk.done, false);
+  p = planFeedCorpus({ bars, cursorMs: cursor, backfillFromMs: F + 200 * BM, walk: p.walk, now: cursor + 2 * BM });
+  assert.equal(p.walk.from, F + 200 * BM, "the server moved on: a new walk from its new value");
+  assert.equal(p.bars[0][0], F + 200 * BM);
+  p = planFeedCorpus({ bars, cursorMs: cursor, backfillFromMs: F + 400 * BM, walk: p.walk, now: cursor + 2 * BM });
+  assert.equal(p.walk.done, true, "the last chunk reached the newest bar");
+  assert.equal(p.bars.at(-1)[0], B0 + 599 * BM);
+  const again = planFeedCorpus({ bars, cursorMs: cursor, backfillFromMs: F + 400 * BM, walk: p.walk, now: cursor + 3 * BM });
+  assert.equal(again.bars.length, 0, "a walked value sends only what is after the cursor (nothing here)");
+  assert.equal(planFeedCorpus({ bars, cursorMs: cursor, backfillFromMs: null, walk: again.walk, now: cursor }).walk, null, "closed: the walk ends");
+});
+
+test("FD-13. a minute the broker never had (an early close) is walked once, then the feed stays on its fresh bars", () => {
+  // Bars to 19:24, nothing 19:25-21:59 (the broker closed), bars again from 23:00: the server keeps answering 19:25.
+  const close = Date.parse("2026-11-26T19:25:00Z"), reopen = Date.parse("2026-11-26T23:00:00Z");
+  const bars = [...bfBars(close - 60 * BM, 60), ...bfBars(reopen, 120)];
+  const cursor = reopen + 119 * BM;
+  let p = planFeedCorpus({ bars, cursorMs: cursor - 2 * BM, backfillFromMs: close, fileFromMs: null, now: cursor + BM });
+  assert.equal(p.bars[0][0], reopen, "nothing at or after 19:25 until the reopen: the walk sends from there");
+  for (let i = 0; i < 3 && !p.walk.done; i++) p = planFeedCorpus({ bars, cursorMs: cursor, backfillFromMs: close, walk: p.walk, now: cursor + BM });
+  assert.equal(p.walk.done, true);
+  const steady = planFeedCorpus({ bars: [...bars, ...bfBars(cursor + BM, 1)], cursorMs: cursor, backfillFromMs: close, walk: p.walk, now: cursor + 2 * BM });
+  assert.deepEqual(steady.bars.map((b) => b[0]), [cursor + BM], "only the new bar: the unfillable minute costs nothing more");
+  assert.equal(steady.request, null);
+});
+
+test("FD-14. a hole older than the file: ask the EA, keep the feed fresh meanwhile, walk its answer; an EA that never answers is walked as is", () => {
+  const now = B0 + 300 * BM, F = B0 + 10 * BM;
+  const recent = bfBars(now - 120 * BM, 120);        // the default 120 bars, newer than the hole
+  let p = planFeedCorpus({ bars: recent, cursorMs: now - 2 * BM, backfillFromMs: F, now });
+  assert.deepEqual(p.request, { from_ms: F, until_ms: now }, "asked from the hole");
+  assert.deepEqual(p.bars.map((b) => b[0]), [now - BM], "meanwhile only the fresh bar");
+  const answer = bfBars(F, 290);                      // OmegaFeed 1.02's answer, echoing backfill_from_ms
+  p = planFeedCorpus({ bars: answer, cursorMs: now - BM, backfillFromMs: F, walk: p.walk, fileFromMs: F, now: now + 20_000 });
+  assert.equal(p.bars[0][0], F, "walked from the hole");
+  assert.deepEqual(p.request, { from_ms: F, until_ms: now }, "the request stays while the walk runs");
+  p = planFeedCorpus({ bars: answer, cursorMs: now - BM, backfillFromMs: F + 200 * BM, walk: p.walk, fileFromMs: F, now: now + 40_000 });
+  assert.equal(p.walk.done, true);
+  assert.equal(p.request, null, "walked: the request file goes");
+  // An EA without 1.02: no echo, the file never reaches back.
+  let q = planFeedCorpus({ bars: recent, cursorMs: now - 2 * BM, backfillFromMs: F, now });
+  q = planFeedCorpus({ bars: recent, cursorMs: now - 2 * BM, backfillFromMs: F, walk: q.walk, now: now + BACKFILL_REQUEST_WAIT_MS - 1 });
+  assert.equal(q.bars.length, 1, "still waiting");
+  q = planFeedCorpus({ bars: recent, cursorMs: now - 2 * BM, backfillFromMs: F, walk: q.walk, now: now + BACKFILL_REQUEST_WAIT_MS });
+  assert.equal(q.bars[0][0], recent[0][0], "timed out: what the file holds is walked once");
+  assert.ok(q.bars.length <= BACKFILL_CHUNK_BARS + BACKFILL_FRESH_BARS);
+});
+
+test("FD-15. the daemon: the cursor from the server, the request file for the EA (readable by its terminal), removed once walked; the sync body carries no echo", async () => {
+  const { env, omega } = setup();
+  const now = B0 + 300 * BM, F = B0 + 10 * BM;
+  fs.writeFileSync(path.join(omega, "state.json"), JSON.stringify({ connected: true, server: "OANDA-Demo-1", symbol: { name: "XAUUSD.sml" } }));
+  const write = (bars, from = null) => fs.writeFileSync(path.join(omega, "corpus.json"), JSON.stringify({ server: "OANDA-Demo-1", symbol: "XAUUSD.sml", timeframe: "M1", ...(from != null ? { backfill_from_ms: from } : {}), bars }));
+  write(bfBars(now - 120 * BM, 120));
+  const bodies = [];
+  let answer = { ok: true, role: "feed", connection: null, corpus_cursor_ms: now - 2 * BM, corpus_backfill_from_ms: F };
+  const logs = [];
+  const d = createFeedDaemon({ env, now: () => now, fetch: async (_u, init) => { bodies.push(JSON.parse(init.body)); return okJson(answer); }, execFile: async () => "", log: (o) => logs.push(o) });
+  const req = path.join(omega, CORPUS_FROM_FILE);
+  await d.syncOnce();                                   // learns the hole
+  assert.equal(fs.existsSync(req), false, "nothing asked before the server answered");
+  await d.syncOnce();                                   // asks
+  assert.deepEqual(JSON.parse(fs.readFileSync(req, "ascii")), { from_ms: F, until_ms: now });
+  assert.equal((fs.statSync(req).mode & 0o044) !== 0, true, "readable by the terminal's user (written like intents.txt)");
+  assert.ok(logs.some((l) => l.event === "feed_backfill_requested" && l.from_ms === F));
+  write(bfBars(F, 290), F);                           // OmegaFeed 1.02 answers
+  await d.syncOnce();
+  const body = bodies.at(-1);
+  assert.equal(body.corpus.bars[0][0], F);
+  assert.equal("backfill_from_ms" in body.corpus, false, "the echo stays on the VPS");
+  answer = { ...answer, corpus_cursor_ms: now - BM, corpus_backfill_from_ms: null };
+  await d.syncOnce();                                   // the server says closed
+  await d.syncOnce();
+  assert.equal(fs.existsSync(req), false, "the request file is removed");
+  assert.equal(fs.existsSync(path.join(omega, "intents.txt")), false, "a feed never writes intents");
 });

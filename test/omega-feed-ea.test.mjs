@@ -34,7 +34,7 @@ test("OF-3. it writes the state and the gold M1 corpus in the executor's formats
 
 test("OF-4. 1.01 macro export: an explicit BASE=SYMBOL map, the executor's corpus_macro format, data only", async () => {
   const { CORPUS_MACRO_BASES, readCorpusMacro } = await import("../bridge/omega-bridge/src/files.mjs");
-  assert.equal(src.match(/#property version\s+"([\d.]+)"/)?.[1], "1.01");
+  assert.ok(["1.01", "1.02"].includes(src.match(/#property version\s+"([\d.]+)"/)?.[1]), "1.01 or later");
   assert.match(code, /"omega\/corpus_macro\.json"/);
   assert.match(code, /input bool\s+MacroEnabled = true;/);
   const map = code.match(/input string MacroSymbols = "([^"]+)";/)?.[1];
@@ -54,4 +54,29 @@ test("OF-4. 1.01 macro export: an explicit BASE=SYMBOL map, the executor's corpu
   const got = readCorpusMacro("/omega", { fs });
   assert.deepEqual(got.series.map((s) => s.base), bases);
   assert.equal(got.series.find((s) => s.base === "USOIL").symbol, "USOIL.sml");
+});
+
+test("OF-5. 1.02 backfill (BF1 c): reads the bridge's corpus_from.json, writes at most 600 closed bars from there and echoes the start; still data only", async () => {
+  const { readCorpus, writeBackfillRequest, BACKFILL_MAX_BARS } = await import("../bridge/omega-bridge/src/files.mjs");
+  assert.equal(src.match(/#property version\s+"([\d.]+)"/)?.[1], "1.02");
+  assert.match(code, /CORPUS_FROM_JSON_PATH\s*= "omega\/corpus_from\.json"/);
+  assert.match(code, /FileOpen\(CORPUS_FROM_JSON_PATH, FILE_READ \| FILE_TXT \| FILE_ANSI\)/, "read only");
+  assert.doesNotMatch(code, /FileOpen\(CORPUS_FROM_JSON_PATH, FILE_WRITE/, "the EA never writes the request");
+  assert.doesNotMatch(code, /FileDelete/, "nor deletes it: the bridge does");
+  assert.match(code, /CopyRates\(sym, PERIOD_M1, fromServer, lastClosed, rates\)/, "from the asked minute to the last closed bar");
+  assert.match(code, /BACKFILL_MAX_BARS\s*= 600;/);
+  assert.equal(BACKFILL_MAX_BARS, 600, "the bridge reads what the EA writes");
+  assert.match(code, /fromMs < nowMs - 11 \* 3600 \* \(long\)1000\) return 0;/, "only inside the last 11 hours");
+  assert.match(code, /\\"backfill_from_ms\\":%I64d/, "the echo");
+  // The bridge's request file is one line the EA's reader finds; the EA's answer is read back with its echo.
+  const files = new Map();
+  const fs = { mkdirSync() {}, writeFileSync: (p, t) => files.set(p, t), renameSync: (a, b) => { files.set(b, files.get(a)); files.delete(a); }, existsSync: (p) => files.has(p), readFileSync: (p) => files.get(p) };
+  const p = writeBackfillRequest("/omega", { from_ms: 1795800000000, until_ms: 1795810000000 }, { fs, now: () => 1 });
+  assert.equal(files.get(p), '{"from_ms":1795800000000,"until_ms":1795810000000}\n');
+  assert.ok(/"from_ms"/.test(files.get(p)) && !files.get(p).includes(" "), "the shape the EA's StringFind reads");
+  files.set("/omega/corpus.json", JSON.stringify({ server: "Feed-Server", symbol: "XAUUSD.sml", timeframe: "M1", digits: 2, utc_offset_s: 7200, written_ms: 1, backfill_from_ms: 1795800000000, bars: Array.from({ length: 600 }, (_, i) => [1795800000000 + i * 60000, 1, 2, 0.5, 1.5, 10, 20]) }));
+  const all = readCorpus("/omega", { fs, maxBars: BACKFILL_MAX_BARS });
+  assert.equal(all.bars.length, 600);
+  assert.equal(all.backfill_from_ms, 1795800000000);
+  assert.equal(readCorpus("/omega", { fs }).bars.length, 240, "the default read is unchanged");
 });

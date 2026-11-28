@@ -140,6 +140,50 @@ Phases 0–1 are already done: `/opt/mt5-oanda`, Xvfb `:2`, and the units `xvfb-
 
    Report the counts before trying anything else. Rollback: `cp -p /opt/mt5-oanda/run.sh.bak /opt/mt5-oanda/run.sh`.
 
+## 1b. Bridge 1.8.3 and OmegaFeed 1.02: the backfill (BF1 b + c, one VPS change with the owner's go)
+
+**What it does.** Since BF1 (a) the server answers each feed sync with `corpus_backfill_from_ms`: the feed source's first missing trading minute in the last 10 hours, or null. Bridge 1.8.3 walks that hole once, oldest first. Each sync sends up to 200 bars from the walk's position plus the newest 40 after the server's cursor, so the feed stays fresh. When `corpus.json` does not reach back that far, the bridge writes `omega/corpus_from.json` (`{"from_ms":…,"until_ms":…}`, one line, times only). OmegaFeed 1.02 then writes the closed M1 bars from there to the last closed bar (at most 600), and echoes `backfill_from_ms` in `corpus.json`. Once the walk ends, or the server answers null, the bridge removes the request file and the EA returns to its last `CorpusBars` bars. A minute the broker never had (a holiday's early close, 26 Nov 19:25Z) is walked once and then left; it ages out of the server's 10-hour window. Still no trade code, no account data, no intents. The executor's bridge and EA are not changed. Install the bridge and the EA together.
+
+**The VPS runs bridge 1.8.1 on the feed (read from D1 2026-11-28).** This install therefore also brings 1.8.2's `startup.ini` and `feed-run.sh` (above). Do those steps 2 to 4 in the same change.
+
+1. Back up the feed's bridge, then copy the repo's `bridge/omega-bridge` over `/opt/omega-bridge-oanda` at the merged commit (only the feed's copy):
+
+   ```bash
+   cp -a /opt/omega-bridge-oanda /opt/omega-bridge-oanda.bak-1.8.1 && echo backed-up
+   ```
+
+   Check it as for 1.8.1. Expect `export const BRIDGE_VERSION = "1.8.3";` and no `SYNTAX FAIL`.
+2. If `startup.ini` and `feed-run.sh` are not installed yet, do 1.8.2's steps 2 to 4 above.
+3. Install OmegaFeed 1.02 with section 3's steps 1 to 4 (copy, compile, check `Result: 0 errors`). Restart only the feed's terminal with the guarded line there, then restart the feed's bridge:
+
+   ```bash
+   systemctl restart omega-bridge@oanda
+   ```
+
+4. Check the start line and any backfill events. The events carry times only:
+
+   ```bash
+   journalctl -u omega-bridge@oanda --since -10min -o cat | grep -E 'feed_started|feed_backfill|feed_sync_http|feed_loop_error'
+   ```
+
+   Expect `feed_started` with `"version":"1.8.3"` and no `feed_sync_http` or `feed_loop_error`. `feed_backfill_*` lines appear only while the server reports a hole.
+5. Check that the EA writes 1.02's corpus. This prints the bar count, the first and last bar times and whether it answers a request; no prices:
+
+   ```bash
+   T="/opt/mt5-oanda/prefix/drive_c/Program Files/OANDA MetaTrader 5"; python3 -c 'import json,sys,datetime as D; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); b=d["bars"]; f=lambda ms: D.datetime.fromtimestamp(ms/1000, D.timezone.utc).isoformat(); print(len(b), f(b[0][0]), f(b[-1][0]), "backfill_from_ms" in d)' "$T/MQL5/Files/omega/corpus.json"; ls -l "$T/MQL5/Files/omega/corpus_from.json" 2>/dev/null || echo "no request file"
+   ```
+
+   Without a hole: about 120 bars, `False`, `no request file`. During a walk the request file exists, and after the EA's next write the count is up to 600 and the flag is `True`.
+6. The agent then checks read-only that the feed source's `corpus_sources.backfill_from_ms` turns null once a hole is walked (D1, no rows of prices). The first real test is the next reconnect or broker switch.
+
+**Rollback.** Restore the bridge backup and the 1.01 EA (section 3 with the 1.01 file from the previous commit), then restart only the feed's terminal (guarded line) and `omega-bridge@oanda`:
+
+```bash
+rm -rf /opt/omega-bridge-oanda && cp -a /opt/omega-bridge-oanda.bak-1.8.1 /opt/omega-bridge-oanda && echo restored
+```
+
+A leftover `omega/corpus_from.json` is harmless to 1.01, which never reads it. Remove it with `rm -f "$T/MQL5/Files/omega/corpus_from.json"`.
+
 ## 2. The secret (owner only)
 
 1. The owner opens their own SSH session and runs:

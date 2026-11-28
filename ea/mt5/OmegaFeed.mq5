@@ -13,11 +13,16 @@
 //|     closed M1 bars of the macro symbols named in MacroSymbols    |
 //|     (BASE=SYMBOL, explicit names: nothing is guessed), in the    |
 //|     executor's corpus_macro format.                              |
+//|   - 1.02 (BF1 c, backfill): when the bridge writes               |
+//|     omega/corpus_from.json { from_ms }, corpus.json holds the    |
+//|     closed M1 bars from there to the last closed bar (at most    |
+//|     600, the server's 10-hour window) and echoes backfill_from_ms;|
+//|     without the file it is 1.01's last CorpusBars bars.          |
 //| The gold symbol is the input FeedSymbol, else the chart's symbol |
 //| (OANDA: "XAUUSD.sml"). Its contract is recorded, never checked.  |
 //+------------------------------------------------------------------+
 #property copyright "Cryptophys"
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 input string FeedSymbol   = "";   // the gold symbol on this server (empty: the chart's symbol)
@@ -30,16 +35,19 @@ input bool   MacroEnabled = true;
 input string MacroSymbols = "XAGUSD=XAGUSD,USOIL=USOIL.sml,EURUSD=EURUSD.sml,GBPUSD=GBPUSD.sml,USDJPY=USDJPY.sml,USDCAD=USDCAD,USDCHF=USDCHF";
 input int    MacroBars    = 240;  // closed M1 bars per macro symbol (10 to 240)
 
-const string OMEGA_FEED_VERSION = "1.01"; // keep equal to #property version
+const string OMEGA_FEED_VERSION = "1.02"; // keep equal to #property version
 const string STATE_JSON_PATH  = "omega/state.json";
 const string STATE_TMP_PATH   = "omega/state.tmp";
 const string CORPUS_JSON_PATH = "omega/corpus.json";
 const string CORPUS_TMP_PATH  = "omega/corpus.tmp";
 const string CORPUS_MACRO_JSON_PATH = "omega/corpus_macro.json";
 const string CORPUS_MACRO_TMP_PATH  = "omega/corpus_macro.tmp";
+const string CORPUS_FROM_JSON_PATH  = "omega/corpus_from.json"; // 1.02: written by the bridge, read only here
+const int    BACKFILL_MAX_BARS      = 600;
 
 datetime g_lastCorpusBar = 0;
 datetime g_lastMacroBar  = 0;
+long     g_lastFromMs    = -1;   // 1.02: the backfill start the last corpus.json answered (0: none)
 long     g_lastStateMs   = 0;
 
 string EscapeJson(const string s)
@@ -92,35 +100,73 @@ void WriteStateJson()
    FileMove(STATE_TMP_PATH, 0, STATE_JSON_PATH, FILE_REWRITE);
   }
 
+// 1.02: the backfill start the bridge asks for (UTC ms), or 0. Accepted only inside the last 11 hours and before now.
+long BackfillFromMs()
+  {
+   if(!FileIsExist(CORPUS_FROM_JSON_PATH)) return 0;
+   int h = FileOpen(CORPUS_FROM_JSON_PATH, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return 0;
+   string text = "";
+   while(!FileIsEnding(h) && StringLen(text) < 512) text += FileReadString(h);
+   FileClose(h);
+   int k = StringFind(text, "\"from_ms\"");
+   if(k < 0) return 0;
+   int c = StringFind(text, ":", k);
+   if(c < 0) return 0;
+   string digitsText = "";
+   for(int i = c + 1; i < StringLen(text) && StringLen(digitsText) < 16; i++)
+     {
+      ushort ch = StringGetCharacter(text, i);
+      if(ch == ' ') { if(digitsText == "") continue; break; }
+      if(ch < '0' || ch > '9') break;
+      digitsText += ShortToString(ch);
+     }
+   long fromMs = StringToInteger(digitsText);
+   long nowMs = NowUtcMs();
+   if(fromMs <= 0 || fromMs >= nowMs || fromMs < nowMs - 11 * 3600 * (long)1000) return 0;
+   return fromMs - (fromMs % 60000);
+  }
+
 void WriteCorpusJson()
   {
    string sym = FeedGoldSymbol();
    datetime lastClosed = iTime(sym, PERIOD_M1, 1);
-   if(lastClosed == 0 || lastClosed == g_lastCorpusBar) return;
+   long fromMs = BackfillFromMs();
+   if(lastClosed == 0 || (lastClosed == g_lastCorpusBar && fromMs == g_lastFromMs)) return;
    int n = (int)MathMax(10, MathMin(240, CorpusBars));
+   int offset = ServerUtcOffsetSeconds();
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
-   int got = CopyRates(sym, PERIOD_M1, 1, n, rates); // from shift 1: closed bars only, oldest first
+   int got = 0;
+   if(fromMs > 0)
+     {
+      // From the asked minute (server time) to the last closed bar, oldest first; the newest 600 if more.
+      datetime fromServer = (datetime)(fromMs / 1000 + offset);
+      got = CopyRates(sym, PERIOD_M1, fromServer, lastClosed, rates);
+     }
+   else
+      got = CopyRates(sym, PERIOD_M1, 1, n, rates); // from shift 1: closed bars only, oldest first
    if(got <= 0) return;
+   int first = (fromMs > 0 && got > BACKFILL_MAX_BARS) ? got - BACKFILL_MAX_BARS : 0;
    int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   int offset = ServerUtcOffsetSeconds();
    string bars = "";
-   for(int i = 0; i < got; i++)
+   for(int i = first; i < got; i++)
      {
       long tMs = ((long)rates[i].time - offset) * 1000;
-      if(i > 0) bars += ",";
+      if(i > first) bars += ",";
       bars += StringFormat("[%I64d,%s,%s,%s,%s,%I64d,%d]", tMs,
                            DoubleToString(rates[i].open, digits), DoubleToString(rates[i].high, digits),
                            DoubleToString(rates[i].low, digits), DoubleToString(rates[i].close, digits),
                            rates[i].tick_volume, rates[i].spread);
      }
-   string json = StringFormat("{\"server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M1\",\"digits\":%d,\"utc_offset_s\":%d,\"written_ms\":%I64d,\"bars\":[%s]}",
-                              EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(sym), digits, offset, NowUtcMs(), bars);
+   string echo = fromMs > 0 ? StringFormat(",\"backfill_from_ms\":%I64d", fromMs) : "";
+   string json = StringFormat("{\"server\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M1\",\"digits\":%d,\"utc_offset_s\":%d,\"written_ms\":%I64d%s,\"bars\":[%s]}",
+                              EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(sym), digits, offset, NowUtcMs(), echo, bars);
    int h = FileOpen(CORPUS_TMP_PATH, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE) return;
    FileWriteString(h, json);
    FileClose(h);
-   if(FileMove(CORPUS_TMP_PATH, 0, CORPUS_JSON_PATH, FILE_REWRITE)) g_lastCorpusBar = lastClosed;
+   if(FileMove(CORPUS_TMP_PATH, 0, CORPUS_JSON_PATH, FILE_REWRITE)) { g_lastCorpusBar = lastClosed; g_lastFromMs = fromMs; }
   }
 
 // Once per closed gold M1 bar: the macro symbols' closed M1 bars, oldest first, one series per base, in the same
