@@ -32,8 +32,8 @@ export const H1_PENDING_TTL_S = 6 * 3600;
  */
 export const AWAITING_CONSENSUS = "awaiting_consensus";
 export const FINALIZING = "finalizing";
-/** A Reasoner that keeps failing this long after the close gives a fail-closed WAIT. */
-export const H1_REASONER_GIVE_UP_MS = 2 * 60 * 60 * 1000;
+/** RM1: the H1 decision is written without a model (ai_syntheses.ai_model). */
+export const H1_DECISION_MODEL = "deterministic:h1_quorum";
 /** How far back the sweep looks for bars awaiting their decision. */
 export const H1_PENDING_LOOKBACK_MS = 4 * 60 * 60 * 1000;
 
@@ -187,48 +187,27 @@ export function applyQuorum(decision, { quorum, plan = null } = {}) {
 }
 
 /**
- * The Reasoner's prompt lines (owner decision 2026-11-09): the decision is already fixed by the
- * room's QUORUM and its prices by the PLAN; the Reasoner writes it and explains it from the
- * consensus and the evidence. applyQuorum enforces both whatever the model returns.
+ * RM1 (owner 2026-11-28, "Hapus saja h1 reasoner"): the H1 decision without a model call. The Reasoner only ever
+ * added text and its confidence (the quorum and the plan decided, applyQuorum), so the decision's input is now
+ * deterministic: the quorum's stance (WAIT without one), no model confidence (applyQuorum then gives a BUY or SELL
+ * r2(min(0.95, quorum share)); every other decision has none) and a reasoning text built from the quorum's reason,
+ * the room's conclusion summary and the plan's entry type. No price is written into the text: the prices are the
+ * decision's own fields.
  */
-export function reasonerLines({ evidence, consensus, quorum = null, plan = null, laneRule, decisionTextRule, tradePlanRule }) {
+export function quorumDecisionInput({ consensus, quorum, plan = null } = {}) {
   const q = quorum ?? quorumOf(consensus);
-  return [
-    "You are the Reasoner, the final stage of the XAUUSD H1 decision. You write the decision LAST, after the Consensus Discussion of the 1H War Room: CONSENSUS holds its communication bus (every agent's opening), the Consensus Discussion (the agents answering each other), the moderator's conclusion with its decision and bias, and the crowd line.",
-    `The H1 decision is the QUORUM of the room, not yours to choose: BUY or SELL only when the moderator concluded BUY or SELL and more than ${Math.round(q.needed * 100)}% of the weight of the agents who spoke (each weighted by its track record, CONSENSUS.crowd.weighted_biases) holds the matching bias; otherwise WAIT. QUORUM gives the result. For a BUY or SELL, PLAN gives the entry, stop and targets from the 1-hour chart's own key-level zones: use exactly those prices (entry_price = PLAN.entry, stop_loss = PLAN.stop, take_profit = PLAN.tp1, risk_reward = PLAN.rrr.tp1). If QUORUM is BUY or SELL and PLAN is null, the decision is WAIT. Never set position_size_pct: it is always null.`,
-    "Use only CONSENSUS, QUORUM, PLAN and EVIDENCE. Do not invent market prices or claim the agents verified facts they did not receive.",
-    "Decode every numeric field with EVIDENCE.policy.field_dictionary (derived from the Pine sources) before quoting it, and quote the decoded meaning. Never infer a field meaning that is not in the dictionary.",
-    "Indicator signals (the Prophet R38 confirmation and setup state, its trade management t_enc, the GMI verdict, gate and conflict) are arguments the agents weighed in the discussion, not gates and not vetoes: mention them only as the agents used them. Every field describes the closed candle being decided (EVIDENCE.candle_time, the bar that just closed), never the running candle. Local engine values that are not parity-approved are still evidence, read with less weight.",
-    "Independence (owner decisions 2026-11-09): the room's statements are anonymous (#n). Never name an agent or a role, and never use another timeframe's room or decision: say which metrics carried the decision and which metrics the dissent rests on.",
-    consensus?.status === "partial"
-      ? `The room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke, so there is no quorum and the decision is WAIT; say which way the bus leans.`
-      : "Name the room's conclusion, its bias and the quorum once in the reasoning; say which metrics carried the decision and which metrics the dissent rests on.",
-    laneRule,
-    "If news_evidence.available is false, state completed fundamental news analysis was unavailable. Do NOT claim news supported or contradicted the setup.",
-    "If news_evidence.available is true, incorporate the completed news analysis and its underlying article evidence into final reasoning.",
-    "Return ONLY a JSON object with keys: decision (BUY, SELL, WAIT, or NO_TRADE), confidence (number 0-1 or null), entry_price, stop_loss, take_profit, risk_reward, position_size_pct, reasoning, confirmation, invalidation, trade_plan.", decisionTextRule, tradePlanRule,
-    "For WAIT set every price to null. Never imply automatic execution.",
-    "CONSENSUS:",
-    JSON.stringify(consensus),
-    "QUORUM:",
-    JSON.stringify(q),
-    "PLAN:",
-    JSON.stringify(plan),
-    "EVIDENCE:",
-    // This timeframe only (owner decisions 2026-11-09): the 5m context stays in the stored fusion, not here.
-    JSON.stringify(ownTimeframeEvidence(evidence))
-  ];
-}
-
-/** Pure: the evidence without another timeframe's data (the 5m execution context). */
-export function ownTimeframeEvidence(evidence) {
-  if (!evidence || typeof evidence !== "object") return evidence;
-  const { informational_5m_context: _m5, ...rest } = evidence;
-  if (rest.evidence_fusion && typeof rest.evidence_fusion === "object") {
-    const { informational_5m_context: _f5, ...fusion } = rest.evidence_fusion;
-    rest.evidence_fusion = fusion;
+  const stance = q?.stance === "BUY" || q?.stance === "SELL" ? q.stance : "WAIT";
+  const parts = [];
+  if (consensus?.status === "partial") parts.push(`The 1H War Room did not conclude within 45 minutes of the close: ${consensus.agents_spoke} of ${consensus.roster_size} agents spoke, so there is no quorum and the decision is WAIT.`);
+  else if (stance === "WAIT") parts.push(`No quorum: ${q?.reason ?? "the room did not reach its quorum"}, so the decision stays WAIT.`);
+  else parts.push(`The 1H War Room reached its quorum: ${q.reason}, so the decision is ${stance}.`);
+  const summary = String(consensus?.conclusion?.summary ?? "").trim();
+  if (summary) parts.push(`The room's conclusion: ${summary}`);
+  if (stance !== "WAIT" && planIsValid(stance, plan)) {
+    const rr = Number.isFinite(plan.rrr?.tp1) ? ` at a reward to risk of ${r2(plan.rrr.tp1)}` : "";
+    parts.push(`The plan comes from the 1-hour chart's key-level zones: ${plan.at_level ? "price is at the level, so the entry is at market" : "a limit entry at the level"}${rr}.`);
   }
-  return rest;
+  return { decision: stance, confidence: null, reasoning: parts.join(" "), confirmation: null, invalidation: null };
 }
 
 /** The fail-closed WAIT when the room produced nothing by the fallback time. */
@@ -236,15 +215,6 @@ export function emptyConsensusDecision() {
   return {
     decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null,
     reasoning: "No agent of the 1H War Room spoke within 45 minutes of the close, so there is no consensus to decide from. The decision stays WAIT until the next bar.",
-    confirmation: null, invalidation: null
-  };
-}
-
-/** The fail-closed WAIT when the Reasoner kept failing for H1_REASONER_GIVE_UP_MS. */
-export function reasonerUnavailableDecision() {
-  return {
-    decision: "WAIT", confidence: null, entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null,
-    reasoning: "The Reasoner did not answer within two hours of the close, so no decision was written from the room's consensus. The decision stays WAIT until the next bar.",
     confirmation: null, invalidation: null
   };
 }
