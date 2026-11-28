@@ -1,5 +1,5 @@
 // Canonical names (docs/SSOT.md §1 and §3): the four production Workers by their Worker names, and
-// the parity engines by their indicator names. Every Nexus status label uses these.
+// the local engines by their indicator names. Every Nexus status label uses these.
 export const WORKERS = Object.freeze({
   ai: { name: "xauusd-ai-trading-assistant", role: "AI Worker" },
   news: { name: "xauusd-fundamental-news-ingestion", role: "news Worker" },

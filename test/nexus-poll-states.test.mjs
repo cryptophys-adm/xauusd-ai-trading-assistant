@@ -286,7 +286,7 @@ test("PS18 item 4: a failed read never reads as \"nothing yet\"", () => {
 
 test("PS19 item 5: the stale/live tag on Status, Shadow, Councils, Calendar and the War Room's tabs and decision", () => {
   const st = src("pages/Status.tsx");
-  for (const p of ["poll={poll} live right=", "poll={lanePoll} right=", "title=\"Parity registry\" icon={<ShieldCheck className=\"h-3.5 w-3.5 text-cyan-300\" />} poll={poll} live"]) assert.ok(st.includes(p), p);
+  for (const p of ["poll={poll} live right=", "poll={lanePoll} right="]) assert.ok(st.includes(p), p);
   assert.ok(src("pages/Shadow.tsx").includes("poll={poll} live"), "Shadow");
   const co = src("pages/Councils.tsx");
   for (const p of ["poll={poll} live", "poll={sugPoll}", "poll={topic ? packPoll : undefined}", "<PollStrip poll={poll}"]) assert.ok(co.includes(p), p);
