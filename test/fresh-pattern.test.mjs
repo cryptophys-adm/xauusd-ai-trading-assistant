@@ -5,7 +5,7 @@ import {
   breakoutAgeBars, freshPlansRecord, freshPatternVerdict, freshPatternRevert, freshPatternRevertLine, readFreshPatternHold, freshPatternTrades, FRESH_PATTERN_SINCE
 } from "../src/fresh-pattern.mjs";
 import { STRATEGY_AGENTS, freshPatternPlans, withFreshPlans, slimPlan } from "../src/strategy-agents.mjs";
-import { assess, buildDecisionRecord, decisionKeyFor, councilEvidence } from "../src/decision-engine.mjs";
+import { assess, buildDecisionRecord, decisionKeyFor, councilEvidence, tradeFor } from "../src/decision-engine.mjs";
 import { freshSetupsFrom } from "../src/plan-learning.mjs";
 import { FEATURE_SWITCH_OVERRIDDEN, switchByKey, readSwitch } from "../src/feature-switches.mjs";
 
@@ -131,6 +131,29 @@ test("FP-6b on: an agent's own plan on the same pattern (retest limit, key-zone 
   const rec = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded: l, assessment: a, council: council("pattern_lines"), now: NOW, env: onEnv });
   assert.deepEqual([rec.trade.strategy, rec.trade.entry, rec.trade.action, rec.trade.fresh_pattern.target_r], ["pattern_lines", 4003, "ENTER_MARKET", 1.21]);
   assert.ok([4020, 4027.5].includes(rec.trade.tp), "a target of the fresh plan, never the key zone's 4011.5");
+});
+
+test("FP-6c on: a fresh plan enters at market whatever the entry type: a council limit answer and the no-answer fallback", () => {
+  const env = { ...LIVE, FRESH_PATTERN_MODE: "on" };
+  const l = loaded(), a = assess(l, { now: NOW, env });
+  const limitCouncil = { answer: { ...council("pattern_lines").answer, entry_type: "limit" } };
+  const viaLimit = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded: l, assessment: a, council: limitCouncil, now: NOW, env });
+  assert.deepEqual([viaLimit.trade.strategy, viaLimit.trade.action, viaLimit.trade.trigger_required, viaLimit.trade.entry], ["pattern_lines", "ENTER_MARKET", true, 4003]);
+  // No council answer: the fallback sets entry type "limit" (decide()) and every path builds the trade with tradeFor;
+  // a fresh plan given "limit" still enters at market, with the market trigger.
+  const fresh = a.guards.long.plans.pattern_lines.plan;
+  const t = tradeFor("BUY", fresh, { entryType: "limit", target: "tp1", minRrr: 1 });
+  assert.deepEqual([t.action, t.trigger_required, t.entry], ["ENTER_MARKET", true, 4003]);
+  assert.equal(tradeFor("BUY", { ...fresh, fresh_pattern: undefined }, { entryType: "limit", target: "tp1", minRrr: 1 }).action, "ENTER_LIMIT", "without fresh_pattern: the entry type's rule");
+  // The fallback end to end: the record is the fallback's; a fresh plan it trades is a market entry.
+  const lb = { ...l, strategy: { ...l.strategy, decision: "BUY" } }, ab = assess(lb, { now: NOW, env });
+  const fb = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded: lb, assessment: ab, council: { answer: null, reason: "invalid answer" }, now: NOW, env });
+  assert.equal(fb.source, "fallback");
+  if (fb.trade?.fresh_pattern) assert.equal(fb.trade.action, "ENTER_MARKET");
+  // A plan without fresh_pattern keeps the entry type's rule: a limit answer rests a limit.
+  const off = { ...LIVE, FRESH_PATTERN_MODE: "off" }, lz = loaded(); lz.strategy = { ...lz.strategy, key_levels: { ...lz.strategy.key_levels, zones: [...zones.filter((z) => z.price !== 4006), { low: 4011.5, high: 4012.5, price: 4012, candidate: true }] } };
+  const own = buildDecisionRecord({ key: decisionKeyFor(CLOSE), barClose: CLOSE, loaded: lz, assessment: assess(lz, { now: NOW, env: off }), council: limitCouncil, now: NOW, env: off });
+  if (own.trade) assert.equal(own.trade.action, "ENTER_LIMIT");
 });
 
 test("FP-7 record: recorded, never offered nor traded; off: nothing; a 3-bar-old breakout: nothing", () => {

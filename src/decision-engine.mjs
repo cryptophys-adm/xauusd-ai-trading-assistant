@@ -718,7 +718,9 @@ export function tradeFor(side, plan, { entryType = "limit", target = "tp1", minR
   // Quick Win Priority: Default target is "tp1" at the nearest key level. If the chosen target doesn't pay 1.5R, alternate.
   const t = pays(target) ? target : pays(target === "tp1" ? "tp2" : "tp1") ? (target === "tp1" ? "tp2" : "tp1") : null;
   if (!t) return null;
-  const market = entryType !== "limit" && plan.at_level === true;
+  // FP1 (src/fresh-pattern.mjs): a fresh 15m pattern plan enters at market by design, whatever the council's entry type
+  // or the fallback's "limit" (a resting limit would miss the breakout and distort FP1's revert sample).
+  const market = (entryType !== "limit" || Boolean(plan.fresh_pattern)) && plan.at_level === true;
   return {
     side, action: market ? "ENTER_MARKET" : "ENTER_LIMIT", entry: plan.entry, stop: plan.stop, target: t, tp: plan[t],
     // EZ1: the plan's entry zone (feed scale), beside the entry, when it has one.
