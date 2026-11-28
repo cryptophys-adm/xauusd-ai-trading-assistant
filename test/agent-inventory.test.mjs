@@ -34,7 +34,7 @@ test("the roster is every seat of the code's rooms, plus the moderator and the s
     assert.equal(a.kernel_id, HUD_PLATFORM_IDS[a.id] ?? (a.id === "moderator" ? "xauusd-moderator" : null), a.id);
   }
   assert.equal(roster.find((a) => a.id === "system").model, null, "the system rows use no model");
-  assert.deepEqual(roster.find((a) => a.id === "news").rooms.sort(), ["macro", "news", "newsdaily", "tf", "warroom"]);
+  assert.deepEqual(roster.find((a) => a.id === "news").rooms.sort(), ["macro", "newsdaily", "tf", "warroom"]);
 });
 
 test("the DNA links the inventory at the top level, with the roster's count, and the RPC serves it", () => {

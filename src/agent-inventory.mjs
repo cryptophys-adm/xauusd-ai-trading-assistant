@@ -12,7 +12,7 @@ import ORGANISM from "../organism.json" with { type: "json" };
 import { DESK_AGENTS } from "./war-room.mjs";
 import { TF_DESKS } from "./timeframe-threads.mjs";
 import { MACRO_AGENTS } from "./macro-room.mjs";
-import { BUS_AGENTS, roleModels } from "./model-call.mjs";
+import { roleModels } from "./model-call.mjs";
 import { HUD_NAMES, hudAgentsIn } from "./hud-reading.mjs";
 import { HUD_PLATFORM_IDS } from "./platform-reports.mjs";
 
@@ -48,13 +48,6 @@ export const ROOMS = Object.freeze({
     writes: ["D1 agent_threads", "D1 agent_thread_messages", "D1 ai_usage_daily"],
     seats: () => Object.keys(MACRO_AGENTS)
   },
-  news: {
-    name: "News thread", flag: "NEWS_THREADS_ENABLED", thread: "news:<analysis>",
-    trigger: "queue task news_thread after each hourly news analysis",
-    reads: ["D1 news_analyses", "D1 ai_syntheses"],
-    writes: ["D1 agent_threads", "D1 agent_thread_messages", "D1 ai_usage_daily"],
-    seats: () => [...BUS_AGENTS]
-  },
   newsdaily: {
     name: "News Daily", flag: "NEWS_DAILY_ENABLED", thread: "newsdaily:<day>",
     trigger: "after the hourly news batch (cron 6 * * * *), one digest per day",
@@ -64,7 +57,7 @@ export const ROOMS = Object.freeze({
   }
 });
 /** Every room's moderator concludes it; "system" writes the briefs and status rows (no model). */
-const MODERATOR_ROOMS = Object.freeze(["warroom", "tf", "macro", "news", "newsdaily"]);
+const MODERATOR_ROOMS = Object.freeze(["warroom", "tf", "macro", "newsdaily"]);
 const SYSTEM_ROOMS = Object.freeze(["warroom", "tf", "macro", "newsdaily"]);
 
 const nameOf = (id) => DESK_AGENTS[id]?.name ?? TF_DESKS[id]?.name ?? MACRO_AGENTS[id]?.name ?? HUD_NAMES[id]
@@ -134,13 +127,8 @@ export const ENGINE_LOGIC = Object.freeze({
   macro_room_rebuttal: { source: "src/macro-room.mjs", room: "macro", role: "agent", inputs: "the openings", output: "rebuttal", validation: "strict JSON schema; the macro room's validator", consumers: ["macro room conclusion"] },
   macro_room_conclusion: { source: "src/macro-room.mjs", room: "macro", role: "moderator", inputs: "the session's openings and rebuttals", output: "conclusion {bias, confidence, summary}", validation: "strict JSON schema; the macro room's validator", consumers: ["Decision Engine (MACRO witness)", "global conclusion"] },
   decision_council: { source: "src/decision-engine.mjs decideBar", trigger: "every 15m bar, after its room (and the sweep's fallback)", role: "moderator", inputs: "the witnesses, the guardrails, the strategy engine", output: "{stance, bias, confidence, summary, reasons, risks}", validation: "strict JSON schema; validateCouncil; then the deterministic guardrails (a failed council falls back to them)", consumers: ["engine decision", "signal ledger", "EA signal / Omega", "Telegram", "kernel reports"] },
-  thread_agent: { source: "src/agent-threads.mjs runNewsThread", room: "news", role: "agent", inputs: "the news analysis, the H1 technical evidence", output: "{agent, round, stance, confidence, insight, refs}", validation: "strict JSON schema; validateAgentOutput (refs, natural language)", consumers: ["news thread moderator"] },
-  thread_moderator: { source: "src/agent-threads.mjs runNewsThread", room: "news", role: "moderator", inputs: "the thread", output: "{stance, confidence, agreed, summary, dissent}", validation: "strict JSON schema; validateModeratorOutput", consumers: ["/api/tldr (news)", "rooms' News Analyst evidence"] },
   news_daily_tags: { source: "src/news-daily.mjs runNewsDaily", room: "newsdaily", role: "agent", inputs: "the last 24 h of headlines", output: "per-headline bias tags", validation: "strict JSON schema", consumers: ["News Daily TLDR"] },
   news_daily_tldr: { source: "src/news-daily.mjs runNewsDaily", room: "newsdaily", role: "moderator", inputs: "the tagged headlines", output: "{stance, confidence, summary}", validation: "strict JSON schema", consumers: ["every room's News Analyst", "macro room", "strategy engine", "/api/news-daily"] },
-  news_analyst: { source: "src/index.ts runNewsAnalysis", trigger: "hourly news cron (6 * * * *)", model_var: "AI_MODEL_ANALYST", inputs: "the hour's fresh articles", output: "analyst text", validation: "text; the chain's next stage reads it", consumers: ["news counselor"] },
-  news_counselor: { source: "src/index.ts runNewsAnalysis", trigger: "hourly news cron (6 * * * *)", model_var: "AI_MODEL_COUNSELOR", inputs: "the analyst's text", output: "counselor text", validation: "text", consumers: ["news reasoner"] },
-  news_reasoner: { source: "src/index.ts runNewsAnalysis", trigger: "hourly news cron (6 * * * *)", model_var: "AI_MODEL_REASONER", inputs: "the counselor's text", output: "news recommendation (JSON)", validation: "JSON parse", consumers: ["news_analyses", "news thread", "News Daily"] },
   plain_decision: { source: "src/plain-decision.mjs", trigger: "after a decision, its plain-language rewrite", role: "agent", inputs: "the decision's reasons", output: "plain text", validation: "strict JSON schema; natural language", consumers: ["Nexus decision card", "Telegram"] },
   cfc_seat: { source: "src/cfc-session.mjs runSessionStep", trigger: "a Call for Councils session the owner opened (queue task council_step): positions, rebuttals, answers to the owner", role: "agent", shadow: false, flag_off: "CFC_MODE (on) and the owner's switch on the Councils page", inputs: "the session's question (a topic or the owner's free text), the evidence pack (no price) and what the other seats said", output: "the seat's own opinion: stance (support, oppose, amend, abstain), 2-5 first-person sentences, what it would try, at most 3 refs of the pack", validation: "strict JSON schema; refs kept only when they are the pack's; at most 16 calls a session, CFC_NEURONS_PER_DAY_MAX a day", consumers: ["the Councils page (opinion cards)", "the moderator's synthesis"] },
   cfc_synthesis: { source: "src/cfc-session.mjs runSessionStep", trigger: "after a session's rebuttals (queue task council_step)", role: "moderator", shadow: false, flag_off: "CFC_MODE (on) and the owner's switch on the Councils page", inputs: "the seats' opinions and the owner's messages", output: "a summary and 2-5 ranked options, always including no_change", validation: "strict JSON schema; no_change added when missing; a failure aborts the session", consumers: ["the Councils page", "the platform inbox (council_options.v1, legacy_schema council_decision.v1; the pick in Cerebrum, or the council itself in CFC_MODE auto)"] },

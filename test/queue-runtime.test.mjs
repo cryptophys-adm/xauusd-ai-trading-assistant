@@ -98,7 +98,8 @@ test("worker source keeps asynchronous queueing, provenance, and AI tracing hook
   assert.match(source, /reconcileLocalComputation\(env, task\.candle_key\)/);
   assert.match(source, /claimAnalysisRun\(env, candleKey/);
   assert.match(source, /tracing\.enterSpan\("invoke_agent"/);
-  assert.match(source, /tracing\.enterSpan\("chat"/);
+  // The "chat" spans were the hourly news chain's model calls, removed with AU1 item 9 (owner 2026-11-28).
+  assert.doesNotMatch(source, /tracing\.enterSpan\("chat"/);
   assert.match(source, /tracing\.enterSpan\("process_queue"/);
   const d1Write = source.indexOf(').bind(candleKey, source, JSON.stringify(storedPayload)).run();');
   const kvWrite = source.indexOf('await env.WEBHOOK_BUFFER.put("candle:" + candleKey + ":" + source');

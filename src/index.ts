@@ -106,7 +106,6 @@ export interface Env {
   INDICATOR_SOURCE?: string;
   ANALYSIS_TIMEFRAMES?: string;
   /** The news threads (owner 2026-11-15; MULTI_AGENT_BUS_ENABLED is read for one deploy when this is unset). */
-  NEWS_THREADS_ENABLED?: string;
   /** The deployed commit (40 hex) and time, injected by deploy-worker.yml (P5). */
   DEPLOY_COMMIT?: string;
   DEPLOYED_AT?: string;
@@ -277,7 +276,7 @@ import { reserveTvCalls, releaseTvCalls } from "./tv-budget.mjs";
 import { reconcileLocalComputation, reconcileRecentCandles, backfillRecentAnalyses, closedH1CandleKeys, decisionLocalRecords, OBSERVED_PREFIX, LOCAL_TTL, PARITY_SWEEP_CRON } from "./parity-sweep.mjs";
 import { loadWebhookPayloadsFromD1 } from "./webhook-payloads.mjs";
 import { webhookIngestMode, retiredWebhookResponse } from "./webhook-retirement.mjs";
-import { liveRoomEnabled, isFifteenMinuteClose, buildNewsThreadTask, newsThreadsEnabled, buildLiveRoomTask, runNewsThread, listThreads, readThread, readLive, listH1Threads, readH1Thread, m15KeyForClose } from "./agent-threads.mjs";
+import { liveRoomEnabled, isFifteenMinuteClose, buildLiveRoomTask, listThreads, readThread, readLive, listH1Threads, readH1Thread, m15KeyForClose } from "./agent-threads.mjs";
 import { warRoomEnabled, runWarRoomBar, runMissedWarRoom, readWarRoom, readTldr, agentName } from "./war-room.mjs";
 import { reputationOf, familyOf, REPUTATION_VERSION, REPUTATION_PRIOR, WEIGHT_RANGE } from "./reputation.mjs";
 import { indicatorAgents } from "./indicator-registry.mjs";
@@ -358,18 +357,6 @@ function safeKeyPart(value: string): string {
 // tasks and the scheduled parity sweep); OBSERVED_PREFIX and LOCAL_TTL come from
 // there too so the lane's KV layout has a single owner.
 
-/**
- * One chat call in the request form of its model family (model-text.mjs modelRequests): gpt-oss
- * takes reasoning_effort (or the Responses form), gemma-4 runs with thinking off.
- */
-async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }, source = "h1_chain"): Promise<unknown> {
-  // The usage meter (src/ai-usage.mjs): the H1 chain's analyst, counselor and reasoner calls.
-  const meter = env.DB ? { db: env.DB, source } : null;
-  return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, { ...opts, meter })).result;
-}
-function aiRunAs(source: string, env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }): Promise<unknown> {
-  return aiRun(env, model, opts, source);
-}
 
 function extractText(result: unknown): string {
   return cleanModelText(extractRawText(result));
@@ -566,92 +553,13 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     policy: NEWS_KNOWLEDGE
   };
 
-  const analystResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": traceConversationId,
-      "gen_ai.request.model": String(env.AI_MODEL_ANALYST as keyof AiModels)
-    });
-    return aiRunAs("news_analyst", env, env.AI_MODEL_ANALYST, {
-    messages: chatMessages([
-      "You are the Fundamental News Analyst for XAUUSD decision support.",
-      "Analyze only the supplied news articles. Do not infer current price action, technical indicators, or unpublished facts.",
-      "Assess direct and indirect potential impact on gold (XAUUSD), US dollar (DXY), and oil (USOIL). Distinguish reported facts from interpretation and note publication-time limitations.",
-      "Write your thesis as plain prose (4-6 sentences, no JSON, no markdown). Cover: gold bias (BULLISH, BEARISH or NEUTRAL), dollar bias, oil bias, risk sentiment, key catalysts, key risks, evidence quality (LOW, MEDIUM, HIGH) and whether the evidence is stale or uncertain. Cite article titles.",
-      "Do not produce entry, stop-loss, take-profit, position size, or a technical BUY/SELL order.",
-      "NEWS EVIDENCE:", JSON.stringify(evidence)
-    ]),
-    maxTokens: MAX_TOKENS.analyst,
-    effort: "low"
-  }); });
-  const analystText = extractText(analystResult);
-
-  const counselorResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": traceConversationId,
-      "gen_ai.request.model": String(env.AI_MODEL_COUNSELOR as keyof AiModels)
-    });
-    return aiRunAs("news_counselor", env, env.AI_MODEL_COUNSELOR, {
-    messages: chatMessages([
-      "You are the Fundamental News Counselor.",
-      "Use only the news evidence and analyst output. Provide balanced conditional scenarios, not trade execution instructions.",
-      "Challenge the analyst's thesis in plain prose (4-6 sentences, no JSON, no markdown). Cover: bullish, bearish and neutral scenarios, what would confirm or invalidate the thesis, watchlist events, and conflicts or missing evidence.",
-      "Do not invent prices, technical confirmation, or unsupported causal claims.",
-      "NEWS EVIDENCE:", JSON.stringify(evidence),
-      "ANALYST:", analystText
-    ]),
-    maxTokens: MAX_TOKENS.counselor,
-    effort: "low"
-  }); });
-  const counselorText = extractText(counselorResult);
-
-  const reasonerResult = await tracing.enterSpan("chat", async (span) => {
-    span.setAttributes({
-      "gen_ai.operation.name": "chat",
-      "gen_ai.agent.name": "xauusd-decision-agent",
-      "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-      "gen_ai.conversation.id": traceConversationId,
-      "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
-    });
-    return aiRunAs("news_reasoner", env, env.AI_MODEL_REASONER, {
-    messages: chatMessages([
-      "You are the final Fundamental News Reasoner for XAUUSD decision support.",
-      "Synthesize only the supplied article evidence, analyst output, and counselor output. This is a fundamental outlook, not a technical trade signal.",
-      "Your entire response must be one JSON object: start with { and end with }. No markdown, no text outside the JSON.",
-      "Return JSON only with keys: recommendation (BULLISH_BIAS, BEARISH_BIAS, NEUTRAL, WAIT_FOR_TECHNICAL_CONFIRMATION), confidence (0 to 1 or null), horizon, rationale, supporting_evidence, opposing_evidence, risks, confirmation_needed, invalidation_conditions.",
-      "Do not output numeric entry, stop-loss, take-profit, risk/reward, or position size. Do not claim an executable BUY/SELL without technical evidence.",
-      "If evidence is mixed, stale, or insufficient, choose WAIT_FOR_TECHNICAL_CONFIRMATION or NEUTRAL and lower confidence.",
-      "NEWS EVIDENCE:", JSON.stringify(evidence),
-      "ANALYST:", analystText,
-      "COUNSELOR:", counselorText
-    ]),
-    maxTokens: MAX_TOKENS.reasoner,
-    effort: "medium"
-  }); });
-  const reasonerText = extractText(reasonerResult);
-
-  let recommendation: JsonObject;
-  const extractedRecommendation = extractJsonObject(reasonerText);
-  try {
-    recommendation = extractedRecommendation ? extractedRecommendation : {
-      recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION",
-      confidence: null,
-      rationale: "Reasoner response was not valid JSON; no trade signal generated.",
-      raw_response: reasonerText
-    };
-  } catch {
-    recommendation = {
-      recommendation: "WAIT_FOR_TECHNICAL_CONFIRMATION",
-      confidence: null,
-      rationale: "Reasoner response was not valid JSON; no trade signal generated.",
-      raw_response: reasonerText
-    };
-  }
+  // AU1 item 9 (owner 2026-11-28, "jawaban bernomor 1-9 setuju semua"): the news chain's three AI steps (analyst,
+  // counselor, reasoner) are removed. The hour's articles are still stored as the evidence News Daily reads
+  // (news-daily.mjs); the analysis fields stay in the row (NOT NULL), empty, and the recommendation says no model made one.
+  const analystText = "";
+  const counselorText = "";
+  const reasonerText = "";
+  const recommendation: JsonObject = { recommendation: null, confidence: null, source: "ingest_only", rationale: "No model reads the hourly articles any more (AU1 item 9); News Daily reads them." };
 
   const analyzedAt = new Date().toISOString();
   const result: JsonObject = {
@@ -663,11 +571,11 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     analyzed_at: analyzedAt,
     article_count: newsEvidence.article_count,
     symbols: evidence.symbols,
-    analyst_model: env.AI_MODEL_ANALYST,
+    analyst_model: null,
     analyst_output: analystText,
-    counselor_model: env.AI_MODEL_COUNSELOR,
+    counselor_model: null,
     counselor_output: counselorText,
-    reasoner_model: env.AI_MODEL_REASONER,
+    reasoner_model: null,
     reasoner_output: reasonerText,
     recommendation
   };
@@ -679,7 +587,6 @@ async function runNewsAnalysis(env: Env): Promise<JsonObject> {
     JSON.stringify(evidence), analystText, counselorText, reasonerText, JSON.stringify(recommendation)
   ).run();
   await env.SIGNAL_CACHE.put("latest:news:fundamental", JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 });
-  await enqueueNewsThread(env, analysisKey);
   return result;
 
   });
@@ -779,15 +686,6 @@ async function setAnalysisRunStatus(env: Env, candleKey: string, status: string,
   }
 }
 
-/** Phase 3 news thread for a completed news analysis (shadow, behind NEWS_THREADS_ENABLED). */
-async function enqueueNewsThread(env: Env, analysisKey: string): Promise<void> {
-  if (!newsThreadsEnabled(env)) return;
-  try {
-    await sendQueueTask(env.XAUUSD_EVENTS, buildNewsThreadTask({ analysisKey }) as unknown as QueueTask);
-  } catch (error) {
-    console.error("news_thread_enqueue_failed", JSON.stringify({ analysis_key: analysisKey, error: error instanceof Error ? error.message : String(error) }));
-  }
-}
 
 
 
@@ -1483,8 +1381,8 @@ async function processQueueTask(env: Env, task: QueueTask): Promise<void> {
       return;
     }
     if (task.kind === "news_thread") {
-      const result = await runNewsThread(env, task);
-      console.log("news_thread", JSON.stringify({ analysis_key: task.analysis_key, ...result }));
+      // The news thread is removed (AU1 item 8, owner 2026-11-28): a task already queued is acknowledged.
+      console.log("news_thread_retired", JSON.stringify({ analysis_key: task.analysis_key ?? null }));
       return;
     }
     if (task.kind === "live_room") {
@@ -3336,8 +3234,7 @@ export default {
       await env.DB.prepare(
         "INSERT INTO news_analyses (analysis_key, fetched_at, analyzed_at, article_count, evidence_json, analyst_output, counselor_output, reasoner_output, recommendation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).bind(analysisKey, now, now, 2, JSON.stringify(evidence), "preview fixture", "preview fixture", "Preview fixture reasoner: wait for technical confirmation.", JSON.stringify(recommendation)).run();
-      await enqueueNewsThread(env, analysisKey);
-      return json({ status: "ok", analysis_key: analysisKey, thread_id: "news:" + analysisKey }, 202);
+      return json({ status: "ok", analysis_key: analysisKey }, 202);
     }
     if (request.method === "POST" && url.pathname === "/preview/reasoner-probe") {
       // Preview only (PREVIEW_FIXTURES_ENABLED): one call on AI_MODEL_REASONER, so preview-e2e proves the

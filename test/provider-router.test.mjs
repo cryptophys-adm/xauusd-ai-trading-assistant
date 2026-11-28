@@ -139,10 +139,9 @@ test("PR2-2 off means unchanged: callBusModel sends today's Workers AI request f
     assert.deepEqual(runs, [BUS_DEFAULT_MODEL]);
   } finally { globalThis.fetch = keep; }
   assert.deepEqual(hits, [], "no fetch at all");
-  // aiRun (src/index.ts, the news chain AU1 item 9 removes) never routes; the router returns at once when off.
+  // The news chain's aiRun is gone with AU1 item 9 (owner 2026-11-28); only callBusModel routes. The router returns at once when off.
   const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  const aiRun = idx.slice(idx.indexOf("async function aiRun("), idx.indexOf("function aiRunAs("));
-  assert.doesNotMatch(aiRun, /routeLiveCall|provider-router/);
+  assert.doesNotMatch(idx, /function aiRun\(|function aiRunAs\(|routeLiveCall/);
   assert.equal(await routeLiveCall(env({ ROUTER_TEXT: "off" }), { source: "plain_decision", messages: MESSAGES, fetcher: () => { throw new Error("fetched"); } }), null);
 });
 
