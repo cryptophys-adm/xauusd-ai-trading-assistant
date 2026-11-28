@@ -69,11 +69,15 @@ test("OG-1 a signed-in non-owner gets 403 owner_only on every mutating route, an
   assert.deepEqual(calls, [], "no RPC was made for a non-owner");
 });
 
-test("OG-2 the owner reaches the RPC on every mutating route; with OWNER_ACCESS_SUB unset nobody does (fail closed)", async () => {
+// The one exception to fail closed: POST /api/strategy-arm keeps its bootstrap (RFC §11.3: while OWNER_ACCESS_SUB is unset,
+// the AI Worker records the first visitor's sub). OWNER_ACCESS_SUB is set in both wrangler.jsonc files.
+const BOOTSTRAP = new Set(["POST /api/strategy-arm"]);
+test("OG-2 the owner reaches the RPC on every mutating route; with OWNER_ACCESS_SUB unset nobody does (fail closed, but the arm bootstrap)", async () => {
   resetKeyCacheForTests();
   const opts = { fetchImpl: certsFetch, now: NOW_S };
   const owner = await jwt({ email: "owner@example.com", sub: OWNER });
   for (const [method, path, body] of MUTATING) {
+    if (BOOTSTRAP.has(`${method} ${path}`)) continue;
     const { O, calls } = gateway();
     const r = await handle(req(method, path, { token: owner, body }), { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OMEGA: O, OWNER_ACCESS_SUB: OWNER }, opts);
     // The owner passes the gate; a body this test does not shape fully may still get a 400 from the route's own checks.

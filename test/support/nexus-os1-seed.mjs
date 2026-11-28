@@ -28,7 +28,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { buildEnvelope } from "../../workers/xauusd-omega/public/omega-crypto.js";
 import { resetKeyCacheForTests } from "../../workers/xauusd-omega/src/omega.mjs";
-import { access, caller, ctx, deterministic, kidOf, KEYS, loadWorkerModule, migratedD1 } from "./nexus-f4-seed.mjs";
+import { access, caller, ctx, deterministic, kidOf, KEYS, loadWorkerModule, migratedD1, OWNER_SUB } from "./nexus-f4-seed.mjs";
 import { kv } from "../fixtures/mode-shadow.mjs";
 
 /** The fixture's clock: 05:00 UTC, 12:00 GMT+7 on Friday 27 November 2026 (gold open). */
@@ -68,7 +68,7 @@ async function scenario(a, run) {
     resetKeyCacheForTests();
     const db = await migratedD1();
     const gw = new mod.OmegaGateway(ctx, { DB: db, SIGNAL_CACHE: kv(), CORPUS_ORACLE_MODE: "shadow" });
-    const env = { ACCESS_TEAM_DOMAIN: "cryptophys.cloudflareaccess.com", ACCESS_AUD: "c".repeat(64), OMEGA_BRIDGE_CLIENT_ID: "f4bridge.access", OMEGA_FEED_CLIENT_ID: "f4feed.access", OMEGA: gw };
+    const env = { ACCESS_TEAM_DOMAIN: "cryptophys.cloudflareaccess.com", ACCESS_AUD: "c".repeat(64), OWNER_ACCESS_SUB: OWNER_SUB, OMEGA_BRIDGE_CLIENT_ID: "f4bridge.access", OMEGA_FEED_CLIENT_ID: "f4feed.access", OMEGA: gw };
     const must = (r, what) => { if (r.status !== 200 || r.body?.ok === false) throw new Error(`${what}: ${JSON.stringify(r).slice(0, 400)}`); return r; };
     const sync = async (t, connected, server) => { at(t); return must(await call(env, a.bridge, { path: "/omega/api/bridge/sync", body: { public_key: KEYS.executor, kid, bridge_version: "1.8.0", results: [], state: executorState(t, connected, server) } }), "executor sync"); };
     const connect = async (t, server) => { at(t); return must(await call(env, a.owner, { path: "/omega/api/connection", body: { server, envelope: await buildEnvelope(KEYS.executor, kid, { server, ...CREDS }), trade_symbol: null, units_per_usd: null } }), "connection"); };

@@ -21,6 +21,8 @@ async function jwt(claims, { key = pair.privateKey, kid = "k1" } = {}) {
   return `${head}.${body}.${b64url(new Uint8Array(sig))}`;
 }
 const ENV_BASE = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD };
+// CF2a: every Omega write is the owner's alone; the owner of these tests.
+const OWNER_SUB = "owner-sub-0001";
 
 function omega() {
   const calls = [];
@@ -56,19 +58,21 @@ test("the Access JWT: signature, audience, issuer and expiry; a person or a serv
 test("every route but /health needs the JWT; reads go through the OmegaGateway binding", async () => {
   resetKeyCacheForTests();
   const O = omega();
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: OWNER_SUB };
   const opts = { fetchImpl: certsFetch, now: NOW };
   assert.equal((await handle(req("/health"), env, opts)).status, 200);
   assert.equal((await handle(req("/"), env, opts)).status, 403, "no JWT, no page (fail closed even before the edge covers the host)");
   assert.equal((await handle(req("/api/overview"), env, opts)).status, 403);
   assert.equal((await handle(req("/api/overview", { token: await jwt({ email: "a@b.c" }, { key: other.privateKey }) }), env, opts)).status, 403);
-  const ok = await handle(req("/api/overview", { token: await jwt({ email: "owner@example.com" }) }), env, opts);
+  const ok = await handle(req("/api/overview", { token: await jwt({ email: "owner@example.com", sub: OWNER_SUB }) }), env, opts);
   assert.equal(ok.status, 200);
   const body = await ok.json();
   assert.equal(body.signal.side, "BUY");
   assert.deepEqual(body.viewer, { subject: "owner@example.com", type: "user", can_control: true });
   const svc = await (await handle(req("/api/overview", { token: await jwt({ common_name: "ci.access" }) }), env, opts)).json();
   assert.equal(svc.viewer.can_control, false, "a service token reads only");
+  const guest = await (await handle(req("/api/overview", { token: await jwt({ email: "guest@example.com", sub: "guest-sub-0002" }) }), env, opts)).json();
+  assert.equal(guest.viewer.can_control, false, "CF2a: a signed-in non-owner reads only");
   assert.equal((await (await handle(req("/api/deals?limit=9999", { token: await jwt({ email: "a@b.c" }) }), env, opts)).json()).limit, 500);
   assert.equal((await handle(req("/api/overview", { token: await jwt({ email: "a@b.c" }) }), { ...ENV_BASE }, opts)).status, 503, "no binding");
 });
@@ -76,9 +80,9 @@ test("every route but /health needs the JWT; reads go through the OmegaGateway b
 test("a control change: a person, same origin, JSON, a reason, KILL typed; the actor is the Access email", async () => {
   resetKeyCacheForTests();
   const O = omega();
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: OWNER_SUB };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const person = await jwt({ email: "Owner@Example.com" });
+  const person = await jwt({ email: "Owner@Example.com", sub: OWNER_SUB });
   const post = (body, extra = {}) => handle(req("/api/control", { token: person, method: "POST", body, ...extra }), env, opts);
 
   assert.equal((await post({ mode: "paused", reason: "CPI" })).status, 200);
@@ -92,6 +96,8 @@ test("a control change: a person, same origin, JSON, a reason, KILL typed; the a
   assert.equal((await post({ mode: "paused", reason: "x" }, { type: "text/plain" })).status, 415);
   assert.equal((await handle(req("/api/control", { token: await jwt({ common_name: "ci.access" }), method: "POST", body: { mode: "paused", reason: "x" } }), env, opts)).status, 403, "a service token never changes the control");
   assert.equal((await handle(req("/api/control", { token: person }), env, opts)).status, 405);
+  const guest = await jwt({ email: "guest@example.com", sub: "guest-sub-0002" });
+  assert.deepEqual(await (await handle(req("/api/control", { token: guest, method: "POST", body: { mode: "active" } }), env, opts)).json(), { error: "owner_only" }, "CF2a: another signed-in person never changes the control");
   assert.equal(O.calls.length, 3);
   assert.deepEqual(controlRequest({ mode: "off" }), { error: "mode must be one of active, paused, killed" });
 });
@@ -229,9 +235,9 @@ test("the MT5 fallback switch (War Room, 2026-11-11): read when signed in; chang
   resetKeyCacheForTests();
   const calls = [];
   const O = { ...omega(), feedFallback: async () => ({ mode: "auto", active: true }), setFeedFallback: async (input) => { calls.push(input); return { ok: true, mode: input.mode, changed: true }; } };
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: OWNER_SUB };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const person = await jwt({ email: "Owner@Example.com" });
+  const person = await jwt({ email: "Owner@Example.com", sub: OWNER_SUB });
   const read = await handle(req("/api/feed-fallback", { token: person }), env, opts);
   assert.equal(read.status, 200);
   assert.deepEqual(await read.json(), { mode: "auto", active: true, can_control: true });
@@ -251,9 +257,9 @@ test("the shadow kill switch (owner 2026-11-14): read when signed in; changed by
   resetKeyCacheForTests();
   const calls = [];
   const O = { ...omega(), shadowMode: async () => ({ mode: "on", allowed: true }), setShadowMode: async (input) => { calls.push(input); return { ok: true, mode: input.mode, changed: true }; } };
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: OWNER_SUB };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const person = await jwt({ email: "Owner@Example.com" });
+  const person = await jwt({ email: "Owner@Example.com", sub: OWNER_SUB });
   const read = await handle(req("/api/shadow-mode", { token: person }), env, opts);
   assert.deepEqual(await read.json(), { mode: "on", allowed: true, can_control: true });
   const post = (body, extra = {}) => handle(req("/api/shadow-mode", { token: person, method: "POST", body, ...extra }), env, opts);
@@ -301,9 +307,9 @@ test("the trading mode changes only by a person's same-origin POST (owner 2026-1
   resetKeyCacheForTests();
   const calls = [];
   const O = { ...omega(), setTradingMode: async (input) => { calls.push(input); return { ok: true, mode: input.mode, previous: "intraday", changed: true }; } };
-  const env = { ...ENV_BASE, OMEGA: O };
+  const env = { ...ENV_BASE, OMEGA: O, OWNER_ACCESS_SUB: OWNER_SUB };
   const opts = { fetchImpl: certsFetch, now: NOW };
-  const person = await jwt({ email: "Owner@Example.com" });
+  const person = await jwt({ email: "Owner@Example.com", sub: OWNER_SUB });
   const post = (body, extra = {}) => handle(req("/api/trading-mode", { token: person, method: "POST", body, ...extra }), env, opts);
   const ok = await post({ mode: "Scalp" });
   assert.equal(ok.status, 200);

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateKeyPairSync, createHash, privateDecrypt, constants, createDecipheriv } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { seedF4, access, caller, ORIGIN, PLACEHOLDER, TEAM, AUD } from "./support/nexus-f4-seed.mjs";
+import { seedF4, access, caller, ORIGIN, PLACEHOLDER, TEAM, AUD, OWNER_SUB } from "./support/nexus-f4-seed.mjs";
 import { envelopeError } from "../src/omega-broker.mjs";
 import { feedSync, setFeedConnection, clearFeedConnection, feedOverview, resetFeedSchemaForTests } from "../src/feed-bridge.mjs";
 import { resetKeyCacheForTests } from "../workers/xauusd-omega/src/omega.mjs";
@@ -283,7 +283,7 @@ test("F4-10 the writes leave the Nexus origin same-origin and JSON, as the execu
   await feedSync(dbEnv, { bridgeId: "oanda", state: { connected: true, server: PLACEHOLDER.server }, publicKey: spki, kid, bridgeVersion: "1.9.0" });
   const OMEGA = { overview: async () => ({}), setFeedConnection: (i) => setFeedConnection(dbEnv, i), clearFeedConnection: (i) => clearFeedConnection(dbEnv, i) };
   const a = await access();
-  const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OMEGA };
+  const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OWNER_ACCESS_SUB: OWNER_SUB, OMEGA };
   const { handle } = await import("../workers/xauusd-omega/src/omega.mjs");
   const sent = [];
   // The browser's request: the page's init at the Nexus origin (a same-origin POST or DELETE carries Origin), its Access cookie as the JWT.
