@@ -14,7 +14,6 @@ export const CLAUDE_LIVE_RPM: number;
 export const ROUTER_ROLLBACK: Readonly<{ window_ms: number; min_calls: number; min_validity: number; max_timeout_share: number }>;
 export const ROUTER_ROLLBACK_KEY: string;
 export const ROUTER_KEEP_MS: number;
-export const NEWS_RECOMMENDATIONS: readonly string[];
 export function resetProviderRouterForTests(): void;
 export function routerGroupOf(source: unknown): "decision" | "text" | null;
 export function routerMode(env: unknown, group: string): "on" | "off";
@@ -34,4 +33,3 @@ export function rollbackVerdicts(rows: unknown[], opts?: { since?: Record<string
 export function routeLiveCall(env: unknown, opts: { source: string; messages: unknown; schema?: unknown; check?: ((obj: any) => string | null) | null; maxTokens?: number; deadline?: number | null; clock?: () => number; fetcher?: (...a: any[]) => Promise<any>; claudeClient?: unknown }): Promise<{ ok: true; provider: string; model: string; text: string; obj: Record<string, any> | null; usage: { prompt: number; completion: number }; latency_ms: number; tried: string[] } | null>;
 export function evaluateRouterRollback(env: unknown, opts?: { now?: number; send?: ((text: string) => Promise<unknown>) | null }): Promise<{ status: string; added?: string[]; notified?: string[]; verdicts?: unknown[]; message?: string }>;
 export function readModelRouter(env: unknown, opts?: { days?: number; now?: number }): Promise<Record<string, any>>;
-export function newsReasonerCheck(obj: unknown): string | null;

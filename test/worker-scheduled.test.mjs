@@ -211,42 +211,6 @@ test("news cron: a missing news ingestion fails into a logged error, never an ex
   assert.ok(!output.lines.error.some(l => /ReferenceError|is not a function|is not defined/.test(l)), output.lines.error.join("\n"));
 });
 
-test("CL1 PR2: the news chain's aiRun is unchanged with ROUTER_TEXT off (no Beam or Anthropic fetch); on, Beam answers the three calls", async () => {
-  const article = () => ({ title: "Gold steadies as the dollar eases", url: "https://example.test/a1", source: "test", published_at: new Date(Date.now() - 10 * 60_000).toISOString(), summary: "Gold held its gains." });
-  const recording = () => { const inputs = []; return { inputs, async run(model, input) { inputs.push({ model, input: JSON.parse(JSON.stringify(input)) }); const t = JSON.stringify({ recommendation: "NEUTRAL", confidence: 0.4, rationale: "Mixed." }); return { response: t, usage: { prompt_tokens: 10, completion_tokens: 5 } }; } }; };
-  const run = async (over) => {
-    const { env } = await workerEnv();
-    const ai = recording();
-    Object.assign(env, { AI: ai, NEWS_INGESTION: { async pull() { return { articles: [article()] }; } } }, over);
-    const hits = [];
-    const keep = globalThis.fetch;
-    globalThis.fetch = async (url, init) => {
-      hits.push(String(url));
-      if (String(url).includes("reflection")) return new Response(JSON.stringify({ choices: [{ message: { content: hits.length === 3 ? JSON.stringify({ recommendation: "NEUTRAL", confidence: 0.4, rationale: "Mixed." }) : "Plain prose." }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { status: 200, headers: { "content-type": "application/json", "reflection-data-retention": "none" } });
-      throw new Error("no network in tests: " + String(url));
-    };
-    const { ctx, settle } = execution();
-    const output = captureConsole();
-    try { await worker.scheduled({ cron: "5 * * * *", scheduledTime: Date.now() }, env, ctx); await settle(); } finally { output.restore(); globalThis.fetch = keep; }
-    // ai_usage_daily's schema is cached per bundle (one worker for every test), so the router's own table is read here.
-    const routed = env.DB.db.prepare("SELECT name FROM sqlite_master WHERE name = 'router_calls'").get() ? env.DB.db.prepare("SELECT role, provider, outcome FROM router_calls ORDER BY id").all().map((r) => ({ ...r })) : [];
-    // The run's own clock times (fetched_at, the article's age) differ between runs; everything else must not.
-    const stable = (c) => ({ model: c.model, input: JSON.parse(JSON.stringify(c.input).replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z/g, "<time>")) });
-    return { ai: ai.inputs.filter((c) => JSON.stringify(c.input).includes("Fundamental News")).map(stable), hits, routed, lines: output.lines };
-  };
-  const main = await run({});
-  const off = await run({ ROUTER_TEXT: "off", ROUTER_DECISION: "off", REFLECTION_API_KEY: "test-only-beam", ANTHROPIC_API_KEY: "test-only-claude" });
-  assert.equal(main.ai.length, 3, main.lines.error.join("\n"));
-  assert.deepEqual(off.ai, main.ai, "the same Workers AI requests, byte for byte");
-  assert.deepEqual([main.hits, off.hits], [[], []], "no fetch");
-  assert.deepEqual([main.routed, off.routed], [[], []], "no router row");
-  const kernelOn = { async syscall(agent, capability) { return capability === "model_router.status" ? { outcome: "succeeded", result: { schema: "model_router.status.v1", state: { state: "on", mode: "free_only" } } } : { outcome: "succeeded", result: {} }; } };
-  const on = await run({ ROUTER_TEXT: "on", REFLECTION_API_KEY: "test-only-beam", AGENTS: kernelOn });
-  assert.equal(on.ai.length, 0, "no Workers AI call for the news chain");
-  assert.equal(on.hits.filter((h) => h.includes("reflection")).length, 3);
-  assert.deepEqual(on.routed, ["news_analyst", "news_counselor", "news_reasoner"].map((role) => ({ role, provider: "beam", outcome: "ok" })));
-});
-
 test("B2: the H1 chain labels the 5m context VERIFIED 5m only while the 5m identities are trusted (the frozen table, not the registry)", async () => {
   const { TRUSTED_IDENTITIES } = await import("../src/trusted-identities.mjs");
   const closeMs = Math.floor(Date.now() / 300_000) * 300_000;

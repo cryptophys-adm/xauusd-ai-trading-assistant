@@ -218,7 +218,7 @@ function asText(value: unknown): string {
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
 import { readClaudeShadow } from "./claude-shadow.mjs";
-import { routeLiveCall, routerGroupOf, readModelRouter, evaluateRouterRollback, newsReasonerCheck } from "./provider-router.mjs";
+import { readModelRouter, evaluateRouterRollback } from "./provider-router.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
@@ -363,13 +363,7 @@ function safeKeyPart(value: string): string {
  * takes reasoning_effort (or the Responses form), gemma-4 runs with thinking off.
  */
 async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }, source = "h1_chain"): Promise<unknown> {
-  // CL1 PR2 (src/provider-router.mjs): the news chain asks Beam, then Claude Haiku, while ROUTER_TEXT is on; an answer
-  // comes back in the Workers AI shape, and any call the router does not answer runs below as before.
-  if (routerGroupOf(source)) {
-    const routed = await routeLiveCall(env as unknown as Record<string, unknown>, { source, messages: opts.messages, maxTokens: opts.maxTokens, check: source === "news_reasoner" ? newsReasonerCheck : null });
-    if (routed) return { response: routed.text, usage: { prompt_tokens: routed.usage.prompt, completion_tokens: routed.usage.completion }, provider: routed.provider, model: routed.model };
-  }
-  // The usage meter (src/ai-usage.mjs): the news chain's analyst, counselor and reasoner calls.
+  // The usage meter (src/ai-usage.mjs): the H1 chain's analyst, counselor and reasoner calls.
   const meter = env.DB ? { db: env.DB, source } : null;
   return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, { ...opts, meter })).result;
 }

@@ -9,7 +9,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   ROUTER_GROUPS, ROUTER_SWITCHES, ROUTER_OUTPUT_CAP, ROUTER_ROLLBACK, ROUTER_ROLLBACK_KEY, ROUTER_KEEP_MS, BEAM_LIVE_LIMITS, BEAM_METER_PREFIX,
   CLAUDE_LIVE_CAP_USD, WORKERS_AI_RESERVE_MS, routerGroupOf, routerDecisionMode, routerTextMode, claudeLiveCap, schemaErrors, acceptAnswer,
-  outboundBlock, outputCap, rollbackVerdicts, rollbackStands, routeLiveCall, evaluateRouterRollback, readModelRouter, newsReasonerCheck,
+  outboundBlock, outputCap, rollbackVerdicts, rollbackStands, routeLiveCall, evaluateRouterRollback, readModelRouter,
   resetProviderRouterForTests
 } from "../src/provider-router.mjs";
 import { MODEL_ROUTER_DEFAULTS, MODEL_ROUTER_CAPABILITIES, MODEL_ROUTER_RATE_KEY, MODEL_ROUTER_PAID_KEY, resetModelRouterForTests } from "../src/model-router.mjs";
@@ -96,10 +96,10 @@ const call = (e, over = {}) => quiet(() => routeLiveCall(e, { source: "decision_
 
 test("PR2-1 one constant for the routed roles; the FS1 switches are off by default and emergency stops", () => {
   assert.deepEqual([...ROUTER_GROUPS.decision], ["decision_council", "war_room_conclusion", "tf_room_conclusion", "macro_room_conclusion"]);
-  assert.deepEqual([...ROUTER_GROUPS.text], ["news_analyst", "news_counselor", "news_reasoner", "news_daily_tldr", "plain_decision", "thread_moderator"]);
+  assert.deepEqual([...ROUTER_GROUPS.text], ["news_daily_tldr", "plain_decision"], "AU1 items 8 and 9 removed the news chain and the threads");
   for (const r of ROUTER_GROUPS.decision) assert.equal(routerGroupOf(r), "decision");
   for (const r of ROUTER_GROUPS.text) assert.equal(routerGroupOf(r), "text");
-  for (const r of ["h1_reasoner", "war_room_opening", "war_room_rebuttal", "shadow:decision_council", "claude:decision_council", "cfc:synthesis", "position_council", "", null]) assert.equal(routerGroupOf(r), null, String(r));
+  for (const r of ["h1_reasoner", "news_analyst", "news_counselor", "news_reasoner", "thread_moderator", "war_room_opening", "war_room_rebuttal", "shadow:decision_council", "claude:decision_council", "cfc:synthesis", "position_council", "", null]) assert.equal(routerGroupOf(r), null, String(r));
   assert.deepEqual(Object.keys(ROUTER_OUTPUT_CAP).sort(), [...ROUTER_GROUPS.decision, ...ROUTER_GROUPS.text].sort(), "an output cap per routed role");
   for (const [g, key] of Object.entries(ROUTER_SWITCHES)) {
     const sw = switchByKey(key);
@@ -110,7 +110,7 @@ test("PR2-1 one constant for the routed roles; the FS1 switches are off by defau
   assert.equal(routerTextMode({ ROUTER_TEXT: " ON " }), "on");
   assert.doesNotMatch(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"), /ROUTER_DECISION|ROUTER_TEXT/, "off until the owner turns it on in FS1");
   assert.deepEqual([claudeLiveCap({}), claudeLiveCap({ ROUTER_CLAUDE_USD_PER_DAY: "0.5" }), claudeLiveCap({ ROUTER_CLAUDE_USD_PER_DAY: "x" })], [CLAUDE_LIVE_CAP_USD, 0.5, 1]);
-  assert.deepEqual([outputCap("decision_council", 6144, "beam"), outputCap("decision_council", 6144, "claude"), outputCap("plain_decision", 1000, "beam"), outputCap("news_analyst", 4096, "beam")], [6144, 8000, 1000, 2048]);
+  assert.deepEqual([outputCap("decision_council", 6144, "beam"), outputCap("decision_council", 6144, "claude"), outputCap("plain_decision", 1000, "beam"), outputCap("news_daily_tldr", 4096, "beam")], [6144, 8000, 1000, 2048]);
 });
 
 // ---------------------------------------------------------------- 2. off means unchanged
@@ -139,10 +139,11 @@ test("PR2-2 off means unchanged: callBusModel sends today's Workers AI request f
     assert.deepEqual(runs, [BUS_DEFAULT_MODEL]);
   } finally { globalThis.fetch = keep; }
   assert.deepEqual(hits, [], "no fetch at all");
-  // aiRun (src/index.ts): the news chain asks the router only for a routed source, and the router returns at once when off.
+  // aiRun (src/index.ts, the news chain AU1 item 9 removes) never routes; the router returns at once when off.
   const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.match(idx, /async function aiRun\([^)]*\)[^{]*\{\n(?:\s*\/\/[^\n]*\n)*\s*if \(routerGroupOf\(source\)\) \{\n\s*const routed = await routeLiveCall\(/);
-  assert.equal(await routeLiveCall(env({ ROUTER_TEXT: "off" }), { source: "news_analyst", messages: MESSAGES, fetcher: () => { throw new Error("fetched"); } }), null);
+  const aiRun = idx.slice(idx.indexOf("async function aiRun("), idx.indexOf("function aiRunAs("));
+  assert.doesNotMatch(aiRun, /routeLiveCall|provider-router/);
+  assert.equal(await routeLiveCall(env({ ROUTER_TEXT: "off" }), { source: "plain_decision", messages: MESSAGES, fetcher: () => { throw new Error("fetched"); } }), null);
 });
 
 // ---------------------------------------------------------------- 3. Beam answers
@@ -246,17 +247,20 @@ test("PR2-5 Claude Haiku: adaptive thinking at effort low with structured output
   const meter = rows(e, "SELECT source, model, usd_micros FROM ai_usage_daily WHERE model = ?", CLAUDE_METER_MODEL);
   assert.deepEqual(meter.map((x) => x.source), ["decision_council"], "metered under the role, not claude:<role> (the shadow's)");
   assert.ok(meter[0].usd_micros > 0);
-  // A text role: thinking disabled, no effort, no schema (prose).
+  // A text role: thinking disabled, no effort; its schema as structured output when it has one.
   const t = env(noBeam);
-  const cl2 = claude(() => claudeOk("The thesis in plain prose."));
-  const r2 = await quiet(() => routeLiveCall(t, { source: "news_analyst", messages: MESSAGES, maxTokens: 4096, clock: () => NOW, claudeClient: cl2 }));
-  assert.equal(r2.value.text, "The thesis in plain prose.");
+  const cl2 = claude(() => claudeOk("The text in plain prose."));
+  const r2 = await quiet(() => routeLiveCall(t, { source: "news_daily_tldr", messages: MESSAGES, maxTokens: 4096, clock: () => NOW, claudeClient: cl2 }));
+  assert.equal(r2.value.text, "The text in plain prose.");
   assert.deepEqual([cl2.seen[0].body.thinking, cl2.seen[0].body.output_config, cl2.seen[0].body.max_tokens], [{ type: "disabled" }, undefined, 2048]);
-  // The news Reasoner's JSON is checked for its recommendation.
-  assert.deepEqual([newsReasonerCheck({ recommendation: "neutral" }), newsReasonerCheck({ recommendation: "BUY" }), newsReasonerCheck(null)], [null, "recommendation", "recommendation"]);
   const t2 = env(noBeam);
-  const bad = await quiet(() => routeLiveCall(t2, { source: "news_reasoner", messages: MESSAGES, check: newsReasonerCheck, clock: () => NOW, claudeClient: claude(() => claudeOk(JSON.stringify({ recommendation: "BUY" }))) }));
-  assert.equal(bad.value, null, "an unknown recommendation goes to Workers AI");
+  const cl3 = claude();
+  await quiet(() => routeLiveCall(t2, { source: "plain_decision", messages: MESSAGES, schema: SCHEMA, maxTokens: 2048, clock: () => NOW, claudeClient: cl3 }));
+  assert.deepEqual([cl3.seen[0].body.thinking, cl3.seen[0].body.output_config.effort, cl3.seen[0].body.output_config.format.type], [{ type: "disabled" }, undefined, "json_schema"]);
+  // A caller's check (any role) turns a schema-valid answer away: it goes to Workers AI.
+  const t3 = env(noBeam);
+  const bad = await quiet(() => routeLiveCall(t3, { source: "plain_decision", messages: MESSAGES, schema: SCHEMA, check: (o) => (o.stance === "WAIT" ? "no_wait" : null), clock: () => NOW, claudeClient: claude() }));
+  assert.equal(bad.value, null);
 });
 
 test("PR2-6 Claude falls through to Workers AI on refusal, max_tokens, 429 and billing; a billing error stops Claude until the next UTC day; the $1 live cap counts live rows only", async () => {

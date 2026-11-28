@@ -16,7 +16,9 @@ export const ROUTER_VERSION = "provider-router-v1";
 /** The routed sources by switch group; nothing else is routed (seats, rebuttals, shadow arms stay on Workers AI). */
 export const ROUTER_GROUPS = Object.freeze({
   decision: Object.freeze(["decision_council", "war_room_conclusion", "tf_room_conclusion", "macro_room_conclusion"]),
-  text: Object.freeze(["news_analyst", "news_counselor", "news_reasoner", "news_daily_tldr", "plain_decision", "thread_moderator"])
+  // AU1 (owner 2026-11-28, "jawaban bernomor 1-9 setuju semua"): the news AI chain and the agent threads are removed
+  // (items 8 and 9), so the text group is News Daily's TLDR and the plain-language rewrite.
+  text: Object.freeze(["news_daily_tldr", "plain_decision"])
 });
 export const ROUTER_SWITCHES = Object.freeze({ decision: "ROUTER_DECISION", text: "ROUTER_TEXT" });
 export const ROUTER_PROVIDERS = Object.freeze(["beam", "claude"]);
@@ -26,7 +28,7 @@ export const ROUTER_PROVIDERS = Object.freeze(["beam", "claude"]);
  */
 export const ROUTER_OUTPUT_CAP = Object.freeze({
   decision_council: 8000, war_room_conclusion: 6000, tf_room_conclusion: 6000, macro_room_conclusion: 6000,
-  news_analyst: 2048, news_counselor: 2048, news_reasoner: 3000, news_daily_tldr: 2048, plain_decision: 2048, thread_moderator: 3000
+  news_daily_tldr: 2048, plain_decision: 2048
 });
 /**
  * What never leaves the account (orchestrator, CL1 PR2): a prompt that carries any of these JSON keys, or the value of any
@@ -38,7 +40,7 @@ const SECRET_NAME = /(KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL)/i;
 /** Per-call timeouts; a step runs only while the Workers AI step keeps its reserve before the call's deadline. */
 export const ROUTER_TIMEOUT_MS = Object.freeze({ beam: 20_000, claude: 20_000 });
 export const WORKERS_AI_RESERVE_MS = 35_000;
-/** The text roles have no deadline of their own (the hourly news chain); they get one this long. */
+/** A call without a deadline of its own gets one this long. */
 export const ROUTER_TEXT_DEADLINE_MS = 120_000;
 /** Beam: xauusd's share of the org's free beta (10M in / 1M out a day, 60 rpm, shared with CTA). */
 export const BEAM_LIVE_LIMITS = Object.freeze({ tokens_in_day: 6_000_000, tokens_out_day: 600_000, rpm: 30 });
@@ -512,8 +514,3 @@ export async function readModelRouter(env, { days = 7, now = Date.now() } = {}) 
   }
 }
 
-/** The news Reasoner's answer as the router accepts it: one JSON object with a known recommendation (else a reason). */
-export const NEWS_RECOMMENDATIONS = Object.freeze(["BULLISH_BIAS", "BEARISH_BIAS", "NEUTRAL", "WAIT_FOR_TECHNICAL_CONFIRMATION"]);
-export function newsReasonerCheck(obj) {
-  return NEWS_RECOMMENDATIONS.includes(String(obj?.recommendation ?? "").toUpperCase()) ? null : "recommendation";
-}
