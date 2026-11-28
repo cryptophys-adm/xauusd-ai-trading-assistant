@@ -4,7 +4,7 @@
 // (stance, 2-5 sentences, what it would try), the evidence stays behind its refs; then rebuttals by name, the
 // moderator's 2-5 options (always "no_change"), and the owner's messages, each answered by the seats addressed. The
 // owner opens a session on a suggested topic or on free text. The pick is made in Cerebrum (HAIC Q6): the options go to
-// the platform as a council_decision.v1 report. A session never changes trading: its options are proposals.
+// the platform as a council_options.v1 report (council_decision.v1 until 2026-11-28; legacy_schema carries the old name). A session never changes trading: its options are proposals.
 //
 // Runs as queue steps (kind "council_step", one step per message: positions, rebuttals, synthesis, answer), so a step
 // may take the model's minutes. Limits (RFC §8): at most 16 model calls per session (6 positions, 4 rebuttals,
@@ -15,7 +15,7 @@ import { callBusModel } from "./model-call.mjs";
 import { ensureAiUsageSchema, neuronsOf } from "./ai-usage.mjs";
 import { buildEvidencePack, parseTopicKey, evRef } from "./cfc-pack.mjs";
 import { parseRef, refCarriesPrice } from "./owner-corrections.mjs";
-import { cfcMode, cfcSessionsMode } from "./cfc-triggers.mjs";
+import { cfcMode, cfcSessionsMode, cfcAutoMode } from "./cfc-triggers.mjs";
 import { agentRoster } from "./agent-inventory.mjs";
 import { publishToPlatform } from "./platform-reports.mjs";
 import { knobMenu, checkKnobValue, readKnobOverrides } from "./council-knobs.mjs";
@@ -65,10 +65,13 @@ const SCHEMA_SQL = [
     report_id TEXT, accepted_by TEXT, accepted_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL)`,
   "CREATE INDEX IF NOT EXISTS council_proposals_state ON council_proposals (state, updated_ms)"
 ];
+// CFC-A2 (2026-11-28): the council's own pick (decided_by council, its rationale and the seat tally) on the proposal.
+const SCHEMA_ADD = ["ALTER TABLE council_proposals ADD COLUMN decision_json TEXT"];
 let schemaReady = null;
 export async function ensureSessionSchema(db) {
   if (schemaReady === db) return;
   for (const q of SCHEMA_SQL) await db.prepare(q).run();
+  for (const q of SCHEMA_ADD) { try { await db.prepare(q).run(); } catch { /* the column exists */ } }
   // C1's repair, idempotent: a session the owner closed (or re-opened) while a step ran was moved on to awaiting_owner
   // by that step; its reason still says so. Only that state and those reasons are touched.
   try {
@@ -258,6 +261,11 @@ export async function closeSession(env, { session_id, actor = "owner", reason = 
   await ensureSessionSchema(db);
   const s = await db.prepare("SELECT id, state FROM council_sessions WHERE id = ?").bind(session_id).first();
   if (!s) return { ok: false, error: "unknown session" };
+  if (s.state === "decided") {
+    // CFC-A2: the owner's veto. A council-picked task still in its veto window is stopped; it is never handed off.
+    const v = await db.prepare("UPDATE council_proposals SET state = 'vetoed', note = ?, updated_ms = ? WHERE session_id = ? AND state = 'veto_window'").bind(clip(`vetoed by ${actor}`, 200), now, session_id).run();
+    if (changed(v)) return { ok: true, session_id, state: "decided", proposal_state: "vetoed" };
+  }
   if (TERMINAL_STATES.includes(s.state)) return { ok: false, error: `the session is already ${s.state}` };
   const r = await db.prepare(`UPDATE council_sessions SET state = 'closed', reason = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(clip(`${reason} by ${actor}`, 200), now, session_id).run();
   if (!changed(r)) return { ok: false, error: "the session has just ended" };
@@ -279,6 +287,41 @@ export async function reopenSession(env, { session_id, actor = "owner", now = Da
 
 export const PROPOSAL_AGENT = "xauusd-moderator";
 export const PROPOSAL_REPO = "cryptophys-adm/xauusd-ai-trading-assistant";
+/** The options report's schema (renamed 2026-11-28; the platform reads both during the window: legacy_schema). */
+export const OPTIONS_SCHEMA = "council_options.v1";
+export const OPTIONS_SCHEMA_LEGACY = "council_decision.v1";
+/** CFC-A2: a repository_task the council picked waits this long for the owner's veto (Close) before it is handed off. */
+export const VETO_WINDOW_MS = 2 * 3_600_000;
+
+/** CFC-A2: the fewest position seats that must have spoken for the council to decide by itself. */
+export const COUNCIL_QUORUM = 4;
+/**
+ * Pure, CFC-A2 (CFC_MODE "auto" only): the council's own pick after the synthesis. The stance tally comes from the
+ * position round, before the options exist, so "support" is support for acting on the topic; the pick is the
+ * moderator's top-ranked option that is not no_change. A quorum is needed: at least COUNCIL_QUORUM (4) seats spoke;
+ * without it there is no auto-decision (quorum false, option_id null: the owner picks). With it, the option is chosen
+ * when support >= max(4, ceil(2/3 of the seats that spoke)) and it is valid (a knob inside its bounds against the live
+ * values, or a repository_task with a spec); otherwise no_change. Returns the option and why, with the tally.
+ */
+export function councilPick(options, positions, live = null) {
+  const opts = Array.isArray(options) ? options : [];
+  const tally = { support: 0, oppose: 0, amend: 0, abstain: 0 };
+  for (const p of Array.isArray(positions) ? positions : []) if (p?.stance in tally) tally[p.stance] += 1;
+  const spoke = Object.values(tally).reduce((a, b) => a + b, 0);
+  const quorum = spoke >= COUNCIL_QUORUM;
+  const need = Math.max(COUNCIL_QUORUM, Math.ceil((2 * spoke) / 3));
+  if (!quorum) return { option_id: null, decided_by: null, quorum: false, rationale: `no quorum (${spoke} spoke; needs ${COUNCIL_QUORUM})`, tally, spoke, need, supported: false, valid: false, top: null };
+  const supported = tally.support >= need;
+  const top = opts.find((o) => o && o.kind !== "no_change" && o.option_id !== "no_change") ?? null;
+  let valid = false, why = "no option other than no_change";
+  if (top?.kind === "policy_parameter") { const k = checkKnobValue(top.knob, top.value, live); valid = k.ok; why = k.ok ? "the knob is inside its bounds" : `the knob change is not valid: ${k.error}`; }
+  else if (top?.kind === "repository_task") { valid = Boolean(clip(top.spec, 800)); why = valid ? "the task has a spec" : "the task has no spec"; }
+  const pick = top && supported && valid ? top.option_id : "no_change";
+  const rationale = clip(pick === "no_change"
+    ? `no_change: ${!top ? why : !supported ? `${tally.support} of ${spoke} seats support (needs ${need})` : why}`
+    : `${top.option_id}: ${tally.support} of ${spoke} seats support (needs ${need}); ${why}`, 300);
+  return { option_id: pick, decided_by: "council", quorum: true, rationale, tally, spoke, need, supported, valid, top: top?.option_id ?? null };
+}
 
 /** Pure: the typed_proposal.v1 report for an accepted option (docs/design/HAIC-H0-H1.md on the platform). */
 export function proposalReport(p, { session, refs = [] } = {}) {
@@ -290,7 +333,11 @@ export function proposalReport(p, { session, refs = [] } = {}) {
     body: {
       schema: "typed_proposal.v1", proposal_id: p.id, kind: p.kind, state: p.state, executor: p.kind === "repository_task" ? "cryptophys" : "xauusd",
       origin: { council: p.session_id, option_id: p.option_id, side: "nexus", repo: PROPOSAL_REPO, topic: session?.topic_key ?? null, question: session?.question ?? null },
-      chosen_by: `owner:${p.accepted_by ?? "owner"}`, chosen_at: new Date(Number(p.accepted_ms)).toISOString(),
+      session_id: p.session_id,
+      // CFC-A3: who chose the option, and that the owner approved the topic (the owner's identity is never stored).
+      chosen_by: String(p.accepted_by ?? "").startsWith("council") ? "council" : `owner:${p.accepted_by ?? "owner"}`, chosen_at: new Date(Number(p.accepted_ms)).toISOString(),
+      topic_approved_by: "owner",
+      ...(String(p.accepted_by ?? "").startsWith("council") && parse(p.decision_json, null) ? { council_decision: parse(p.decision_json, null) } : {}),
       title: o.title ?? null, hypothesis: o.hypothesis ?? null, change: o.change ?? null, risk: o.risk ?? null, dissent: o.dissent ?? null,
       ...(p.kind === "policy_parameter" ? { knob: p.knob, from: p.from_value, value: p.value } : {}),
       ...(p.kind === "repository_task" ? { spec: p.spec ?? o.change ?? null } : {}),
@@ -314,7 +361,7 @@ async function handOff(env, p, publish) {
  * the platform (typed_proposal.v1): a repository_task is handed to the evolution loop there (Cryptophys builds it, not
  * an external party); a policy_parameter waits for its shadow test; no_change is recorded. A send that fails is retried.
  */
-export async function acceptOption(env, { session_id, option_id, actor = "owner", now = Date.now(), publish = publishToPlatform }) {
+export async function acceptOption(env, { session_id, option_id, actor = "owner", now = Date.now(), publish = publishToPlatform, decision = null }) {
   const db = env.DB;
   await ensureSessionSchema(db);
   const s = await db.prepare("SELECT id, state, options FROM council_sessions WHERE id = ?").bind(session_id).first();
@@ -331,14 +378,19 @@ export async function acceptOption(env, { session_id, option_id, actor = "owner"
     knob = k.knob.id; from = k.from; value = k.value; note = "waits for its shadow test against today's setting (phase 2)";
   }
   const id = `cp_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const state = kind === "no_change" ? "closed" : kind === "policy_parameter" ? "queued_shadow" : "handoff_pending";
+  // CFC-A2: a repository_task the council picked waits VETO_WINDOW_MS for the owner's Close before the hand-off.
+  const byCouncil = String(actor).startsWith("council");
+  const veto = byCouncil && kind === "repository_task";
+  const state = kind === "no_change" ? "closed" : kind === "policy_parameter" ? "queued_shadow" : veto ? "veto_window" : "handoff_pending";
+  if (veto) note = `handed off after the ${VETO_WINDOW_MS / 3_600_000} h veto window unless the owner closes it`;
   const p = { id, session_id, option_id, kind, title: clip(opt.title, 120), knob, from_value: from, value, spec: kind === "repository_task" ? clip(opt.spec ?? opt.change, 800) : null,
-    option_json: JSON.stringify(opt), state, note, accepted_by: clip(actor, 120), accepted_ms: now };
+    option_json: JSON.stringify(opt), state, note, accepted_by: clip(actor, 120), accepted_ms: now, decision_json: decision ? JSON.stringify(decision) : null };
   // C1: the session is decided only while it still waits for the owner (a Close in between wins); then the proposal is stored.
   const decided = await db.prepare("UPDATE council_sessions SET state = 'decided', reason = ?, updated_ms = ? WHERE id = ? AND state = 'awaiting_owner'").bind(clip(`accepted ${option_id} by ${actor}`, 200), now, session_id).run();
   if (!changed(decided)) return { ok: false, error: "the session is no longer waiting for your pick" };
-  await db.prepare("INSERT INTO council_proposals (id, session_id, option_id, kind, title, knob, from_value, value, spec, option_json, state, note, report_id, accepted_by, accepted_ms, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)")
-    .bind(p.id, p.session_id, p.option_id, p.kind, p.title, p.knob, p.from_value, p.value, p.spec, p.option_json, p.state, p.note, p.accepted_by, now, now).run();
+  await db.prepare("INSERT INTO council_proposals (id, session_id, option_id, kind, title, knob, from_value, value, spec, option_json, state, note, report_id, accepted_by, accepted_ms, updated_ms, decision_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)")
+    .bind(p.id, p.session_id, p.option_id, p.kind, p.title, p.knob, p.from_value, p.value, p.spec, p.option_json, p.state, p.note, p.accepted_by, now, now, p.decision_json).run();
+  if (veto) return { ok: true, proposal_id: id, kind, state, delivered: false, veto_until: new Date(now + VETO_WINDOW_MS).toISOString() };
   // The report carries the state the proposal has once the platform holds it (a code task: handed_off).
   const sent = await handOff(env, { ...p, state: kind === "repository_task" ? "handed_off" : state }, publish);
   const delivered = sent?.outcome === "success";
@@ -353,12 +405,13 @@ export async function retryProposalHandoffs(env, { now = Date.now(), publish = p
   const db = env?.DB;
   if (!db) return { status: "unavailable" };
   await ensureSessionSchema(db);
-  const rows = (await db.prepare("SELECT * FROM council_proposals WHERE state = 'handoff_pending' ORDER BY accepted_ms LIMIT ?").bind(limit).all()).results ?? [];
+  // CFC-A2: a council-picked task leaves its veto window here (the owner's Close inside it vetoes it).
+  const rows = (await db.prepare("SELECT * FROM council_proposals WHERE state = 'handoff_pending' OR (state = 'veto_window' AND accepted_ms <= ?) ORDER BY accepted_ms LIMIT ?").bind(now - VETO_WINDOW_MS, limit).all()).results ?? [];
   let sent = 0;
   for (const p of rows) {
     const r = await handOff(env, { ...p, state: "handed_off" }, publish);
-    if (r?.outcome === "success") { sent += 1; await db.prepare("UPDATE council_proposals SET state = 'handed_off', report_id = ?, note = NULL, updated_ms = ? WHERE id = ?").bind(String(r.report_id ?? "") || null, now, p.id).run(); }
-    else await db.prepare("UPDATE council_proposals SET note = ?, updated_ms = ? WHERE id = ?").bind(clip(`platform send: ${r?.reason ?? r?.outcome ?? "failed"}; retried hourly`, 200), now, p.id).run();
+    if (r?.outcome === "success") { sent += 1; await db.prepare("UPDATE council_proposals SET state = 'handed_off', report_id = ?, note = NULL, updated_ms = ? WHERE id = ? AND state IN ('handoff_pending', 'veto_window')").bind(String(r.report_id ?? "") || null, now, p.id).run(); }
+    else await db.prepare("UPDATE council_proposals SET state = 'handoff_pending', note = ?, updated_ms = ? WHERE id = ? AND state IN ('handoff_pending', 'veto_window')").bind(clip(`platform send: ${r?.reason ?? r?.outcome ?? "failed"}; retried hourly`, 200), now, p.id).run();
   }
   return { status: "ok", pending: rows.length, sent };
 }
@@ -455,13 +508,26 @@ export async function runSessionStep(env, { session_id, step }, { now = Date.now
     } catch { syn = null; }
     if (!syn) { await keepCalls(); return abort("the moderator gave no valid synthesis"); }
     const moved = await db.prepare(`UPDATE council_sessions SET state = 'awaiting_owner', options = ?, calls = ?, updated_ms = ? WHERE id = ? AND ${NOT_TERMINAL}`).bind(JSON.stringify(syn), calls, now, session_id).run();
-    // C1: closed during the synthesis: no awaiting_owner, and no council_decision.v1 for a closed session.
+    // C1: closed during the synthesis: no awaiting_owner, and no options report for a closed session.
     if (!changed(moved)) return ended;
     // The pick is made in Cerebrum (HAIC Q6): the options go to the platform's inbox. Best effort.
     try {
       await publish(env, "xauusd-moderator", { kind: "xauusd_digest", severity: "info", subject: clip(`Council: ${s.topic_text ?? s.topic_key}`, 200), ai_status: "model",
-        body: { schema: "council_decision.v1", session_id, topic: s.topic_key, question: s.question, summary: syn.summary, options: syn.options, participants: seats, source: "xauusd-ai-trading-assistant" } });
+        body: { schema: OPTIONS_SCHEMA, legacy_schema: OPTIONS_SCHEMA_LEGACY, session_id, topic: s.topic_key, question: s.question, summary: syn.summary, options: syn.options, participants: seats, source: "xauusd-ai-trading-assistant" } });
     } catch { /* the session stands; the owner sees it in Nexus */ }
+    // CFC-A2: in CFC_MODE "auto" the council decides by itself (the owner approved the topic, never picks an option).
+    if (cfcAutoMode(env)) {
+      const pick = councilPick(syn.options, spoken.filter((r) => r.round === "position"), live);
+      if (!pick.quorum) {
+        // Too few seats spoke: the owner approved the topic and picks; the session stays awaiting_owner, saying why.
+        await db.prepare("UPDATE council_sessions SET reason = ?, updated_ms = ? WHERE id = ? AND state = 'awaiting_owner'").bind(clip(`no quorum (${pick.spoke} of ${seats.length} spoke)`, 200), now, session_id).run();
+        return { status: "awaiting_owner", options: syn.options.length, pick: null, quorum: false, spoke: pick.spoke };
+      }
+      let r = await acceptOption(env, { session_id, option_id: pick.option_id, actor: "council", now, publish, decision: pick });
+      // A pick no longer valid at acceptance (the engine moved): the council's answer is no_change.
+      if (!r?.ok && pick.option_id !== "no_change") r = await acceptOption(env, { session_id, option_id: "no_change", actor: "council", now, publish, decision: { ...pick, option_id: "no_change", rationale: clip(`no_change: ${r?.error ?? "the pick was refused"}`, 300) } });
+      return { status: r?.ok ? "decided" : "awaiting_owner", options: syn.options.length, pick: pick.option_id, decided_by: "council", proposal: r?.ok ? { id: r.proposal_id, state: r.state } : null };
+    }
     return { status: "awaiting_owner", options: syn.options.length };
   }
   if (step === "answer") {
