@@ -4,8 +4,8 @@
     "body": {
       "ok": true,
       "decision": "approve",
-      "suggestion_id": 14,
-      "session_id": "cfc_mx0dn3mo_wvuf01",
+      "suggestion_id": 18,
+      "session_id": "cfc_mx0dn3mo_ntco03",
       "participants": [
         "risk",
         "technical",
@@ -15,7 +15,7 @@
         "interstellar_eyes"
       ],
       "suggestion": {
-        "id": 14,
+        "id": 18,
         "topic_key": "strategy:zone_pullback@intraday|normal-trending",
         "type": "strategy",
         "rule": "context_negative",
@@ -24,7 +24,7 @@
         "expires_at": "2026-11-30T09:14:00.000Z",
         "decided_at": "2026-11-28T12:19:00.000Z",
         "decided_by": "owner",
-        "session_id": "cfc_mx0dn3mo_wvuf01"
+        "session_id": "cfc_mx0dn3mo_ntco03"
       }
     }
   },
@@ -33,10 +33,10 @@
     "body": {
       "ok": true,
       "decision": "reject",
-      "suggestion_id": 5,
+      "suggestion_id": 7,
       "session_id": null,
       "suggestion": {
-        "id": 5,
+        "id": 7,
         "topic_key": "cost:council",
         "type": "cost",
         "rule": "neurons_week",
@@ -55,10 +55,10 @@
       "ok": true,
       "replay": true,
       "decision": "approve",
-      "suggestion_id": 14,
-      "session_id": "cfc_mx0dn3mo_wvuf01",
+      "suggestion_id": 18,
+      "session_id": "cfc_mx0dn3mo_ntco03",
       "suggestion": {
-        "id": 14,
+        "id": 18,
         "topic_key": "strategy:zone_pullback@intraday|normal-trending",
         "type": "strategy",
         "rule": "context_negative",
@@ -67,7 +67,7 @@
         "expires_at": "2026-11-30T09:14:00.000Z",
         "decided_at": "2026-11-28T12:19:00.000Z",
         "decided_by": "owner",
-        "session_id": "cfc_mx0dn3mo_wvuf01"
+        "session_id": "cfc_mx0dn3mo_ntco03"
       }
     }
   },
@@ -79,7 +79,7 @@
       "http_status": 409,
       "error": "this suggestion is already rejected",
       "suggestion": {
-        "id": 5,
+        "id": 7,
         "topic_key": "cost:council",
         "type": "cost",
         "rule": "neurons_week",
@@ -100,7 +100,7 @@
       "http_status": 409,
       "error": "this suggestion has expired",
       "suggestion": {
-        "id": 6,
+        "id": 8,
         "topic_key": "data:market_feed",
         "type": "data",
         "rule": "stuck_state",
@@ -121,7 +121,7 @@
       "http_status": 409,
       "error": "council sessions are off (CFC_MODE and the switch on the Councils page)",
       "suggestion": {
-        "id": 13,
+        "id": 15,
         "topic_key": "engine:model",
         "type": "engine",
         "rule": "gate_drift",
@@ -162,6 +162,39 @@
     "status": 403,
     "body": {
       "error": "same_origin_only"
+    }
+  },
+  "veto": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "session_id": "cfc_mwyznz40_wvuf01",
+      "state": "decided",
+      "proposal_state": "vetoed"
+    }
+  },
+  "accept": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "proposal_id": "cp_mx0j002o_gaxpi3",
+      "kind": "repository_task",
+      "state": "handoff_pending",
+      "delivered": false
+    }
+  },
+  "accept_again": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "only a session waiting for your pick can be accepted (this one is decided)"
+    }
+  },
+  "close_decided": {
+    "status": 400,
+    "body": {
+      "ok": false,
+      "error": "the session is already decided"
     }
   }
 }

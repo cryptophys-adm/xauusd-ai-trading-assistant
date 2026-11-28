@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "mode": "on",
+  "mode": "auto",
   "rules": {
     "strategy": {
       "last_n": 20,

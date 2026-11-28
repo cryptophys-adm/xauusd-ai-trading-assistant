@@ -10,9 +10,9 @@ import { CHIP, FILL, TEXT } from "../lib/tokens";
 import { CorrectionControl, ROW, useOwnerGate } from "../components/Correction";
 import { councilOpinionTarget, councilOptionsTarget } from "../lib/corrections";
 import {
-  ACTIVE_FILTERS, activeOf, agoText, archiveOf, archivePath, archiveStatuses, archivedOf, chainFor, decideKey, decideRequest, decideResult, decidedByText, detailOf,
+  ACTIVE_FILTERS, ARCHIVE_PAGE, activeOf, agoText, archiveOf, archivePath, archiveStatuses, archivedOf, chainFor, decideKey, decideRequest, decideResult, decidedByText, detailOf,
   endedAt, endedText, kindText, mergeArchive, oneLine, postCouncil, sessionsOf, splitArchive, stanceOf, statusText, suggestionsOf, summaryText, tallyText, toneOf, whenText,
-  type Archive, type Chain, type DecideResult, type Decision, type Detail, type SessionRow, type Sessions, type Suggestion, type Suggestions, type Tally, type Tone
+  controlResult, maskEmail, vetoCountdown, type Archive, type Chain, type DecideResult, type Decision, type Detail, type Option, type SessionRow, type Sessions, type Suggestion, type Suggestions, type Tally, type Tone
 } from "../lib/councilArchive";
 
 // Call for Councils, CF2 (the owner approved the mockup on 2026-11-28, "approved"; the API is CFC-A PR1, #677). The
@@ -172,6 +172,7 @@ export function CouncilHeader({ mode, sessions, canControl, busy = false, error 
       </h1>
       <div className="flex flex-wrap items-center gap-2 text-[12px] text-fg-2">
         <Chip tone={mode === "off" ? "off" : "plain"} mono>CFC_MODE {mode ?? "—"}</Chip>
+        {mode === "auto" ? <Hint text="CFC_MODE auto: the council picks an option by itself once at least 4 seats spoke; without that quorum the owner picks. Topics still need the owner's approval. A code task the council picks waits 2 h for the owner's veto." /> : mode === "on" ? <Hint text="CFC_MODE on: the owner approves each topic and picks each session's option." /> : null}
         <Chip tone={on ? "ok" : "off"} dot>{sessions?.enabled == null ? "sessions —" : on ? "sessions on" : "sessions off"}</Chip>
         {sessions ? <span className="mono" title={`Sessions started today, of ${sessions.perDay} a day (closed sessions do not count)`}>{sessions.today}/{sessions.perDay} today</span> : null}
         {canControl && sessions?.enabled != null ? (
@@ -200,7 +201,7 @@ export function Tabs({ tab, open, running, onTab = noop }: { tab: TabKey; open: 
 
 // ------------------------------------------------------------------ Suggestions
 export type CardState = { sending?: Decision | null; result?: DecideResult | null; decision?: Decision };
-export function SuggestionCard({ s, now, canControl, state = {}, onDecide = noop, onEvidence = noop, onOpenSession = noop }: { s: Suggestion; now: number; canControl: boolean; state?: CardState; onDecide?: (s: Suggestion, d: Decision) => void; onEvidence?: (topic: string) => void; onOpenSession?: (id: string) => void }) {
+export function SuggestionCard({ s, now, canControl, state = {}, sessionsOn = true, onDecide = noop, onEvidence = noop, onOpenSession = noop }: { s: Suggestion; now: number; canControl: boolean; state?: CardState; sessionsOn?: boolean; onDecide?: (s: Suggestion, d: Decision) => void; onEvidence?: (topic: string) => void; onOpenSession?: (id: string) => void }) {
   const open = s.status === "open";
   const cd = s.countdown;
   const soon = cd?.soon === true;
@@ -236,10 +237,11 @@ export function SuggestionCard({ s, now, canControl, state = {}, onDecide = noop
       ) : !open && s.status === "rejected" ? <div className="text-[11px] text-muted">No session opened.</div> : null}
       {open && canControl ? (
         <div className="flex gap-2 pt-0.5">
-          <button type="button" className="btn btn-approve min-h-[36px] flex-1 justify-center" disabled={sending != null} aria-busy={sending === "approve" || undefined} onClick={() => onDecide(s, "approve")}>{sending === "approve" ? <><Spin />Approving</> : "Approve"}</button>
+          <button type="button" className="btn btn-approve min-h-[36px] flex-1 justify-center" disabled={sending != null || !sessionsOn} aria-busy={sending === "approve" || undefined} title={sessionsOn ? undefined : "Sessions are off: an approval cannot open a session"} onClick={() => onDecide(s, "approve")}>{sending === "approve" ? <><Spin />Approving</> : "Approve"}</button>
           <button type="button" className="btn min-h-[36px] flex-1 justify-center" disabled={sending != null} aria-busy={sending === "reject" || undefined} onClick={() => onDecide(s, "reject")}>{sending === "reject" ? <><Spin />Rejecting</> : "Reject"}</button>
         </div>
       ) : null}
+      {open && canControl && !sessionsOn ? <div className="flex items-center gap-1.5 text-[11px] text-muted">Approve is off while sessions are off.<Hint text="An approved topic opens its session at once; with CFC_MODE off or suggest, or the sessions switch off, the start is refused (409 session_refused). Reject still works." /></div> : null}
       {r && r.kind !== "ok" ? <DecideNote r={r} onRetry={r.retry && canControl && open && state.decision ? () => onDecide(s, state.decision!) : undefined} /> : null}
     </article>
   );
@@ -294,8 +296,8 @@ export function RecentList({ recent, archive, now, onOpenArchive = noop, onOpenS
   );
 }
 
-export function SuggestionsView({ sug, archive, now, canControl, cards = {}, notice = null, pack = null, onDecide, onEvidence = noop, onOpenArchive, onOpenSession, poll }: {
-  sug: Suggestions; archive: Archive | null; now: number; canControl: boolean; cards?: Record<number, CardState>; notice?: { topic: string; r: DecideResult } | null; pack?: ReactNode;
+export function SuggestionsView({ sug, archive, now, canControl, sessionsOn = true, cards = {}, notice = null, pack = null, onDecide, onEvidence = noop, onOpenArchive, onOpenSession, poll }: {
+  sug: Suggestions; archive: Archive | null; now: number; canControl: boolean; sessionsOn?: boolean; cards?: Record<number, CardState>; notice?: { topic: string; r: DecideResult } | null; pack?: ReactNode;
   onDecide?: (s: Suggestion, d: Decision) => void; onEvidence?: (t: string) => void; onOpenArchive?: () => void; onOpenSession?: (id: string) => void; poll?: Poll;
 }) {
   return (
@@ -312,7 +314,7 @@ export function SuggestionsView({ sug, archive, now, canControl, cards = {}, not
         ) : null}
         {sug.open.length ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {sug.open.map((s) => <SuggestionCard key={s.id ?? s.topicKey} s={s} now={now} canControl={canControl} state={s.id != null ? cards[s.id] : undefined} onDecide={onDecide} onEvidence={onEvidence} onOpenSession={onOpenSession} />)}
+            {sug.open.map((s) => <SuggestionCard key={s.id ?? s.topicKey} s={s} now={now} canControl={canControl} sessionsOn={sessionsOn} state={s.id != null ? cards[s.id] : undefined} onDecide={onDecide} onEvidence={onEvidence} onOpenSession={onOpenSession} />)}
           </div>
         ) : <Empty when="The flags run once an hour while the market is open.">0 open suggestions</Empty>}
       </Section>
@@ -348,6 +350,7 @@ export function RunningCard({ row, detail, now, callsMax, onOpen = noop }: { row
         <div className="flex min-w-0 flex-col gap-1">
           <div className="text-[13.5px] font-semibold text-fg">{row.topicText ?? row.question ?? row.topicKey}</div>
           <div className="mono break-all text-[11.5px] text-fg-2">{row.topicKey} · {row.id}</div>
+          {waiting ? <div className="flex items-center gap-1.5 text-[11.5px] text-late">Waiting for the owner&apos;s pick{row.reason ? `: ${row.reason}` : ""}<Hint text="The moderator's options are ready. In CFC_MODE on the owner picks every option; in auto the council picks by itself once at least 4 seats spoke, else the owner picks." /></div> : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Chip tone="late" dot>{waiting ? "awaiting pick" : "running"}</Chip>
@@ -399,7 +402,7 @@ export function SessionsView({ sessions, archive, now, details = {}, onOpen = no
                 <thead><tr><th className="w-[96px]">Status</th><th>Topic</th><th>Decided by</th><th>Tally</th><th>Pick</th><th>Ended</th><th><span className="sr-only">Open</span></th></tr></thead>
                 <tbody>{sessions.ended.map((r) => { const c = chainFor(archive, { sessionId: r.id }); const t = c?.session?.tally ?? null; return (
                   <tr key={r.id}>
-                    <td><Chip tone={toneOf(r.state)} title={r.reason ?? undefined}>{statusText(r.state)}</Chip></td>
+                    <td><Chip tone={toneOf(r.state)} title={r.reason ?? undefined}>{statusText(r.state)}</Chip>{vetoCountdown(c, now) ? <div className="mono mt-1 whitespace-nowrap text-[10.5px] text-late">veto {vetoCountdown(c, now)!.left}</div> : null}</td>
                     <td><div className="mono break-all text-fg">{r.topicKey}</div><div className="mono text-[10.5px] text-muted">{r.id}</div></td>
                     <td className="mono text-slate-300">{decidedBy(r, c)}</td>
                     <td>{t ? <TallyLine t={t} /> : <span className="text-muted">—</span>}</td>
@@ -453,12 +456,13 @@ export function OpinionCard({ m }: { m: any }) {
   );
 }
 
-export type DetailActions = { busy?: boolean; error?: string | null; onBack?: () => void; onClose?: () => void; onReopen?: () => void; onSend?: (text: string, to: string[]) => void };
+export type DetailActions = { busy?: boolean; error?: string | null; notice?: string | null; onBack?: () => void; onClose?: () => void; onReopen?: () => void; onVeto?: () => void; onAccept?: (o: Option) => void; onSend?: (text: string, to: string[]) => void };
 /** One session: the header, the options the council weighed (read-only, its pick marked), the seats' votes, the rounds. */
 export function SessionDetailView({ d, chain, now, canControl, enabled, actions = {} }: { d: Detail; chain: Chain | null; now: number; canControl: boolean; enabled: boolean; actions?: DetailActions }) {
   const s = d.raw;
   const [text, setText] = useState(""); const [to, setTo] = useState<string[]>([]);
-  const t = chain?.session?.tally ?? null;
+  const t = d.council?.tally ?? chain?.session?.tally ?? null;
+  const veto = vetoCountdown(chain, now);
   const pickWord = d.pickedBy === "owner" ? "owner's pick" : d.pickedBy === "council" ? "council's pick" : "pick";
   return (
     <div className="flex flex-col gap-4">
@@ -480,14 +484,24 @@ export function SessionDetailView({ d, chain, now, canControl, enabled, actions 
           <div><div className="eyebrow">{d.state === "decided" ? "Decided" : d.terminal ? "Ended" : "Updated"}</div><div className="mono text-[12px]">{whenText(d.updatedAt, now)}</div></div>
           <div><div className="eyebrow">Calls</div><div className="mono text-[12px]">{d.calls ?? "—"}/16</div></div>
           <div><div className="eyebrow">Evidence</div><div className="mono text-[12px]">{d.refs ?? 0} refs{d.packHash ? <span className="text-fg-2" title="pack sha256"> · {d.packHash.slice(0, 12)}…</span> : null}</div></div>
-          <div><div className="eyebrow">Proposal</div>{chain?.proposal ? <div className="flex flex-wrap items-center gap-1.5"><Chip tone={chain.proposal.step.tone}>{chain.proposal.step.text}</Chip><span className="mono text-[11px] text-slate-300">next {chain.nextActor}</span></div> : <div className="mono text-[12px] text-muted">—</div>}</div>
+          <div><div className="eyebrow">Proposal</div>{chain?.proposal ? <div className="flex flex-wrap items-center gap-1.5"><Chip tone={chain.proposal.step.tone}>{chain.proposal.step.text}</Chip><span className="mono text-[11px] text-slate-300">next {chain.nextActor}</span></div> : <div className="mono text-[12px] text-muted">—</div>}
+            {veto ? <div className="mono mt-1 text-[11px] text-late" title={veto.at}>veto ends in {veto.left} · {veto.at}</div> : null}</div>
         </div>
         {d.stale && !d.terminal ? <div className="text-[11px] text-late">{d.refs === 0 ? "This session ran on no evidence." : "This session's evidence is older than 24 hours."}</div> : null}
-        {d.reason && d.state !== "decided" ? <div className="text-[11.5px] text-fg-2">{d.state === "aborted" ? "Stopped: " : ""}{d.reason}</div> : null}
+        {d.awaitingPick ? (
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-late">Waiting for the owner&apos;s pick{d.reason ? `: ${d.reason}` : ""}.
+            <Hint text="CFC_MODE on: the owner picks every option. CFC_MODE auto: the council picks by itself once at least 4 seats spoke; without that quorum the owner picks." /></div>
+        ) : d.reason && d.state !== "decided" ? <div className="text-[11.5px] text-fg-2">{d.state === "aborted" ? "Stopped: " : ""}{d.reason}</div> : null}
+        {veto ? (
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-late">The council picked a code task. It is handed to the platform at {veto.at} unless the owner vetoes it.
+            <Hint text="CFC-A2: a code task the council picks waits 2 h for the owner's veto; the hourly hand-off sends it after the window. A knob change goes to its shadow test at once." /></div>
+        ) : null}
         {canControl ? (
           <div className="flex flex-wrap items-center gap-2 text-[11px]">
             <button type="button" disabled={actions.busy || !enabled} onClick={actions.onReopen} title={enabled ? "Open a new session on the same topic and agents, with fresh evidence; this one is closed" : "Turn sessions on first"} className="btn min-h-[30px] px-2.5 py-1">Re-open with fresh evidence</button>
             {!d.terminal ? <button type="button" disabled={actions.busy} onClick={actions.onClose} title="End this session; it frees a slot and does not count toward the day" className="btn min-h-[30px] px-2.5 py-1">Close</button> : null}
+            {veto ? <button type="button" disabled={actions.busy} onClick={actions.onVeto} title="Stop the council's code task before its hand-off" className="btn btn-danger min-h-[30px] px-2.5 py-1">Veto</button> : null}
+            {actions.notice ? <span role="status" className="text-ok">{actions.notice}</span> : null}
             {actions.error ? <span role="alert" className="mono text-fault">{actions.error}</span> : null}
           </div>
         ) : null}
@@ -496,11 +510,19 @@ export function SessionDetailView({ d, chain, now, canControl, enabled, actions 
       {d.options.length ? (
         <section aria-labelledby="cfc-options" className="glass flex flex-col gap-3 p-4 sm:p-[18px]">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 id="cfc-options" className="flex items-center gap-2 text-[13px] font-semibold text-fg">Options the council weighed<Hint text="The moderator's options (always including no change). The seats voted; the council picked one. Read-only: nothing to accept here. A knob change runs its shadow test first, then goes live by itself and rolls back by itself if it does worse." /></h2>
-            {t ? <div className="flex flex-wrap items-center gap-2.5"><span className="eyebrow">Tally</span><TallyBar t={t} /><span className="mono text-[11.5px] text-slate-300">{tallyText(t)}</span><Hint text="The stances of the opening opinions. The tally per option comes with the council's own pick." /></div> : null}
+            <h2 id="cfc-options" className="flex items-center gap-2 text-[13px] font-semibold text-fg">Options the council weighed<Hint text={d.awaitingPick ? "The moderator's options (always including no change). The owner picks one; the session ends with it. A knob change runs its shadow test first, then goes live by itself and rolls back by itself if it does worse." : "The moderator's options (always including no change). The pick is shown read-only. A knob change runs its shadow test first, then goes live by itself and rolls back by itself if it does worse."} /></h2>
+            {t ? <div className="flex flex-wrap items-center gap-2.5"><span className="eyebrow">Tally</span><TallyBar t={t} /><span className="mono text-[11.5px] text-slate-300">{tallyText(t)}</span><Hint text="The stances of the opening opinions: support is support for acting on the topic. There is no tally per option." /></div> : null}
           </div>
           <div className="flex flex-col gap-3">
           {d.summary ? <p className="text-[12px] leading-normal text-slate-300">{d.summary}</p> : null}
+          {d.council ? (
+            <div className="glass-inner flex flex-col gap-1 px-3 py-2 text-[12px]">
+              <div className="flex flex-wrap items-center gap-2"><span className="font-semibold text-fg">Decided by council</span>
+                {d.council.quorum != null ? <Chip tone="plain" mono>{d.council.quorum ? "quorum" : "no quorum"}{d.council.spoke != null ? ` · ${d.council.spoke} spoke` : ""}{d.council.need != null ? ` · needs ${d.council.need}` : ""}</Chip> : null}
+                <Hint text="CFC_MODE auto: the council picks the moderator's top option other than no change when at least 4 seats spoke and support reaches max(4, 2/3 of those who spoke), and the option is valid; else no change." /></div>
+              {d.council.rationale ? <div className="mono break-words text-[11.5px] text-slate-300">{d.council.rationale}</div> : null}
+            </div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{d.options.map((o) => (
             <article key={o.id} className={clsx("glass-inner flex flex-col gap-2 p-3.5", o.picked && "border-ok-fill/50 ring-1 ring-ok-fill/25")}>
               <div className="flex items-start justify-between gap-2">
@@ -512,6 +534,7 @@ export function SessionDetailView({ d, chain, now, canControl, enabled, actions 
               {o.knob ? <div className="mono rounded-md bg-white/3 px-2 py-1.5 text-[11.5px] text-fg">{o.knob}</div> : null}
               {o.kind === "repository_task" && o.spec ? <div className="text-[11px] text-slate-300">To build: {o.spec}</div> : null}
               <div className="text-[11px] leading-normal text-fg-2">Change: {o.change ?? "—"} · Risk: {o.risk ?? "—"}<br />Dissent: {o.dissent ?? "—"}</div>
+              {d.awaitingPick && canControl && actions.onAccept ? <button type="button" disabled={actions.busy} onClick={() => actions.onAccept?.(o)} className="btn btn-approve mt-1 min-h-[32px] self-start px-3 py-1">Accept</button> : null}
             </article>))}</div>
           {/* H3f: the owner's Rate / correct under the moderator's options (the session's ev_ref; each option's as evidence). */}
           <CorrectionControl target={councilOptionsTarget(s)} className={`mt-[12px] ${ROW}`} /></div>
@@ -578,7 +601,7 @@ function ChainRow({ c, now }: { c: Chain; now: number }) {
       <Arrow on={c.session != null} />
       <div className="flex min-w-0 flex-col gap-1">{c.session ? <><span className="self-start"><Chip tone={c.session.step.tone}>{c.session.step.text}</Chip></span><span className="mono truncate text-[11.5px] text-fg-2">{c.session.id}{c.session.reopenedAs ? ` → ${c.session.reopenedAs}` : ""}</span></> : <span className="text-muted">—</span>}</div>
       <Arrow on={c.proposal != null} />
-      <div className="flex min-w-0 flex-col gap-1">{c.proposal ? <><span className="flex items-center gap-1.5"><Chip tone={c.proposal.step.tone}>{c.proposal.step.text}</Chip>{c.proposal.kindText ? <span className="text-[10.5px] text-muted">{c.proposal.kindText}</span> : null}</span><span className="truncate text-[12px] text-fg" title={c.proposal.knob ?? c.proposal.title ?? ""}>{c.proposal.knob ?? c.proposal.title ?? "—"}</span></> : <span className="text-muted">—</span>}</div>
+      <div className="flex min-w-0 flex-col gap-1">{c.proposal ? <><span className="flex items-center gap-1.5"><Chip tone={c.proposal.step.tone}>{c.proposal.step.text}</Chip>{c.proposal.kindText ? <span className="text-[10.5px] text-muted">{c.proposal.kindText}</span> : null}</span><span className="truncate text-[12px] text-fg" title={c.proposal.knob ?? c.proposal.title ?? ""}>{c.proposal.knob ?? c.proposal.title ?? "—"}</span>{vetoCountdown(c, now) ? <span className="mono text-[10.5px] text-late" title={vetoCountdown(c, now)!.at}>veto ends in {vetoCountdown(c, now)!.left}</span> : null}</> : <span className="text-muted">—</span>}</div>
       <span className={clsx("mono text-[11.5px]", actorCls(c.nextActor))}>{c.nextActor}</span>
       <span className="mono truncate text-[11.5px] text-fg-2" title={c.proposal?.closeCode ?? ""}>{c.proposal?.closeCode ?? "—"}</span>
       <span className="mono text-[11px] leading-snug text-fg-2">{whenText(c.updatedAt, now)}</span>
@@ -596,7 +619,7 @@ function ChainCard({ c, now }: { c: Chain; now: number }) {
     <article className="flex flex-col rounded-[14px] border border-white/8 bg-panel/80 px-3.5 py-3">
       {link("Topic", c.topic.step ? <Chip tone={c.topic.step.tone}>{c.topic.step.text}</Chip> : <Chip tone="plain">owner topic</Chip>, <span className="mono break-all text-[12px] text-fg">{c.topic.key}</span>)}
       {link("Session", c.session ? <Chip tone={c.session.step.tone}>{c.session.step.text}</Chip> : <span className="text-muted">—</span>, <span className="mono text-[11.5px] text-fg-2">{c.session?.id ?? "—"}</span>)}
-      {link("Proposal", c.proposal ? <Chip tone={c.proposal.step.tone}>{c.proposal.step.text}</Chip> : <span className="text-muted">—</span>, <span className="text-[12px] text-fg">{c.proposal?.knob ?? c.proposal?.title ?? "—"}</span>, true)}
+      {link("Proposal", c.proposal ? <Chip tone={c.proposal.step.tone}>{c.proposal.step.text}</Chip> : <span className="text-muted">—</span>, <><span className="text-[12px] text-fg">{c.proposal?.knob ?? c.proposal?.title ?? "—"}</span>{vetoCountdown(c, now) ? <span className="mono text-[11px] text-late">veto ends in {vetoCountdown(c, now)!.left} · {vetoCountdown(c, now)!.at}</span> : null}</>, true)}
       <div className="mono flex justify-between gap-2 border-t border-white/6 pt-2 text-[11px] text-fg-2"><span>next <span className={actorCls(c.nextActor)}>{c.nextActor}</span></span><span>{c.proposal?.closeCode ?? "—"}</span><span className="text-muted">{whenText(c.updatedAt, now)}</span></div>
     </article>
   );
@@ -628,42 +651,51 @@ function ChainList({ chains, now }: { chains: Chain[]; now: number }) {
 }
 
 export type ArchiveUi = { open?: boolean; filter?: string; active?: string; loadingMore?: boolean; moreError?: string | null };
-export function ArchiveView({ a, now, ui = {}, onToggle = noop, onFilter = noop, onActive = noop, onLoadMore = noop, poll }: { a: Archive; now: number; ui?: ArchiveUi; onToggle?: () => void; onFilter?: (f: string) => void; onActive?: (f: string) => void; onLoadMore?: () => void; poll?: Poll }) {
-  const sp = splitArchive(a);
+/**
+ * The Archive tab (#680's scopes): `active` is the scope=active read (the chains that need someone, listed by default),
+ * `ended` the scope=archive read with its status filter (listed only once the owner opens the Archive line). The line's
+ * counts are the server's, over the whole window (exact).
+ */
+export function ArchiveView({ active, ended = null, now, ui = {}, onToggle = noop, onFilter = noop, onActive = noop, onLoadMore = noop, poll, endedPoll }: { active: Archive; ended?: Archive | null; now: number; ui?: ArchiveUi; onToggle?: () => void; onFilter?: (f: string) => void; onActive?: (f: string) => void; onLoadMore?: () => void; poll?: Poll; endedPoll?: Poll }) {
+  const sp = splitArchive(active, ended);
   const af = ui.active ?? "all", f = ui.filter ?? "all", open = ui.open === true;
-  const active = activeOf(sp.active, af);
-  const statuses = archiveStatuses(sp, a.statuses);
-  const shown = archivedOf(sp, statuses.includes(f) ? f : "all");
-  if (!sp.loaded) return (
+  const list = activeOf(sp.active, af);
+  const statuses = archiveStatuses(sp, active.statuses, active.counts ?? ended?.counts ?? null);
+  const shown = archivedOf(sp, f === "all" || !statuses.includes(f) ? "all" : f);
+  const of = ended?.total ?? (f === "all" ? sp.archivedTotal : shown.length);
+  if (!sp.loaded && !sp.archivedTotal && !sp.activeTotal) return (
     <Section id="cfc-archive" title="Archive" right={<span className="mono text-[11px] text-muted">0 chains</span>}>
       <Empty when="A chain starts when a suggestion is approved, rejected or expires.">0 chains</Empty>
     </Section>
   );
   return (
     <div className="flex flex-col gap-4">
-      <Section id="cfc-active" title={<>Needs someone <span className="mono text-[11px] font-normal text-muted">{active.length} of {sp.active.length}</span></>}
-        hint="Each row is one chain: the suggested topic, the session it opened, the proposal the council picked. Each step has one status. Next actor: who moves the chain next. Only chains that need someone are listed; the ended ones are in the Archive line below."
+      <Section id="cfc-active" title={<>Needs someone <span className="mono text-[11px] font-normal text-muted">{list.length} of {sp.activeTotal}</span></>}
+        hint="Each row is one chain: the suggested topic, the session it opened, the proposal picked. Each step has one status. Next actor: who moves the chain next. Only chains that need someone are listed; the ended ones are in the Archive line below."
         right={<div className="flex flex-wrap items-center gap-1.5">{ACTIVE_FILTERS.map(([k, label]) => (
           <button key={k} type="button" aria-pressed={af === k} onClick={() => onActive(k)} className={clsx("min-h-[30px] rounded-full border px-2.5 text-[11.5px] font-medium max-sm:min-h-[36px]", af === k ? "border-ok-fill/45 bg-ok-fill/8 text-ok" : "border-white/10 text-fg-2")}>{label}</button>))}</div>}>
         {poll ? <PollStrip poll={poll} className="mb-0" /> : null}
-        {active.length ? <ChainList chains={active} now={now} /> : <Empty>{sp.active.length ? "No chain in this filter." : "Nothing needs anyone now."}</Empty>}
+        {list.length ? <ChainList chains={list} now={now} /> : <Empty>{sp.active.length ? "No chain in this filter." : "Nothing needs anyone now."}</Empty>}
+        {active.nextCursor ? <span className="mono text-[11px] text-muted">{sp.active.length} of {sp.activeTotal} shown</span> : null}
         <button type="button" aria-expanded={open} aria-controls="cfc-archive-list" onClick={onToggle}
           className="mono flex items-center gap-2 self-start rounded-lg border border-white/8 bg-black/20 px-3 py-2 text-left text-[12px] text-fg-2 hover:text-fg">
           <span aria-hidden="true">{open ? "▾" : "▸"}</span>{summaryText(sp)}
         </button>
       </Section>
       {open ? (
-        <Section id="cfc-archive" title={<>Archive <span className="mono text-[11px] font-normal text-muted">{shown.length} of {sp.archived.length} ended{sp.exact ? "" : `, of ${sp.loaded} loaded`}</span></>}
-          hint={`The ended chains of the last ${a.windowDays ?? 90} days: no one acts on them any more. Expired and rejected topics are one line each. Close code: the platform's code for why a task ended, as sent.`}
+        <Section id="cfc-archive" title={<>Archive <span className="mono text-[11px] font-normal text-muted">{shown.length} of {of} {f === "all" ? "ended" : statusText(f)}</span></>}
+          hint={`The ended chains of the last ${active.windowDays ?? 90} days: no one acts on them any more. Expired and rejected topics are one line each. Close code: the platform's code for why a task ended, as sent.`}
           right={<label className="flex items-center gap-2 text-[11.5px] text-fg-2">Status
             <select className="mono min-h-[34px] rounded-lg border border-white/12 bg-black/35 px-2.5 text-[12px] text-fg" value={statuses.includes(f) ? f : "all"} onChange={(e) => onFilter(e.target.value)}>
               {statuses.map((o) => <option key={o} value={o}>{o === "all" ? "all" : statusText(o)}</option>)}
             </select></label>}>
-          <div id="cfc-archive-list">{shown.length ? <ChainList chains={shown} now={now} /> : <p className="mono text-[12px] text-fg">0 chains · {f}</p>}</div>
-          {a.nextCursor ? (
+          {endedPoll && phaseOf(endedPoll) === "error" ? <PollError poll={endedPoll} /> : ended == null ? <Skeleton rows={3} /> : (
+            <div id="cfc-archive-list">{shown.length ? <ChainList chains={shown} now={now} /> : <p className="mono text-[12px] text-fg">0 chains · {f}</p>}</div>
+          )}
+          {ended?.nextCursor ? (
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" className="btn min-h-[34px]" disabled={ui.loadingMore} onClick={onLoadMore}>{ui.loadingMore ? <><Spin />Loading</> : "Load more"}</button>
-              <span className="mono text-[11px] text-muted">{sp.loaded} of {sp.total ?? "?"} chains loaded</span>
+              <span className="mono text-[11px] text-muted">{ended.chains.length} of {ended.total ?? "?"} loaded</span>
               {ui.moreError ? <span role="alert" className="mono text-[11px] text-fault">{ui.moreError}</span> : null}
             </div>
           ) : null}
@@ -687,7 +719,7 @@ const useNow = (every = 30_000) => {
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), every); return () => window.clearInterval(t); }, [every]);
   return now;
 };
-const errorOf = (r: { status: number | null; body: any }) => (r.status === 200 && r.body?.ok !== false ? null : `${r.status ?? "network"} ${r.body?.error ?? r.body?.code ?? "failed"}`);
+const errorOf = (r: { status: number | null; body: any }) => (r.status === 200 && r.body?.ok !== false ? null : `${r.status ?? "network"} ${maskEmail(r.body?.error ?? r.body?.code ?? "failed")}`);
 
 /** A running session's seats: its own read every 10 s. */
 function RunningSession({ row, now, callsMax, onOpen }: { row: SessionRow; now: number; callsMax: number; onOpen: (id: string) => void }) {
@@ -698,24 +730,37 @@ function RunningSession({ row, now, callsMax, onOpen }: { row: SessionRow; now: 
 function SessionDetail({ id, archive, now, canControl, enabled, onBack, onOpen }: { id: string; archive: Archive | null; now: number; canControl: boolean; enabled: boolean; onBack: () => void; onOpen: (id: string) => void }) {
   const [tick, setTick] = useState(0);
   const poll = usePoll(() => get(`/api/council/session?id=${encodeURIComponent(id)}`), 10_000, [id, tick]);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null); const [notice, setNotice] = useState<string | null>(null);
   const [confirm, dialog] = useConfirm();
-  const d = detailOf((poll.data as any)?.session, chainFor(archive, { sessionId: id }));
-  const act = async (body: unknown) => {
-    setBusy(true); setError(null);
+  const chain = chainFor(archive, { sessionId: id });
+  const d = detailOf((poll.data as any)?.session, chain);
+  const act = async (body: { action: string } & Record<string, unknown>) => {
+    setBusy(true); setError(null); setNotice(null);
     const r = await postCouncil(body);
-    setError(errorOf(r)); setBusy(false); setTick((t) => t + 1);
-    return r;
+    const res = controlResult(body.action, r.status, r.body);
+    if (res.ok) setNotice(res.words); else setError(`${res.code} ${res.words}`);
+    setBusy(false); setTick((t) => t + 1);
+    return res;
   };
   const actions: DetailActions = {
-    busy, error, onBack,
+    busy, error, notice, onBack,
     onClose: async () => { if (await confirm({ title: "Close this session?", body: "It ends here: no more answers and no pick. It frees a slot and does not count toward the 4 sessions a day.", confirmLabel: "Close session", tone: "late" })) await act({ action: "close", session_id: id }); },
-    onReopen: async () => { const r = await act({ action: "reopen", session_id: id }); if (r.body?.session_id) onOpen(r.body.session_id); },
+    // CFC-A2: inside the veto window the owner's Close on the decided session vetoes the council's code task.
+    onVeto: async () => { if (await confirm({ title: "Veto the council's task?", body: <><div className="font-semibold text-fg">{chain?.proposal?.title ?? "The council's task"}</div><p className="mt-1.5">It is never handed to the platform. The session stays decided; the proposal becomes vetoed.</p></>, confirmLabel: "Veto", tone: "fault" })) await act({ action: "close", session_id: id }); },
+    // CFC_MODE on (or auto without a quorum): the owner's pick, as before CF2.
+    onAccept: async (o) => {
+      const what = o.kind === "policy_parameter" ? <>The knob <span className="mono text-ok">{o.knob}</span> changes only after a shadow test on the recorded decisions shows it does better; it then goes live by itself and rolls back by itself if it does worse.</>
+        : o.kind === "repository_task" ? <>This needs new code. It is handed to the platform&apos;s evolution loop, so Cryptophys builds it, not an outside party. Nothing in trading changes until it is built and tested.</>
+        : <>Nothing changes. The decision is recorded.</>;
+      if (!(await confirm({ title: `Accept "${o.title}"?`, body: <><p>{what}</p><p className="mt-2 text-slate-400">The session ends with this pick.</p></>, confirmLabel: "Accept", tone: "ok" }))) return;
+      await act({ action: "accept", session_id: id, option_id: o.id });
+    },
+    onReopen: async () => { const r = await act({ action: "reopen", session_id: id }); if (r.sessionId) onOpen(r.sessionId); },
     onSend: (text, to) => { void act({ action: "message", session_id: id, text, to }); }
   };
   if (phaseOf(poll) === "error") return <div className="flex flex-col gap-3"><button type="button" className={clsx(linkCls, "self-start")} onClick={onBack}>Sessions</button><PollError poll={poll} /></div>;
   if (!d) return poll.error != null ? <PollError poll={poll} /> : poll.loading ? <Skeleton rows={4} /> : <Empty>Session not found.</Empty>;
-  return <>{dialog}<PollStrip poll={poll} className="mb-0" /><SessionDetailView d={d} chain={chainFor(archive, { sessionId: id })} now={now} canControl={canControl} enabled={enabled} actions={actions} /></>;
+  return <>{dialog}<PollStrip poll={poll} className="mb-0" /><SessionDetailView d={d} chain={chain} now={now} canControl={canControl} enabled={enabled} actions={actions} /></>;
 }
 
 export default function Councils() {
@@ -725,12 +770,14 @@ export default function Councils() {
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   const sugPoll = usePoll(() => get("/api/council/suggestions"), 60_000, [tick]);
   const sesPoll = usePoll(() => get("/api/council/sessions"), 30_000, [tick]);
-  const arcPoll = usePoll(() => get(archivePath()), 60_000, [tick]);
-  const [more, setMore] = useState<Archive | null>(null);
+  // #680: the default view reads scope=active; the Archive view scope=archive with its status filter, paged by its cursor.
+  const [aui, setAui] = useState<ArchiveUi>({ open: false, filter: "all", active: "all" });
+  const arcPoll = usePoll(() => get(archivePath(null, ARCHIVE_PAGE, "active")), 60_000, [tick]);
+  const endPoll = usePoll(() => get(archivePath(null, ARCHIVE_PAGE, "archive", aui.filter ?? "all")), 120_000, [tick, aui.filter]);
+  const [more, setMore] = useState<{ filter: string; a: Archive } | null>(null);
   const [tab, setTab] = useState<TabKey>("suggestions");
   const [openId, setOpenId] = useState<string | null>(null);
   const [topic, setTopic] = useState<string | null>(null);
-  const [aui, setAui] = useState<ArchiveUi>({ open: false, filter: "all", active: "all" });
   const [cards, setCards] = useState<Record<number, CardState & { key?: string; decision?: Decision }>>({});
   const [notice, setNotice] = useState<{ topic: string; r: DecideResult } | null>(null);
   const [sw, setSw] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
@@ -739,7 +786,10 @@ export default function Councils() {
 
   const sug = useMemo(() => suggestionsOf(sugPoll.data, now), [sugPoll.data, now]);
   const sessions = useMemo(() => sesPoll.data ? sessionsOf(sesPoll.data, now) : null, [sesPoll.data, now]);
-  const archive = useMemo(() => { const first = arcPoll.data ? archiveOf(arcPoll.data) : null; return first && more ? mergeArchive(first, more) : first; }, [arcPoll.data, more]);
+  const active = useMemo(() => (arcPoll.data ? archiveOf(arcPoll.data) : null), [arcPoll.data]);
+  const ended = useMemo(() => { const first = endPoll.data ? archiveOf(endPoll.data) : null; return first && more && more.filter === (aui.filter ?? "all") ? mergeArchive(first, more.a) : first; }, [endPoll.data, more, aui.filter]);
+  // Every loaded chain, for a suggestion's or a session's own chain (Recent, Sessions, a session's detail).
+  const archive = useMemo(() => (active && ended ? { ...active, chains: [...active.chains, ...ended.chains.filter((c) => !active.chains.some((x) => x.id === c.id))] } : active ?? ended), [active, ended]);
 
   const decide = async (s: Suggestion, decision: Decision) => {
     if (s.id == null) return;
@@ -747,7 +797,7 @@ export default function Councils() {
     const approve = decision === "approve";
     const ok = await confirm({
       title: approve ? "Approve this topic?" : "Reject this topic?",
-      body: <><div className="mono font-semibold text-fg">{s.topicKey}</div><p className="mt-1.5">{approve ? "A session opens at once on fresh evidence and the seats decide. A session never changes trading by itself." : "No session opens. The same signal is not suggested again for 7 days."}</p></>,
+      body: <><div className="mono font-semibold text-fg">{s.topicKey}</div><p className="mt-1.5">{approve ? (sug.mode === "auto" ? "A session opens at once on fresh evidence; the council then picks an option by itself (CFC_MODE auto), and a code task waits 2 h for your veto." : "A session opens at once on fresh evidence; you pick its option when the seats are done. A session never changes trading by itself.") : "No session opens. The same signal is not suggested again for 7 days."}</p></>,
       ...(approve ? { confirmLabel: "Approve", tone: "ok" } : { confirmLabel: "Reject", tone: "late" })
     } as const);
     if (!ok) return;
@@ -769,9 +819,10 @@ export default function Councils() {
     refresh();
   };
   const loadMore = async () => {
-    if (!archive?.nextCursor) return;
+    if (!ended?.nextCursor) return;
+    const f = aui.filter ?? "all";
     setAui((u) => ({ ...u, loadingMore: true, moreError: null }));
-    try { const page = archiveOf(await get(archivePath(archive.nextCursor))); setMore((m) => (m ? mergeArchive(m, page) : page)); setAui((u) => ({ ...u, loadingMore: false })); }
+    try { const page = archiveOf(await get(archivePath(ended.nextCursor, ARCHIVE_PAGE, "archive", f))); setMore((m) => ({ filter: f, a: m && m.filter === f ? mergeArchive(m.a, page) : page })); setAui((u) => ({ ...u, loadingMore: false })); }
     catch (e) { setAui((u) => ({ ...u, loadingMore: false, moreError: e instanceof Error ? e.message : String(e) })); }
   };
   const openSession = (id: string) => { setOpenId(id); setTab("sessions"); };
@@ -791,7 +842,7 @@ export default function Councils() {
       <CouncilHeader mode={sug.mode ?? sessions?.mode ?? null} sessions={sessions} canControl={canControl} busy={sw.busy} error={sw.error} onSwitch={onSwitch} />
       <Tabs tab={tab} open={sugPoll.data ? sug.open.length : null} running={sessions ? sessions.running.length + sessions.waiting.length : null} onTab={(t) => { setTab(t); if (t === "sessions") setOpenId(null); }} />
       {tab === "suggestions" ? body(sugPoll, () => (
-        <SuggestionsView sug={sug} archive={archive} now={now} canControl={canControl} cards={cards} notice={notice} pack={packPanel} poll={sugPoll}
+        <SuggestionsView sug={sug} archive={archive} now={now} canControl={canControl} sessionsOn={sessions?.enabled !== false} cards={cards} notice={notice} pack={packPanel} poll={sugPoll}
           onDecide={decide} onEvidence={setTopic} onOpenArchive={openArchive} onOpenSession={openSession} />
       )) : tab === "sessions" ? (openId ? (
         <SessionDetail id={openId} archive={archive} now={now} canControl={canControl} enabled={sessions?.enabled === true} onBack={() => setOpenId(null)} onOpen={setOpenId} />
@@ -799,8 +850,8 @@ export default function Councils() {
         <SessionsView sessions={sessions} archive={archive} now={now} poll={sesPoll} onOpen={setOpenId}
           renderRunning={(r) => <RunningSession row={r} now={now} callsMax={sessions.callsMax} onOpen={setOpenId} />} />
       ) : null)) : (
-        phaseOf(arcPoll) === "error" ? <ArchiveUnread poll={arcPoll} /> : !archive ? <Skeleton rows={4} /> : (
-          <ArchiveView a={archive} now={now} ui={aui} poll={arcPoll} onToggle={() => setAui((u) => ({ ...u, open: !u.open }))} onFilter={(f) => setAui((u) => ({ ...u, filter: f }))}
+        phaseOf(arcPoll) === "error" ? <ArchiveUnread poll={arcPoll} /> : !active ? <Skeleton rows={4} /> : (
+          <ArchiveView active={active} ended={ended} now={now} ui={aui} poll={arcPoll} endedPoll={endPoll} onToggle={() => setAui((u) => ({ ...u, open: !u.open }))} onFilter={(f) => { setMore(null); setAui((u) => ({ ...u, filter: f })); }}
             onActive={(f) => setAui((u) => ({ ...u, active: f }))} onLoadMore={loadMore} />
         )
       )}

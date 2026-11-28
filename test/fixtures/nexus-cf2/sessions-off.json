@@ -15,7 +15,29 @@
   },
   "sessions": [
     {
-      "id": "cfc_mx0dn3mo_wvuf01",
+      "id": "cfc_mx0dyoao_2u6l02",
+      "topic_key": "execution:fills",
+      "topic_text": null,
+      "type": "execution",
+      "question": "What should change about execution:fills, if anything?",
+      "state": "decided",
+      "participants": [
+        "trade_management",
+        "risk",
+        "m15",
+        "technical"
+      ],
+      "calls": 11,
+      "reason": "accepted task by council",
+      "created_ms": 1795868880000,
+      "updated_ms": 1795871400000,
+      "pack_refs": 48,
+      "created_at": "2026-11-28T12:28:00.000Z",
+      "pack_stale": false,
+      "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dyoao_2u6l02"
+    },
+    {
+      "id": "cfc_mx0dn3mo_ntco03",
       "topic_key": "strategy:zone_pullback@intraday|normal-trending",
       "topic_text": null,
       "type": "strategy",
@@ -36,7 +58,79 @@
       "pack_refs": 72,
       "created_at": "2026-11-28T12:19:00.000Z",
       "pack_stale": false,
-      "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dn3mo_wvuf01"
+      "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dn3mo_ntco03"
+    },
+    {
+      "id": "cfc_mx08ocg0_aclji2",
+      "topic_key": "risk:intraday",
+      "topic_text": null,
+      "type": "risk",
+      "question": "What should change about risk:intraday, if anything?",
+      "state": "awaiting_owner",
+      "participants": [
+        "risk",
+        "m15",
+        "chronos_matrix",
+        "technical",
+        "trade_management",
+        "projection"
+      ],
+      "calls": 11,
+      "reason": "no quorum (3 of 6 spoke)",
+      "created_ms": 1795860000000,
+      "updated_ms": 1795862400000,
+      "pack_refs": 72,
+      "created_at": "2026-11-28T10:00:00.000Z",
+      "pack_stale": false,
+      "ev_ref": "ev:xauusd/council_sessions/cfc_mx08ocg0_aclji2"
+    },
+    {
+      "id": "cfc_mwz63gg0_hv0i02",
+      "topic_key": "risk:new_york",
+      "topic_text": null,
+      "type": "risk",
+      "question": "What should change about risk:new_york, if anything?",
+      "state": "awaiting_owner",
+      "participants": [
+        "risk",
+        "m15",
+        "chronos_matrix",
+        "technical",
+        "trade_management",
+        "projection"
+      ],
+      "calls": 11,
+      "reason": null,
+      "created_ms": 1795795200000,
+      "updated_ms": 1795797600000,
+      "pack_refs": 24,
+      "created_at": "2026-11-27T16:00:00.000Z",
+      "pack_stale": false,
+      "ev_ref": "ev:xauusd/council_sessions/cfc_mwz63gg0_hv0i02"
+    },
+    {
+      "id": "cfc_mwyznz40_wvuf01",
+      "topic_key": "risk:normal-trending",
+      "topic_text": null,
+      "type": "risk",
+      "question": "What should change about risk:normal-trending, if anything?",
+      "state": "decided",
+      "participants": [
+        "risk",
+        "m15",
+        "chronos_matrix",
+        "technical",
+        "trade_management",
+        "projection"
+      ],
+      "calls": 11,
+      "reason": "accepted task by council",
+      "created_ms": 1795784400000,
+      "updated_ms": 1795786920000,
+      "pack_refs": 72,
+      "created_at": "2026-11-27T13:00:00.000Z",
+      "pack_stale": true,
+      "ev_ref": "ev:xauusd/council_sessions/cfc_mwyznz40_wvuf01"
     },
     {
       "id": "cfc_mwymt0g0_bwoc01",
@@ -53,10 +147,10 @@
         "trade_management",
         "projection"
       ],
-      "calls": 9,
+      "calls": 11,
       "reason": "accepted task by council",
       "created_ms": 1795762800000,
-      "updated_ms": 1795765620000,
+      "updated_ms": 1795765320000,
       "pack_refs": 18,
       "created_at": "2026-11-27T07:00:00.000Z",
       "pack_stale": true,
@@ -75,10 +169,10 @@
         "m15",
         "technical"
       ],
-      "calls": 9,
+      "calls": 11,
       "reason": "accepted task by council",
       "created_ms": 1795752000000,
-      "updated_ms": 1795754820000,
+      "updated_ms": 1795754520000,
       "pack_refs": 48,
       "created_at": "2026-11-27T04:00:00.000Z",
       "pack_stale": true,
@@ -123,7 +217,7 @@
         "trade_management",
         "interstellar_eyes"
       ],
-      "calls": 12,
+      "calls": 11,
       "reason": "accepted raise_rrr by council",
       "created_ms": 1795681860000,
       "updated_ms": 1795686000000,

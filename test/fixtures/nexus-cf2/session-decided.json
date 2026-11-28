@@ -39,19 +39,19 @@
         "role": "the The Interstellar Eyes HUD reading of the room's chart"
       }
     ],
-    "calls": 12,
+    "calls": 11,
     "options": {
       "summary": "Four seats see the stops come from the shortest targets; the Risk Manager wants to keep the floor.",
       "options": [
         {
           "option_id": "raise_rrr",
           "rank": 1,
-          "kind": "policy_parameter",
           "title": "Raise the intraday reward floor",
           "hypothesis": "The stopped setups had the shortest targets; a higher floor drops them first.",
           "change": "small",
           "risk": "low",
           "dissent": "Risk Manager",
+          "kind": "policy_parameter",
           "knob": "decision.min_rrr.intraday",
           "from": 1.5,
           "value": 1.7,
@@ -61,24 +61,24 @@
         {
           "option_id": "hold_exits",
           "rank": 2,
-          "kind": "repository_task",
           "title": "Hold exits past the first key level",
           "hypothesis": "Exits at the first key level cut the trades that would have paid.",
           "change": "medium",
           "risk": "medium",
           "dissent": null,
+          "kind": "repository_task",
           "spec": "Hold the exit past the first key level when the 15m trend holds.",
           "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0#options.hold_exits"
         },
         {
           "option_id": "no_change",
           "rank": 3,
-          "kind": "no_change",
           "title": "No change",
           "hypothesis": "What runs today stays.",
           "change": "none",
           "risk": "none",
           "dissent": null,
+          "kind": "no_change",
           "ev_ref": "ev:xauusd/council_sessions/cfc_mwxam6qo_dgr4i0#options.no_change"
         }
       ]

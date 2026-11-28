@@ -1,0 +1,137 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mx0dyoao_2u6l02",
+    "topic_key": "execution:fills",
+    "topic_text": null,
+    "type": "execution",
+    "question": "What should change about execution:fills, if anything?",
+    "state": "decided",
+    "participants": [
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      }
+    ],
+    "calls": 11,
+    "options": {
+      "summary": "Four seats want the change; one abstains.",
+      "options": [
+        {
+          "option_id": "task",
+          "rank": 1,
+          "title": "Place the entry limit 0.1 ATR inside the zone",
+          "hypothesis": "The failures repeat on the same step.",
+          "change": "small",
+          "risk": "low",
+          "dissent": null,
+          "kind": "repository_task",
+          "spec": "Place the entry limit 0.1 ATR inside the zone",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dyoao_2u6l02#options.task"
+        },
+        {
+          "option_id": "no_change",
+          "rank": 2,
+          "title": "No change",
+          "hypothesis": "What runs today stays.",
+          "change": "none",
+          "risk": "none",
+          "dissent": null,
+          "kind": "no_change",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dyoao_2u6l02#options.no_change"
+        }
+      ]
+    },
+    "reason": "accepted task by council",
+    "pack_hash": "9203b3cc3a363740844ae5371a934333ae2cb4422a771968873da26e9c449c4a",
+    "created_by": "owner",
+    "created_ms": 1795868880000,
+    "updated_ms": 1795871400000,
+    "pack_refs": 48,
+    "pack_stale": false,
+    "terminal": true,
+    "messages": [
+      {
+        "id": 35,
+        "round": "position",
+        "seat": "trade_management",
+        "stance": "support",
+        "opinion": "The failures repeat on the same step.",
+        "proposal": "Place the entry limit 0.1 ATR inside the zone",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:28:00.000Z#r_omega"
+        ],
+        "ms": 1795869000000,
+        "name": "Trade Management",
+        "at": "2026-11-28T12:30:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/35"
+      },
+      {
+        "id": 36,
+        "round": "position",
+        "seat": "risk",
+        "stance": "support",
+        "opinion": "Only with a limit on how often.",
+        "proposal": "Place the entry limit 0.1 ATR inside the zone, at most once.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-28T12:28:00.000Z#r_tp1"
+        ],
+        "ms": 1795869060000,
+        "name": "Risk Manager",
+        "at": "2026-11-28T12:31:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/36"
+      },
+      {
+        "id": 37,
+        "round": "position",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "It would have kept the entries the chart wanted.",
+        "proposal": "Place the entry limit 0.1 ATR inside the zone",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-28T12:28:00.000Z#r_omega"
+        ],
+        "ms": 1795869120000,
+        "name": "15m Desk",
+        "at": "2026-11-28T12:32:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/37"
+      },
+      {
+        "id": 38,
+        "round": "position",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "The record backs it.",
+        "proposal": "Place the entry limit 0.1 ATR inside the zone",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-28T12:28:00.000Z#r_tp1"
+        ],
+        "ms": 1795869180000,
+        "name": "Technical Analyst",
+        "at": "2026-11-28T12:33:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/38"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dyoao_2u6l02"
+  }
+}

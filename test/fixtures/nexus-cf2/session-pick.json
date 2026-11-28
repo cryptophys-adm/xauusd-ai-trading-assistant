@@ -1,0 +1,194 @@
+{
+  "status": "ok",
+  "session": {
+    "id": "cfc_mwz63gg0_hv0i02",
+    "topic_key": "risk:new_york",
+    "topic_text": null,
+    "type": "risk",
+    "question": "What should change about risk:new_york, if anything?",
+    "state": "awaiting_owner",
+    "participants": [
+      {
+        "id": "risk",
+        "name": "Risk Manager",
+        "role": "risk only: the volatility of the 15m chart, the 15m Prophet R38 confirmation and what would invalidate a move"
+      },
+      {
+        "id": "m15",
+        "name": "15m Desk",
+        "role": "the local Prophet (signal, direction, structure, trade management) and GMI computation of the 15m candle that just closed: this timeframe's own signal"
+      },
+      {
+        "id": "chronos_matrix",
+        "name": "Chronos Matrix",
+        "role": "the Chronos Matrix HUD reading of the room's chart"
+      },
+      {
+        "id": "technical",
+        "name": "Technical Analyst",
+        "role": "price action only: the closed 15m candles"
+      },
+      {
+        "id": "trade_management",
+        "name": "Trade Management",
+        "role": "the Trade Management HUD reading of the room's chart"
+      },
+      {
+        "id": "projection",
+        "name": "Projection Agent",
+        "role": "where a move projects on the 15m chart: Fibonacci, the probability cone, trendlines and the chart patterns, each pattern with its record on gold"
+      }
+    ],
+    "calls": 11,
+    "options": {
+      "summary": "Four seats would skip the first New York hour; Trade Management blames the exits.",
+      "options": [
+        {
+          "option_id": "skip_ny_open",
+          "rank": 1,
+          "title": "Skip the first New York hour",
+          "hypothesis": "Most stops come in the first hour.",
+          "change": "small",
+          "risk": "fewer trades",
+          "dissent": "Trade Management",
+          "kind": "repository_task",
+          "spec": "Skip new entries 13:30-14:30 UTC; measure R per trade.",
+          "ev_ref": null
+        },
+        {
+          "option_id": "rrr",
+          "rank": 2,
+          "title": "Ask more reward intraday",
+          "hypothesis": "Only the longer targets survive the open.",
+          "change": "small",
+          "risk": "low",
+          "dissent": null,
+          "kind": "policy_parameter",
+          "knob": "decision.min_rrr.intraday",
+          "from": 1.5,
+          "value": 1.8,
+          "unit": "R",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mwz63gg0_hv0i02#options.rrr"
+        },
+        {
+          "option_id": "no_change",
+          "rank": 3,
+          "title": "No change",
+          "hypothesis": "What runs today stays.",
+          "change": "none",
+          "risk": "none",
+          "dissent": null,
+          "kind": "no_change",
+          "ev_ref": "ev:xauusd/council_sessions/cfc_mwz63gg0_hv0i02#options.no_change"
+        }
+      ]
+    },
+    "reason": null,
+    "pack_hash": "c8c2a21c25f7d425cc7bbed00147b371cf3c6d8ccc11fd9c33c3478a5c492b14",
+    "created_by": "owner",
+    "created_ms": 1795795200000,
+    "updated_ms": 1795797600000,
+    "pack_refs": 24,
+    "pack_stale": false,
+    "terminal": false,
+    "messages": [
+      {
+        "id": 26,
+        "round": "position",
+        "seat": "risk",
+        "stance": "support",
+        "opinion": "New York's first hour stops most trades.",
+        "proposal": "Skip the first New York hour.",
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-27T16:00:00.000Z"
+        ],
+        "ms": 1795795320000,
+        "name": "Risk Manager",
+        "at": "2026-11-27T16:02:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/26"
+      },
+      {
+        "id": 27,
+        "round": "position",
+        "seat": "m15",
+        "stance": "support",
+        "opinion": "The 15m opens wide there.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-27T16:00:00.000Z#r_omega"
+        ],
+        "ms": 1795795380000,
+        "name": "15m Desk",
+        "at": "2026-11-27T16:03:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/27"
+      },
+      {
+        "id": 28,
+        "round": "position",
+        "seat": "chronos_matrix",
+        "stance": "amend",
+        "opinion": "Only on release days.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795099680000@2026-11-27T16:00:00.000Z#r_tp1"
+        ],
+        "ms": 1795795440000,
+        "name": "Chronos Matrix",
+        "at": "2026-11-27T16:04:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/28"
+      },
+      {
+        "id": 29,
+        "round": "position",
+        "seat": "technical",
+        "stance": "support",
+        "opinion": "The candles agree.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-27T16:00:00.000Z"
+        ],
+        "ms": 1795795500000,
+        "name": "Technical Analyst",
+        "at": "2026-11-27T16:05:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/29"
+      },
+      {
+        "id": 30,
+        "round": "position",
+        "seat": "trade_management",
+        "stance": "oppose",
+        "opinion": "The exits, not the hour, lose.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-27T16:00:00.000Z#r_omega"
+        ],
+        "ms": 1795795560000,
+        "name": "Trade Management",
+        "at": "2026-11-27T16:06:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/30"
+      },
+      {
+        "id": 31,
+        "round": "position",
+        "seat": "projection",
+        "stance": "support",
+        "opinion": "The cone is wide at the open.",
+        "proposal": null,
+        "reply_to": [],
+        "refs": [
+          "ev:xauusd/signal_ledger/decision:OANDA:XAUUSD:15:1795103280000@2026-11-27T16:00:00.000Z#r_tp1"
+        ],
+        "ms": 1795795620000,
+        "name": "Projection Agent",
+        "at": "2026-11-27T16:07:00.000Z",
+        "ev_ref": "ev:xauusd/council_messages/31"
+      }
+    ],
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mwz63gg0_hv0i02"
+  }
+}

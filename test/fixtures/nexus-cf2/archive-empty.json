@@ -4,6 +4,15 @@
   "next_cursor": null,
   "total": 0,
   "window_days": 90,
+  "scope": "active",
+  "status_filter": null,
+  "counts": {
+    "total": 0,
+    "active": 0,
+    "archive": 0,
+    "by_status": {},
+    "by_next_actor": {}
+  },
   "vocab": {
     "chain_status": [
       "awaiting_approval",
@@ -20,6 +29,8 @@
       "live",
       "rolled_back",
       "superseded",
+      "veto_window",
+      "vetoed",
       "handoff_pending",
       "handed_off"
     ],
@@ -41,7 +52,12 @@
     "decided_by": [
       "owner",
       "council",
-      "system"
+      "system",
+      "legacy"
+    ],
+    "scope": [
+      "active",
+      "archive"
     ]
   },
   "as_of": "2026-11-28T14:48:00.000Z"

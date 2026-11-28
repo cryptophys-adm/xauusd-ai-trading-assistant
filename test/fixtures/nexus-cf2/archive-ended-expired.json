@@ -1,0 +1,189 @@
+{
+  "status": "ok",
+  "items": [
+    {
+      "chain_id": "suggestion:8",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-28T12:30:00.000Z",
+      "topic": {
+        "key": "data:market_feed",
+        "type": "data",
+        "origin": "suggestion",
+        "suggestion_id": 8,
+        "rule": "stuck_state",
+        "status": "expired",
+        "created_at": "2026-11-24T22:00:00.000Z",
+        "expires_at": "2026-11-26T22:00:00.000Z",
+        "decided_at": "2026-11-28T12:30:00.000Z",
+        "decided_by": "system"
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:12",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-25T14:00:00.000Z",
+      "topic": {
+        "key": "risk:asia",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 12,
+        "rule": "session_negative",
+        "status": "expired",
+        "created_at": "2026-11-25T14:00:00.000Z",
+        "expires_at": "2026-11-27T14:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:11",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-25T10:00:00.000Z",
+      "topic": {
+        "key": "execution:sl_plus",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 11,
+        "rule": "sl_plus_share",
+        "status": "expired",
+        "created_at": "2026-11-25T10:00:00.000Z",
+        "expires_at": "2026-11-27T10:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:10",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-24T03:00:00.000Z",
+      "topic": {
+        "key": "news:release_horizon",
+        "type": "news",
+        "origin": "suggestion",
+        "suggestion_id": 10,
+        "rule": "losses_near_releases",
+        "status": "expired",
+        "created_at": "2026-11-24T03:00:00.000Z",
+        "expires_at": "2026-11-26T03:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:9",
+      "status": "expired",
+      "status_source": "suggestion",
+      "next_actor": "none",
+      "updated_at": "2026-11-23T17:00:00.000Z",
+      "topic": {
+        "key": "seat:risk@15",
+        "type": "seat",
+        "origin": "suggestion",
+        "suggestion_id": 9,
+        "rule": "weight_floor",
+        "status": "expired",
+        "created_at": "2026-11-23T17:00:00.000Z",
+        "expires_at": "2026-11-25T17:00:00.000Z",
+        "decided_at": null,
+        "decided_by": null
+      },
+      "session": null,
+      "proposal": null
+    }
+  ],
+  "next_cursor": null,
+  "total": 5,
+  "window_days": 90,
+  "scope": "archive",
+  "status_filter": "expired",
+  "counts": {
+    "total": 20,
+    "active": 9,
+    "archive": 11,
+    "by_status": {
+      "veto_window": 1,
+      "in_session": 1,
+      "expired": 5,
+      "awaiting_pick": 2,
+      "awaiting_approval": 3,
+      "vetoed": 1,
+      "refused": 1,
+      "in_progress": 1,
+      "rejected": 1,
+      "aborted": 1,
+      "shadow_test": 1,
+      "closed": 2
+    },
+    "by_next_actor": {
+      "owner": 6,
+      "council": 1,
+      "none": 11,
+      "platform": 1,
+      "shadow": 1
+    }
+  },
+  "vocab": {
+    "chain_status": [
+      "awaiting_approval",
+      "approved",
+      "rejected",
+      "expired",
+      "in_session",
+      "awaiting_pick",
+      "decided",
+      "closed",
+      "aborted",
+      "no_change",
+      "shadow_test",
+      "live",
+      "rolled_back",
+      "superseded",
+      "veto_window",
+      "vetoed",
+      "handoff_pending",
+      "handed_off"
+    ],
+    "platform_states": "a handed-off task shows the platform's latest state (council_proposal_updates)",
+    "next_actor": [
+      "owner",
+      "council",
+      "platform",
+      "shadow",
+      "none"
+    ],
+    "suggestion_status": [
+      "open",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "close_code": "the platform's short code for why a task reached a terminal state, passed through as sent",
+    "decided_by": [
+      "owner",
+      "council",
+      "system",
+      "legacy"
+    ],
+    "scope": [
+      "active",
+      "archive"
+    ]
+  },
+  "as_of": "2026-11-28T14:48:00.000Z"
+}

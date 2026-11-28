@@ -2,7 +2,87 @@
   "status": "ok",
   "items": [
     {
-      "chain_id": "suggestion:14",
+      "chain_id": "suggestion:17",
+      "status": "veto_window",
+      "status_source": "proposal",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T13:10:00.000Z",
+      "topic": {
+        "key": "execution:fills",
+        "type": "execution",
+        "origin": "suggestion",
+        "suggestion_id": 17,
+        "rule": "fill_slippage",
+        "status": "approved",
+        "created_at": "2026-11-28T11:28:00.000Z",
+        "expires_at": "2026-11-30T11:28:00.000Z",
+        "decided_at": "2026-11-28T12:28:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx0dyoao_2u6l02",
+        "topic_key": "execution:fills",
+        "topic_text": null,
+        "type": "execution",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-28T12:28:00.000Z",
+        "updated_at": "2026-11-28T13:10:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 4,
+            "expected": 4
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mx0fgoqo_vbrmi2",
+        "kind": "repository_task",
+        "title": "Place the entry limit 0.1 ATR inside the zone",
+        "state": "veto_window",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-28T13:10:00.000Z",
+        "updated_at": "2026-11-28T13:10:00.000Z",
+        "note": "handed off after the 2 h veto window unless the owner closes it",
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 4 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          },
+          "spoke": 4,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
+        "platform": null
+      }
+    },
+    {
+      "chain_id": "suggestion:18",
       "status": "in_session",
       "status_source": "session",
       "next_actor": "council",
@@ -11,7 +91,7 @@
         "key": "strategy:zone_pullback@intraday|normal-trending",
         "type": "strategy",
         "origin": "suggestion",
-        "suggestion_id": 14,
+        "suggestion_id": 18,
         "rule": "context_negative",
         "status": "approved",
         "created_at": "2026-11-28T09:14:00.000Z",
@@ -20,7 +100,7 @@
         "decided_by": "owner"
       },
       "session": {
-        "id": "cfc_mx0dn3mo_wvuf01",
+        "id": "cfc_mx0dn3mo_ntco03",
         "topic_key": "strategy:zone_pullback@intraday|normal-trending",
         "topic_text": null,
         "type": "strategy",
@@ -52,7 +132,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:6",
+      "chain_id": "suggestion:8",
       "status": "expired",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -61,7 +141,7 @@
         "key": "data:market_feed",
         "type": "data",
         "origin": "suggestion",
-        "suggestion_id": 6,
+        "suggestion_id": 8,
         "rule": "stuck_state",
         "status": "expired",
         "created_at": "2026-11-24T22:00:00.000Z",
@@ -73,7 +153,57 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:13",
+      "chain_id": "suggestion:16",
+      "status": "awaiting_pick",
+      "status_source": "session",
+      "next_actor": "owner",
+      "updated_at": "2026-11-28T10:40:00.000Z",
+      "topic": {
+        "key": "risk:intraday",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 16,
+        "rule": "mode_negative",
+        "status": "approved",
+        "created_at": "2026-11-28T06:00:00.000Z",
+        "expires_at": "2026-11-30T06:00:00.000Z",
+        "decided_at": "2026-11-28T10:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mx08ocg0_aclji2",
+        "topic_key": "risk:intraday",
+        "topic_text": null,
+        "type": "risk",
+        "state": "awaiting_owner",
+        "terminal": false,
+        "created_at": "2026-11-28T10:00:00.000Z",
+        "updated_at": "2026-11-28T10:40:00.000Z",
+        "started_by": "owner",
+        "reason": "no quorum (3 of 6 spoke)",
+        "reopened_as": null,
+        "progress": {
+          "step": "awaiting_owner",
+          "positions": {
+            "done": 3,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 2,
+            "oppose": 0,
+            "amend": 1,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:15",
       "status": "awaiting_approval",
       "status_source": "suggestion",
       "next_actor": "owner",
@@ -82,7 +212,7 @@
         "key": "engine:model",
         "type": "engine",
         "origin": "suggestion",
-        "suggestion_id": 13,
+        "suggestion_id": 15,
         "rule": "gate_drift",
         "status": "open",
         "created_at": "2026-11-28T01:48:00.000Z",
@@ -94,7 +224,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:12",
+      "chain_id": "suggestion:14",
       "status": "awaiting_approval",
       "status_source": "suggestion",
       "next_actor": "owner",
@@ -103,7 +233,7 @@
         "key": "strategy:zone_pullback:exits",
         "type": "strategy",
         "origin": "suggestion",
-        "suggestion_id": 12,
+        "suggestion_id": 14,
         "rule": "stop_share",
         "status": "open",
         "created_at": "2026-11-27T18:48:00.000Z",
@@ -115,11 +245,141 @@
       "proposal": null
     },
     {
+      "chain_id": "suggestion:6",
+      "status": "awaiting_pick",
+      "status_source": "session",
+      "next_actor": "owner",
+      "updated_at": "2026-11-27T16:40:00.000Z",
+      "topic": {
+        "key": "risk:new_york",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 6,
+        "rule": "session_negative",
+        "status": "approved",
+        "created_at": "2026-11-27T13:00:00.000Z",
+        "expires_at": "2026-11-29T13:00:00.000Z",
+        "decided_at": "2026-11-27T16:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwz63gg0_hv0i02",
+        "topic_key": "risk:new_york",
+        "topic_text": null,
+        "type": "risk",
+        "state": "awaiting_owner",
+        "terminal": false,
+        "created_at": "2026-11-27T16:00:00.000Z",
+        "updated_at": "2026-11-27T16:40:00.000Z",
+        "started_by": "owner",
+        "reason": null,
+        "reopened_as": null,
+        "progress": {
+          "step": "awaiting_owner",
+          "positions": {
+            "done": 6,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 3,
+          "tally": {
+            "support": 4,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 0
+          }
+        }
+      },
+      "proposal": null
+    },
+    {
+      "chain_id": "suggestion:5",
+      "status": "vetoed",
+      "status_source": "proposal",
+      "next_actor": "none",
+      "updated_at": "2026-11-27T14:07:00.000Z",
+      "topic": {
+        "key": "risk:normal-trending",
+        "type": "risk",
+        "origin": "suggestion",
+        "suggestion_id": 5,
+        "rule": "regime_negative",
+        "status": "approved",
+        "created_at": "2026-11-27T12:00:00.000Z",
+        "expires_at": "2026-11-29T12:00:00.000Z",
+        "decided_at": "2026-11-27T13:00:00.000Z",
+        "decided_by": "owner"
+      },
+      "session": {
+        "id": "cfc_mwyznz40_wvuf01",
+        "topic_key": "risk:normal-trending",
+        "topic_text": null,
+        "type": "risk",
+        "state": "decided",
+        "terminal": true,
+        "created_at": "2026-11-27T13:00:00.000Z",
+        "updated_at": "2026-11-27T13:42:00.000Z",
+        "started_by": "owner",
+        "reason": "accepted task by council",
+        "reopened_as": null,
+        "progress": {
+          "step": "decided",
+          "positions": {
+            "done": 5,
+            "expected": 6
+          },
+          "rebuttals": 0,
+          "answers": 0,
+          "owner_messages": 0,
+          "synthesis": 2,
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 1
+          }
+        }
+      },
+      "proposal": {
+        "id": "cp_mwz15zk0_pdfgi2",
+        "kind": "repository_task",
+        "title": "Halve the size in a normal-trending regime after two losses",
+        "state": "vetoed",
+        "knob": null,
+        "from": null,
+        "value": null,
+        "decided_by": "council",
+        "decided_at": "2026-11-27T13:42:00.000Z",
+        "updated_at": "2026-11-27T14:07:00.000Z",
+        "note": "vetoed by owner@example.com",
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 5 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 1
+          },
+          "spoke": 5,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
+        "platform": null
+      }
+    },
+    {
       "chain_id": "suggestion:4",
       "status": "refused",
       "status_source": "platform",
       "next_actor": "none",
-      "updated_at": "2026-11-27T10:02:00.000Z",
+      "updated_at": "2026-11-27T10:42:00.000Z",
       "topic": {
         "key": "risk:london",
         "type": "risk",
@@ -140,14 +400,14 @@
         "state": "decided",
         "terminal": true,
         "created_at": "2026-11-27T07:00:00.000Z",
-        "updated_at": "2026-11-27T07:47:00.000Z",
+        "updated_at": "2026-11-27T07:42:00.000Z",
         "started_by": "owner",
         "reason": "accepted task by council",
         "reopened_as": null,
         "progress": {
           "step": "decided",
           "positions": {
-            "done": 4,
+            "done": 5,
             "expected": 6
           },
           "rebuttals": 0,
@@ -155,15 +415,15 @@
           "owner_messages": 0,
           "synthesis": 2,
           "tally": {
-            "support": 2,
+            "support": 4,
             "oppose": 0,
-            "amend": 1,
+            "amend": 0,
             "abstain": 1
           }
         }
       },
       "proposal": {
-        "id": "cp_mwyohgdc_4e9di1",
+        "id": "cp_mwyob0w0_4e9di1",
         "kind": "repository_task",
         "title": "Skip the first London hour after a range night",
         "state": "handed_off",
@@ -171,18 +431,35 @@
         "from": null,
         "value": null,
         "decided_by": "council",
-        "decided_at": "2026-11-27T07:47:00.000Z",
-        "updated_at": "2026-11-27T10:02:00.000Z",
+        "decided_at": "2026-11-27T07:42:00.000Z",
+        "updated_at": "2026-11-27T10:42:00.000Z",
         "note": null,
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 5 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 1
+          },
+          "spoke": 5,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
         "platform": {
           "state": "refused",
-          "at": "2026-11-27T10:02:00.000Z",
+          "at": "2026-11-27T10:42:00.000Z",
           "reason": "outside the platform's scope",
           "close_code": "out_of_scope",
           "history": [
             {
               "state": "refused",
-              "at": "2026-11-27T10:02:00.000Z"
+              "at": "2026-11-27T10:42:00.000Z"
             }
           ]
         }
@@ -193,7 +470,7 @@
       "status": "in_progress",
       "status_source": "platform",
       "next_actor": "platform",
-      "updated_at": "2026-11-27T07:02:00.000Z",
+      "updated_at": "2026-11-27T07:42:00.000Z",
       "topic": {
         "key": "execution:rejected_intents",
         "type": "execution",
@@ -214,7 +491,7 @@
         "state": "decided",
         "terminal": true,
         "created_at": "2026-11-27T04:00:00.000Z",
-        "updated_at": "2026-11-27T04:47:00.000Z",
+        "updated_at": "2026-11-27T04:42:00.000Z",
         "started_by": "owner",
         "reason": "accepted task by council",
         "reopened_as": null,
@@ -229,15 +506,15 @@
           "owner_messages": 0,
           "synthesis": 2,
           "tally": {
-            "support": 2,
+            "support": 4,
             "oppose": 0,
-            "amend": 1,
-            "abstain": 1
+            "amend": 0,
+            "abstain": 0
           }
         }
       },
       "proposal": {
-        "id": "cp_mwyi1z1c_jf3ai1",
+        "id": "cp_mwyhvjk0_jf3ai1",
         "kind": "repository_task",
         "title": "Retry a failed intent once, then hand to the EA",
         "state": "handed_off",
@@ -245,25 +522,42 @@
         "from": null,
         "value": null,
         "decided_by": "council",
-        "decided_at": "2026-11-27T04:47:00.000Z",
-        "updated_at": "2026-11-27T07:02:00.000Z",
+        "decided_at": "2026-11-27T04:42:00.000Z",
+        "updated_at": "2026-11-27T07:42:00.000Z",
         "note": null,
+        "council_decision": {
+          "option_id": "task",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "task: 4 of 4 seats support (needs 4); the task has a spec",
+          "tally": {
+            "support": 4,
+            "oppose": 0,
+            "amend": 0,
+            "abstain": 0
+          },
+          "spoke": 4,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "task"
+        },
         "platform": {
           "state": "in_progress",
-          "at": "2026-11-27T07:02:00.000Z",
+          "at": "2026-11-27T07:42:00.000Z",
           "reason": "building",
           "close_code": null,
           "history": [
             {
               "state": "in_progress",
-              "at": "2026-11-27T07:02:00.000Z"
+              "at": "2026-11-27T07:42:00.000Z"
             }
           ]
         }
       }
     },
     {
-      "chain_id": "suggestion:5",
+      "chain_id": "suggestion:7",
       "status": "rejected",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -272,7 +566,7 @@
         "key": "cost:council",
         "type": "cost",
         "origin": "suggestion",
-        "suggestion_id": 5,
+        "suggestion_id": 7,
         "rule": "neurons_week",
         "status": "rejected",
         "created_at": "2026-11-27T05:00:00.000Z",
@@ -284,7 +578,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:11",
+      "chain_id": "suggestion:13",
       "status": "awaiting_approval",
       "status_source": "suggestion",
       "next_actor": "owner",
@@ -293,7 +587,7 @@
         "key": "execution:recoveries",
         "type": "execution",
         "origin": "suggestion",
-        "suggestion_id": 11,
+        "suggestion_id": 13,
         "rule": "recoveries_per_day",
         "status": "open",
         "created_at": "2026-11-25T15:28:00.000Z",
@@ -413,12 +707,29 @@
         "decided_by": "council",
         "decided_at": "2026-11-26T09:40:00.000Z",
         "updated_at": "2026-11-26T09:40:00.000Z",
-        "note": "platform send: disabled; retried hourly",
+        "note": "waits for its shadow test against today's setting (phase 2)",
+        "council_decision": {
+          "option_id": "raise_rrr",
+          "decided_by": "council",
+          "quorum": true,
+          "rationale": "raise_rrr: 4 of 6 seats support (needs 4); the knob is inside its bounds",
+          "tally": {
+            "support": 4,
+            "oppose": 1,
+            "amend": 1,
+            "abstain": 0
+          },
+          "spoke": 6,
+          "need": 4,
+          "supported": true,
+          "valid": true,
+          "top": "raise_rrr"
+        },
         "platform": null
       }
     },
     {
-      "chain_id": "suggestion:10",
+      "chain_id": "suggestion:12",
       "status": "expired",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -427,7 +738,7 @@
         "key": "risk:asia",
         "type": "risk",
         "origin": "suggestion",
-        "suggestion_id": 10,
+        "suggestion_id": 12,
         "rule": "session_negative",
         "status": "expired",
         "created_at": "2026-11-25T14:00:00.000Z",
@@ -439,7 +750,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:9",
+      "chain_id": "suggestion:11",
       "status": "expired",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -448,7 +759,7 @@
         "key": "execution:sl_plus",
         "type": "execution",
         "origin": "suggestion",
-        "suggestion_id": 9,
+        "suggestion_id": 11,
         "rule": "sl_plus_share",
         "status": "expired",
         "created_at": "2026-11-25T10:00:00.000Z",
@@ -546,7 +857,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:8",
+      "chain_id": "suggestion:10",
       "status": "expired",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -555,7 +866,7 @@
         "key": "news:release_horizon",
         "type": "news",
         "origin": "suggestion",
-        "suggestion_id": 8,
+        "suggestion_id": 10,
         "rule": "losses_near_releases",
         "status": "expired",
         "created_at": "2026-11-24T03:00:00.000Z",
@@ -567,7 +878,7 @@
       "proposal": null
     },
     {
-      "chain_id": "suggestion:7",
+      "chain_id": "suggestion:9",
       "status": "expired",
       "status_source": "suggestion",
       "next_actor": "none",
@@ -576,7 +887,7 @@
         "key": "seat:risk@15",
         "type": "seat",
         "origin": "suggestion",
-        "suggestion_id": 7,
+        "suggestion_id": 9,
         "rule": "weight_floor",
         "status": "expired",
         "created_at": "2026-11-23T17:00:00.000Z",
@@ -589,8 +900,36 @@
     }
   ],
   "next_cursor": null,
-  "total": 16,
+  "total": 20,
   "window_days": 90,
+  "scope": null,
+  "status_filter": null,
+  "counts": {
+    "total": 20,
+    "active": 9,
+    "archive": 11,
+    "by_status": {
+      "veto_window": 1,
+      "in_session": 1,
+      "expired": 5,
+      "awaiting_pick": 2,
+      "awaiting_approval": 3,
+      "vetoed": 1,
+      "refused": 1,
+      "in_progress": 1,
+      "rejected": 1,
+      "aborted": 1,
+      "shadow_test": 1,
+      "closed": 2
+    },
+    "by_next_actor": {
+      "owner": 6,
+      "council": 1,
+      "none": 11,
+      "platform": 1,
+      "shadow": 1
+    }
+  },
   "vocab": {
     "chain_status": [
       "awaiting_approval",
@@ -607,6 +946,8 @@
       "live",
       "rolled_back",
       "superseded",
+      "veto_window",
+      "vetoed",
       "handoff_pending",
       "handed_off"
     ],
@@ -628,7 +969,12 @@
     "decided_by": [
       "owner",
       "council",
-      "system"
+      "system",
+      "legacy"
+    ],
+    "scope": [
+      "active",
+      "archive"
     ]
   },
   "as_of": "2026-11-28T14:48:00.000Z"

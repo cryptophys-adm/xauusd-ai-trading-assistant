@@ -73,6 +73,8 @@ test("NF6 dialogs in the tokens: confirm or approve ok cyan, a step to think twi
   const councils = src("pages/Councils.tsx");
   // CF2: the option pick is read-only (no Accept); approving a topic is the approve, cyan; rejecting it a step to think twice.
   assert.match(councils, /\{ confirmLabel: "Approve", tone: "ok" \} : \{ confirmLabel: "Reject", tone: "late" \}/, "approving a topic is an approve: cyan, not green");
+  assert.match(councils, /confirmLabel: "Accept", tone: "ok" \}/, "accepting an option (CFC_MODE on) is an approve: cyan, not green");
+  assert.match(councils, /confirmLabel: "Veto", tone: "fault" \}/, "vetoing the council's task stops it: destructive");
   assert.match(councils, /confirmLabel: "Close session", tone: "late" \}/);
   assert.match(councils, /confirmLabel: "Turn off", tone: "fault" \}/, "turning sessions off stops running ones: destructive");
   const ex = src("components/ExitConfirmModal.tsx");

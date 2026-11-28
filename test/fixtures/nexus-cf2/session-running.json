@@ -1,7 +1,7 @@
 {
   "status": "ok",
   "session": {
-    "id": "cfc_mx0dn3mo_wvuf01",
+    "id": "cfc_mx0dn3mo_ntco03",
     "topic_key": "strategy:zone_pullback@intraday|normal-trending",
     "topic_text": null,
     "type": "strategy",
@@ -51,7 +51,7 @@
     "terminal": false,
     "messages": [
       {
-        "id": 20,
+        "id": 39,
         "round": "position",
         "seat": "risk",
         "stance": "oppose",
@@ -65,10 +65,10 @@
         "ms": 1795868520000,
         "name": "Risk Manager",
         "at": "2026-11-28T12:22:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/20"
+        "ev_ref": "ev:xauusd/council_messages/39"
       },
       {
-        "id": 21,
+        "id": 40,
         "round": "position",
         "seat": "technical",
         "stance": "support",
@@ -81,10 +81,10 @@
         "ms": 1795868580000,
         "name": "Technical Analyst",
         "at": "2026-11-28T12:23:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/21"
+        "ev_ref": "ev:xauusd/council_messages/40"
       },
       {
-        "id": 22,
+        "id": 41,
         "round": "position",
         "seat": "projection",
         "stance": "amend",
@@ -98,10 +98,10 @@
         "ms": 1795868640000,
         "name": "Projection Agent",
         "at": "2026-11-28T12:24:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/22"
+        "ev_ref": "ev:xauusd/council_messages/41"
       },
       {
-        "id": 23,
+        "id": 42,
         "round": "position",
         "seat": "m15",
         "stance": "support",
@@ -114,10 +114,10 @@
         "ms": 1795868700000,
         "name": "15m Desk",
         "at": "2026-11-28T12:25:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/23"
+        "ev_ref": "ev:xauusd/council_messages/42"
       },
       {
-        "id": 24,
+        "id": 43,
         "round": "position",
         "seat": "trade_management",
         "stance": "abstain",
@@ -128,10 +128,10 @@
         "ms": 1795868760000,
         "name": "Trade Management",
         "at": "2026-11-28T12:26:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/24"
+        "ev_ref": "ev:xauusd/council_messages/43"
       },
       {
-        "id": 25,
+        "id": 44,
         "round": "rebuttal",
         "seat": "risk",
         "stance": "oppose",
@@ -146,10 +146,10 @@
         "ms": 1795869060000,
         "name": "Risk Manager",
         "at": "2026-11-28T12:31:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/25"
+        "ev_ref": "ev:xauusd/council_messages/44"
       },
       {
-        "id": 26,
+        "id": 45,
         "round": "rebuttal",
         "seat": "technical",
         "stance": "support",
@@ -164,9 +164,9 @@
         "ms": 1795869120000,
         "name": "Technical Analyst",
         "at": "2026-11-28T12:32:00.000Z",
-        "ev_ref": "ev:xauusd/council_messages/26"
+        "ev_ref": "ev:xauusd/council_messages/45"
       }
     ],
-    "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dn3mo_wvuf01"
+    "ev_ref": "ev:xauusd/council_sessions/cfc_mx0dn3mo_ntco03"
   }
 }

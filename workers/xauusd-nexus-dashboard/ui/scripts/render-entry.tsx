@@ -105,7 +105,15 @@ import cf2Running from "../../../../test/fixtures/nexus-cf2/session-running.json
 import cf2Decided from "../../../../test/fixtures/nexus-cf2/session-decided.json";
 import cf2Reopened from "../../../../test/fixtures/nexus-cf2/session-reopened.json";
 import cf2Archive from "../../../../test/fixtures/nexus-cf2/archive.json";
-import cf2ArchivePage1 from "../../../../test/fixtures/nexus-cf2/archive-page1.json";
+import cf2ArchiveActive from "../../../../test/fixtures/nexus-cf2/archive-active.json";
+import cf2ArchiveEnded from "../../../../test/fixtures/nexus-cf2/archive-ended.json";
+import cf2ArchiveEndedExpired from "../../../../test/fixtures/nexus-cf2/archive-ended-expired.json";
+import cf2ArchiveEndedPage1 from "../../../../test/fixtures/nexus-cf2/archive-ended-page1.json";
+import cf2Pick from "../../../../test/fixtures/nexus-cf2/session-pick.json";
+import cf2Veto from "../../../../test/fixtures/nexus-cf2/session-veto.json";
+import cf2NoQuorum from "../../../../test/fixtures/nexus-cf2/session-noquorum.json";
+import cf2SuggestionsAuto from "../../../../test/fixtures/nexus-cf2/suggestions-auto.json";
+import cf2SessionsAuto from "../../../../test/fixtures/nexus-cf2/sessions-auto.json";
 import cf2ArchiveEmpty from "../../../../test/fixtures/nexus-cf2/archive-empty.json";
 import cf2ArchiveOff from "../../../../test/fixtures/nexus-cf2/archive-off.json";
 import cf2Replies from "../../../../test/fixtures/nexus-cf2/decide-replies.json";
@@ -591,24 +599,28 @@ export const OS1_VIEWS: Entry[] = [
   { name: "OS1FeedsStaleViewer", View: FeedsView, fixture: os1FeedsViewer, shows: ["Bars stopped", "Last bar 21 min ago, while the feed keeps syncing.", "Re-enter the feed login.", "read only"], hides: ["login below", "<form", "<button", "<input", ...OS1_NO_DIRECTION] }
 ];
 
-// CF2, the Call for Councils page (test/fixtures/nexus-cf2/*.json: test/support/nexus-cf2-seed.mjs over #677's real code).
+// CF2, the Call for Councils page (test/fixtures/nexus-cf2/*.json: test/support/nexus-cf2-seed.mjs over #677's and #680's
+// real code; CFC_MODE on, with the council-decided sessions run in auto).
 export const CF2_NOW = Date.parse("2026-11-28T14:48:00Z");
 const CF2_ARCHIVE = archiveOf(cf2Archive);
+const CF2_ACTIVE = archiveOf(cf2ArchiveActive), CF2_ENDED = archiveOf(cf2ArchiveEnded);
 const CF2_REPLIES = cf2Replies as unknown as Record<string, { status: number; body: any }>;
 const CF2_OWNER = { canControl: true, on: true, show: true };
 const CF2_VIEWER = { canControl: false, on: true, show: false };
-const cf2Sug = (canControl: boolean) => ({ d }: { d: any }) => <SuggestionsView sug={suggestionsOf(d, CF2_NOW)} archive={CF2_ARCHIVE} now={CF2_NOW} canControl={canControl} />;
+const cf2Sug = (canControl: boolean, sessionsOn = true) => ({ d }: { d: any }) => <SuggestionsView sug={suggestionsOf(d, CF2_NOW)} archive={CF2_ARCHIVE} now={CF2_NOW} canControl={canControl} sessionsOn={sessionsOn} />;
 const cf2Card = (key: string, decision: Decision = "approve") => ({ d }: { d: any }) => {
   const sug = suggestionsOf(cf2Suggestions, CF2_NOW).open[1];
   const r = decideResult(d?.status ?? null, d?.body ?? null, decision, CF2_NOW);
   return <SuggestionCard s={r.suggestion && key !== "session_refused" ? r.suggestion : sug} now={CF2_NOW} canControl state={{ result: r, decision }} />;
 };
-const cf2Detail = (gate: any, canControl: boolean) => ({ d }: { d: any }) => {
+const cf2Detail = (gate: any, canControl: boolean, actions: any = {}) => ({ d }: { d: any }) => {
   const chain = chainFor(CF2_ARCHIVE, { sessionId: d?.session?.id ?? null });
   const det = detailOf(d?.session, chain);
-  return <GateOverride.Provider value={gate}>{det ? <SessionDetailView d={det} chain={chain} now={CF2_NOW} canControl={canControl} enabled /> : <span>no session</span>}</GateOverride.Provider>;
+  return <GateOverride.Provider value={gate}>{det ? <SessionDetailView d={det} chain={chain} now={CF2_NOW} canControl={canControl} enabled actions={actions} /> : <span>no session</span>}</GateOverride.Provider>;
 };
-const cf2ArchiveView = (ui: any = {}) => ({ d }: { d: any }) => <ArchiveView a={archiveOf(d)} now={CF2_NOW} ui={ui} />;
+const CF2_ACTIONS = { onAccept: () => {}, onVeto: () => {}, onClose: () => {}, onReopen: () => {} };
+const cf2Active = (ui: any = {}) => ({ d }: { d: any }) => <ArchiveView active={archiveOf(d)} ended={CF2_ENDED} now={CF2_NOW} ui={ui} />;
+const cf2Ended = (ui: any = {}) => ({ d }: { d: any }) => <ArchiveView active={CF2_ACTIVE} ended={archiveOf(d)} now={CF2_NOW} ui={{ open: true, ...ui }} />;
 const CF2_DECIDE_SHOWS: Record<string, string[]> = {
   already_decided: ["409 already_decided", "It was decided before yours arrived.", 'role="status"', ">rejected<"],
   expired: ["409 expired", "It expired before yours arrived.", ">expired<", "expired, not decided"],
@@ -616,44 +628,60 @@ const CF2_DECIDE_SHOWS: Record<string, string[]> = {
   not_found: ["404 not_found", "no longer on the server"], bad_request: ["400 bad_request", "a Nexus bug, not yours"],
   owner_only: ["403 owner_only", "Only the owner decides."], same_origin_only: ["403 same_origin_only", "not sent from this page"]
 };
+const CF2_SUMMARY = "Archive: 5 expired · 2 closed · 1 aborted · 1 refused · 1 rejected · 1 vetoed";
 export const CF2_VIEWS: Entry[] = [
   { name: "Cf2SuggestionsOwner", View: cf2Sug(true), fixture: cf2Suggestions,
     shows: ["Open", "soonest expiry first", "execution:recoveries", "expiring", "expires in 42m", "15:30 UTC · 22:30 GMT+7", "expires in 3h 12m", "expires in 11h 05m", "Approve", "Reject", "Evidence", "border-late-fill/30", "bg-late-fill",
-      "Recent", "strategy:zone_pullback@intraday|normal-trending", "Recent: 5 expired · 1 aborted · 1 refused · 1 rejected"], hides: ["Accept", "example.com", "Open a session on", "Build the evidence pack"] },
+      "Recent", "strategy:zone_pullback@intraday|normal-trending", ">veto_window<", ">awaiting pick<", "Recent: 5 expired · 1 aborted · 1 refused · 1 rejected · 1 vetoed"], hides: ["Accept", "example.com", "Open a session on", "Build the evidence pack", "Approve is off"] },
   { name: "Cf2SuggestionsViewer", View: cf2Sug(false), fixture: cf2Suggestions, shows: ["expires in 42m", "only the owner approves or rejects"], hides: [">Approve<", ">Reject<"] },
+  { name: "Cf2SuggestionsAuto", View: cf2Sug(true), fixture: cf2SuggestionsAuto, shows: [">Approve<", ">Reject<", "expires in 42m"], hides: ["Approve is off"] },
   { name: "Cf2SuggestionsEmpty", View: cf2Sug(true), fixture: cf2SuggestionsEmpty, shows: ["0 open suggestions", "The flags run once an hour while the market is open.", "No recent topic needs anyone now."] },
-  { name: "Cf2SuggestionsOff", View: cf2Sug(true), fixture: cf2SuggestionsOff, shows: ["CFC_MODE off", "No new suggestions and no sessions. The archive stays readable.", "expires in 42m"] },
+  { name: "Cf2SuggestionsOff", View: cf2Sug(true, false), fixture: cf2SuggestionsOff, shows: ["CFC_MODE off", "No new suggestions and no sessions. The archive stays readable.", "expires in 42m", "Approve is off while sessions are off.", 'title="Sessions are off: an approval cannot open a session"', ">Reject<"] },
   { name: "Cf2CardSending", View: ({ d }) => { const x = suggestionsOf(d, CF2_NOW).open[2]; return x ? <SuggestionCard s={x} now={CF2_NOW} canControl state={{ sending: "approve" }} /> : <span>none</span>; }, fixture: cf2Suggestions, shows: ["Approving", 'aria-busy="true"', 'disabled=""', "engine:model"] },
-  { name: "Cf2CardApproved", View: ({ d }) => { const x = suggestionsOf(d, CF2_NOW).recent.find((y) => y.status === "approved"); return x ? <SuggestionCard s={x} now={CF2_NOW} canControl /> : <span>none</span>; }, fixture: cf2Suggestions, shows: [">approved<", "approved by owner", "Open session", "12:19 UTC · 19:19 GMT+7"], hides: [">Approve<"] },
+  { name: "Cf2CardApproved", View: ({ d }) => { const x = suggestionsOf(d, CF2_NOW).recent.find((y) => y.status === "approved"); return x ? <SuggestionCard s={x} now={CF2_NOW} canControl /> : <span>none</span>; }, fixture: cf2Suggestions, shows: [">approved<", "approved by owner", "Open session"], hides: [">Approve<"] },
   { name: "Cf2CardRejected", View: ({ d }) => { const x = suggestionsOf(d, CF2_NOW).recent.find((y) => y.status === "rejected"); return x ? <SuggestionCard s={x} now={CF2_NOW} canControl /> : <span>none</span>; }, fixture: cf2Suggestions, shows: [">rejected<", "rejected by owner", "No session opened.", "27 Nov 06:40 UTC · 13:40 GMT+7"] },
   { name: "Cf2CardExpired", View: ({ d }) => { const x = suggestionsOf(d, CF2_NOW).recent.find((y) => y.status === "expired"); return x ? <SuggestionCard s={x} now={CF2_NOW} canControl /> : <span>none</span>; }, fixture: cf2Suggestions, shows: [">expired<", "expired, not decided"], hides: [">Approve<", "expires in"] },
-  ...Object.keys(CF2_DECIDE_SHOWS).map((k) => ({ name: `Cf2Decide_${k}`, View: cf2Card(k, k === "already_decided" ? "approve" : "approve"), fixture: CF2_REPLIES[k], shows: CF2_DECIDE_SHOWS[k] })),
+  ...Object.keys(CF2_DECIDE_SHOWS).map((k) => ({ name: `Cf2Decide_${k}`, View: cf2Card(k), fixture: CF2_REPLIES[k], shows: CF2_DECIDE_SHOWS[k] })),
   { name: "Cf2SessionsOwner", View: ({ d }) => <SessionsView sessions={sessionsOf(d, CF2_NOW)} archive={CF2_ARCHIVE} now={CF2_NOW} details={{ [(cf2Running as any).session.id]: detailOf((cf2Running as any).session) }} />, fixture: cf2Sessions,
-    shows: ["Running", "running", "responses", "9/16 calls", "Risk Manager", "responded", "The Interstellar Eyes", "waiting", "not yet", "Ended", ">decided<", ">aborted<", ">closed<", "council", "4 agree", "1 change", "Raise the intraday reward floor", "Skip the first London hour after a range night", "the daily council budget is used up"], hides: ["example.com", "Accept"] },
+    shows: ["Running", "running", "responses", "9/16 calls", "Risk Manager", "responded", "The Interstellar Eyes", "waiting", "not yet", "awaiting pick", "Waiting for the owner&#x27;s pick: no quorum (3 of 6 spoke)", "Ended", ">decided<", ">aborted<", ">closed<", "council", "4 agree", "1 change",
+      "Raise the intraday reward floor", "Skip the first London hour after a range night", "veto 22m", "the daily council budget is used up"], hides: ["example.com", "Accept"] },
+  { name: "Cf2SessionsAuto", View: ({ d }) => <SessionsView sessions={sessionsOf(d, CF2_NOW)} archive={CF2_ARCHIVE} now={CF2_NOW} />, fixture: cf2SessionsAuto, shows: ["Running", "Ended", "veto 22m"] },
   { name: "Cf2SessionsOff", View: ({ d }) => <SessionsView sessions={sessionsOf(d, CF2_NOW)} archive={null} now={CF2_NOW} />, fixture: cf2SessionsOff, shows: ["Running", "Ended", ">closed<"] },
-  { name: "Cf2DetailDecided", View: cf2Detail(CF2_OWNER, true), fixture: cf2Decided,
-    shows: ["Options the council weighed", "council&#x27;s pick", "decided by", "council", "Raise the intraday reward floor", "decision.min_rrr.intraday: 1.5 → 1.7 R", "knob change · shadow test first", "no change", "4 agree · 1 change · 1 disagree · 0 abstain", 'role="img"', "Seat votes", "Opening opinions", "Responses to each other", "Re-open with fresh evidence", ">shadow<", "next shadow", 'aria-label="Rate / correct"'],
-    hides: ["Accept", ">Close<", "Write to the agents"] },
-  { name: "Cf2DetailViewer", View: cf2Detail(CF2_VIEWER, false), fixture: cf2Decided, shows: ["council&#x27;s pick", "Seat votes"], hides: ["Re-open", "Rate / correct", "Write to the agents"] },
-  { name: "Cf2DetailRunning", View: cf2Detail(CF2_OWNER, true), fixture: cf2Running, shows: ["running", "responses", ">Close<", "Write to the agents", "Send"], hides: ["Options the council weighed", "&#x27;s pick"] },
-  { name: "Cf2DetailReopened", View: cf2Detail(CF2_OWNER, true), fixture: cf2Reopened, shows: [">closed<", "reopened as", "by owner"], hides: ["example.com"] },
-  { name: "Cf2ArchiveActive", View: cf2ArchiveView(), fixture: cf2Archive,
-    shows: ["Needs someone", "6 of 6", "Needs you", "In progress", "strategy:zone_pullback@intraday|normal-trending", "in_progress", ">shadow<", "decision.min_rrr.intraday 1.5 → 1.7", "owner", "platform", 'aria-expanded="false"', "Archive: 5 expired · 2 closed · 1 aborted · 1 refused · 1 rejected"],
-    hides: ["data:market_feed", "out_of_scope", "Load more", 'id="cfc-archive-list"'] },
-  { name: "Cf2ArchiveOpen", View: cf2ArchiveView({ open: true }), fixture: cf2Archive,
-    shows: ['aria-expanded="true"', "10 of 10 ended", "data:market_feed", "expired at 12:30 UTC · 19:30 GMT+7", "rejected at 27 Nov 06:40 UTC · 13:40 GMT+7", 'data-line="one"', "out_of_scope", ">refused<", "free:zone-pullback-exits-review", "Status", ">all<"], hides: ["Load more", "example.com"] },
-  { name: "Cf2ArchiveOpenExpired", View: cf2ArchiveView({ open: true, filter: "expired" }), fixture: cf2Archive, shows: ["5 of 10 ended", "seat:risk@15"], hides: ["out_of_scope", "risk:london"] },
-  { name: "Cf2ArchivePage1", View: cf2ArchiveView({ open: true }), fixture: cf2ArchivePage1, shows: ["Load more", "6 of 16 chains loaded", "in the last 6 loaded of 16"] },
-  { name: "Cf2ArchiveEmpty", View: cf2ArchiveView(), fixture: cf2ArchiveEmpty, shows: ["0 chains", "A chain starts when a suggestion is approved, rejected or expires."] },
-  { name: "Cf2ArchiveOff", View: cf2ArchiveView(), fixture: cf2ArchiveOff, shows: ["Needs someone", "Archive: 5 expired"] },
+  { name: "Cf2DetailDecided", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2Decided,
+    shows: ["Options the council weighed", "council&#x27;s pick", "decided by", "Decided by council", "quorum · 6 spoke · needs 4", "raise_rrr: 4 of 6 seats support (needs 4); the knob is inside its bounds", "Raise the intraday reward floor", "decision.min_rrr.intraday: 1.5 → 1.7 R", "knob change · shadow test first", "no change",
+      "4 agree · 1 change · 1 disagree · 0 abstain", 'role="img"', "Seat votes", "Opening opinions", "Responses to each other", "Re-open with fresh evidence", ">shadow<", "next shadow", 'aria-label="Rate / correct"'],
+    hides: [">Accept<", ">Close<", ">Veto<", "Write to the agents", "Waiting for the owner"] },
+  { name: "Cf2DetailViewer", View: cf2Detail(CF2_VIEWER, false, CF2_ACTIONS), fixture: cf2Decided, shows: ["council&#x27;s pick", "Seat votes", "Decided by council"], hides: ["Re-open", "Rate / correct", "Write to the agents", ">Accept<"] },
+  { name: "Cf2DetailPick", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2Pick,
+    shows: ["awaiting pick", "Waiting for the owner&#x27;s pick.", "Skip the first New York hour", "Ask more reward intraday", ">Accept<", "The owner picks one; the session ends with it.", ">Close<", "Write to the agents"], hides: ["&#x27;s pick<", "Decided by council", ">Veto<"] },
+  { name: "Cf2DetailPickViewer", View: cf2Detail(CF2_VIEWER, false, CF2_ACTIONS), fixture: cf2Pick, shows: ["Waiting for the owner&#x27;s pick.", "Skip the first New York hour"], hides: [">Accept<", ">Close<"] },
+  { name: "Cf2DetailNoQuorum", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2NoQuorum, shows: ["Waiting for the owner&#x27;s pick: no quorum (3 of 6 spoke).", ">Accept<", "Widen the intraday stop after a range night"], hides: ["Decided by council"] },
+  { name: "Cf2DetailVeto", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2Veto,
+    shows: [">veto_window<", "next owner", "veto ends in 22m · 15:10 UTC · 22:10 GMT+7", "It is handed to the platform at 15:10 UTC · 22:10 GMT+7 unless the owner vetoes it.", ">Veto<", "btn-danger", "Decided by council", "task: 4 of 4 seats support (needs 4); the task has a spec", "council&#x27;s pick"], hides: [">Accept<", ">Close<"] },
+  { name: "Cf2DetailVetoViewer", View: cf2Detail(CF2_VIEWER, false, CF2_ACTIONS), fixture: cf2Veto, shows: ["veto ends in 22m", "unless the owner vetoes it"], hides: [">Veto<"] },
+  { name: "Cf2DetailVetoed", View: cf2Detail(CF2_OWNER, true, { ...CF2_ACTIONS, notice: "Vetoed. The council&apos;s task is not handed off." }), fixture: cf2Veto, shows: ['role="status"', "Vetoed."] },
+  { name: "Cf2DetailRunning", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2Running, shows: ["running", "responses", ">Close<", "Write to the agents", "Send"], hides: ["Options the council weighed", "&#x27;s pick", ">Veto<"] },
+  { name: "Cf2DetailReopened", View: cf2Detail(CF2_OWNER, true, CF2_ACTIONS), fixture: cf2Reopened, shows: [">closed<", "reopened as", "by owner"], hides: ["example.com"] },
+  { name: "Cf2ArchiveActive", View: cf2Active(), fixture: cf2ArchiveActive,
+    shows: ["Needs someone", "9 of 9", "Needs you", "In progress", "strategy:zone_pullback@intraday|normal-trending", "in_progress", ">shadow<", ">veto_window<", "veto ends in 22m", "decision.min_rrr.intraday 1.5 → 1.7", "owner", "platform", 'aria-expanded="false"', CF2_SUMMARY],
+    hides: ["data:market_feed", "out_of_scope", "Load more", 'id="cfc-archive-list"', "in the last"] },
+  { name: "Cf2ArchiveOpen", View: cf2Ended(), fixture: cf2ArchiveEnded,
+    shows: ['aria-expanded="true"', "11 of 11 ended", "data:market_feed", "expired at 12:30 UTC · 19:30 GMT+7", "rejected at 27 Nov 06:40 UTC · 13:40 GMT+7", 'data-line="one"', "out_of_scope", ">refused<", ">vetoed<", "free:zone-pullback-exits-review", "Status", ">all<"], hides: ["Load more", "example.com"] },
+  { name: "Cf2ArchiveOpenExpired", View: cf2Ended({ filter: "expired" }), fixture: cf2ArchiveEndedExpired, shows: ["5 of 5 expired", "seat:risk@15"], hides: ["out_of_scope", "risk:london"] },
+  { name: "Cf2ArchivePage1", View: cf2Ended(), fixture: cf2ArchiveEndedPage1, shows: ["Load more", "4 of 11 loaded", CF2_SUMMARY], hides: ["in the last"] },
+  { name: "Cf2ArchiveEmpty", View: ({ d }) => <ArchiveView active={archiveOf(d)} ended={null} now={CF2_NOW} />, fixture: cf2ArchiveEmpty, shows: ["0 chains", "A chain starts when a suggestion is approved, rejected or expires."] },
+  { name: "Cf2ArchiveOff", View: cf2Active(), fixture: cf2ArchiveOff, shows: ["Needs someone", "Archive: 5 expired"] },
   { name: "Cf2Archive404", View: ({ d }) => <ArchiveUnread poll={unread(`/api/council/archive 404 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { error: "Not found" }, shows: ["/api/council/archive 404 Not found", "The archive is not on this Worker yet."] },
   { name: "Cf2Archive503", View: ({ d }) => <ArchiveUnread poll={unread(`/api/council/archive 503 ${typeof d?.error === "string" ? d.error : "read failed"}`)} />, fixture: { status: "error", error: "unavailable" }, shows: ["/api/council/archive 503", ">error<"] },
-  { name: "Cf2HeaderOwner", View: ({ d }) => <CouncilHeader mode={d?.mode ?? null} sessions={sessionsOf(d, CF2_NOW)} canControl />, fixture: cf2Sessions, shows: ["CFC_MODE on", "sessions on", "1/4 today", "Turn off"] },
+  { name: "Cf2HeaderOwner", View: ({ d }) => <CouncilHeader mode={d?.mode ?? null} sessions={sessionsOf(d, CF2_NOW)} canControl />, fixture: cf2Sessions, shows: ["CFC_MODE on", "the owner approves each topic and picks each session&#x27;s option", "sessions on", "3/4 today", "Turn off"] },
+  { name: "Cf2HeaderAuto", View: ({ d }) => <CouncilHeader mode={d?.mode ?? null} sessions={sessionsOf(d, CF2_NOW)} canControl />, fixture: cf2SessionsAuto, shows: ["CFC_MODE auto", "the council picks an option by itself once at least 4 seats spoke"] },
   { name: "Cf2HeaderViewer", View: ({ d }) => <CouncilHeader mode={d?.mode ?? null} sessions={sessionsOf(d, CF2_NOW)} canControl={false} />, fixture: cf2Sessions, shows: ["sessions on", "the owner approves"], hides: ["Turn off", "Turn on"] },
   { name: "Cf2HeaderOff", View: ({ d }) => <CouncilHeader mode={d?.mode ?? null} sessions={sessionsOf(d, CF2_NOW)} canControl />, fixture: cf2SessionsOff, shows: ["CFC_MODE off", "sessions off", "Turn on", 'disabled=""'] },
   { name: "Cf2Tabs", View: ({ d }) => <Tabs tab="archive" open={suggestionsOf(d, CF2_NOW).open.length} running={1} />, fixture: cf2Suggestions, shows: ["Suggestions", "Sessions", "Archive", 'aria-current="page"', ">3<"] },
   { name: "Cf2ConfirmApprove", View: ({ d }) => <ConfirmDialog options={{ title: "Approve this topic?", body: <span className="mono">{d?.topic ?? "—"}</span>, confirmLabel: "Approve", tone: "ok" }} onDone={() => {}} />, fixture: { topic: "strategy:zone_pullback:exits" }, shows: ["Approve this topic?", "border-ok-fill/40", "Approve", "Cancel"] },
-  { name: "Cf2ConfirmReject", View: ({ d }) => <ConfirmDialog options={{ title: "Reject this topic?", body: <span className="mono">{d?.topic ?? "—"}</span>, confirmLabel: "Reject", tone: "late" }} onDone={() => {}} />, fixture: { topic: "strategy:zone_pullback:exits" }, shows: ["Reject this topic?", "border-late-fill/40", "Reject"], hides: ["confirm-reason"] }
+  { name: "Cf2ConfirmReject", View: ({ d }) => <ConfirmDialog options={{ title: "Reject this topic?", body: <span className="mono">{d?.topic ?? "—"}</span>, confirmLabel: "Reject", tone: "late" }} onDone={() => {}} />, fixture: { topic: "strategy:zone_pullback:exits" }, shows: ["Reject this topic?", "border-late-fill/40", "Reject"], hides: ["confirm-reason"] },
+  { name: "Cf2ConfirmAccept", View: ({ d }) => <ConfirmDialog options={{ title: `Accept "${d?.title ?? "—"}"?`, body: "The session ends with this pick.", confirmLabel: "Accept", tone: "ok" }} onDone={() => {}} />, fixture: { title: "Skip the first New York hour" }, shows: ["Accept &quot;Skip the first New York hour&quot;?", "border-ok-fill/40", ">Accept<"] },
+  { name: "Cf2ConfirmVeto", View: ({ d }) => <ConfirmDialog options={{ title: "Veto the council's task?", body: <span>{d?.title ?? "—"}</span>, confirmLabel: "Veto", tone: "fault" }} onDone={() => {}} />, fixture: { title: "Place the entry limit 0.1 ATR inside the zone" }, shows: ["Veto the council&#x27;s task?", "border-fault-fill/40", ">Veto<"] }
 ];
 
 export const VIEWS: Entry[] = [

@@ -58,7 +58,7 @@
   "sessions": "the owner opens a session on the Councils page (GET /api/council/sessions), or approves a suggestion",
   "suggestions": [
     {
-      "id": 13,
+      "id": 15,
       "topic_key": "engine:model",
       "type": "engine",
       "rule": "gate_drift",
@@ -76,7 +76,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 14,
       "topic_key": "strategy:zone_pullback:exits",
       "type": "strategy",
       "rule": "stop_share",
@@ -94,7 +94,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 13,
       "topic_key": "execution:recoveries",
       "type": "execution",
       "rule": "recoveries_per_day",
@@ -112,7 +112,25 @@
       }
     },
     {
-      "id": 14,
+      "id": 17,
+      "topic_key": "execution:fills",
+      "type": "execution",
+      "rule": "fill_slippage",
+      "status": "approved",
+      "created_at": "2026-11-28T11:28:00.000Z",
+      "last_seen_at": "2026-11-28T11:28:00.000Z",
+      "expires_at": "2026-11-30T11:28:00.000Z",
+      "decided_at": "2026-11-28T12:28:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mx0dyoao_2u6l02",
+      "active": false,
+      "fingerprint": "fp-execution:fills-1795865280000",
+      "signal": {
+        "summary": "Fills 0.4 ATR worse than the plan's entry on 6 of the last 20 trades."
+      }
+    },
+    {
+      "id": 18,
       "topic_key": "strategy:zone_pullback@intraday|normal-trending",
       "type": "strategy",
       "rule": "context_negative",
@@ -122,11 +140,65 @@
       "expires_at": "2026-11-30T09:14:00.000Z",
       "decided_at": "2026-11-28T12:19:00.000Z",
       "decided_by": "owner",
-      "session_id": "cfc_mx0dn3mo_wvuf01",
+      "session_id": "cfc_mx0dn3mo_ntco03",
       "active": false,
       "fingerprint": "fp-strategy:zone_pullback@intraday|normal-trending-1795857240000",
       "signal": {
         "summary": "-0.28R per setup over 16 setups in intraday · normal-trending."
+      }
+    },
+    {
+      "id": 16,
+      "topic_key": "risk:intraday",
+      "type": "risk",
+      "rule": "mode_negative",
+      "status": "approved",
+      "created_at": "2026-11-28T06:00:00.000Z",
+      "last_seen_at": "2026-11-28T06:00:00.000Z",
+      "expires_at": "2026-11-30T06:00:00.000Z",
+      "decided_at": "2026-11-28T10:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mx08ocg0_aclji2",
+      "active": false,
+      "fingerprint": "fp-risk:intraday-1795845600000",
+      "signal": {
+        "summary": "-0.18R per trade over 22 intraday trades."
+      }
+    },
+    {
+      "id": 6,
+      "topic_key": "risk:new_york",
+      "type": "risk",
+      "rule": "session_negative",
+      "status": "approved",
+      "created_at": "2026-11-27T13:00:00.000Z",
+      "last_seen_at": "2026-11-27T13:00:00.000Z",
+      "expires_at": "2026-11-29T13:00:00.000Z",
+      "decided_at": "2026-11-27T16:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwz63gg0_hv0i02",
+      "active": false,
+      "fingerprint": "fp-risk:new_york-1795784400000",
+      "signal": {
+        "summary": "-0.27R per trade over 24 trades in the New York session."
+      }
+    },
+    {
+      "id": 5,
+      "topic_key": "risk:normal-trending",
+      "type": "risk",
+      "rule": "regime_negative",
+      "status": "approved",
+      "created_at": "2026-11-27T12:00:00.000Z",
+      "last_seen_at": "2026-11-27T12:00:00.000Z",
+      "expires_at": "2026-11-29T12:00:00.000Z",
+      "decided_at": "2026-11-27T13:00:00.000Z",
+      "decided_by": "owner",
+      "session_id": "cfc_mwyznz40_wvuf01",
+      "active": false,
+      "fingerprint": "fp-risk:normal-trending-1795780800000",
+      "signal": {
+        "summary": "-0.25R per trade over 20 trades in the normal-trending regime."
       }
     },
     {
@@ -148,7 +220,7 @@
       }
     },
     {
-      "id": 5,
+      "id": 7,
       "topic_key": "cost:council",
       "type": "cost",
       "rule": "neurons_week",
@@ -220,7 +292,7 @@
       }
     },
     {
-      "id": 10,
+      "id": 12,
       "topic_key": "risk:asia",
       "type": "risk",
       "rule": "session_negative",
@@ -238,7 +310,7 @@
       }
     },
     {
-      "id": 9,
+      "id": 11,
       "topic_key": "execution:sl_plus",
       "type": "execution",
       "rule": "sl_plus_share",
@@ -256,7 +328,7 @@
       }
     },
     {
-      "id": 6,
+      "id": 8,
       "topic_key": "data:market_feed",
       "type": "data",
       "rule": "stuck_state",
@@ -274,7 +346,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 10,
       "topic_key": "news:release_horizon",
       "type": "news",
       "rule": "losses_near_releases",
@@ -292,7 +364,7 @@
       }
     },
     {
-      "id": 7,
+      "id": 9,
       "topic_key": "seat:risk@15",
       "type": "seat",
       "rule": "weight_floor",

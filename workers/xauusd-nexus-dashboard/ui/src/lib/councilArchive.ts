@@ -4,7 +4,7 @@
 //   GET /api/council/suggestions   suggestionsOf   (status open | approved | rejected | expired, expires_at)
 //   GET /api/council/sessions      sessionsOf
 //   GET /api/council/session?id=   detailOf, seatsOf
-//   GET /api/council/archive       archiveOf, mergeArchive, splitArchive, archivePath (cursor paging, items, vocab)
+//   GET /api/council/archive       archiveOf, mergeArchive, splitArchive, archivePath (#680: scope, status, counts; cursor)
 //   POST /omega/api/council        decideRequest, decideResult (action "decide", the idempotency key, 409 codes)
 // Pure and null-safe: any body, null included, gives a view (empty lists, nulls), never a throw. No price and no email:
 // the routes send no price, and a session's reason (the owner's Access email on a close or a re-open) is masked here.
@@ -29,9 +29,9 @@ const TONES: Record<string, Tone> = {
   approved: "ok", decided: "ok", live: "ok", merged: "ok", deployed: "ok", deployed_unmeasured: "ok",
   open: "late", awaiting_approval: "late", expiring: "late", running: "late", in_session: "late", awaiting_pick: "late", awaiting_owner: "late",
   positions: "late", rebuttals: "late", synthesis: "late", in_progress: "late", queued_external: "late", waiting_external: "late", proposed: "late",
-  handoff_pending: "late", received: "late", queued: "late",
+  handoff_pending: "late", received: "late", queued: "late", veto_window: "late",
   refused: "fault", rolled_back: "fault", aborted: "fault", unfit: "fault", reverted: "fault",
-  expired: "off", closed: "off", rejected: "off", handed_off: "off", none: "off", no_change: "off", superseded: "off",
+  expired: "off", closed: "off", rejected: "off", handed_off: "off", none: "off", no_change: "off", superseded: "off", vetoed: "off",
   shadow: "shadow", shadow_test: "shadow", queued_shadow: "shadow"
 };
 export const toneOf = (status: unknown): Tone => TONES[String(status ?? "")] ?? "plain";
@@ -200,7 +200,9 @@ export const pickedOptionId = (reason: unknown): string | null => /^accepted (\S
 export type Detail = {
   id: string; question: string; topicKey: string; state: string; statusText: string; tone: Tone; step: string | null; terminal: boolean;
   calls: number | null; createdAt: string | null; updatedAt: string | null; refs: number | null; packHash: string | null; stale: boolean; reason: string | null;
-  summary: string | null; options: Option[]; pickedBy: string | null; seats: Seat[]; rounds: { round: string; title: string; messages: any[] }[]; participants: { id: string; name: string }[]; raw: any;
+  summary: string | null; options: Option[]; pickedBy: string | null; seats: Seat[];
+  /** The session waits for the owner's pick (CFC_MODE on, or auto without a quorum): the owner may accept an option. */
+  awaitingPick: boolean; council: CouncilDecision | null; rounds: { round: string; title: string; messages: any[] }[]; participants: { id: string; name: string }[]; raw: any;
 };
 const ROUND_TITLE: Record<string, string> = { position: "Opening opinions", rebuttal: "Responses to each other", answer: "Answers to the owner" };
 /**
@@ -211,7 +213,8 @@ export function detailOf(session: any, chain: Chain | null = null): Detail | nul
   const s = obj(session);
   if (!str(s.id)) return null;
   const state = str(s.state) ?? "—";
-  const pickedId = pickedOptionId(s.reason);
+  // #680: the council's own pick on its proposal (council_decision.option_id), else the reason "accepted <id> by …".
+  const pickedId = (chain?.proposal?.council?.optionId ?? null) ?? pickedOptionId(s.reason);
   const opts = obj(s.options);
   const options = arr(opts.options).filter((o) => o && typeof o === "object").map((o) => ({
     id: str(o.option_id) ?? "—", rank: num(o.rank), title: str(o.title) ?? str(o.option_id) ?? "—", kind: str(o.kind), hypothesis: str(o.hypothesis),
@@ -224,7 +227,8 @@ export function detailOf(session: any, chain: Chain | null = null): Detail | nul
     id: s.id, question: str(s.topic_text) ?? str(s.question) ?? "—", topicKey: str(s.topic_key) ?? "—", state, statusText: RUNNING.includes(state) ? "running" : statusText(state), tone: toneOf(RUNNING.includes(state) ? "running" : state),
     step: stepText(state), terminal: s.terminal === true || TERMINAL.includes(state), calls: num(s.calls), createdAt: msIso(s.created_ms), updatedAt: msIso(s.updated_ms),
     refs: num(s.pack_refs), packHash: str(s.pack_hash), stale: s.pack_stale === true, reason: maskEmail(s.reason), summary: str(opts.summary), options,
-    pickedBy: pickedId ? chain?.proposal?.decidedBy ?? null : null, seats: seatsOf(s), rounds,
+    pickedBy: pickedId ? chain?.proposal?.decidedBy ?? (pickedOptionId(s.reason) ? (/ by council/.test(String(s.reason)) ? "council" : "owner") : null) : null, seats: seatsOf(s), rounds,
+    awaitingPick: state === "awaiting_owner", council: chain?.proposal?.council ?? null,
     participants: arr(s.participants).map((p) => { const id = typeof p === "string" ? p : str(obj(p).id) ?? "—"; return { id, name: typeof p === "string" ? p : str(obj(p).name) ?? id }; }), raw: s
   };
 }
@@ -236,8 +240,29 @@ export type Chain = {
   id: string; status: string; text: string; tone: Tone; source: string | null; nextActor: string; terminal: boolean; updatedAt: string | null;
   topic: { key: string; type: string | null; origin: string | null; suggestionId: number | null; rule: string | null; step: Step | null; expiresAt: string | null; decidedAt: string | null; decidedBy: string | null; endedAt: string | null };
   session: { id: string; state: string; step: Step; stepName: string | null; startedBy: string | null; reopenedAs: string | null; reason: string | null; createdAt: string | null; updatedAt: string | null; tally: Tally | null; done: number | null; expected: number | null; rebuttals: number | null; options: number | null } | null;
-  proposal: { id: string; kind: string | null; kindText: string | null; title: string | null; knob: string | null; state: string; step: Step; decidedBy: string | null; decidedAt: string | null; closeCode: string | null; note: string | null } | null;
+  proposal: { id: string; kind: string | null; kindText: string | null; title: string | null; knob: string | null; state: string; step: Step; decidedBy: string | null; decidedAt: string | null; closeCode: string | null; note: string | null; vetoUntil: string | null; council: CouncilDecision | null } | null;
 };
+/**
+ * CFC-A2 (#680): the council's own pick on its proposal (council_proposals.decision_json, the archive's
+ * proposal.council_decision): the option, why, the opening-stance tally, how many seats spoke and the support it needed.
+ * There is no per-option tally (a later item): `tally` is the stance count of the opening opinions.
+ */
+export type CouncilDecision = { optionId: string | null; rationale: string | null; tally: Tally | null; spoke: number | null; need: number | null; quorum: boolean | null };
+export function councilDecisionOf(x: unknown): CouncilDecision | null {
+  const d = obj(x);
+  if (!Object.keys(d).length) return null;
+  return { optionId: str(d.option_id), rationale: maskEmail(d.rationale), tally: tallyOf(d.tally), spoke: num(d.spoke), need: num(d.need), quorum: typeof d.quorum === "boolean" ? d.quorum : null };
+}
+/** CFC-A2: a council-picked code task waits this long for the owner's veto (src/cfc-session.mjs VETO_WINDOW_MS). The reads carry
+ * no veto_until (only the accept's answer does), so it is the pick's time plus this window. */
+export const VETO_WINDOW_MS = 2 * H;
+/** The veto window's countdown, late amber: from the pick to its end, in UTC · GMT+7. */
+export function vetoCountdown(c: Chain | null, now: number): Countdown | null {
+  const p = c?.proposal;
+  if (!p || p.state !== "veto_window" || !p.vetoUntil) return null;
+  const cd = countdownOf(p.decidedAt, p.vetoUntil, now);
+  return cd ? { ...cd, tone: "late" } : null;
+}
 /** One archive item (#677 readCouncilArchive items[]). */
 export function chainOf(x: any): Chain {
   const c = obj(x), t = obj(c.topic), s = c.session ? obj(c.session) : null, p = c.proposal ? obj(c.proposal) : null;
@@ -262,18 +287,25 @@ export function chainOf(x: any): Chain {
     proposal: p && pState ? {
       id: str(p.id) ?? "—", kind: str(p.kind), kindText: SHORT_KIND[String(p.kind)] ?? null, title: str(p.title),
       knob: p.kind === "policy_parameter" && str(p.knob) ? `${p.knob} ${p.from ?? "—"} → ${p.value ?? "—"}` : null,
-      state: pState, step: step(pState)!, decidedBy: str(p.decided_by), decidedAt: str(p.decided_at), closeCode: str(pf?.close_code), note: maskEmail(p.note)
+      state: pState, step: step(pState)!, decidedBy: str(p.decided_by), decidedAt: str(p.decided_at), closeCode: str(pf?.close_code), note: maskEmail(p.note),
+      vetoUntil: p.state === "veto_window" && ms(p.decided_at) != null ? new Date((ms(p.decided_at) as number) + VETO_WINDOW_MS).toISOString() : null,
+      council: councilDecisionOf(p.council_decision)
     } : null
   };
 }
 
-export type Archive = { chains: Chain[]; nextCursor: string | null; total: number | null; windowDays: number | null; asOf: string | null; statuses: string[]; actors: string[] };
-/** GET /api/council/archive (#677: items, next_cursor, total, window_days, as_of, vocab). */
+/** #680: the counts over the whole 90-day window, whatever the scope or status asked. */
+export type Counts = { total: number; active: number; archive: number; byStatus: Record<string, number>; byNextActor: Record<string, number> };
+export type Archive = { chains: Chain[]; nextCursor: string | null; total: number | null; windowDays: number | null; asOf: string | null; statuses: string[]; actors: string[]; scope: string | null; statusFilter: string | null; counts: Counts | null };
+const countMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(obj(v)).filter(([, n]) => num(n) != null) as [string, number][]);
+/** GET /api/council/archive (#677: items, next_cursor, total, window_days, as_of, vocab; #680: scope, status_filter, counts). */
 export function archiveOf(body: any): Archive {
-  const d = obj(body), v = obj(d.vocab);
+  const d = obj(body), v = obj(d.vocab), c = d.counts ? obj(d.counts) : null;
   return {
     chains: arr(d.items ?? d.chains).map(chainOf), nextCursor: str(d.next_cursor), total: num(d.total), windowDays: num(d.window_days), asOf: str(d.as_of),
-    statuses: arr(v.chain_status).filter((x) => typeof x === "string"), actors: arr(v.next_actor).filter((x) => typeof x === "string")
+    statuses: arr(v.chain_status).filter((x) => typeof x === "string"), actors: arr(v.next_actor).filter((x) => typeof x === "string"),
+    scope: str(d.scope), statusFilter: str(d.status_filter),
+    counts: c && num(c.total) != null ? { total: num(c.total)!, active: num(c.active) ?? 0, archive: num(c.archive) ?? 0, byStatus: countMap(c.by_status), byNextActor: countMap(c.by_next_actor) } : null
   };
 }
 /** Load more: the next page's chains after the ones on screen (a chain already listed is kept once), its cursor and total. */
@@ -285,33 +317,51 @@ export function mergeArchive(prev: Archive | null, next: Archive): Archive {
 
 /** The archive read: one page of ARCHIVE_PAGE chains (#677 allows at most 50), then the cursor. */
 export const ARCHIVE_PAGE = 50;
+export type Scope = "active" | "archive";
 /**
- * The archive's path. The API has no scope filter yet, so the split into active and archived chains is made here, on
- * the client (splitArchive); a later server-side `?scope=active|archive` changes this function and splitArchive only.
+ * The archive's path (#680): `scope=active` (a chain someone still acts on: next_actor not "none") or `scope=archive` (the
+ * rest), an optional `status=` filter, and the cursor of the same query.
  */
-export const archivePath = (cursor: string | null = null, limit = ARCHIVE_PAGE): string => `/api/council/archive?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+export const archivePath = (cursor: string | null = null, limit = ARCHIVE_PAGE, scope: Scope | null = null, status: string | null = null): string =>
+  `/api/council/archive?limit=${limit}${scope ? `&scope=${scope}` : ""}${status && status !== "all" ? `&status=${encodeURIComponent(status)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
 
 export type Split = {
   active: Chain[]; archived: Chain[]; counts: [string, number][]; loaded: number; total: number | null;
-  /** The counts cover every chain of the archive's window (all pages loaded), or only the pages loaded so far. */
+  /** The ended chains in the whole window (the server's counts.archive), else the loaded ones. */
+  archivedTotal: number; activeTotal: number;
+  /** The counts cover every chain of the archive's window (the server's counts, #680, or every page loaded), or only the pages loaded. */
   exact: boolean;
 };
+/** The chain statuses whose next actor is "none" (src/cfc-lifecycle.mjs chainState; platform terminal states included). */
+export const ENDED_STATUSES = ["rejected", "expired", "decided", "closed", "aborted", "no_change", "rolled_back", "superseded", "vetoed", "refused", "unfit", "reverted", "deployed", "deployed_unmeasured"];
 /**
  * The owner's rule (via the Orchestrator, 2026-11-28): only the chains that need someone are listed by default (next_actor
- * not "none"); the terminal ones (next_actor "none": expired, rejected, closed, no change, aborted, deployed, ...) are
- * counted by status and listed only in the Archive view. Client-side, over the pages loaded so far: exact once every page
- * is loaded (no next cursor), else the counts are of the loaded chains only.
+ * not "none"); the ended ones (next_actor "none") are counted by status and listed only in the Archive view. #680 gives the
+ * scopes and the counts over the whole window: `active` is the scope=active read, `ended` the scope=archive read. The
+ * counts are the server's (exact) when it sends them; an older server's single read is split here, counted over the pages
+ * loaded (exact once every page is loaded).
  */
-export function splitArchive(a: Archive | null): Split {
-  const chains = a?.chains ?? [];
-  const active = chains.filter((c) => !c.terminal);
+export function splitArchive(active: Archive | null, ended: Archive | null = null): Split {
+  const seen = new Set<string>();
+  const chains = [...(active?.chains ?? []), ...(ended?.chains ?? [])].filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+  const act = chains.filter((c) => !c.terminal);
   const archived = chains.filter((c) => c.terminal);
+  const server = active?.counts ?? ended?.counts ?? null;
   const by = new Map<string, number>();
-  for (const c of archived) by.set(c.text, (by.get(c.text) ?? 0) + 1);
+  if (server) {
+    const ended = new Set([...ENDED_STATUSES, ...archived.map((c) => c.status)]);
+    for (const [k, n] of Object.entries(server.byStatus)) if (ended.has(k) && n > 0) by.set(statusText(k), (by.get(statusText(k)) ?? 0) + n);
+  } else for (const c of archived) by.set(c.text, (by.get(c.text) ?? 0) + 1);
   const counts = [...by.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
-  return { active, archived, counts, loaded: chains.length, total: a?.total ?? null, exact: a != null && a.nextCursor == null };
+  const sum = counts.reduce((n, [, k]) => n + k, 0);
+  const allLoaded = (active == null || active.nextCursor == null) && (ended == null || ended.nextCursor == null) && (active != null || ended != null);
+  return {
+    active: act, archived, counts, loaded: chains.length, total: server?.total ?? active?.total ?? null,
+    archivedTotal: server ? server.archive : archived.length, activeTotal: server ? server.active : act.length,
+    exact: server ? sum === server.archive : allLoaded
+  };
 }
-/** The one line instead of the terminal chains: "Archive: 5 expired · 2 closed · 1 rejected", honest about its reach. */
+/** The one line instead of the ended chains: "Archive: 5 expired · 2 closed · 1 rejected", honest about its reach. */
 export function summaryText(sp: Split, label = "Archive"): string {
   const parts = sp.counts.map(([k, n]) => `${n} ${k}`);
   const body = parts.length ? parts.join(" · ") : "nothing ended yet";
@@ -322,8 +372,10 @@ export function summaryText(sp: Split, label = "Archive"): string {
 export const ACTIVE_FILTERS: [string, string][] = [["all", "All"], ["owner", "Needs you"], ["moving", "In progress"]];
 export const activeOf = (chains: Chain[], f: string): Chain[] => (f === "owner" ? chains.filter((c) => c.nextActor === "owner") : f === "moving" ? chains.filter((c) => c.nextActor !== "owner") : chains);
 /** The Archive view's status filter: "all" and each chain status among the loaded archived chains (vocab order first). */
-export function archiveStatuses(sp: Split, vocab: string[]): string[] {
-  const present = [...new Set(sp.archived.map((c) => c.status))];
+export function archiveStatuses(sp: Split, vocab: string[], counts: Counts | null = null): string[] {
+  // The server's counts name every ended status of the window (#680); else the loaded chains'.
+  const fromCounts = counts ? Object.entries(counts.byStatus).filter(([k, n]) => n > 0 && (ENDED_STATUSES.includes(k) || sp.archived.some((c) => c.status === k))).map(([k]) => k) : [];
+  const present = [...new Set([...fromCounts, ...sp.archived.map((c) => c.status)])];
   const order = (s: string) => { const i = vocab.indexOf(s); return i < 0 ? vocab.length : i; };
   return ["all", ...present.sort((x, y) => order(x) - order(y) || x.localeCompare(y))];
 }
@@ -372,6 +424,19 @@ export function decideResult(status: number | null, body: any, decision: Decisio
     : status == null ? "No answer from Nexus. The card is still open."
     : "Not saved. The card is still open.";
   return { ...base, kind: "error", words, tone: "fault", refresh: status === 404, retry: status == null || status >= 500 };
+}
+
+/** A session control's answer in words (POST /omega/api/council close, reopen, accept, message, switch), never a throw. */
+export type ControlResult = { ok: boolean; words: string; code: string | null; sessionId: string | null; vetoed: boolean };
+export function controlResult(action: string, status: number | null, body: any): ControlResult {
+  const b = obj(body);
+  const ok = status === 200 && b.ok !== false;
+  const vetoed = ok && b.proposal_state === "vetoed";
+  const words = !ok ? (status == null ? "No answer from Nexus. Nothing changed." : `Not done: ${maskEmail(str(b.error) ?? str(b.code) ?? "refused") ?? "refused"}.`)
+    : vetoed ? "Vetoed. The council's task is not handed off."
+    : action === "accept" ? (b.state === "handoff_pending" || b.state === "handed_off" ? "Accepted. The task goes to the platform." : b.state === "queued_shadow" ? "Accepted. The knob goes to its shadow test." : "Accepted. The decision is recorded.")
+    : action === "close" ? "Closed." : action === "reopen" ? "Re-opened on fresh evidence." : action === "message" ? "Sent." : "Done.";
+  return { ok, words, code: ok ? null : String(status ?? "network"), sessionId: str(b.session_id), vetoed };
 }
 
 /** The decide POST (same origin, JSON), as the page's other owner writes: { status, body }, never a throw. */
