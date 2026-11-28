@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-28
+- chore(nexus): the Priority Queue drops the `parity_revoked` fault colour (S5c). The server retired that alert in #671 (dfc0e9b, live 2026-11-28 09:01Z), so `components/PriorityQueue.tsx` colours only `war_room_stale` as a fault and every other open alert late. UI only.
 - feat(feed): the feed walks the backfill cursor (BF1 b + c, the orchestrator's spec, feed first; the owner's go to install before the Sunday reopen, relayed by the orchestrator 2026-11-28: "Go, pasang sebelum buka (Recommended)". The VPS Claude installs by docs/RUNBOOK_OF1_FEED.md section 1b; no agent here touches the VPS).
   - **Bridge 1.8.3, feed role** (`bridge/omega-bridge/src/feed-daemon.mjs`). It reads `corpus_backfill_from_ms` from each feed sync. `planFeedCorpus` walks the hole once, oldest first: up to 200 bars from the walk's position plus the newest 40 after the server's cursor, at most 240, ascending.
   - **The request file.** When `corpus.json` does not reach back, the bridge writes `omega/corpus_from.json` (`writeBackfillRequest` in `files.mjs`: ASCII, atomic, like `intents.txt`). It removes the file once the walk ends or the server answers null. An EA that does not answer within 2 minutes is walked with the bars it has.
