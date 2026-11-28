@@ -9,7 +9,7 @@ import { WORKERS } from "../lib/names";
 const when = (iso?: string | null) => (iso ? `${String(iso).slice(5, 16).replace("T", " ")} UTC` : "—");
 
 /** The rows that come from /api/status (the others from /api/local-lane). */
-const STATUS_ROWS = new Set(["ai", "news", "oauth", "lane", "calibration"]);
+const STATUS_ROWS = new Set(["ai", "news", "oauth", "lane"]);
 
 /**
  * Review of #520: two reads, each with its own state. A failed /api/status is its error box above the lane's rows

@@ -1,6 +1,6 @@
 import { get } from "./api";
 import { usePoll } from "./usePoll";
-import { WORKERS, engineTitle } from "./names";
+import { WORKERS } from "./names";
 
 /** A lane's state in the status tones (as the header): ok cyan, late amber, fault red, off grey (idle, market closed). */
 export type Tone = "ok" | "late" | "fault" | "off";
@@ -19,10 +19,6 @@ const mins = (ms: number | null) => (ms == null ? "never" : ms < 120_000 ? `${Ma
 /** Pure: the health of every lane from /api/status and the pull adapter diagnostics (/api/local-lane). */
 export function healthItems(status: any, lane: any, now = Date.now()): HealthItem[] {
   const ai = status?.ai_worker ?? {}, ing = status?.ingestion_worker ?? {};
-  const registry: any[] = Array.isArray(ai.local_lane?.registry) ? ai.local_lane.registry : [];
-  const h1 = registry.filter((x) => x.engine === "prophet" || x.engine === "gmi");
-  const reEarning = !ai.local_lane?.fresh && h1.length > 0 && h1.every((x) => x.status !== "approved");
-  const progress = h1.length ? Math.min(...h1.map((x) => Number(x.consecutive_matches) || 0)) : 0;
   const closed = marketClosed(now);
   const items: HealthItem[] = [];
   if (status) {
@@ -31,12 +27,13 @@ export function healthItems(status: any, lane: any, now = Date.now()): HealthIte
     const pullBad = pull && !["ok", "empty"].includes(pull.status);
     items.push({ key: "news", label: "News Worker", worker: WORKERS.news.name, tone: ing.status !== "ok" ? "fault" : pullBad ? "late" : "ok", detail: ing.status !== "ok" ? "not answering" : `last hourly pull ${pull?.status ?? "none"} ${mins(age(pull?.checked_at ?? null))}` });
     items.push({ key: "oauth", label: "TradingView MCP OAuth", worker: WORKERS.news.name, tone: ing.oauth_authorized ? "ok" : "fault", detail: ing.oauth_authorized ? "authorized" : "not authorized: the news and the bars stop" });
+    // S5 (parity removal): /api/status keeps only local_lane.fresh (local 1H records exist for a recent closed candle);
+    // the parity rows and texts are gone.
     items.push({
       key: "lane", label: "Local lane", worker: WORKERS.pull.name,
-      tone: ai.local_lane?.fresh ? "ok" : reEarning ? "late" : closed ? "off" : "fault",
-      detail: ai.local_lane?.fresh ? "approved local 1H records for the latest bars" : reEarning ? `${h1.map((x) => engineTitle(x.engine)).filter((v, i, a) => a.indexOf(v) === i).join(" and ")} re-earning parity: ${progress}${h1[0]?.promote_after ? `/${h1[0].promote_after}` : " matches"}` : closed ? "market closed: no new 1H bar" : "no approved local 1H record for the last two bars"
+      tone: ai.local_lane?.fresh ? "ok" : closed ? "off" : "fault",
+      detail: ai.local_lane?.fresh ? "local 1H records for the latest bars" : closed ? "market closed: no new 1H bar" : "no local 1H record for the last two bars"
     });
-    if (ai.local_lane?.calibration?.due) items.push({ key: "calibration", label: "Calibration", tone: "late", detail: "an approved engine has not been compared for its interval" });
   }
   if (lane) {
     const r = lane.last_refresh ?? {};
