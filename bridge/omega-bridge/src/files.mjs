@@ -44,17 +44,22 @@ function sanitizeState(raw) {
 
 /** Corpus Oracle (owner 2026-11-11): at most this many closed M1 bars go with one sync. */
 export const CORPUS_MAX_BARS = 240;
+/** BF1 (b), bridge 1.8.3: the most bars a backfill answer holds (OmegaFeed 1.02 writes at most 600, the server's 10-hour window). */
+export const BACKFILL_MAX_BARS = 600;
 
 /**
  * Read `corpus.json` (Corpus Oracle, written by OmegaExecutor.mq5 once per closed M1 bar): the broker's
  * closed M1 bars of the symbol the executor trades, [t_ms UTC, open, high, low, close, tick_volume,
- * spread]. Only bars after `afterMs` (the server's cursor) are returned. Null when missing or invalid.
+ * spread]. Only bars after `afterMs` (the server's cursor) are returned, the newest `maxBars` (default CORPUS_MAX_BARS;
+ * the feed's backfill walk, 1.8.3, reads up to BACKFILL_MAX_BARS). Null when missing or invalid. When the file answers
+ * a backfill request (OmegaFeed 1.02 writes `backfill_from_ms`, the start it was asked for), the value is returned too;
+ * the executor's file never carries it, so its result is unchanged.
  * Never a login or an account number: the file carries the server name, the symbol and bars only.
  *
  * @param {string} [dir]
- * @param {{ fs?: typeof nodeFs, afterMs?: number | null }} [options]
+ * @param {{ fs?: typeof nodeFs, afterMs?: number | null, maxBars?: number }} [options]
  */
-export function readCorpus(dir = resolveOmegaDir(), { fs = nodeFs, afterMs = null } = {}) {
+export function readCorpus(dir = resolveOmegaDir(), { fs = nodeFs, afterMs = null, maxBars = CORPUS_MAX_BARS } = {}) {
   try {
     const p = path.join(dir, "corpus.json");
     if (!fs.existsSync(p)) return null;
@@ -65,9 +70,10 @@ export function readCorpus(dir = resolveOmegaDir(), { fs = nodeFs, afterMs = nul
       .filter((b) => Array.isArray(b) && b.length >= 5 && b.slice(0, 5).every((x) => typeof x === "number" && Number.isFinite(x)))
       .map((b) => b.slice(0, 7).map((x) => (typeof x === "number" && Number.isFinite(x) ? x : null)))
       .filter((b) => afterMs == null || b[0] > afterMs)
-      .slice(-CORPUS_MAX_BARS);
+      .slice(-Math.max(1, Math.min(BACKFILL_MAX_BARS, Number(maxBars) || CORPUS_MAX_BARS)));
     if (!bars.length) return null;
-    return { server: ascii(raw.server, 64), symbol: ascii(raw.symbol, 32), timeframe: "M1", bars };
+    const from = Number.isFinite(raw.backfill_from_ms) ? raw.backfill_from_ms : null;
+    return { server: ascii(raw.server, 64), symbol: ascii(raw.symbol, 32), timeframe: "M1", bars, ...(from != null ? { backfill_from_ms: from } : {}) };
   } catch {
     return null;
   }
@@ -228,6 +234,24 @@ export function writeIntents(dir, intents = [], { fs = nodeFs, now = () => Date.
   const targetPath = path.join(dir, "intents.txt");
   const tmpPath = path.join(dir, `intents.txt.tmp.${process.pid}.${writtenMs}`);
   fs.writeFileSync(tmpPath, content, { encoding: "ascii" });
+  fs.renameSync(tmpPath, targetPath);
+  return targetPath;
+}
+
+/**
+ * BF1 (b), bridge 1.8.3, the feed role only: ask the feed's EA (OmegaFeed 1.02) for its closed M1 bars from `from_ms`
+ * (`omega/corpus_from.json`, one ASCII line, atomically). Written like intents.txt (the terminal's user must read it).
+ *
+ * @param {string} dir
+ * @param {{ from_ms: number, until_ms?: number | null }} req
+ */
+export function writeBackfillRequest(dir, req, { fs = nodeFs, now = () => Date.now() } = {}) {
+  if (!Number.isFinite(req?.from_ms)) throw new Error("from_ms must be a number");
+  fs.mkdirSync(dir, { recursive: true });
+  const targetPath = path.join(dir, "corpus_from.json");
+  const tmpPath = path.join(dir, `corpus_from.json.tmp.${process.pid}.${now()}`);
+  const until = Number.isFinite(req.until_ms) ? Math.round(req.until_ms) : null;
+  fs.writeFileSync(tmpPath, `${JSON.stringify({ from_ms: Math.round(req.from_ms), until_ms: until })}\n`, { encoding: "ascii" });
   fs.renameSync(tmpPath, targetPath);
   return targetPath;
 }
