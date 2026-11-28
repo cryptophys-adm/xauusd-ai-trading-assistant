@@ -237,3 +237,118 @@ export async function applyBrokerSeries(env, { now = Date.now() } = {}) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- BF1 (d): filling holes inside the 1m series
+// After a bridge reconnect or a broker switch the 1m series can hold a hole: minutes the fallback never appended
+// (applyMt5Fallback appends only bars newer than the series' last) and TradingView never healed. Every FILL_EVERY_MIN
+// minutes, while the owner's fallback switch is "auto", the trading minutes missing between two bars of the last
+// FILL_WINDOW_S are asked of the corpus (corpusBars, bounded to the hole): the feed bridge's source first (the OANDA feed,
+// the TradingView series' own venue), the executor's for what the feed lacks. A filled minute is marked
+// src "mt5-feed" or "mt5-exec" and `fill: true`; it never replaces a bar (only missing minutes are written). The 5m, 15m
+// and 1H buckets the fill completes are built and inserted where their series has no bar, at their own open times, so a
+// filled bar is history: freshness (FP1's breakout age, the public patterns' confirmed_at_ms) counts from the latest
+// closed bar, and the Decision Engine decides only the latest close. With no hole, nothing is read but the 1m series.
+export const FILL_WINDOW_S = 10 * 3600;
+export const FILL_EVERY_MIN = 5;
+const FILL_SERIES = Object.freeze([`${SYMBOL}|5m`, `${SYMBOL}|15m`, `${SYMBOL}|1h`]);
+const NY_CLOCK = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", hourCycle: "h23" });
+
+/** Pure: gold trades at the minute opening at `sec` (not the weekend, Friday 17:00 to Sunday 18:00 New York, nor the daily break, 17:00-18:00 Monday to Thursday). */
+export function goldTradesAt(sec) {
+  const p = Object.fromEntries(NY_CLOCK.formatToParts(new Date(sec * 1000)).map((x) => [x.type, x.value]));
+  const h = Number(p.hour);
+  if (p.weekday === "Sat" || (p.weekday === "Fri" && h >= 17) || (p.weekday === "Sun" && h < 18)) return false;
+  return !(["Mon", "Tue", "Wed", "Thu"].includes(p.weekday) && h === 17);
+}
+
+/** Pure: the holes of a 1m series in the window ending at `nowSec`: [{ from, to, minutes }] (seconds; the trading minutes from..to-60 are missing). */
+export function seriesHoles(candles, nowSec, { windowS = FILL_WINDOW_S } = {}) {
+  const start = nowSec - windowS;
+  const c = (Array.isArray(candles) ? candles : []).filter((x) => finite(x?.time)).sort((a, b) => a.time - b.time);
+  const out = [];
+  for (let i = 1; i < c.length; i++) {
+    const a = c[i - 1].time, b = c[i].time;
+    if (b <= start || b - a <= 60) continue;
+    let first = null, last = null, n = 0;
+    for (let t = Math.max(a + 60, Math.ceil(start / 60) * 60); t < b; t += 60) if (goldTradesAt(t)) { if (first == null) first = t; last = t; n += 1; }
+    if (n) out.push({ from: first, to: last + 60, minutes: n });
+  }
+  return out;
+}
+
+/** Pure: the complete buckets of `seconds` that the filled minutes make whole, absent from `existing`, from the 1m `candles`. */
+export function filledBuckets(candles, filledTimes, existing, { seconds, nowSec }) {
+  const have = new Set((existing || []).map((x) => x.time));
+  const byTime = new Map((candles || []).map((x) => [x.time, x]));
+  const starts = new Set([...filledTimes].map((t) => Math.floor(t / seconds) * seconds));
+  const out = [];
+  for (const s of [...starts].sort((a, b) => a - b)) {
+    if (have.has(s) || s + seconds > nowSec) continue;
+    const minutes = [];
+    let whole = true;
+    for (let t = s; t < s + seconds; t += 60) {
+      if (!goldTradesAt(t)) continue;
+      const m = byTime.get(t);
+      if (!m) { whole = false; break; }
+      minutes.push(m);
+    }
+    if (!whole || !minutes.length) continue;
+    const src = minutes.some((m) => m.src === "mt5-exec") ? "mt5-exec" : minutes.some((m) => m.src === "mt5-feed") ? "mt5-feed" : minutes[0].src;
+    const vol = minutes.every((m) => m.volume !== null && finite(m.volume)) ? minutes.reduce((a, m) => a + m.volume, 0) : null;
+    out.push({ time: s, open_time: new Date(s * 1000).toISOString(), close_time: new Date((s + seconds) * 1000).toISOString(),
+      open: minutes[0].open, high: Math.max(...minutes.map((m) => m.high)), low: Math.min(...minutes.map((m) => m.low)), close: minutes.at(-1).close, volume: vol, src, fill: true });
+  }
+  return out;
+}
+
+/**
+ * Cron step (every FILL_EVERY_MIN minutes, the fallback switch "auto", the market open): fills the 1m series' holes from
+ * the corpus and inserts the buckets they complete. Never throws; returns what it did.
+ */
+export async function fillHoles(env, { now = Date.now() } = {}) {
+  const resolved = await resolveFallbackMode(env);
+  if (resolved.mode === "off") return { status: "off" };
+  const kv = env?.MARKET_DATA_CACHE;
+  if (!kv || typeof env?.AI_WORKER?.corpusBars !== "function") return { status: "unavailable" };
+  const nowSec = Math.floor(now / 1000);
+  if (Math.floor(nowSec / 60) % FILL_EVERY_MIN !== 0) return { status: "not_due" };
+  if (marketClosed(SYMBOL, nowSec)) return { status: "market_closed" };
+  try {
+    const sourceSpec = SERIES.find((s) => s.key === SOURCE_KEY);
+    const m1 = await readSeries(kv, sourceSpec);
+    const holes = seriesHoles(m1?.candles, nowSec);
+    if (!holes.length) return { status: "no_hole" };
+    const have = new Set((m1.candles || []).map((c) => c.time));
+    const filled = new Map();
+    for (const hole of holes) {
+      const want = (rows, src) => brokerCandles(rows, nowSec).filter((c) => c.time >= hole.from && c.time < hole.to && !have.has(c.time) && !filled.has(c.time) && goldTradesAt(c.time)).map((c) => ({ ...c, src, fill: true }));
+      const ask = { since_ms: (hole.from - 60) * 1000, limit: Math.min(1500, Math.ceil((hole.to - hole.from) / 60) + 1) };
+      const first = await env.AI_WORKER.corpusBars({ ...ask, prefer_feed: true });
+      for (const c of want(first?.bars, first?.feed ? "mt5-feed" : "mt5-exec")) filled.set(c.time, c);
+      const still = hole.minutes - [...filled.keys()].filter((t) => t >= hole.from && t < hole.to).length;
+      if (first?.feed && still > 0) {
+        const exec = await env.AI_WORKER.corpusBars({ ...ask, prefer_feed: false });
+        if (!exec?.feed) for (const c of want(exec?.bars, "mt5-exec")) filled.set(c.time, c);
+      }
+    }
+    if (!filled.size) return { status: "nothing_in_corpus", holes: holes.length, missing: holes.reduce((a, h) => a + h.minutes, 0) };
+    // Only missing minutes are written: the existing bars come last in the merge, so none is ever replaced.
+    const candles = mergeCandles([...filled.values()], m1.candles, sourceSpec.retain);
+    await writeSeries(kv, sourceSpec, { ...m1, fetched_at: m1.fetched_at, candle_count: candles.length, volume_available: candles.every((c) => c.volume !== null), candles });
+    const rebuilt = [];
+    for (const key of FILL_SERIES) {
+      const spec = SERIES.find((s) => s.key === key);
+      if (!spec) continue;
+      const own = await readSeries(kv, spec);
+      const bars = filledBuckets(candles, filled.keys(), own?.candles, { seconds: spec.seconds, nowSec });
+      if (!bars.length) continue;
+      const merged = mergeCandles(bars, own?.candles, spec.retain);
+      await writeSeries(kv, spec, { ...(own || {}), series: spec.key, symbol: spec.symbol, interval: spec.interval, timeframe: spec.timeframe, candle_count: merged.length, volume_available: merged.every((c) => c.volume !== null), candles: merged });
+      rebuilt.push({ series: key, bars: bars.length });
+    }
+    const bySrc = [...filled.values()].reduce((a, c) => ({ ...a, [c.src]: (a[c.src] ?? 0) + 1 }), {});
+    return { status: "filled", holes: holes.length, missing: holes.reduce((a, h) => a + h.minutes, 0), filled: filled.size, by_source: bySrc, rebuilt };
+  } catch (error) {
+    return { status: "failed", error: String(error?.message ?? error).slice(0, 160) };
+  }
+}
