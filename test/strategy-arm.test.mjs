@@ -114,7 +114,7 @@ test("SA5. at signal time: a strategy disarmed since the decision has no side; t
   assert.equal(strategyExits({ positions, signal: signal("sweep_reversal"), sym, agents: { "open:1:S": "zone_pullback" }, now }).intents.length, 0, "not armed: it does not close by its own rule");
 });
 
-test("SA6. owner only (RFC §11.3): OWNER_ACCESS_SUB set → only that Access sub arms or disarms; unset → bootstrap records each sub once", async () => {
+test("SA6. owner only (RFC §11.3): OWNER_ACCESS_SUB set → only that Access sub arms or disarms; unset → nobody (CF2a: configured, never learned)", async () => {
   resetStrategyArmSchemaCacheForTests();
   const OWNER = "7c1d2e3f-aaaa-bbbb-cccc-0123456789ab";
   assert.equal(ownerCheck({}, OWNER), "unset");
@@ -126,16 +126,13 @@ test("SA6. owner only (RFC §11.3): OWNER_ACCESS_SUB set → only that Access su
   assert.equal((await setStrategyArm(e, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: null })).error, "owner_only");
   assert.equal((await setStrategyArm(e, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).ok, true);
   assert.equal((await disarmAll(e, { reason: "kill_switch" })).status, "disarmed", "the system's auto-disarm needs no owner sub");
-  // Bootstrap: unset var → the arm works as before, and the visitor's sub is noted once.
+  // CF2a (2026-11-28): no first-visitor bootstrap. Unset var → a person's arm is refused, and no visitor's sub is recorded.
   const b = env();
   b.raw.exec("CREATE TABLE omega_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER, actor TEXT, action TEXT, detail TEXT)");
-  assert.equal(await noteOwnerSub(b, { sub: OWNER, actor: "owner@example.com" }), true);
-  assert.equal(await noteOwnerSub(b, { sub: OWNER, actor: "owner@example.com" }), false, "once per sub");
-  assert.equal(await noteOwnerSub(b, { sub: "bad sub!", actor: "x" }), false);
-  assert.equal(await noteOwnerSub({ ...b, OWNER_ACCESS_SUB: OWNER }, { sub: "another-sub-5678", actor: "x" }), false, "nothing is recorded once the var is set");
-  const rows = b.raw.prepare("SELECT actor, action, detail FROM omega_events").all();
-  assert.deepEqual(rows.map((r) => [r.actor, r.action, JSON.parse(r.detail).sub]), [["owner@example.com", "owner_sub_seen", OWNER]]);
-  assert.equal((await setStrategyArm(b, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).ok, true);
+  assert.equal(await noteOwnerSub(b, { sub: OWNER, actor: "owner@example.com" }), false, "inert: nothing is learned");
+  assert.deepEqual(b.raw.prepare("SELECT actor, action, detail FROM omega_events").all(), []);
+  assert.equal((await setStrategyArm(b, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: OWNER })).error, "owner_only", "fail closed while unset");
+  assert.equal((await setStrategyArm(b, { strategy_id: "zone_pullback", action: "arm", allowed, actor_sub: null })).error, "owner_only");
 });
 
 test("SA7. migration 0025 builds the same strategy_arm tables as the run-time schema; ea_deals.strategy comes from the open intent's ticket", async () => {

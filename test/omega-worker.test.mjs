@@ -323,7 +323,7 @@ test("the trading mode changes only by a person's same-origin POST (owner 2026-1
 });
 
 
-test("the strategy arm route is owner only once OWNER_ACCESS_SUB is set (RFC §11.3); the sub goes to the RPC", async () => {
+test("the strategy arm route is owner only, fail closed (RFC §11.3, CF2a); the sub goes to the RPC", async () => {
   resetKeyCacheForTests();
   const calls = [], views = [];
   const O = { ...omega(), strategyArm: async (input) => { views.push(input); return { ok: true }; }, setStrategyArm: async (input) => { calls.push(input); return { ok: true }; } };
@@ -337,9 +337,11 @@ test("the strategy arm route is owner only once OWNER_ACCESS_SUB is set (RFC §1
   assert.equal(calls.length, 0);
   assert.equal((await post(locked, owner)).status, 200);
   assert.deepEqual([calls.at(-1).actor, calls.at(-1).actor_sub], ["owner@example.com", "owner-sub-0001"]);
-  // Unset (bootstrap): as before, and the sub still reaches the RPC (the AI Worker records it once).
-  assert.equal((await post({ ...ENV_BASE, OMEGA: O }, other)).status, 200);
-  assert.equal(calls.at(-1).actor_sub, "guest-sub-0002");
+  // CF2a: no bootstrap. Unset, nobody arms (fail closed), and nothing reaches the RPC.
+  const before = calls.length;
+  assert.equal((await post({ ...ENV_BASE, OMEGA: O }, other)).status, 403);
+  assert.equal((await post({ ...ENV_BASE, OMEGA: O }, owner)).status, 403, "not even the owner's sub while the var is unset");
+  assert.equal(calls.length, before);
   assert.equal((await handle(req("/api/strategy-arm", { token: owner }), locked, opts)).status, 200);
   assert.deepEqual(views.at(-1), { viewer: "owner@example.com", viewer_sub: "owner-sub-0001" });
 });

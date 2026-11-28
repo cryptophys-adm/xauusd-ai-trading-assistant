@@ -502,8 +502,9 @@ export async function handle(request, env, { fetchImpl = fetch, now } = {}) {
       const action = r.body.action === "arm" || r.body.action === "disarm" ? r.body.action : "";
       if (!id || !action) return json({ error: "strategy_id and action (arm or disarm) are required" }, 400);
       // Owner only (RFC §11.3): the Access user id must equal OWNER_ACCESS_SUB once it is set; the AI Worker checks again.
-      const ownerSub = String(env.OWNER_ACCESS_SUB ?? "").trim();
-      if (ownerSub && identity.sub !== ownerSub) return json({ error: "owner_only" }, 403);
+      // CF2a: fail closed like every other write; the owner's sub is configured, never learned (no first-visitor bootstrap).
+      const denied = ownerOnly(env, identity);
+      if (denied) return denied;
       if (typeof env.OMEGA.setStrategyArm !== "function") return json({ error: "strategy_arm_unavailable" }, 503);
       return rpc(() => env.OMEGA.setStrategyArm({ strategy_id: id, action, request_id: typeof r.body.request_id === "string" ? r.body.request_id.slice(0, 64) : null,
         expected_version: Number.isFinite(Number(r.body.expected_version)) ? Number(r.body.expected_version) : null, actor: identity.subject, actor_sub: identity.sub ?? null }), "strategy_arm_failed");

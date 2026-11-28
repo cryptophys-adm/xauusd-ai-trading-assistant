@@ -73,7 +73,8 @@ export async function setStrategyArm(env, { strategy_id: id, action, request_id 
   if (!db) return { ok: false, error: "unavailable" };
   if (strategyArmMode(env) === "off") return { ok: false, error: "arm_mode_off" };
   // A person's click carries actor_sub (the Omega route); the system's auto-disarm (disarmAll) does not use this path.
-  if (actor_sub !== undefined && ownerCheck(env, actor_sub) === "not_owner") return { ok: false, error: "owner_only" };
+  // CF2a (2026-11-28): fail closed, an unset OWNER_ACCESS_SUB refuses a person's click too (no first-visitor bootstrap).
+  if (actor_sub !== undefined && ownerCheck(env, actor_sub) !== "owner") return { ok: false, error: "owner_only" };
   if (action !== "arm" && action !== "disarm") return { ok: false, error: "action must be arm or disarm" };
   if (typeof id !== "string" || !/^[a-z0-9_]{2,40}$/.test(id)) return { ok: false, error: "unknown strategy" };
   await ensureStrategyArmSchema(db);
@@ -137,7 +138,6 @@ export async function disarmAll(env, { reason, now = Date.now(), send = null } =
 // the owner's first visit) the check is "unset": the route stays as it was (Cloudflare Access admits only the owner)
 // and each signed-in visitor's sub is recorded once in omega_events (action "owner_sub_seen") so it can be set.
 export const OWNER_SUB_SEEN_KEY = "strategy-arm:owner-sub-seen:";
-const SUB_RE = /^[A-Za-z0-9-]{8,64}$/;
 
 /** Pure: "owner" | "not_owner" | "unset" for this Access sub. */
 export function ownerCheck(env, sub) {
@@ -146,17 +146,9 @@ export function ownerCheck(env, sub) {
   return typeof sub === "string" && sub && sub === want ? "owner" : "not_owner";
 }
 
-/** Records a visitor's Access sub once (bootstrap only, while OWNER_ACCESS_SUB is unset). Never throws. */
-export async function noteOwnerSub(env, { sub, actor, now = Date.now() } = {}) {
-  if (ownerCheck(env, sub) !== "unset" || typeof sub !== "string" || !SUB_RE.test(sub)) return false;
-  try {
-    const key = OWNER_SUB_SEEN_KEY + sub;
-    if (await env.SIGNAL_CACHE?.get?.(key)) return false;
-    await env.DB.prepare("INSERT INTO omega_events (ms, actor, action, detail) VALUES (?, ?, 'owner_sub_seen', ?)").bind(now, String(actor || "unknown").slice(0, 200), JSON.stringify({ sub })).run();
-    await env.SIGNAL_CACHE?.put?.(key, "1", { expirationTtl: 7 * 86_400 });
-    return true;
-  } catch { return false; }
-}
+/** Retired (CF2a, 2026-11-28): the owner's Access sub is configured (OWNER_ACCESS_SUB in both wrangler.jsonc), never
+ * learned from a visitor. Inert: records nothing and returns false. Kept so old callers fail safe. */
+export async function noteOwnerSub() { return false; }
 
 /** The state for the page: mode, armed set, count, the last 20 events. */
 export async function readStrategyArm(env) {

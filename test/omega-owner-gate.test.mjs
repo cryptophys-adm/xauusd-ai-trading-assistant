@@ -69,15 +69,11 @@ test("OG-1 a signed-in non-owner gets 403 owner_only on every mutating route, an
   assert.deepEqual(calls, [], "no RPC was made for a non-owner");
 });
 
-// The one exception to fail closed: POST /api/strategy-arm keeps its bootstrap (RFC §11.3: while OWNER_ACCESS_SUB is unset,
-// the AI Worker records the first visitor's sub). OWNER_ACCESS_SUB is set in both wrangler.jsonc files.
-const BOOTSTRAP = new Set(["POST /api/strategy-arm"]);
-test("OG-2 the owner reaches the RPC on every mutating route; with OWNER_ACCESS_SUB unset nobody does (fail closed, but the arm bootstrap)", async () => {
+test("OG-2 the owner reaches the RPC on every mutating route; with OWNER_ACCESS_SUB unset nobody does (fail closed, the arm included)", async () => {
   resetKeyCacheForTests();
   const opts = { fetchImpl: certsFetch, now: NOW_S };
   const owner = await jwt({ email: "owner@example.com", sub: OWNER });
   for (const [method, path, body] of MUTATING) {
-    if (BOOTSTRAP.has(`${method} ${path}`)) continue;
     const { O, calls } = gateway();
     const r = await handle(req(method, path, { token: owner, body }), { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, OMEGA: O, OWNER_ACCESS_SUB: OWNER }, opts);
     // The owner passes the gate; a body this test does not shape fully may still get a 400 from the route's own checks.
@@ -91,7 +87,7 @@ test("OG-2 the owner reaches the RPC on every mutating route; with OWNER_ACCESS_
   }
 });
 
-test("OG-3 the GET disconnect: the owner from the same origin only; a service token or a cross-site navigation is refused", async () => {
+test("OG-3 the GET disconnect: the owner from the same origin only; a service token or a cross-site navigation is refused; an unset owner arms nobody", async () => {
   resetKeyCacheForTests();
   const opts = { fetchImpl: certsFetch, now: NOW_S };
   const owner = await jwt({ email: "owner@example.com", sub: OWNER }), svc = await jwt({ common_name: "ci.access" });
@@ -104,6 +100,12 @@ test("OG-3 the GET disconnect: the owner from the same origin only; a service to
   assert.deepEqual(calls, []);
   assert.equal((await handle(req("GET", path, { token: owner, headers: { "sec-fetch-site": "same-origin" } }), env, opts)).status, 200);
   assert.deepEqual(calls, ["clearConnection"]);
+  // CF2a: with the owner unset the live arm is refused too: the owner's sub is configured, never learned from a visitor.
+  const { O: O2, calls: c2 } = gateway();
+  const arm = await handle(req("POST", "/api/strategy-arm", { token: owner, body: { strategy_id: "zone_pullback", action: "arm" } }), { ...env, OMEGA: O2, OWNER_ACCESS_SUB: "" }, opts);
+  assert.deepEqual([arm.status, (await arm.json()).error, c2], [403, "owner_only", []]);
+  const view = await handle(req("GET", "/api/strategy-arm", { token: owner }), { ...env, OMEGA: O2, OWNER_ACCESS_SUB: "" }, opts);
+  assert.equal(view.status, 200, "the read stays open to the signed-in");
 });
 
 test("OG-4 can_control and is_owner are the owner check on whoami, the overview, feed-fallback and shadow-mode", async () => {
