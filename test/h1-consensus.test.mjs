@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  H1_CONSENSUS_FALLBACK_MS, h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, planIsValid, applyQuorum,
-  QUORUM_SHARE, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
+  H1_CONSENSUS_FALLBACK_MS, h1BarTimes, finalizeDue, consensusInput, quorumDecisionInput, quorumOf, planIsValid, applyQuorum,
+  QUORUM_SHARE, emptyConsensusDecision, consensusSummary, H1_DECISION_MODEL
 } from "../src/h1-consensus.mjs";
 
 const OPEN = Date.parse("2026-11-07T09:00:00.000Z");
@@ -101,29 +101,58 @@ test("applyQuorum: direction from the quorum, prices from the plan, never a posi
   assert.equal(applyQuorum({ decision: "WAIT", reasoning: "w" }, { quorum: quorumOf(consensusInput(room())) }).overridden, false);
 });
 
-test("the Reasoner's prompt: it writes the quorum's decision with the plan's prices; indicators are arguments, not gates", () => {
+test("RM1-1 no model: a quorum BUY with a valid plan takes the plan's prices, confidence = r2(min(0.95, share)), and a deterministic text without prices", () => {
   const consensus = concluded("BUY", "BULLISH", crowd(0.62, 0.1));
-  const lines = reasonerLines({ evidence: { candle_key: KEY }, consensus, plan: PLAN_BUY, laneRule: "LANES", decisionTextRule: "TEXT", tradePlanRule: "PLANRULE" });
-  const text = lines.join("\n");
-  assert.match(text, /You write the decision LAST, after the Consensus Discussion of the 1H War Room/);
-  assert.match(text, /The H1 decision is the QUORUM of the room, not yours to choose/);
-  assert.match(text, /more than 50% of the weight of the agents who spoke/);
-  assert.match(text, /use exactly those prices/);
-  assert.match(text, /Never set position_size_pct/);
-  assert.match(text, /are arguments the agents weighed in the discussion, not gates and not vetoes/);
-  assert.match(text, /closed candle being decided \(EVIDENCE\.candle_time, the bar that just closed\), never the running candle/);
-  assert.doesNotMatch(text, /t_enc 4|Never decide against the room's bias|gate 1 or 2/, "the old indicator gates are gone");
-  assert.ok(lines.includes("LANES") && lines.includes("TEXT") && lines.includes("PLANRULE"));
-  assert.ok(lines.indexOf("CONSENSUS:") < lines.indexOf("QUORUM:") && lines.indexOf("QUORUM:") < lines.indexOf("PLAN:") && lines.indexOf("PLAN:") < lines.indexOf("EVIDENCE:"));
-  assert.equal(JSON.parse(lines[lines.indexOf("QUORUM:") + 1]).stance, "BUY");
-  assert.equal(JSON.parse(lines[lines.indexOf("PLAN:") + 1]).entry, 4000);
-  assert.doesNotMatch(text, /ANALYST:|COUNSELOR:/, "the Analyst and the Counselor are retired");
-  const partial = reasonerLines({ evidence: {}, consensus: consensusInput(room()), laneRule: "", decisionTextRule: "", tradePlanRule: "" }).join("\n");
-  assert.match(partial, /did not conclude within 45 minutes of the close: 3 of 4 agents spoke, so there is no quorum/);
+  const q = quorumOf(consensus);
+  const input = quorumDecisionInput({ consensus, quorum: q, plan: PLAN_BUY });
+  assert.deepEqual([input.decision, input.confidence], ["BUY", null]);
+  const a = applyQuorum(input, { quorum: q, plan: PLAN_BUY });
+  assert.equal(a.overridden, false);
+  assert.deepEqual([a.decision.decision, a.decision.confidence, a.decision.entry_price, a.decision.stop_loss, a.decision.take_profit, a.decision.risk_reward, a.decision.position_size_pct], ["BUY", 0.62, 4000, 3990, 4030, 3, null]);
+  assert.match(a.decision.reasoning, /^The 1H War Room reached its quorum: the 1H War Room concluded BUY and 62% of the agents' weight leans bullish, so the decision is BUY\./);
+  assert.match(a.decision.reasoning, /The room's conclusion: /);
+  assert.match(a.decision.reasoning, /entry is at market at a reward to risk of 3\./);
+  assert.doesNotMatch(a.decision.reasoning, /4000|3990|4030/, "no price in the text");
+  const high = quorumOf(concluded("BUY", "BULLISH", crowd(0.97, 0)));
+  assert.equal(applyQuorum(quorumDecisionInput({ consensus: concluded("BUY", "BULLISH", crowd(0.97, 0)), quorum: high, plan: PLAN_BUY }), { quorum: high, plan: PLAN_BUY }).decision.confidence, 0.95, "capped at 0.95");
+  assert.match(applyQuorum(quorumDecisionInput({ consensus, quorum: q, plan: { ...PLAN_BUY, at_level: false } }), { quorum: q, plan: { ...PLAN_BUY, at_level: false } }).decision.reasoning, /a limit entry at the level/);
+  assert.equal(H1_DECISION_MODEL, "deterministic:h1_quorum");
+});
+
+test("RM1-2 the same quorum and plan give the same decision, entry, stop and target as the Reasoner did, whatever it answered", () => {
+  const cases = [
+    [concluded("BUY", "BULLISH", crowd(0.62, 0.1)), PLAN_BUY], [concluded("BUY", "BULLISH", crowd(0.62, 0.1)), { ...PLAN_BUY, at_level: false }],
+    [concluded("BUY", "BULLISH", crowd(0.62, 0.1)), null], [concluded("BUY", "BULLISH", crowd(0.5, 0.2)), PLAN_BUY],
+    [concluded("SELL", "BEARISH", crowd(0.2, 0.7)), null], [concluded("WAIT", "NEUTRAL", crowd(0.3, 0.3)), null], [consensusInput(room()), null]
+  ];
+  const answers = [{ decision: "WAIT", confidence: 0.4, reasoning: "w" }, { decision: "BUY", confidence: 0.8, reasoning: "b" }, { decision: "SELL", confidence: 0.7, reasoning: "s" }, { decision: "WAIT", confidence: null, reasoning: "" }];
+  const levels = (d) => [d.decision, d.entry_price, d.stop_loss, d.take_profit, d.risk_reward, d.position_size_pct, d.trade_plan?.action ?? null];
+  for (const [consensus, plan] of cases) {
+    const q = quorumOf(consensus);
+    const now = applyQuorum(quorumDecisionInput({ consensus, quorum: q, plan }), { quorum: q, plan }).decision;
+    for (const model of answers) assert.deepEqual(levels(now), levels(applyQuorum(model, { quorum: q, plan }).decision), `${q.stance} / plan ${Boolean(plan)} / model ${model.decision}`);
+  }
+});
+
+test("RM1-3 no quorum, a partial room, or a quorum without a valid plan: WAIT, no prices, no confidence", () => {
+  const noQ = concluded("BUY", "BULLISH", crowd(0.5, 0.2));
+  const q1 = quorumOf(noQ);
+  const a = applyQuorum(quorumDecisionInput({ consensus: noQ, quorum: q1 }), { quorum: q1 });
+  assert.deepEqual([a.decision.decision, a.decision.confidence, a.decision.entry_price, a.overridden], ["WAIT", null, null, false]);
+  assert.match(a.decision.reasoning, /^No quorum: /);
+  const partial = consensusInput(room());
+  const qp = quorumOf(partial);
+  const p = applyQuorum(quorumDecisionInput({ consensus: partial, quorum: qp }), { quorum: qp });
+  assert.match(p.decision.reasoning, /did not conclude within 45 minutes of the close: 3 of 4 agents spoke, so there is no quorum and the decision is WAIT/);
+  const yes = concluded("BUY", "BULLISH", crowd(0.62, 0.1));
+  const qy = quorumOf(yes);
+  const noPlan = applyQuorum(quorumDecisionInput({ consensus: yes, quorum: qy, plan: null }), { quorum: qy, plan: null });
+  assert.deepEqual([noPlan.decision.decision, noPlan.decision.confidence, noPlan.decision.entry_price, noPlan.overridden], ["WAIT", null, null, true], "guard_overridden: the plan turned the quorum's BUY into WAIT");
+  assert.match(noPlan.decision.reasoning, /key levels give no valid entry, stop and target/);
 });
 
 test("fail-closed decisions are plain WAITs without prices; the stored summary is compact and carries the quorum", () => {
-  for (const d of [emptyConsensusDecision(), reasonerUnavailableDecision()]) {
+  for (const d of [emptyConsensusDecision()]) {
     assert.equal(d.decision, "WAIT");
     assert.equal(d.entry_price, null);
     assert.match(d.reasoning, /stays WAIT/);
@@ -169,15 +198,16 @@ test("runAnalysis enqueues the 1H room as soon as it parks the evidence; the que
   assert.match(source, /task\.kind === "h1_room"\) return processH1RoomTask\(env, task\)/);
 });
 
-test("the Reasoner reads this timeframe only: no 5m context, no names, metrics instead (owner decisions 2026-11-09)", async () => {
-  const { ownTimeframeEvidence } = await import("../src/h1-consensus.mjs");
-  const ev = { candle_key: KEY, informational_5m_context: { label: "VERIFIED 5m" }, evidence_fusion: { complete: true, informational_5m_context: { x: 1 } } };
-  const own = ownTimeframeEvidence(ev);
-  assert.equal(own.informational_5m_context, undefined);
-  assert.equal(own.evidence_fusion.informational_5m_context, undefined);
-  assert.equal(own.evidence_fusion.complete, true);
-  const text = reasonerLines({ evidence: ev, consensus: consensusInput(room()), laneRule: "", decisionTextRule: "", tradePlanRule: "" }).join("\n");
-  assert.doesNotMatch(text, /informational_5m_context|VERIFIED 5m/);
-  assert.match(text, /Never name an agent or a role/);
-  assert.match(text, /which metrics carried the decision/);
+test("RM1-4 no model writes the H1 decision: finalizeH1Decision makes no model call; the inventory and the DNA have no h1_reasoner", async () => {
+  const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  const start = source.indexOf("async function finalizeH1Decision(");
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.doesNotMatch(body, /aiRunAs|AI_MODEL_REASONER|h1_reasoner|enterSpan/, "no model call, no reasoner model");
+  assert.match(body, /applyQuorum\(quorumDecisionInput\(\{ consensus, quorum, plan \}\), \{ quorum, plan \}\)/);
+  assert.match(body, /reasoner_model: null,\n\s+reasoner_output: null,/, "the keys stay for readers, null");
+  assert.match(body, /model: H1_DECISION_MODEL/);
+  const inventory = await readFile(new URL("../src/agent-inventory.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(inventory, /\bh1_reasoner\b/);
+  const organism = JSON.parse(await readFile(new URL("../organism.json", import.meta.url), "utf8"));
+  assert.ok(!JSON.stringify(organism).includes('"h1_reasoner"'));
 });

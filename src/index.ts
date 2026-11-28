@@ -333,8 +333,8 @@ import { scoreShadowKnowledge, pruneShadowKnowledge, readShadowKnowledge, runSha
 import { runLearnedPromotion, readLearnedLive } from "./learned-live.mjs";
 import { postKnowledgeVerdicts } from "./knowledge-verdicts.mjs";
 import {
-  H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_REASONER_GIVE_UP_MS, H1_PENDING_LOOKBACK_MS,
-  h1BarTimes, finalizeDue, consensusInput, reasonerLines, quorumOf, applyQuorum, emptyConsensusDecision, reasonerUnavailableDecision, consensusSummary
+  H1_CHAIN, H1_CONSENSUS_FALLBACK_MS, H1_PENDING_PREFIX, H1_PENDING_TTL_S, H1_ROOM_RETRY_S, H1_ROOM_LOCK_PREFIX, H1_ROOM_LOCK_TTL_S, buildH1RoomTask, h1RoomGate, AWAITING_CONSENSUS, H1_PENDING_LOOKBACK_MS,
+  h1BarTimes, finalizeDue, consensusInput, quorumDecisionInput, quorumOf, applyQuorum, emptyConsensusDecision, H1_DECISION_MODEL, consensusSummary
 } from "./h1-consensus.mjs";
 import { runNewsDaily, readNewsDaily, newsDailyEnabled } from "./news-daily.mjs";
 import { runNewsShadowCompare, readNewsShadowCompare } from "./news-shadow-compare.mjs";
@@ -346,8 +346,8 @@ import { runHealthAlerts, readHealthAlerts } from "./health-alerts.mjs";
 import { classifyRejection, recordRejection, webhookLaneStatus } from "./webhook-rejections.mjs";
 import { describeDegradedEvidence } from "./natural-language.mjs";
 import { interpretWebhookRow, storedIndicatorMetrics } from "./webhook-interpretation.mjs";
-import { DECISION_TEXT_RULE, plainDecisionText } from "./plain-decision.mjs";
-import { TRADE_PLAN_RULE, validateTradePlan } from "./trade-plan.mjs";
+import { plainDecisionText } from "./plain-decision.mjs";
+import { validateTradePlan } from "./trade-plan.mjs";
 
 function safeKeyPart(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 180);
@@ -392,24 +392,6 @@ async function plainDecision(env: Env, decision: JsonObject): Promise<JsonObject
   }
 }
 
-/**
- * The Reasoner's answer on the quorum path (owner decision 2026-11-09): only its words and its
- * confidence count; the direction comes from the room's quorum and the prices from the plan
- * (applyQuorum), so no price check of the model can downgrade or rewrite its text.
- */
-function modelDecision(text: string): JsonObject {
-  const parsed = extractJsonObject(text);
-  if (!parsed) return { decision: "WAIT", confidence: null, reasoning: "", confirmation: null, invalidation: null };
-  const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) && parsed.confidence >= 0 && parsed.confidence <= 1 ? parsed.confidence : null;
-  const decision = asText(parsed.decision).toUpperCase();
-  return {
-    decision: ["BUY", "SELL", "WAIT", "NO_TRADE"].includes(decision) ? decision : "WAIT",
-    confidence,
-    reasoning: asText(parsed.reasoning),
-    confirmation: typeof parsed.confirmation === "string" ? parsed.confirmation : null,
-    invalidation: typeof parsed.invalidation === "string" ? parsed.invalidation : null
-  };
-}
 
 function parseDecision(text: string): JsonObject {
   const extracted = extractJsonObject(text);
@@ -822,12 +804,6 @@ function candleTimeFromKey(candleKey: string): string {
   return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : "";
 }
 
-function laneRule(localPrimary: boolean): string {
-  return localPrimary
-    ? "Evidence lanes (see input_lanes): source_payloads hold the Prophet R38, Prophet R37 and GMI v12.70 indicator outputs computed locally from raw TradingView OHLCV (each record's trust_status says whether parity with TradingView approved its engine identity; not_parity_approved records are still evidence) (the same fields the TradingView alerts carry, plus prophet_r38.setup_state: the Prophet setup state behind the HUD's READY line, local lane only); local_calculation_evidence holds those local records; tradingview_webhook is calibration only and is not decision evidence; fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes, and attribute every technical claim to its lane."
-    : "Evidence arrives in three separate input lanes (see input_lanes): tradingview_webhook = indicator outputs computed by TradingView (source_payloads); local_computation = outputs computed locally from raw TradingView OHLCV (local_calculation_evidence); fundamental_news = completed news analysis. Never merge, average, or relabel values across lanes. Attribute every technical claim to its lane, and state explicitly where the tradingview_webhook and local_computation lanes agree or disagree.";
-}
-
 async function runAnalysis(
   env: Env,
   candleKey: string,
@@ -1133,7 +1109,6 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
   const isH1 = candleKey.split(":")[2] === "60";
 
   let decision: JsonObject;
-  let reasonerText: string | null = null;
   let overridden = false;
   // Owner decision 2026-11-09: the H1 decision is the room's quorum; a BUY or SELL takes its prices
   // from the Key Level Agent's zones (the strategy engine's tradeLevels), or stays WAIT without them.
@@ -1151,37 +1126,12 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
   if (consensus.status === "empty") {
     decision = isH1 ? emptyConsensusDecision() : { ...emptyConsensusDecision(), reasoning: "This chart has no War Room, so there is no consensus to decide from. The decision stays WAIT." };
   } else {
-    try {
-      const result = await tracing.enterSpan("chat", async (span) => {
-        span.setAttributes({
-          "gen_ai.operation.name": "chat",
-          "gen_ai.agent.name": "xauusd-decision-agent",
-          "gen_ai.agent.id": "xauusd-ai-trading-assistant-production",
-          "gen_ai.conversation.id": candleKey,
-          "gen_ai.request.model": String(env.AI_MODEL_REASONER as keyof AiModels)
-        });
-        return aiRunAs("h1_reasoner", env, env.AI_MODEL_REASONER, {
-          messages: chatMessages(reasonerLines({ evidence, consensus, quorum, plan, laneRule: laneRule(parked.local_primary !== false), decisionTextRule: DECISION_TEXT_RULE, tradePlanRule: TRADE_PLAN_RULE })),
-          maxTokens: MAX_TOKENS.reasoner,
-          effort: "medium"
-        });
-      });
-      reasonerText = extractText(result);
-      // parseDecision may turn a priced model answer into WAIT (its own price checks); the quorum and
-      // the plan decide regardless, so the model's text and confidence are what it contributes.
-      const guarded = applyQuorum(modelDecision(reasonerText), { quorum, plan });
-      overridden = guarded.overridden;
-      decision = await plainDecision(env, guarded.decision as JsonObject);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const bar = h1BarTimes(candleKey);
-      if (!bar || now - bar.close < H1_REASONER_GIVE_UP_MS) {
-        // Back to the queue of the sweep: the next one retries.
-        await setAnalysisRunStatus(env, candleKey, "analyzing", { input_fingerprint: parked.input_fingerprint, parked_at: parked.parked_at, chain: H1_CHAIN, stage: AWAITING_CONSENSUS, last_error: message.slice(0, 300) }, AWAITING_CONSENSUS);
-        return { status: "reasoner_failed", message: message.slice(0, 200) };
-      }
-      decision = reasonerUnavailableDecision();
-    }
+    // RM1 (owner 2026-11-28, "Hapus saja h1 reasoner"): no model call. The quorum and the plan decide (applyQuorum,
+    // as before); the reasoning is built from the quorum, the room's conclusion and the plan (quorumDecisionInput),
+    // then put in plain words as before (plain_decision).
+    const guarded = applyQuorum(quorumDecisionInput({ consensus, quorum, plan }), { quorum, plan });
+    overridden = guarded.overridden;
+    decision = await plainDecision(env, guarded.decision as JsonObject);
   }
 
   const timestamp = new Date().toISOString();
@@ -1190,8 +1140,9 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     evidence_fusion: fusion,
     analysis_chain: H1_CHAIN,
     consensus: consensusSummary(consensus, { overridden, quorum, plan, decidedAfterCloseS: h1BarTimes(candleKey) ? Math.round((Date.now() - (h1BarTimes(candleKey) as { close: number }).close) / 1000) : null }),
-    reasoner_model: env.AI_MODEL_REASONER,
-    reasoner_output: reasonerText,
+    // RM1: no model writes the H1 decision; both keys stay for readers, null.
+    reasoner_model: null,
+    reasoner_output: null,
     news_evidence: parked.news_evidence ?? evidence.news_evidence ?? null,
     decision
   };
@@ -1200,11 +1151,11 @@ async function finalizeH1Decision(env: Env, candleKey: string, { now = Date.now(
     prophetMetrics: asText(parked.prophet_metrics) || "{}",
     gmiMetrics: asText(parked.gmi_metrics) || "{}",
     analysis: JSON.stringify(synthesis),
-    model: env.AI_MODEL_REASONER
+    model: H1_DECISION_MODEL
   });
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const confidence = num(decision.confidence);
-  const reasoning = asText(decision.reasoning) || asText(reasonerText);
+  const reasoning = asText(decision.reasoning);
   const action = asText(decision.decision) || "WAIT";
   await upsertTradeDecision(env, {
     candleKey, decision: action, confidence,
@@ -3378,8 +3329,8 @@ export default {
       return json({ status: "ok", analysis_key: analysisKey, thread_id: "news:" + analysisKey }, 202);
     }
     if (request.method === "POST" && url.pathname === "/preview/reasoner-probe") {
-      // Preview only (PREVIEW_FIXTURES_ENABLED): one call in the H1 Reasoner's request form, so
-      // preview-e2e proves the Reasoner model (model migration 2026-11-07) before production.
+      // Preview only (PREVIEW_FIXTURES_ENABLED): one call on AI_MODEL_REASONER, so preview-e2e proves the
+      // Reasoner model (model migration 2026-11-07) before production; since RM1 the news Reasoner's model only.
       if (String(env.PREVIEW_FIXTURES_ENABLED || "false") !== "true") return json({ error: "Not found" }, 404);
       if (!env.WEBHOOK_SECRET || request.headers.get("x-webhook-secret") !== env.WEBHOOK_SECRET) {
         return json({ error: "Unauthorized" }, 401);

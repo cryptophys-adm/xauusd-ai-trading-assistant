@@ -294,7 +294,7 @@ test("/api/hud/levels and /api/conclusion/global answer as routes of their own (
   assert.deepEqual(g.body.setups, [], "the live setups travel with the decision (none here)");
 });
 
-test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar after its room, once; an empty room is a fail-closed WAIT (owner decision 2026-11-07)", async () => {
+test("H1 by Consensus Discussion: the sweep decides a parked bar after its room, once, without a model (RM1, owner 2026-11-28); an empty room is a fail-closed WAIT (owner decision 2026-11-07)", async () => {
   const { env } = await workerEnv();
   const prompts = [];
   const answer = JSON.stringify({ decision: "WAIT", confidence: 0.45, reasoning: "The room leans up but waits for a confirmed buy, so there is no trade for this candle.", entry_price: null, stop_loss: null, take_profit: null, risk_reward: null, position_size_pct: null, confirmation: null, invalidation: null, trade_plan: null });
@@ -329,16 +329,16 @@ test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar
   };
   const output = await sweep();
   assert.deepEqual(output.lines.error.filter(l => /h1_consensus|ReferenceError|TypeError/.test(l)), [], output.lines.error.join("\n"));
-  const reasoner = prompts.filter(p => p.model === "@cf/test/reasoner" && /You are the Reasoner/.test(p.text));
-  assert.equal(reasoner.length, 1, "one Reasoner call: the empty room needs none");
-  assert.match(reasoner[0].text, /CONSENSUS:\n\{"status":"concluded"/);
-  assert.match(reasoner[0].text, /"communication_bus":\[\{"ref":"#1"/, "the Reasoner reads the anonymous bus (owner decisions 2026-11-09)");
-  assert.doesNotMatch(reasoner[0].text.split("CONSENSUS:")[1], /1H Desk|Risk Manager/, "never a name");
+  // RM1 (owner 2026-11-28, "Hapus saja h1 reasoner"): no model writes the H1 decision.
+  assert.equal(prompts.filter(p => p.model === "@cf/test/reasoner" || /You are the Reasoner/.test(p.text)).length, 0, "no Reasoner call");
   assert.ok(!prompts.some(p => /You are the (Analyst|Counselor) stage in an XAUUSD decision-support pipeline/.test(p.text)), "the Analyst and the Counselor are retired");
 
   const synth = (open) => JSON.parse(db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(SYMBOL + ":60:" + open).ai_analysis);
   const decided = synth(roomOpen);
   assert.equal(decided.analysis_chain, "consensus_reasoner");
+  assert.deepEqual([decided.reasoner_model, decided.reasoner_output], [null, null], "the keys stay for readers, null");
+  assert.match(decided.decision.reasoning, /No quorum: /);
+  assert.equal(db.prepare("SELECT ai_model FROM ai_syntheses WHERE candle_key = ?").get(SYMBOL + ":60:" + roomOpen).ai_model, "deterministic:h1_quorum");
   assert.equal(decided.consensus.status, "concluded");
   assert.equal(decided.consensus.room_bias, "BULLISH");
   assert.equal(decided.decision.decision, "WAIT");
@@ -349,11 +349,13 @@ test("H1 by Consensus Discussion: the sweep has the Reasoner decide a parked bar
   assert.deepEqual(db.prepare("SELECT status FROM analysis_runs WHERE candle_key IN (?, ?) ORDER BY candle_key").all(SYMBOL + ":60:" + lateOpen, roomKey).map(r => r.status), ["complete", "complete"]);
   assert.equal(db.prepare("SELECT decision FROM trade_decisions WHERE candle_key = ?").get(roomKey).decision, "WAIT");
 
+  const firstAt = decided.timestamp;
   await sweep();
-  assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 1, "a decided bar is never decided again");
+  assert.equal(synth(roomOpen).timestamp, firstAt, "a decided bar is never decided again");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM trade_decisions WHERE candle_key = ?").get(roomKey).n, 1);
 });
 
-test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then the room and the Reasoner decide at once (owner request 2026-11-07)", async () => {
+test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then the room meets and the decision follows at once (owner request 2026-11-07; no model since RM1)", async () => {
   const { env } = await workerEnv();
   env.TF_THREADS_ENABLED = "true";
   env.AI_MODEL_REASONER = "@cf/test/reasoner";
@@ -397,7 +399,7 @@ test("the h1_room queue task: waits for the HUD snapshot of a fresh bar, then th
 
   const done = await deliver({ kind: "h1_room", event_id: "h1_room:" + key, candle_key: key, enqueued_at: new Date().toISOString() });
   assert.equal(done.acked, true, JSON.stringify(done.retried));
-  assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 1, "the Reasoner decides right after the room");
+  assert.equal(prompts.filter(p => /You are the Reasoner/.test(p.text)).length, 0, "the decision follows the room at once, without a model (RM1)");
   assert.equal(db.prepare("SELECT status FROM analysis_runs WHERE candle_key = ?").get(key).status, "complete");
   const synth = JSON.parse(db.prepare("SELECT ai_analysis FROM ai_syntheses WHERE candle_key = ?").get(key).ai_analysis);
   assert.equal(synth.consensus.status, "concluded");

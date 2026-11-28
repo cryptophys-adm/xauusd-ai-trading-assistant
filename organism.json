@@ -223,9 +223,6 @@
           "task": "decision_council"
         },
         {
-          "task": "h1_reasoner"
-        },
-        {
           "task": "macro_room_conclusion"
         },
         {
