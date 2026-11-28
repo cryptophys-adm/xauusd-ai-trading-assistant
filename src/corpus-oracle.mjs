@@ -56,7 +56,10 @@ export function validateCorpus(corpus, { executor = null, connection = null, now
   return { ok: true, source: corpusSource(server, symbol), server, symbol, connection_version: Number(connection.version), bars, refused };
 }
 
-/** Pure: closed, aligned, ordered, consistent M1 bars of the last 14 days; the others are counted. */
+/**
+ * Pure: closed, aligned, ordered, consistent M1 bars of the last 14 days; the others are counted. CG2 (2026-11-28): a bar
+ * on a minute gold does not trade (the weekend and the daily break, goldPausedAt) is refused as well.
+ */
 function validBars(rowsIn, now) {
   const rows = Array.isArray(rowsIn) ? rowsIn.slice(-CORPUS_MAX_BARS_PER_SYNC) : [];
   const bars = [];
@@ -64,7 +67,7 @@ function validBars(rowsIn, now) {
   for (const b of rows) {
     const [t, o, h, l, c, v, s] = Array.isArray(b) ? b : [];
     const ok = finite(t) && t % MINUTE === 0 && t + MINUTE <= now && t > now - CORPUS_KEEP_MS && t > last
-      && [o, h, l, c].every((x) => finite(x) && x > 0) && l <= Math.min(o, c) && h >= Math.max(o, c);
+      && [o, h, l, c].every((x) => finite(x) && x > 0) && l <= Math.min(o, c) && h >= Math.max(o, c) && !goldPausedAt(t);
     if (!ok) { refused += 1; continue; }
     last = t;
     bars.push({ t, o, h, l, c, v: finite(v) && v >= 0 ? Math.round(v) : null, s: finite(s) && s >= 0 ? Math.round(s) : null });
@@ -212,6 +215,78 @@ async function backfillCursor(db, source, { prev, batch, now }) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------- CG2: shifted copies (feed incident 2026-11-28)
+// A terminal that writes its bars right after a weekend login, before it has the trade server's clock, takes its server
+// time for UTC: at 10:25:58Z one sync carried 120 bars (27 Nov 19:43-21:42Z) that were exactly the stored bars of two
+// hours earlier. A batch whose new bars equal the source's stored bars at a whole-hour shift is refused whole and logged.
+export const SHIFT_HOURS = Object.freeze(Array.from({ length: 28 }, (_, i) => (i < 14 ? i - 14 : i - 13)));
+const HOUR_MS = 3_600_000;
+const sameOhlc = (a, b) => a && b && Number(a.o) === Number(b.o) && Number(a.h) === Number(b.h) && Number(a.l) === Number(b.l) && Number(a.c) === Number(b.c);
+
+/**
+ * The shift at which the batch's new bars (after `prevLast`) copy the source's stored bars, or null. Two of the newest
+ * three new non-flat bars must match at the same whole-hour shift, then at least 80 % of the new non-flat bars at it.
+ * One indexed lookup of at most 84 minutes per sync with a new bar; a range read only when two samples match.
+ */
+export async function detectShiftedCopy(db, source, bars, { prevLast = null } = {}) {
+  const fresh = bars.filter((b) => (prevLast == null || b.t > prevLast) && b.h > b.l);
+  const samples = fresh.slice(-3);
+  if (samples.length < 2) return null;
+  const minutes = samples.flatMap((b) => SHIFT_HOURS.map((h) => b.t - h * HOUR_MS));
+  const rows = ((await db.prepare(`SELECT minute_ms, o, h, l, c FROM corpus_bars WHERE source = ? AND minute_ms IN (${minutes.map(() => "?").join(",")})`).bind(source, ...minutes).all()).results) || [];
+  const at = new Map(rows.map((r) => [Number(r.minute_ms), r]));
+  for (const h of SHIFT_HOURS) {
+    const hits = samples.filter((b) => sameOhlc(b, at.get(b.t - h * HOUR_MS))).length;
+    if (hits < 2) continue;
+    const lo = Math.min(...fresh.map((b) => b.t)) - h * HOUR_MS, hi = Math.max(...fresh.map((b) => b.t)) - h * HOUR_MS;
+    const stored = ((await db.prepare("SELECT minute_ms, o, h, l, c FROM corpus_bars WHERE source = ? AND minute_ms BETWEEN ? AND ?").bind(source, lo, hi).all()).results) || [];
+    const byMin = new Map(stored.map((r) => [Number(r.minute_ms), r]));
+    const matched = fresh.filter((b) => sameOhlc(b, byMin.get(b.t - h * HOUR_MS))).length;
+    if (matched >= 0.8 * fresh.length) return { shift_hours: h, matched, of: fresh.length };
+  }
+  return null;
+}
+
+/** The refusal of a shifted batch: counted on the source, logged once per source and isolate while it repeats. */
+const SHIFT_LOGGED = new Set();
+async function refuseShifted(db, v, hit, { now }) {
+  if (!SHIFT_LOGGED.has(v.source)) { SHIFT_LOGGED.add(v.source); console.warn("corpus_shifted_copy_refused", JSON.stringify({ source: v.source, shift_hours: hit.shift_hours, matched: hit.matched, of: hit.of, bars: v.bars.length })); }
+  await db.prepare(`INSERT INTO corpus_sources (source, server, symbol, connection_version, refused, last_error, updated_ms) VALUES (?, ?, ?, ?, ?, 'shifted_copy', ?)
+    ON CONFLICT(source) DO UPDATE SET refused = refused + excluded.refused, last_error = excluded.last_error, updated_ms = excluded.updated_ms`)
+    .bind(v.source, v.server, v.symbol, v.connection_version, v.bars.length, now).run();
+}
+
+/**
+ * The one-time repair of the 10:25:58Z batch (the owner's "Guard + bersihkan (Recommended)", 2026-11-28): its rows of
+ * that source, at 27 Nov 19:43-21:42Z, that equal the stored bar two hours earlier, are deleted; the source's newest
+ * minute is set back to its newest remaining bar. Deterministic and idempotent (a second run deletes nothing); logged.
+ */
+export const SHIFTED_BATCH_2026_11_28 = Object.freeze({
+  source: "mt5:oanda_global-live-1:XAUUSD.SML", received_ms: 1795861558378,
+  from_ms: Date.UTC(2026, 10, 27, 19, 43), to_ms: Date.UTC(2026, 10, 27, 21, 42), shift_ms: 2 * HOUR_MS
+});
+export async function repairShiftedBatch(db, spec = SHIFTED_BATCH_2026_11_28) {
+  const r = await db.prepare(`DELETE FROM corpus_bars WHERE source = ? AND received_ms = ? AND minute_ms BETWEEN ? AND ? AND EXISTS (
+      SELECT 1 FROM corpus_bars b WHERE b.source = corpus_bars.source AND b.minute_ms = corpus_bars.minute_ms - ?
+        AND b.o = corpus_bars.o AND b.h = corpus_bars.h AND b.l = corpus_bars.l AND b.c = corpus_bars.c)`)
+    .bind(spec.source, spec.received_ms, spec.from_ms, spec.to_ms, spec.shift_ms).run();
+  const deleted = Number(r?.meta?.changes) || 0;
+  const reset = await db.prepare(`UPDATE corpus_sources SET last_minute_ms = (SELECT MAX(minute_ms) FROM corpus_bars WHERE source = ?)
+    WHERE source = ? AND last_minute_ms > COALESCE((SELECT MAX(minute_ms) FROM corpus_bars WHERE source = ?), 0)`).bind(spec.source, spec.source, spec.source).run();
+  const last = (await db.prepare("SELECT last_minute_ms FROM corpus_sources WHERE source = ?").bind(spec.source).first())?.last_minute_ms ?? null;
+  const out = { source: spec.source, deleted, cursor_reset: Number(reset?.meta?.changes) > 0, last_minute_ms: last == null ? null : Number(last) };
+  if (deleted || out.cursor_reset) console.log("corpus_shifted_batch_repaired", JSON.stringify({ ...out, last_minute: out.last_minute_ms == null ? null : new Date(out.last_minute_ms).toISOString() }));
+  return out;
+}
+let repaired = false;
+export function resetShiftRepairForTests() { repaired = false; SHIFT_LOGGED.clear(); }
+/** Once per isolate, from the feed sync: the repair above. Never throws. */
+export async function repairShiftedBatchOnce(env) {
+  if (repaired || !env?.DB) return null;
+  repaired = true;
+  try { await ensureSchema(env.DB); return await repairShiftedBatch(env.DB); } catch (e) { console.warn("corpus_shifted_batch_repair_failed", String(e?.message ?? e).slice(0, 120)); return null; }
+}
+
 /**
  * Bridge sync step: stores the new bars of Omega's active broker, pair and user. Returns the cursor
  * (the newest stored minute) so the bridge sends only newer bars. Never throws; off by default.
@@ -230,6 +305,8 @@ export async function ingestCorpus(env, corpus, { executor = null, now = Date.no
     return { mode: "shadow", error: v.error, cursor_ms: null };
   }
   const prevRow = await db.prepare("SELECT last_minute_ms, backfill_from_ms FROM corpus_sources WHERE source = ?").bind(v.source).first().catch(() => null);
+  const shifted = await detectShiftedCopy(db, v.source, v.bars, { prevLast: prevRow?.last_minute_ms == null ? null : Number(prevRow.last_minute_ms) });
+  if (shifted) { await refuseShifted(db, v, shifted, { now }); return { mode: "shadow", error: "shifted_copy", shift_hours: shifted.shift_hours, cursor_ms: prevRow?.last_minute_ms ?? null }; }
   let stored = 0;
   for (const b of v.bars) {
     const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -292,6 +369,8 @@ export async function ingestFeedCorpus(env, corpus, { bridgeId, connection = nul
   } else if (mark.bridge_id !== bridgeId) return { mode: "shadow", error: "source_of_another_feed", cursor_ms: null };
   await db.prepare("INSERT INTO corpus_feeds (source, bridge_id, updated_ms) VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET updated_ms = excluded.updated_ms").bind(v.source, bridgeId, now).run();
   const prevRow = await db.prepare("SELECT last_minute_ms, backfill_from_ms FROM corpus_sources WHERE source = ?").bind(v.source).first().catch(() => null);
+  const shifted = await detectShiftedCopy(db, v.source, v.bars, { prevLast: prevRow?.last_minute_ms == null ? null : Number(prevRow.last_minute_ms) });
+  if (shifted) { await refuseShifted(db, v, shifted, { now }); return { mode: "shadow", error: "shifted_copy", shift_hours: shifted.shift_hours, cursor_ms: prevRow?.last_minute_ms ?? null }; }
   let stored = 0;
   for (const b of v.bars) {
     const r = await db.prepare("INSERT OR IGNORE INTO corpus_bars (source, minute_ms, o, h, l, c, tick_volume, spread_points, connection_version, received_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")

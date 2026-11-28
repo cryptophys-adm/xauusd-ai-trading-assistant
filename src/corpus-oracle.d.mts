@@ -25,3 +25,9 @@ export function brokerShadowSummary(env: any, options?: { now?: number; days?: n
 export function validateFeedCorpus(corpus: any, options?: { connection?: any; state?: any; now?: number }): any;
 export function ingestFeedCorpus(env: any, corpus: any, options: { bridgeId: string; connection?: any; state?: any; now?: number }): Promise<any>;
 export const FEED_FRESH_MS: number;
+export const SHIFT_HOURS: readonly number[];
+export function detectShiftedCopy(db: any, source: string, bars: Array<{ t: number; o: number; h: number; l: number; c: number }>, options?: { prevLast?: number | null }): Promise<{ shift_hours: number; matched: number; of: number } | null>;
+export const SHIFTED_BATCH_2026_11_28: Readonly<{ source: string; received_ms: number; from_ms: number; to_ms: number; shift_ms: number }>;
+export function repairShiftedBatch(db: any, spec?: { source: string; received_ms: number; from_ms: number; to_ms: number; shift_ms: number }): Promise<{ source: string; deleted: number; cursor_reset: boolean; last_minute_ms: number | null }>;
+export function repairShiftedBatchOnce(env: any): Promise<{ source: string; deleted: number; cursor_reset: boolean; last_minute_ms: number | null } | null>;
+export function resetShiftRepairForTests(): void;
