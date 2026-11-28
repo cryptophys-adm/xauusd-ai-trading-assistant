@@ -5,6 +5,7 @@ deployment rules live in `docs/SSOT.md` and `AGENTS.md`; this file records only
 what changed and when, by merge commit and PR.
 
 ## 2026-11-28
+- ci(nexus): the Councils smoke step also checks that the CI service token is not the owner (CF2a follow-up, orchestrator 2026-11-28): `GET /omega/api/whoami` through Nexus under the CI token answers 200 with `can_control` false and `is_owner` false (#682); the token's subject is never printed. Pinned by CF2-15.
 - ci(nexus): the deploy smoke checks the Call for Councils archive (CF2 follow-up, orchestrator 2026-11-28). `.github/workflows/deploy-nexus-dashboard.yml` "Smoke test the Call for Councils archive": `GET /api/council/archive?scope=active` and `?scope=archive` through the Nexus proxy under the CI service token answer 200 JSON with no-store, `items` an array and `counts.by_status` (#680), and no email address and no price-like number in the body (a bare "@" is allowed: topic keys carry it); without the token, the Access login redirect. Pinned by test CF2-15.
 - fix(council, omega): CF2a, frontend's two CF2 findings, one PR2 leak and the owner gate on every Omega write.
   - No owner email on a council read. `maskActor` shows an Access-email actor as `owner` in the session `reason` and `created_by`, the session list, the proposals' `accepted_by` and `note`, and the archive's proposal `note` (PR2's `vetoed by <actor>` was unmasked there). The hand-off's `chosen_by` keeps its `owner:<actor>` shape as `owner:owner`. The stored rows are not changed.
