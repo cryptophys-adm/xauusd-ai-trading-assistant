@@ -817,6 +817,50 @@
       "write": "feature-switch"
     },
     {
+      "key": "ROUTER_DECISION",
+      "label": "Model router: decision and conclusions (CL1 PR2)",
+      "description": "CL1 PR2: the decision council and the War Room, timeframe-room and Macro Room conclusions ask Reflection's Beam first (free; xauusd's share 6M input and 600k output tokens a day, 30 a minute), then Claude Haiku 5.5 (hard cap USD 1.00 a day, a billing or auth error stops it until the next UTC day), then their Workers AI model as before. Any timeout, 429, 5xx, refusal, cut-off or invalid answer, paid sign or cap goes to the next step, so the decision is never empty. A provider with validity under 95% or timeouts over 2% in a day is rolled back for that role (Telegram) until this switch goes off and on again. off: Workers AI only, as before.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
+      "key": "ROUTER_TEXT",
+      "label": "Model router: news and text roles (CL1 PR2)",
+      "description": "CL1 PR2: the hourly news chain (analyst, counselor, reasoner), the News Daily TLDR, the plain-language rewrite and the thread moderator ask Beam first, then Claude Haiku 5.5 (thinking off), then their Workers AI model as before, with the same caps, fallbacks and rollback as ROUTER_DECISION. off: Workers AI only, as before.",
+      "group": "knowledge",
+      "worker": "ai",
+      "values": [
+        "on",
+        "off"
+      ],
+      "value": "off",
+      "source": "default",
+      "config_value": null,
+      "default_value": "off",
+      "set_by": null,
+      "set_at": null,
+      "era_switch": false,
+      "restarts_mode_evidence": false,
+      "emergency_stop": true,
+      "read_only": false,
+      "write": "feature-switch"
+    },
+    {
       "key": "SHADOW_MODEL_ROUTER",
       "label": "Shadow model router: news comparison on Beam (SB1)",
       "description": "SB1: the news shadow comparison's two daily readings asked of Reflection's Beam (free Beta, its own caps: 100k input and 20k output tokens, 20 requests a day, 2 a minute) instead of the Workers AI agent model; no other call routes. Any limit, error, timeout, paid sign, missing retention terms, invalid answer or a platform router status other than on falls back to Workers AI for that call. off: as before.",

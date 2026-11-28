@@ -9,6 +9,7 @@ import { cleanModelText, extractJsonObject, extractModelText, MODELS, runModel, 
 import { naturalLanguageErrors } from "./natural-language.mjs";
 import { interpretWebhookRow } from "./webhook-interpretation.mjs";
 import { recordAiUsage } from "./ai-usage.mjs";
+import { routeLiveCall, routerGroupOf, routerMode } from "./provider-router.mjs";
 
 // Model migration (owner decision 2026-11-07; glm-5.3-flash stops answering on 2026-11-20): room
 // agents speak on gemma-4-26b-a4b-it with thinking off, moderators conclude on gpt-oss-120b.
@@ -271,7 +272,27 @@ export const FALLBACK_RETRY_MIN_MS = 30_000;
 export const FALLBACK_RESERVE_MS = 20_000;
 export const FALLBACK_BRIEF_NOTE = "Your previous answer ran out of tokens before the JSON. Reply with the JSON object only. Keep any reasoning very short.";
 
-export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary = null, meterSource = null, affinity = null }) {
+export async function callBusModel(env, { messages, schemaName, schema, maxTokens, effort, deadline, clock, runState = {}, role = "agent", skipPrimary: skip = null, meterSource = null, affinity = null }) {
+  // CL1 PR2 (src/provider-router.mjs): a routed role asks Beam, then Claude Haiku, before its Workers AI models; only
+  // while its group switch (ROUTER_DECISION / ROUTER_TEXT) is on. Every call the router does not answer runs below as
+  // before. A retry after the caller rejected the router's answer (skipPrimary) goes to Workers AI's primary: the
+  // answer it rejected was not the primary's.
+  let skipPrimary = skip;
+  const routedSource = meterSource || schemaName;
+  const routedGroup = routerGroupOf(routedSource);
+  if (routedGroup && routerMode(env, routedGroup) === "on" && runState && typeof runState === "object") {
+    if (skipPrimary && runState.routedAnswer === true) skipPrimary = null;
+    else if (!skipPrimary) {
+      runState.routedAnswer = false;
+      const routed = await routeLiveCall(env, { source: routedSource, messages, schema, maxTokens, deadline, clock });
+      if (routed) {
+        runState.routedAnswer = true;
+        const tokens = (routed.usage?.prompt || 0) + (routed.usage?.completion || 0);
+        return { status: "answered", model: routed.model, provider: routed.provider, fallback_used: false, primary_error: null, usage_tokens: tokens || null, latency_ms: routed.latency_ms, obj: routed.obj, text: routed.text, truncated: false, calls: 1 };
+      }
+    }
+    runState.routedAnswer = false;
+  }
   const { primary, fallback } = roleModels(env, role);
   const primaryTimeoutMs = Number(env?.BUS_PRIMARY_TIMEOUT_MS) > 0 ? Number(env.BUS_PRIMARY_TIMEOUT_MS) : PRIMARY_CALL_TIMEOUT_MS;
   const attempts = [];

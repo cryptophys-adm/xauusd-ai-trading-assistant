@@ -218,6 +218,7 @@ function asText(value: unknown): string {
 import { m5ParityApproved, verifiedM5Reading, M5_VERIFIED_LABEL, M5_UNVERIFIED_LABEL } from "./m5-verification.mjs";
 import { TRUSTED_IDENTITIES } from "./trusted-identities.mjs";
 import { readClaudeShadow } from "./claude-shadow.mjs";
+import { routeLiveCall, routerGroupOf, readModelRouter, evaluateRouterRollback, newsReasonerCheck } from "./provider-router.mjs";
 import { storeHudSnapshot, loadHudSnapshot, hudReadings, approvedComparable, barsVerified } from "./hud-store.mjs";
 import { hudLevels, LEVEL_TIMEFRAMES } from "./hud-levels.mjs";
 import { readGlobalConclusion } from "./global-conclusion.mjs";
@@ -362,7 +363,13 @@ function safeKeyPart(value: string): string {
  * takes reasoning_effort (or the Responses form), gemma-4 runs with thinking off.
  */
 async function aiRun(env: Env, model: string, opts: { messages: unknown[]; maxTokens: number; effort?: string }, source = "h1_chain"): Promise<unknown> {
-  // The usage meter (src/ai-usage.mjs): the H1 chain's analyst, counselor and reasoner calls.
+  // CL1 PR2 (src/provider-router.mjs): the news chain asks Beam, then Claude Haiku, while ROUTER_TEXT is on; an answer
+  // comes back in the Workers AI shape, and any call the router does not answer runs below as before.
+  if (routerGroupOf(source)) {
+    const routed = await routeLiveCall(env as unknown as Record<string, unknown>, { source, messages: opts.messages, maxTokens: opts.maxTokens, check: source === "news_reasoner" ? newsReasonerCheck : null });
+    if (routed) return { response: routed.text, usage: { prompt_tokens: routed.usage.prompt, completion_tokens: routed.usage.completion }, provider: routed.provider, model: routed.model };
+  }
+  // The usage meter (src/ai-usage.mjs): the news chain's analyst, counselor and reasoner calls.
   const meter = env.DB ? { db: env.DB, source } : null;
   return (await runModel(env.AI as unknown as { run: (model: string, input: unknown) => Promise<unknown> }, model, { ...opts, meter })).result;
 }
@@ -2670,6 +2677,16 @@ async function handleDashboardApi(request: Request, env: Env, url: URL): Promise
       return dashboardJson({ status: "error", error: "model_arena_unavailable" }, 500);
     }
   }
+  if (url.pathname === "/api/model-router") {
+    // CL1 PR2: the live provider chain (src/provider-router.mjs): switches, per role and provider, spend against the caps,
+    // the breaker, the rollbacks and the council's stance mix; read-only, counts only.
+    try {
+      return dashboardJson({ status: "ok", ...(await readModelRouter(env as unknown as Record<string, unknown>, { days: Math.min(90, Math.max(1, Number(url.searchParams.get("days") || "7") || 7)) })) });
+    } catch (error) {
+      console.error("model_router_read_failed", error instanceof Error ? error.message : String(error));
+      return dashboardJson({ status: "error", error: "model_router_unavailable" }, 500);
+    }
+  }
   if (url.pathname === "/api/claude-shadow") {
     // CL1: the Claude Haiku shadow against the live callers (src/claude-shadow.mjs); read-only, the key's presence only.
     try {
@@ -3725,6 +3742,10 @@ export default {
         if (daily.status !== "disabled") console.log("news_daily", JSON.stringify(daily));
       } catch (e) { console.error("news_daily_failed", e instanceof Error ? e.message : String(e)); }
     }));
+    // CL1 PR2: the provider router's hourly rollback check and router_calls prune (src/provider-router.mjs).
+    ctx.waitUntil(evaluateRouterRollback(env as unknown as Record<string, unknown>, { now: event.scheduledTime || Date.now(), send: (text: string) => sendTelegram(env, text) }).then((r) => {
+      if (r.status !== "off" && r.status !== "ok") console.log("router_rollback", JSON.stringify({ status: r.status, added: r.added ?? [], notified: r.notified ?? [] }));
+    }).catch((e) => console.error("router_rollback_failed", e instanceof Error ? e.message : String(e))));
     // ADR-0015 phase 2a, in shadow (owner 2026-11-15; docs/RFC_ROOM_CELLS.md): the hour's concluded room runs as
     // run documents, then the comparison with what outcome scoring reads today. Nothing reads them yet.
     ctx.waitUntil(deriveRoomRuns(env, { backfill: true }).then(async (derived) => {
