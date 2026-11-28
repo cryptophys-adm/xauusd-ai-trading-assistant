@@ -14,7 +14,7 @@ import { UNCALIBRATED_CONFIDENCE_CAP } from "./war-room.mjs";
 import { ACTIVATION_COOLDOWN_DAYS, ROLLBACK_MIN_ROOMS } from "./weighting.mjs";
 import { DEFAULT_POLICY } from "./parity-registry.mjs";
 import { blackoutWindow } from "./ea-signal.mjs";
-import { OMEGA_DEFAULTS, RISK_PCT_MAX, ROLLOVER_QUARANTINE_UTC } from "./omega-engine.mjs";
+import { OMEGA_DEFAULTS, RISK_PCT_MAX, rolloverQuarantineUtc } from "./omega-engine.mjs";
 import { readSettings, connectedAccount } from "./omega-broker.mjs";
 import { PROFILES, PROFILE_IDS, effectiveLimits, readAccounts } from "./account-spec.mjs";
 import { activeWitnessTuning, tuningFrozen } from "./witness-tuning.mjs";
@@ -121,7 +121,7 @@ async function lensFacts(env, lens) {
 }
 
 /** The execution side (the Omega seat): the settings in force and the fixed gates. */
-export async function omegaFacts(env) {
+export async function omegaFacts(env, { now = Date.now() } = {}) {
   let settings = OMEGA_DEFAULTS;
   try { if (env?.DB) settings = (await readSettings(env)).settings; } catch { settings = OMEGA_DEFAULTS; }
   return {
@@ -131,7 +131,7 @@ export async function omegaFacts(env) {
     "omega.max_daily_loss_pct": Number(settings.max_daily_loss_pct),
     "omega.max_spread_points": Number(settings.max_spread_points),
     "omega.max_signal_age_min": Math.round(Number(settings.max_signal_age_ms) / 60_000 * 100) / 100,
-    "omega.rollover_quarantine_utc": ROLLOVER_QUARANTINE_UTC,
+    "omega.rollover_quarantine_utc": rolloverQuarantineUtc(now),
     "omega.live_arm_required": true,
     // The strategy arm (RFC §10, owner 2026-11-17): live → an entry needs an armed strategy or the AUTO pick.
     "omega.strategy_arm_required": strategyArmMode(env) === "live",
@@ -180,7 +180,7 @@ export async function doctrineFacts(env, { now = Date.now() } = {}) {
     measured_at: new Date(now).toISOString(),
     seats: {
       nexus: { version_id: version, facts: await nexusFacts(env) },
-      omega: { version_id: version, facts: await omegaFacts(env) }
+      omega: { version_id: version, facts: await omegaFacts(env, { now }) }
     }
   };
 }

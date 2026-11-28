@@ -18,7 +18,7 @@
 // Intent ids are deterministic and at most 31 characters (they become the MT5 order comment).
 
 import { cellGateText } from "./htf-cells.mjs";
-import { rolloverQuarantineAt } from "./market-hours.mjs";
+import { rolloverQuarantineAt, rolloverQuarantineUtcAt } from "./market-hours.mjs";
 import { confidenceTrend, parseConfidences, CONFIDENCE_CHANGE_MIN } from "./agent-confidence.mjs";
 import { changeTokens, changeOn, normalizeChangeThresholds, pendingShareFall, CHANGE_THRESHOLDS_ALL } from "./change-thresholds.mjs";
 import { goldCheckOf, goldPriceProblem } from "./gold-symbol.mjs";
@@ -156,9 +156,12 @@ export function floorToStep(v, step) {
  * UTC in US standard time, 20:55-22:15 UTC in daylight time): prevents opening new positions when interbank liquidity
  * dries up and broker spreads widen dramatically, from 5 minutes before the daily break to 15 minutes after the reopen.
  */
-export const ROLLOVER_QUARANTINE_UTC = "21:55-22:15";
 export function isRolloverQuarantine(nowMs = Date.now()) {
   return rolloverQuarantineAt(nowMs);
+}
+/** The doctrine fact omega.rollover_quarantine_utc: the window in UTC for the season at `nowMs` (the Canon template appends " UTC"). */
+export function rolloverQuarantineUtc(nowMs = Date.now()) {
+  return rolloverQuarantineUtcAt(nowMs);
 }
 
 /**

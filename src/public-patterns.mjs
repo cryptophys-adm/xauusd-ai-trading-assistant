@@ -111,7 +111,12 @@ export function breakoutCloseMs(series, p, { barMs = null } = {}) {
 /** Pure: one chart's public patterns from its bars (the strategy's last PATTERN_BARS), as the analysis shows them. */
 export function chartPublicPatterns(chart, bars, { events = [] } = {}) {
   const series = Array.isArray(bars) ? bars.slice(-PATTERN_BARS) : [];
-  return publicPatterns(detectPatterns(series, { events }).map((p) => ({ tf: CHART_TF[chart], ...p, confirmed_at_ms: p.status === "forming" ? null : breakoutCloseMs(series, p, { barMs: PAUSE_GAP_BAR_MS[chart] ?? null }) })));
+  return publicPatterns(detectPatterns(series, { events }).map((p) => {
+    if (p.status === "forming") return { tf: CHART_TF[chart], ...p, confirmed_at_ms: null };
+    const at = breakoutCloseMs(series, p), barMs = PAUSE_GAP_BAR_MS[chart] ?? null;
+    const gap = at != null && barMs != null && breakoutCloseMs(series, p, { barMs }) == null;
+    return { tf: CHART_TF[chart], ...p, confirmed_at_ms: gap ? null : at, ...(gap ? { breakout_after_pause: true } : {}) };
+  }));
 }
 
 /**

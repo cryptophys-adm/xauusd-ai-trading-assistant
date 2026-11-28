@@ -33,7 +33,9 @@ test("the facts report: both seats, the Decision Engine's thresholds per trading
   assert.equal(n["positioning.de_weight_swing"], 0.05);
   assert.equal(n["liquidity.council_weight_scalp"], 0.4);
   assert.ok(Object.keys(n).filter((k) => k.startsWith("liquidity.")).length >= 34 && Object.keys(n).filter((k) => k.startsWith("positioning.")).length >= 14);
-  assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-22:15"]);
+  assert.deepEqual([o["omega.risk_pct"], o["omega.max_spread_points"], o["omega.max_signal_age_min"], o["omega.rollover_quarantine_utc"]], [0.5, 60, 10, "21:55-23:15"]);
+  // The quarantine fact follows US daylight time (owner 2026-11-28): the summer window in UTC.
+  assert.equal((await doctrineFacts({}, { now: Date.parse("2026-07-14T03:00:00Z") })).seats.omega.facts["omega.rollover_quarantine_utc"], "20:55-22:15");
   assert.doesNotMatch(JSON.stringify(f), /entry|stop_loss|take_profit|login|password|account/i);
   const scalp = await doctrineFacts({ TRADING_MODE: "scalp", WEIGHTING_MODE: "default", BLACKOUT_MINUTES: "60" });
   assert.deepEqual([scalp.seats.nexus.facts["decision.quorum_min"], scalp.seats.nexus.facts["decision.min_rrr"], scalp.seats.nexus.facts["weighting.mode"], scalp.seats.nexus.facts["calendar.blackout_before_min"]], [0.45, 0, "default", 60], "scalp: the nearest key level, no reward minimum (owner 2026-11-12)");

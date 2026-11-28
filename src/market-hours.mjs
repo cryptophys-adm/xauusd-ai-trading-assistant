@@ -64,6 +64,13 @@ export function barAfterPause(prevT, t, barMs) {
  * 21:55-23:15 UTC in US standard time and 20:55-22:15 UTC in US daylight time.
  */
 export const ROLLOVER_QUARANTINE_NY = "16:55-18:15";
+/** Pure: the quarantine in UTC for the season at `ms` ("21:55-23:15" in US standard time, "20:55-22:15" in daylight time). */
+export function rolloverQuarantineUtcAt(ms) {
+  const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const offset = (((new Date(ms).getUTCHours() - Number(p.hour)) % 24) + 24) % 24;
+  const hm = (h, m) => `${String((h + offset) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  return `${hm(16, 55)}-${hm(18, 15)}`;
+}
 export function rolloverQuarantineAt(ms) {
   if (!Number.isFinite(ms)) return false;
   const p = Object.fromEntries(NY_WEEK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));

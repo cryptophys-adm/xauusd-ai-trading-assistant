@@ -5,6 +5,7 @@ import { isRolloverQuarantine } from "../src/omega-engine.mjs";
 import { breakoutAgeBars, breakoutAfterPause } from "../src/fresh-pattern.mjs";
 import { freshPatternPlans } from "../src/strategy-agents.mjs";
 import { breakoutCloseMs } from "../src/public-patterns.mjs";
+import { publicPatterns } from "../src/public-analysis.mjs";
 
 const M15 = 15 * 60_000;
 const at = (iso) => Date.parse(iso);
@@ -111,4 +112,12 @@ test("PG-6 public patterns: a gap-bar breakout has no confirming close (the CTA 
   assert.equal(breakoutCloseMs(real, p, { barMs: M15 }), at("2026-11-29T23:30:00Z"), "the second bar's real breakout");
   const normal = rows("2026-11-24T20:00:00Z", "2026-11-24T20:15:00Z");
   assert.equal(breakoutCloseMs(normal, p, { barMs: M15 }), at("2026-11-24T20:30:00Z"));
+});
+
+test("PG-7 the public projection keeps the flag, and only when set", () => {
+  const base = { tf: "15", id: "broadening_wedge_descending", status: "confirmed", direction: 1, upper: 4000, lower: 3985, height: 15, target: 4020 };
+  const [gap] = publicPatterns([{ ...base, confirmed_at_ms: null, breakout_after_pause: true }]);
+  assert.deepEqual([gap.confirmed_at_ms, gap.breakout_after_pause], [null, true]);
+  const [normal] = publicPatterns([{ ...base, confirmed_at_ms: at("2026-11-24T20:30:00Z") }]);
+  assert.deepEqual([normal.confirmed_at_ms, Object.hasOwn(normal, "breakout_after_pause")], [at("2026-11-24T20:30:00Z"), false]);
 });
