@@ -1,10 +1,12 @@
 // B8: one seeded AI Worker environment for GET /api/liquidity (src/liquidity-view.mjs): an in-memory D1 (node:sqlite)
 // that records every statement, and a KV that records every write. test/fixtures/nexus-intel/liquidity.json (the
-// Nexus Liquidity page's contract) is this seed's answer; liquidity-unavailable.json is the same with no recent bars.
+// Nexus Liquidity page's contract) is this seed's answer; liquidity-unavailable.json is the same with no recent bars, and
+// liquidity-level-readings-off.json the same with `env` LENS_LEVEL_READINGS "off" (no skip or hold reading recorded).
 import { DatabaseSync } from "node:sqlite";
 import { BROKER_BARS_SQL, LIQUIDITY_STATE_KEY, baselineKey, backfillKey, backfillIdentity, backfillVersionsKey } from "../../src/liquidity-lens.mjs";
 import { LENS_READINGS_SQL, lensKnobs } from "../../src/lens-policy.mjs";
 import { DECISION_LATEST_KEY, liquidityCard, liquidityQuorum } from "../../src/decision-engine.mjs";
+import { lensLevelReadings } from "../../src/lens-steps.mjs";
 
 export const NOW = Date.parse("2026-11-23T15:00:00Z"); // Monday 10:00 in New York: the market is open
 export const REF = "acct_00112233aabbccdd";
@@ -47,7 +49,8 @@ export const STRATEGY = Object.freeze({
 
 /**
  * The seeded environment. `available: false` gives the state of an archive with no recent bar (facts.available false,
- * reason archive_stale, no levels); `feed: false` leaves the feed's series out (no basis is known).
+ * reason archive_stale, no levels); `feed: false` leaves the feed's series out (no basis is known). With `env`
+ * LENS_LEVEL_READINGS "off" no skip or hold reading is recorded, as the switch stops both (src/lens-steps.mjs).
  */
 export async function seedLiquidityEnv({ available = true, feed = true, env: extra = {} } = {}) {
   const env = { DB: d1(), SIGNAL_CACHE: kv(), ...extra };
@@ -126,10 +129,13 @@ export async function seedLiquidityEnv({ available = true, feed = true, env: ext
   other("maker", 8, -1, "miss");
   other("maker", 9, 1, "neutral");
   lr.run("h4:x", "positioning", "h4", NOW - 4 * HOUR, 1, "hit", null, NOW);
-  // B19: the entry council's skip scored (skip:<issued_ms>:B), and two hold readings (a ladder lock held, a trailed stop pending).
-  lr.run(`skip:${NOW - 3 * HOUR}:B`, "liquidity", "skip", NOW - 3 * HOUR, 1, "hit", null, NOW);
-  lr.run("hold:0a1b2c3d", "liquidity", "hold", NOW - 5 * HOUR, 1, "hit", JSON.stringify({ what: "ladder" }), NOW);
-  lr.run("hold:4e5f6071", "liquidity", "hold", NOW - 40 * M1, -1, null, JSON.stringify({ what: "trail" }), null);
+  // B19: the entry council's skip scored (skip:<issued_ms>:B), and two hold readings (a ladder lock held, a trailed stop
+  // pending); none while LENS_LEVEL_READINGS is off.
+  if (lensLevelReadings(env) === "on") {
+    lr.run(`skip:${NOW - 3 * HOUR}:B`, "liquidity", "skip", NOW - 3 * HOUR, 1, "hit", null, NOW);
+    lr.run("hold:0a1b2c3d", "liquidity", "hold", NOW - 5 * HOUR, 1, "hit", JSON.stringify({ what: "ladder" }), NOW);
+    lr.run("hold:4e5f6071", "liquidity", "hold", NOW - 40 * M1, -1, null, JSON.stringify({ what: "trail" }), null);
+  }
 
   // The entry council's skip on a sweep against, the deferred modifications, the Position Manager's action citing a sweep.
   raw.prepare("INSERT INTO limit_council (id, kind, open_id, at_ms, status, choice, rule, price, reason, facts, updated_ms) VALUES (?, 'entry', ?, ?, 'decided', 'skip', 'council_skip:liquidity_sweep_against', 4101.5, 'a reclaimed buy-side sweep argues against the long', ?, ?)")
