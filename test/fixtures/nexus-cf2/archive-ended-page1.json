@@ -81,7 +81,7 @@
         "decided_by": "council",
         "decided_at": "2026-11-27T13:42:00.000Z",
         "updated_at": "2026-11-27T14:07:00.000Z",
-        "note": "vetoed by owner@example.com",
+        "note": "vetoed by owner",
         "council_decision": {
           "option_id": "task",
           "decided_by": "council",

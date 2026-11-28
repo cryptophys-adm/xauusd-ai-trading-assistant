@@ -74,9 +74,10 @@ test("CF2-1 the fixtures are the seed's answers over #677's real code, byte for 
   assert.deepEqual([fixture("suggestions-off.json").mode, fixture("sessions-off.json").enabled], ["off", false]);
 });
 
-test("CF2-2 the owner gate is the feature-switch read's viewer.can_control; Omega's whoami is true for any person, so it is not used", async () => {
-  // GET /omega/api/whoami answers can_control: identity.type === "user" (workers/xauusd-omega/src/omega.mjs): any signed-in person.
-  assert.deepEqual([fixture("whoami-owner.json").can_control, fixture("whoami-viewer.json").can_control], [true, true]);
+test("CF2-2 the owner gate is the feature-switch read's viewer.can_control; whoami agrees since CF2a (#682), and the page still does not read it", async () => {
+  // CF2a (#682): GET /omega/api/whoami answers can_control and is_owner as the owner check (OWNER_ACCESS_SUB); before, any person.
+  assert.deepEqual([fixture("whoami-owner.json").can_control, fixture("whoami-viewer.json").can_control], [true, false]);
+  assert.deepEqual([fixture("whoami-owner.json").is_owner, fixture("whoami-viewer.json").is_owner], [true, false]);
   const page = src("pages/Councils.tsx");
   assert.doesNotMatch(page + src("lib/councilArchive.ts"), /whoami/, "the page never reads whoami for its gate");
   assert.match(page, /const canControl = useOwnerGate\(\);/);
@@ -319,8 +320,8 @@ test("CF2-12 no price and no email in any render of the page's views, and in no 
     assert.doesNotMatch(h, PRICE, `${e.name}: no price`);
   }
   for (const [name] of Object.entries(FILES)) assert.doesNotMatch(read(`test/fixtures/nexus-cf2/${name}`), PRICE, `${name}: no price`);
-  // The raw reads that carry the owner's email (the session reason, whoami's subject) never reach the page unmasked.
-  assert.match(JSON.stringify(REOPEN), EMAIL);
+  // CF2a (#682): the session reads are masked server-side (maskActor); the page's own mask stays as a second guard.
+  assert.doesNotMatch(JSON.stringify(REOPEN), EMAIL);
   assert.equal(u.maskEmail("owner_closed by owner@example.com"), "owner_closed by owner");
 });
 
@@ -352,7 +353,7 @@ test("CF2-14 the veto window (#680): late amber, next actor owner, a countdown t
   assert.equal(u.vetoCountdown(c, Date.parse(c.proposal.vetoUntil) + 60_000).left, "0m");
   const vetoed = u.archiveOf(ARC).chains.find((x) => x.status === "vetoed");
   assert.deepEqual([vetoed.tone, vetoed.terminal, u.vetoCountdown(vetoed, NOW)], ["off", true, null]);
-  // The vetoed proposal's note names the owner's Access email (#680's closeSession note): the adapter masks it.
-  assert.match(JSON.stringify(ARC), /vetoed by [^"]*@/);
+  // CF2a (#682): the archive masks the vetoed note server-side ("vetoed by owner"); the adapter's mask is a second guard.
+  assert.doesNotMatch(JSON.stringify(ARC), /vetoed by [^"]*@/);
   assert.equal(vetoed.proposal.note, "vetoed by owner");
 });

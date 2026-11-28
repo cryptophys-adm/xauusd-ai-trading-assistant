@@ -1,5 +1,6 @@
 {
   "subject": "owner@example.com",
   "type": "user",
-  "can_control": true
+  "can_control": true,
+  "is_owner": true
 }
